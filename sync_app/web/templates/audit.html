@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Audit Logs"), t("Use this page to answer who changed what, when it changed, and whether the action succeeded."), eyebrow=t("Trace"), badge_text=t("Global + Organization"), badge_level="info") %}
+    <div class="surface-inline">
+      {{ ui.badge(t("Search"), "info") }}
+      <span class="muted">{{ t("Search by actor, action, target, or message.") }}</span>
+    </div>
+  {% endcall %}
+
+  {% call ui.panel(t("Audit Logs"), description=t("Search by actor, action, target, or message.")) %}
+    <form method="get" action="/audit">
+      <div class="form-grid">
+        <div>
+          <label>{{ t("Keyword") }}</label>
+          <input type="text" name="q" value="{{ audit_query or '' }}" placeholder="login, backup, alice, sync_job">
+        </div>
+      </div>
+      {% if filters_are_remembered %}
+      <p class="section-subtitle">{{ t("Filters are remembered for this browser session.") }}</p>
+      {% endif %}
+      <div class="actions">
+        <button type="submit">{{ t("Search") }}</button>
+        <a class="button secondary" href="/audit?clear_filters=1">{{ t("Reset") }}</a>
+      </div>
+    </form>
+  {% endcall %}
+
+  {% call ui.panel(t("Audit Timeline")) %}
+    {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Time") }}</th>
+            <th>{{ t("Actor") }}</th>
+            <th>{{ t("Action") }}</th>
+            <th>{{ t("Target") }}</th>
+            <th>{{ t("Result") }}</th>
+            <th>{{ t("Message") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in logs %}
+          <tr>
+            <td>{{ item.created_at }}</td>
+            <td>{{ item.actor_username or "-" }}</td>
+            <td>{{ item.action_type }}</td>
+            <td>{{ item.target_type or "-" }} / {{ item.target_id or "-" }}</td>
+            <td>{{ t(item.result) }}</td>
+            <td>{{ item.message }}</td>
+          </tr>
+          {% else %}
+          <tr><td class="table-empty" colspan="6">{{ t("No audit logs matched the current filter.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=audit_page_data.total_items, page=audit_page_data.page, pages=audit_page_data.total_pages)) %}
+      {% if audit_page_data.has_previous %}
+      <a class="button secondary" href="/audit?q={{ audit_query or '' }}&page_number={{ audit_page_data.previous_page }}">{{ t("Previous") }}</a>
+      {% endif %}
+      {% if audit_page_data.has_next %}
+      <a class="button secondary" href="/audit?q={{ audit_query or '' }}&page_number={{ audit_page_data.next_page }}">{{ t("Next") }}</a>
+      {% endif %}
+    {% endcall %}
+  {% endcall %}
+</div>
+{% endblock %}

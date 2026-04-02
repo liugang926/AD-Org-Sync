@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+{% call ui.panel(t("Initial Administrator Setup"), description=t("Create the first local super administrator for the web control plane.")) %}
+  <form method="post" action="/setup">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-grid">
+      <div>
+        <label>{{ t("Username") }}</label>
+        <input type="text" name="username" required>
+      </div>
+      <div>
+        <label>{{ t("Password") }}</label>
+        <input type="password" name="password" required>
+      </div>
+      <div>
+        <label>{{ t("Confirm Password") }}</label>
+        <input type="password" name="confirm_password" required>
+      </div>
+    </div>
+    <div class="actions">
+      <button type="submit">{{ t("Create Administrator") }}</button>
+    </div>
+  </form>
+{% endcall %}
+{% endblock %}

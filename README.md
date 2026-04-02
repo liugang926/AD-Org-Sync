@@ -1,0 +1,229 @@
+# AD Org Sync
+
+`AD Org Sync` is a Windows-first identity synchronization platform for syncing enterprise source directories into Active Directory over LDAPS.
+
+The current production-ready target is:
+
+- Source side: provider-based source connector framework
+- Implemented provider in this build: WeCom
+- Target side: Active Directory / LDAPS
+- Control plane: FastAPI Web console + CLI
+- Local state: SQLite
+
+The codebase has already been refactored away from a simple `WeCom -> AD` utility into a multi-organization, policy-driven sync platform. Source-provider abstraction is in place so DingTalk, Feishu, and other future connectors can be added without rebuilding the core governance flow.
+
+## Current Capabilities
+
+- Multi-organization management
+- Source connector abstraction with provider-aware runtime
+- AD connector routing and multi-domain support
+- Department to OU synchronization
+- User provisioning, update, reactivation, and disable workflows
+- Identity binding and department override rules
+- Exception rules and protected account/group policies
+- Conflict queue with manual resolution and recommendations
+- High-risk approval flow with dry-run to apply gating
+- Disable circuit breaker / throttling protection
+- Future onboarding, contractor expiry, offboarding grace period, and replay queue
+- Attribute mapping and AD to source write-back policy
+- Advanced group lifecycle management
+- Audit logs, operation logs, retention cleanup, and backup rotation
+- Web console, CLI, import/export bundle, and bilingual UI
+
+## Architecture
+
+- `sync_app/web/`
+  - FastAPI control plane, authentication, RBAC, UI rendering
+- `sync_app/services/`
+  - Synchronization runtime, orchestration, reporting, config bundle handling
+- `sync_app/storage/`
+  - SQLite repositories, migrations, retention, backup, audit persistence
+- `sync_app/providers/source/`
+  - Source directory provider abstraction and concrete provider implementations
+- `sync_app/core/`
+  - Domain models, sync policies, conflict recommendation logic, validation
+- `sync_app/clients/`
+  - Source API clients and notification clients
+
+## Product Direction
+
+This repository is no longer structured as a one-off `WeCom AD Sync` script pack.
+
+The current platform direction is:
+
+- `Organization`
+  - tenant-level scope, policies, connector ownership
+- `Source Connector`
+  - source provider config, source routing, source validation
+- `Target Connector`
+  - AD / LDAPS connection and connector-level overrides
+- `Sync Governance`
+  - mapping rules, exceptions, lifecycle queues, conflicts, approvals, throttling
+
+This lets the product evolve toward:
+
+- WeCom
+- DingTalk
+- Feishu
+- HR or master-data source systems
+
+without redesigning the synchronization control plane.
+
+## Quick Start
+
+### 1. Create a virtual environment
+
+```powershell
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 2. Initialize or reuse the local database
+
+The application will initialize SQLite automatically on first use.
+
+Typical local paths:
+
+- `%APPDATA%\NottingADSync\app.db`
+- fallback: `.appdata\NottingADSync\app.db`
+
+For explicit testing or demo use, pass `--db-path`.
+
+### 3. Validate configuration
+
+Database-backed organization config is now the primary configuration source.
+
+```powershell
+venv\Scripts\python.exe -m sync_app.cli validate-config --db-path test_artifacts\demo_web.db --org-id default
+venv\Scripts\python.exe -m sync_app.cli test-source --db-path test_artifacts\demo_web.db --org-id default
+venv\Scripts\python.exe -m sync_app.cli test-ldap --db-path test_artifacts\demo_web.db --org-id default
+```
+
+Legacy `--config config.ini` is still supported as an import / compatibility source.
+
+### 4. Start the Web console
+
+```powershell
+venv\Scripts\python.exe -m sync_app.cli web --db-path test_artifacts\demo_web.db --host 127.0.0.1 --port 8010
+```
+
+### 5. Run synchronization
+
+```powershell
+venv\Scripts\python.exe -m sync_app.cli sync --mode dry-run --db-path test_artifacts\demo_web.db --org-id default
+venv\Scripts\python.exe -m sync_app.cli sync --mode apply --db-path test_artifacts\demo_web.db --org-id default
+```
+
+Recommended rollout path:
+
+1. Complete source and LDAP connectivity checks
+2. Run `dry-run`
+3. Review jobs, conflicts, risky operations, and exception hits
+4. Approve high-risk plans if required
+5. Run `apply`
+
+## Web Console
+
+Main pages:
+
+- `Dashboard`
+- `Getting Started`
+- `Organizations`
+- `Config`
+- `Advanced Sync`
+- `Mappings`
+- `Exceptions`
+- `Conflicts`
+- `Jobs`
+- `Database`
+- `Audit`
+- `Users`
+- `Account`
+
+Access model:
+
+- `super_admin`
+  - full administrative access
+- `operator`
+  - operational access without sensitive config management
+- `auditor`
+  - read-only oversight access
+
+The UI supports:
+
+- English by default
+- automatic Simplified Chinese fallback for Chinese browsers
+- manual language switching
+- basic and advanced modes
+
+## Key Safety Controls
+
+- Protected built-in AD accounts are blocked by default
+- Protected AD groups are excluded by default
+- High-risk apply can be forced through dry-run approval
+- Bulk disable circuit breaker can block suspicious mass disable plans
+- Session security, CSRF, role-based access control, and password policy are enforced in the Web plane
+- Audit logs, operation logs, conflict logs, review records, and retention cleanup are built in
+
+## Configuration Model
+
+Primary configuration source:
+
+- SQLite organization configuration
+- SQLite connector configuration
+- SQLite advanced sync policy tables
+
+Legacy compatibility:
+
+- `config.ini`
+- per-organization legacy import path
+- per-connector legacy import path
+
+Those file paths are now treated as import / compatibility inputs, not the primary runtime source of truth.
+
+## CLI Reference
+
+```powershell
+venv\Scripts\python.exe -m sync_app.cli version
+venv\Scripts\python.exe -m sync_app.cli validate-config --db-path app.db --org-id default
+venv\Scripts\python.exe -m sync_app.cli test-source --db-path app.db --org-id default
+venv\Scripts\python.exe -m sync_app.cli test-ldap --db-path app.db --org-id default
+venv\Scripts\python.exe -m sync_app.cli sync --mode dry-run --db-path app.db --org-id default
+venv\Scripts\python.exe -m sync_app.cli sync --mode apply --db-path app.db --org-id default
+venv\Scripts\python.exe -m sync_app.cli approve-plan <job_id> --notes "reviewed"
+venv\Scripts\python.exe -m sync_app.cli conflicts list --status open --json
+venv\Scripts\python.exe -m sync_app.cli conflicts apply-recommendation <conflict_id> --reason "checked manually"
+venv\Scripts\python.exe -m sync_app.cli config-export --db-path app.db --org-id default
+venv\Scripts\python.exe -m sync_app.cli config-import --db-path app.db --org-id target --file bundle.json
+venv\Scripts\python.exe -m sync_app.cli db-check
+venv\Scripts\python.exe -m sync_app.cli db-backup --label manual
+venv\Scripts\python.exe -m sync_app.cli web --db-path app.db --host 127.0.0.1 --port 8000
+```
+
+## Testing
+
+```powershell
+venv\Scripts\python.exe -m compileall sync_app tests
+venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+## Security Notes
+
+- Do not commit `config.ini`
+- Do not commit runtime databases, logs, backups, or generated artifacts
+- Keep LDAPS certificate validation enabled in production
+- Use reverse proxy / TLS termination settings explicitly when deploying behind a gateway
+- Review `SECURITY.md` before production rollout
+
+## Repository Notes
+
+This is the first GitHub delivery for the refactored platformized codebase.
+
+The repository includes:
+
+- current web control plane
+- current SQLite-backed configuration and governance model
+- provider abstraction groundwork for future source systems
+- multi-organization runtime and UI support
+- safety and audit controls required for enterprise rollout

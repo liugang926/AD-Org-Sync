@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+{% call ui.panel(t("Change Password")) %}
+  <form method="post" action="/account/password">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-grid">
+      <div><label>{{ t("Current Password") }}</label><input type="password" name="current_password" required></div>
+      <div><label>{{ t("New Password") }}</label><input type="password" name="new_password" required></div>
+      <div><label>{{ t("Confirm New Password") }}</label><input type="password" name="confirm_password" required></div>
+    </div>
+    <div class="actions">
+      <button type="submit">{{ t("Update Password") }}</button>
+    </div>
+  </form>
+{% endcall %}
+{% endblock %}

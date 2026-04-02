@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Job Center"), t("Use this page to run the next dry run, inspect the latest results, and decide whether the organization is ready for apply."), eyebrow=t("Execution"), badge_text=(current_org.name if current_org else "-"), badge_level="info") %}
+    <div class="surface-inline">
+      {% if active_job %}
+      {{ ui.badge(t("Active"), "info") }}
+      <span><strong>{{ active_job.job_id }}</strong></span>
+      {% else %}
+      {{ ui.badge(t("Idle"), "success") }}
+      <span class="muted">{{ t("No active synchronization job.") }}</span>
+      {% endif %}
+    </div>
+  {% endcall %}
+
+  {% call ui.panel(t("Job Center"), description=t("Manually trigger a dry run or an apply sync. Only one synchronization job can run at a time. High-risk actions must first go through a dry run and review before apply execution is allowed.")) %}
+    <div class="actions">
+      {% if can("jobs.run") %}
+      <form class="inline" method="post" action="/jobs/run">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="mode" value="dry_run">
+        <button class="secondary" type="submit">{{ t("Run Dry Run") }}</button>
+      </form>
+      <form class="inline" method="post" action="/jobs/run">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="mode" value="apply">
+        <button type="submit" class="confirm-action success">{{ t("Run Apply") }}</button>
+      </form>
+      {% endif %}
+      <a class="button ghost" href="/conflicts">{{ t("Open Conflict Queue") }}</a>
+      {% if can("config.read") %}
+      <a class="button ghost" href="/config">{{ t("Open Organization Config") }}</a>
+      {% endif %}
+      <a class="button ghost" href="/getting-started">{{ t("Open Guided Setup") }}</a>
+    </div>
+
+    {% if active_job %}
+    <div class="panel-note info stack-sm">
+      <div class="surface-inline">
+        <span class="badge badge-info">{{ t("Active") }}</span>
+        <span>{{ t("Job ID") }}: <strong>{{ active_job.job_id }}</strong></span>
+        <span class="muted">/</span>
+        <span>{{ t("Status") }}: {{ ui.badge(t(active_job.status), "info") }}</span>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if sync_runner_error %}
+    <div class="panel-note error">
+      {{ t("Last background execution error: {error}", error=sync_runner_error) }}
+    </div>
+    {% endif %}
+  {% endcall %}
+
+  {% call ui.panel(t("Execution History")) %}
+    {% if jobs %}
+    {% call ui.table_shell() %}
+      <table class="table-sm">
+        <thead>
+          <tr>
+            <th>{{ t("Job ID") }}</th>
+            <th>{{ t("Mode") }}</th>
+            <th>{{ t("Status") }}</th>
+            <th class="table-center">{{ t("Planned") }}</th>
+            <th class="table-center">{{ t("High Risk") }}</th>
+            <th class="table-center">{{ t("Conflicts") }}</th>
+            <th class="table-center">{{ t("Executed") }}</th>
+            <th class="table-center">{{ t("Errors") }}</th>
+            <th>{{ t("Started At") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in jobs %}
+          <tr>
+            <td class="cell-strong"><a href="/jobs/{{ job.job_id }}">{{ job.job_id }}</a></td>
+            <td>{{ ui.badge(t(job.execution_mode), "info" if job.execution_mode == "dry_run" else "success") }}</td>
+            <td>
+              {% set status_level = "success" if job.status == "success" else ("error" if job.status == "failed" else "warning") %}
+              {{ ui.badge(t(job.status), status_level) }}
+            </td>
+            <td class="table-number">{{ job.planned_operation_count }}</td>
+            <td class="table-number">
+              {% set hr_count = (job.summary or {}).get("high_risk_operation_count", 0) %}
+              {% if hr_count > 0 %}<span class="badge badge-error">{{ hr_count }}</span>{% else %}-{% endif %}
+            </td>
+            <td class="table-number">
+              {% set c_count = (job.summary or {}).get("conflict_count", 0) %}
+              {% if c_count > 0 %}<span class="badge badge-warning">{{ c_count }}</span>{% else %}-{% endif %}
+            </td>
+            <td class="table-number">{{ job.executed_operation_count }}</td>
+            <td class="table-number">
+              {% if job.error_count > 0 %}<span class="badge badge-error">{{ job.error_count }}</span>{% else %}0{% endif %}
+            </td>
+            <td class="muted">{{ job.started_at }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    {% else %}
+    {% call ui.empty_state(t("No job history yet"), t("Start with a dry run so you can inspect planned users, groups, and conflicts before the first apply run."), "info") %}
+      {% if can("jobs.run") %}
+      <form class="inline" method="post" action="/jobs/run">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="mode" value="dry_run">
+        <button type="submit">{{ t("Run Your First Dry Run") }}</button>
+      </form>
+      {% endif %}
+      <a class="button secondary" href="/getting-started">{{ t("Open Guided Setup") }}</a>
+      {% if can("config.read") %}
+      <a class="button ghost" href="/config">{{ t("Review Config") }}</a>
+      {% endif %}
+    {% endcall %}
+    {% endif %}
+  {% endcall %}
+</div>
+{% endblock %}

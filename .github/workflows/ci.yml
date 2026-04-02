@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Syntax check
+        run: |
+          python -m py_compile sync_app\__init__.py
+          python -m py_compile sync_app\clients\wecom.py
+          python -m py_compile sync_app\clients\wechat_bot.py
+          python -m py_compile sync_app\core\common.py
+          python -m py_compile sync_app\core\config.py
+          python -m py_compile sync_app\core\logging_utils.py
+          python -m py_compile sync_app\services\ad_sync.py
+          python -m py_compile sync_app\services\entry.py
+          python -m py_compile sync_app\services\reports.py
+          python -m py_compile sync_app\services\runtime.py
+          python -m py_compile sync_app\services\state.py
+          python -m py_compile sync_app\storage\local_db.py
+          python -m py_compile sync_app\ui\desktop.py
+
+      - name: CLI smoke
+        run: |
+          python -m sync_app.cli version
+          python -m sync_app.cli --help
+
+      - name: Package smoke
+        run: |
+          python -m PyInstaller --noconfirm --clean WeCom-AD-Sync.spec
+          if (!(Test-Path "dist\\WeCom-AD-Sync.exe")) { exit 1 }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wecom-ad-sync-windows
+          path: |
+            dist/WeCom-AD-Sync.exe
+            config.example.ini

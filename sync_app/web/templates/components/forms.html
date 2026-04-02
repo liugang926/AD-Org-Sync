@@ -1,0 +1,41 @@
+{% macro input(name, label, value='', type='text', placeholder='', help_text='', required=False, disabled=False, class_name='') %}
+<div class="form-group {{ class_name }}" id="group-{{ name }}">
+  {% if label %}
+  <label for="{{ name }}">{{ label }}{% if required %}<span class="required-mark">*</span>{% endif %}</label>
+  {% endif %}
+  <input type="{{ type }}" id="{{ name }}" name="{{ name }}" value="{{ value }}" 
+         placeholder="{{ placeholder }}" {% if required %}required{% endif %} 
+         {% if disabled %}disabled{% endif %}>
+  {% if help_text %}
+  <div class="help-text">{{ help_text }}</div>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro select(name, label, options, selected_value='', help_text='', required=False, class_name='') %}
+<div class="form-group {{ class_name }}" id="group-{{ name }}">
+  {% if label %}
+  <label for="{{ name }}">{{ label }}</label>
+  {% endif %}
+  <select id="{{ name }}" name="{{ name }}" {% if required %}required{% endif %}>
+    {% for val, label in options %}
+    <option value="{{ val }}" {% if val|string == selected_value|string %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  {% if help_text %}
+  <div class="help-text">{{ help_text }}</div>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro textarea(name, label, value='', placeholder='', help_text='', rows=4, class_name='') %}
+<div class="form-group {{ class_name }}" id="group-{{ name }}">
+  {% if label %}
+  <label for="{{ name }}">{{ label }}</label>
+  {% endif %}
+  <textarea id="{{ name }}" name="{{ name }}" placeholder="{{ placeholder }}" rows="{{ rows }}">{{ value }}</textarea>
+  {% if help_text %}
+  <div class="help-text">{{ help_text }}</div>
+  {% endif %}
+</div>
+{% endmacro %}

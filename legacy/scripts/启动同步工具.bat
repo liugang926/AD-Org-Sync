@@ -1,0 +1,3 @@
+@echo off
+echo 正在启动 NottingADSync...
+start .\dist\NottingADSync\NottingADSync.exe

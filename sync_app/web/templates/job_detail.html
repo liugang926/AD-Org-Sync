@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  <div class="hero-header">
+    <div>
+      <a href="/jobs" class="back-link">&larr; {{ t("Back to Job Center") }}</a>
+      <h2 class="hero-title">{{ t("Job Details") }}</h2>
+    </div>
+    <div class="hero-meta">
+      {{ t("ID") }}: <span class="cell-mono cell-strong">{{ job.job_id }}</span>
+    </div>
+  </div>
+
+  <div class="grid cols-2">
+    {% call ui.panel(t("Overview")) %}
+      <div class="detail-grid">
+        <div class="detail-item">
+          <div class="label">{{ t("Mode") }}</div>
+          <div class="value">{{ ui.badge(t(job.execution_mode), 'info' if job.execution_mode == 'dry_run' else 'success') }}</div>
+        </div>
+        <div class="detail-item">
+          <div class="label">{{ t("Status") }}</div>
+          <div class="value">
+            {% set status_level = 'success' if job.status == 'success' else ('error' if job.status == 'failed' else 'warning') %}
+            {{ ui.badge(t(job.status), status_level) }}
+          </div>
+        </div>
+        <div class="detail-item">
+          <div class="label">{{ t("Started At") }}</div>
+          <div class="value">{{ job.started_at }}</div>
+        </div>
+        <div class="detail-item">
+          <div class="label">{{ t("Ended At") }}</div>
+          <div class="value">{{ job.ended_at or "-" }}</div>
+        </div>
+      </div>
+    {% endcall %}
+
+    {% call ui.panel(t("Execution Stats")) %}
+      <div class="metric-grid">
+        <div class="metric-item">
+          <div class="label">{{ t("Planned") }}</div>
+          <div class="value">{{ job.planned_operation_count }}</div>
+        </div>
+        <div class="metric-item">
+          <div class="label">{{ t("Executed") }}</div>
+          <div class="value">{{ job.executed_operation_count }}</div>
+        </div>
+        <div class="metric-item">
+          <div class="label">{{ t("Errors") }}</div>
+          <div class="value {% if job.error_count > 0 %}danger{% endif %}">{{ job.error_count }}</div>
+        </div>
+      </div>
+    {% endcall %}
+  </div>
+
+  {% if review_record %}
+  {% call ui.panel(t("Approval & Review")) %}
+    <div class="grid cols-2">
+      <div class="subcard">
+        <div class="detail-grid">
+          <div class="detail-item">
+            <div class="label">{{ t("Review Status") }}</div>
+            <div class="value">{{ ui.badge(t(review_record.status), 'warning' if review_record.status == 'pending' else 'success') }}</div>
+          </div>
+          <div class="detail-item">
+            <div class="label">{{ t("High Risk Items") }}</div>
+            <div class="value text-danger">{{ review_record.high_risk_operation_count }}</div>
+          </div>
+          {% if review_record.reviewed_at %}
+          <div class="detail-item">
+            <div class="label">{{ t("Reviewer") }}</div>
+            <div class="value">{{ review_record.reviewer_username or "-" }}</div>
+          </div>
+          <div class="detail-item">
+            <div class="label">{{ t("Reviewed At") }}</div>
+            <div class="value">{{ review_record.reviewed_at }}</div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if review_record.status == "pending" and can("jobs.review") %}
+      <div class="panel-note warning">
+        <div class="stack-md">
+          <div class="cell-strong">{{ t("Action Required") }}</div>
+          <form method="post" action="/jobs/{{ job.job_id }}/approve">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <textarea name="review_notes" placeholder="{{ t('Enter approval notes (optional)...') }}"></textarea>
+            <div class="actions">
+              <button class="success block" type="submit">{{ t("Approve High-Risk Plan") }}</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  {% endcall %}
+  {% endif %}
+
+  {% call ui.panel(t("Planned Operations")) %}
+    {% call ui.table_shell() %}
+      <table class="table-sm">
+        <thead>
+          <tr>
+            <th>{{ t("Object") }}</th>
+            <th>{{ t("Operation") }}</th>
+            <th>{{ t("Source") }}</th>
+            <th>{{ t("Target DN") }}</th>
+            <th class="table-center">{{ t("Risk") }}</th>
+            <th>{{ t("Created") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in planned_operations %}
+          <tr>
+            <td class="cell-strong">{{ item.object_type }}</td>
+            <td>{{ ui.badge(item.operation_type, 'info') }}</td>
+            <td class="muted cell-mono">{{ item.source_id or "-" }}</td>
+            <td class="cell-truncate" title="{{ item.target_dn }}">{{ item.target_dn or "-" }}</td>
+            <td class="table-center">{{ ui.badge(item.risk_level, 'error' if item.risk_level == 'high' else 'info') }}</td>
+            <td class="muted">{{ item.created_at }}</td>
+          </tr>
+          {% else %}
+          <tr><td class="table-empty" colspan="6">{{ t("No planned operations.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    {% set p_data = planned_operations_page_data %}
+    {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=p_data.total_items, page=p_data.page, pages=p_data.total_pages)) %}
+      {% if p_data.has_previous %}
+      <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ events_page_data.page }}&planned_page={{ p_data.previous_page }}&operations_page={{ operation_records_page_data.page }}&conflicts_page={{ job_conflicts_page_data.page }}">{{ t("Previous") }}</a>
+      {% endif %}
+      {% if p_data.has_next %}
+      <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ events_page_data.page }}&planned_page={{ p_data.next_page }}&operations_page={{ operation_records_page_data.page }}&conflicts_page={{ job_conflicts_page_data.page }}">{{ t("Next") }}</a>
+      {% endif %}
+    {% endcall %}
+  {% endcall %}
+
+  {% call ui.panel(t("Operation Records")) %}
+    {% call ui.table_shell() %}
+      <table class="table-sm">
+        <thead>
+          <tr><th>{{ t("Stage") }}</th><th>{{ t("Object") }}</th><th>{{ t("Operation") }}</th><th>{{ t("Status") }}</th><th>{{ t("Target") }}</th><th>{{ t("Message") }}</th></tr>
+        </thead>
+        <tbody>
+          {% for item in operation_records %}
+          <tr>
+            <td>{{ item.stage_name }}</td>
+            <td>{{ item.object_type }}</td>
+            <td>{{ item.operation_type }}</td>
+            <td>{{ ui.badge(t(item.status), 'success' if item.status == 'success' else 'error') }}</td>
+            <td class="cell-truncate" title="{{ item.target_id or item.target_dn }}">{{ item.target_id or item.target_dn or "-" }}</td>
+            <td>{{ item.message }}</td>
+          </tr>
+          {% else %}
+          <tr><td class="table-empty" colspan="6">{{ t("No execution records.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    {% set op_data = operation_records_page_data %}
+    {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=op_data.total_items, page=op_data.page, pages=op_data.total_pages)) %}
+      {% if op_data.has_previous %}
+      <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ events_page_data.page }}&planned_page={{ planned_operations_page_data.page }}&operations_page={{ op_data.previous_page }}&conflicts_page={{ job_conflicts_page_data.page }}">{{ t("Previous") }}</a>
+      {% endif %}
+      {% if op_data.has_next %}
+      <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ events_page_data.page }}&planned_page={{ planned_operations_page_data.page }}&operations_page={{ op_data.next_page }}&conflicts_page={{ job_conflicts_page_data.page }}">{{ t("Next") }}</a>
+      {% endif %}
+    {% endcall %}
+  {% endcall %}
+
+  <div class="grid cols-2">
+    {% call ui.panel(t("Conflict Queue")) %}
+      {% call ui.table_shell() %}
+        <table class="table-sm">
+          <thead><tr><th>{{ t("Type") }}</th><th>{{ t("Object") }}</th><th>{{ t("Status") }}</th><th>{{ t("Message") }}</th></tr></thead>
+          <tbody>
+            {% for item in conflicts %}
+            <tr>
+              <td>{{ item.conflict_type }}</td>
+              <td class="cell-mono">{{ item.source_id }}</td>
+              <td>{{ ui.badge(t(item.status), 'warning') }}</td>
+              <td>{{ item.message }}</td>
+            </tr>
+            {% else %}
+            <tr><td class="table-empty" colspan="4">{{ t("No conflicts.") }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endcall %}
+      {% set c_data = job_conflicts_page_data %}
+      {% call ui.pagination(t("Page {page}/{pages}", page=c_data.page, pages=c_data.total_pages)) %}
+        {% if c_data.has_previous %}
+        <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ events_page_data.page }}&planned_page={{ planned_operations_page_data.page }}&operations_page={{ operation_records_page_data.page }}&conflicts_page={{ c_data.previous_page }}">{{ t("Previous") }}</a>
+        {% endif %}
+        {% if c_data.has_next %}
+        <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ events_page_data.page }}&planned_page={{ planned_operations_page_data.page }}&operations_page={{ operation_records_page_data.page }}&conflicts_page={{ c_data.next_page }}">{{ t("Next") }}</a>
+        {% endif %}
+      {% endcall %}
+    {% endcall %}
+
+    {% call ui.panel(t("System Events")) %}
+      {% call ui.table_shell() %}
+        <table class="table-sm">
+          <thead><tr><th>{{ t("Time") }}</th><th>{{ t("Level") }}</th><th>{{ t("Message") }}</th></tr></thead>
+          <tbody>
+            {% for item in events %}
+            <tr>
+              <td class="muted">{{ item.created_at.split(' ')[1] }}</td>
+              <td>{{ ui.badge(t(item.level), 'error' if item.level == 'error' else ('warning' if item.level == 'warning' else 'info')) }}</td>
+              <td>{{ item.message }}</td>
+            </tr>
+            {% else %}
+            <tr><td class="table-empty" colspan="3">{{ t("No events.") }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endcall %}
+      {% set e_data = events_page_data %}
+      {% call ui.pagination(t("Page {page}/{pages}", page=e_data.page, pages=e_data.total_pages)) %}
+        {% if e_data.has_previous %}
+        <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ e_data.previous_page }}&planned_page={{ planned_operations_page_data.page }}&operations_page={{ operation_records_page_data.page }}&conflicts_page={{ job_conflicts_page_data.page }}">{{ t("Previous") }}</a>
+        {% endif %}
+        {% if e_data.has_next %}
+        <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ e_data.next_page }}&planned_page={{ planned_operations_page_data.page }}&operations_page={{ operation_records_page_data.page }}&conflicts_page={{ job_conflicts_page_data.page }}">{{ t("Next") }}</a>
+        {% endif %}
+      {% endcall %}
+    {% endcall %}
+  </div>
+
+  {% call ui.panel(t("Raw Summary")) %}
+    <pre>{{ summary_json }}</pre>
+  {% endcall %}
+</div>
+{% endblock %}

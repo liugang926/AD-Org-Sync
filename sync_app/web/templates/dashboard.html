@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Dashboard"), t("Start from the current organization's rollout status. Most teams only need preflight, the first dry run, open conflicts, and the latest job results."), eyebrow=t("Operations"), badge_text=(current_org.name if current_org else "-"), badge_level="info") %}
+    <div class="surface-inline">
+      {{ ui.badge(t("Basic") if ui_mode == "basic" else t("Advanced"), "info") }}
+      <span class="muted">{{ t("Current organization") }}: {{ current_org.name if current_org else "-" }}</span>
+    </div>
+  {% endcall %}
+
+  <div class="compact-stats">
+    {{ ui.compact_stat(t("Open Conflicts"), open_conflicts_count or 0) }}
+    {{ ui.compact_stat(t("Recent Jobs"), recent_jobs|length, t("Latest task history")) }}
+    {{ ui.compact_stat(t("Exception Rules"), exception_rule_count or 0) }}
+    {{ ui.compact_stat(t("Bindings"), binding_count or 0) }}
+    {{ ui.compact_stat(t("Connectors"), current_org_connector_count, t("For this organization")) }}
+    {{ ui.compact_stat(t("Admin Users"), user_count) }}
+  </div>
+
+  <div class="dense-two-col">
+    {% call ui.panel(t("Start Here"), description=t("If the system is new, work through these actions in order."), class_name="toolbar-card") %}
+      <div class="stack-tight">
+        {% call ui.helper_block(t("Recommended Rollout Steps"), t("{done} of {total} steps are complete.", done=getting_started.completed_steps, total=getting_started.total_steps), "info") %}
+          <ul class="helper-list">
+            <li><strong>{{ t("1.") }}</strong> {{ t("Verify organization config and connectivity.") }}</li>
+            <li><strong>{{ t("2.") }}</strong> {{ t("Run the first dry run and review planned changes.") }}</li>
+            <li><strong>{{ t("3.") }}</strong> {{ t("Resolve open conflicts before the first apply.") }}</li>
+          </ul>
+        {% endcall %}
+        <div class="actions">
+          <a class="button" href="/getting-started">{{ t("Open Guided Setup") }}</a>
+          {% if can("config.read") %}
+          <a class="button secondary" href="/config">{{ t("Open Organization Config") }}</a>
+          {% endif %}
+          <a class="button ghost" href="/jobs">{{ t("Open Job Center") }}</a>
+        </div>
+      </div>
+    {% endcall %}
+
+    {% call ui.panel(t("Deployment Preflight"), description=t("Use this checklist before the first apply or before enabling unattended runs."), class_name="toolbar-card") %}
+      <div class="stack-tight" id="preflight">
+        <div class="surface-inline">
+          {% if preflight_summary.overall_status == "success" %}
+          {{ ui.badge(t("Ready"), "success") }}
+          {% elif preflight_summary.overall_status == "warning" %}
+          {{ ui.badge(t("Needs Review"), "warning") }}
+          {% else %}
+          {{ ui.badge(t("Blocked"), "error") }}
+          {% endif %}
+          <span class="muted">{{ t("Successful") }} {{ preflight_summary.status_counts.success }} / {{ t("Warnings") }} {{ preflight_summary.status_counts.warning }} / {{ t("Errors") }} {{ preflight_summary.status_counts.error }}</span>
+        </div>
+        {% if preflight_summary.live_ran_at %}
+        <div class="surface-inline">
+          {{ ui.badge(t("Live source connection"), "info") }}
+          <span class="muted">{{ t("Last live check") }}: {{ preflight_summary.live_ran_at }}</span>
+        </div>
+        {% endif %}
+        <div class="check-list">
+          {% for item in preflight_summary.checks %}
+          <div class="check-item">
+            <div class="check-item__header">
+              <h3 class="check-item__title">{{ t(item.label) }}</h3>
+              {{ ui.badge(t(item.status|capitalize), "success" if item.status == "success" else ("warning" if item.status == "warning" else "error")) }}
+            </div>
+            <p class="check-item__detail">{{ t(item.detail, **(item.detail_params or {})) }}</p>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="actions">
+          <form class="inline" method="post" action="/preflight/run">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="return_url" value="/dashboard#preflight">
+            <button type="submit">{{ t("Run Live Preflight") }}</button>
+          </form>
+        </div>
+      </div>
+    {% endcall %}
+  </div>
+
+  <div class="dense-two-col">
+    {% call ui.panel(t("Scope Guide"), description=t("Use this guide to understand which pages change the whole control plane and which pages only affect the selected organization."), class_name="toolbar-card") %}
+      <div class="stack-tight">
+        {% call ui.helper_block(t("Global Scope"), t("These items affect every organization on this server, including the control plane, organization definitions, and administrator access."), "warning") %}
+          <ul class="helper-list">
+            <li>{{ t("Organizations and organization import or export") }}</li>
+            <li>{{ t("Web deployment settings and trusted proxy behavior") }}</li>
+            <li>{{ t("Administrator accounts and platform access") }}</li>
+          </ul>
+        {% endcall %}
+        {% call ui.helper_block(t("Organization Scope"), t("These items follow the organization picker and only affect the currently selected tenant."), "info") %}
+          <ul class="helper-list">
+            <li>{{ t("Organization configuration, jobs, connectors, mappings, and exception rules") }}</li>
+            <li>{{ t("Conflict handling, reviews, replay queues, and lifecycle actions") }}</li>
+            <li>{{ t("Current organization") }}: <strong>{{ current_org.name if current_org else "-" }}</strong></li>
+          </ul>
+        {% endcall %}
+        {% if current_org %}
+        <div class="detail-grid">
+          <div class="detail-item"><div class="label">{{ t("Organization ID") }}</div><div class="value">{{ current_org.org_id }}</div></div>
+          <div class="detail-item"><div class="label">{{ t("Organization Name") }}</div><div class="value">{{ current_org.name }}</div></div>
+          <div class="detail-item"><div class="label">{{ t("Legacy Import Path") }}</div><div class="value">{{ current_org.config_path or "-" }}</div></div>
+          <div class="detail-item"><div class="label">{{ t("Org Connectors") }}</div><div class="value">{{ current_org_connector_count }}</div></div>
+        </div>
+        {% endif %}
+        <div class="actions">
+          {% if can("organizations.manage") and show_advanced_navigation %}
+          <a class="button secondary" href="/organizations">{{ t("Manage Organizations") }}</a>
+          {% endif %}
+          {% if can("config.read") %}
+          <a class="button ghost" href="/config">{{ t("Review Config") }}</a>
+          {% endif %}
+        </div>
+      </div>
+    {% endcall %}
+
+    {% call ui.panel(t("Current State"), description=t("Focus on the latest job, current validation, and runtime warnings."), class_name="toolbar-card") %}
+      <div class="stack-tight">
+        {% if active_job %}
+        <div class="surface-inline">
+          {{ ui.badge(t("Active"), "info") }}
+          <span><strong>{{ active_job.job_id }}</strong></span>
+          <span class="muted">/</span>
+          <span>{{ ui.badge(t(active_job.status), "info") }}</span>
+          <span class="muted">{{ t(active_job.execution_mode) }}</span>
+        </div>
+        {% else %}
+        <div class="panel-note info">{{ t("No active synchronization job.") }}</div>
+        {% endif %}
+        {% if sync_runner_error %}
+        <div class="panel-note error">{{ t("Last background execution error: {error}", error=sync_runner_error) }}</div>
+        {% endif %}
+        {% call ui.helper_block(t("Configuration Validation"), t("Review the missing required values or warnings before starting a dry run or apply."), "warning") %}
+        {% if config_validation_errors %}
+        <div class="panel-note error">
+          <ul class="list-compact">
+            {% for item in config_validation_errors[:4] %}
+            <li>{{ t(item) }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% elif config_security_warnings %}
+        <div class="panel-note warning">
+          <ul class="list-compact">
+            {% for item in config_security_warnings[:4] %}
+            <li>{{ t(item) }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% else %}
+        <div class="panel-note info">{{ t("Validation Passed") }}</div>
+        {% endif %}
+        {% endcall %}
+      </div>
+    {% endcall %}
+  </div>
+
+  {% call ui.panel(t("Recent Jobs"), description=t("Use this table to confirm the latest dry run, apply, and conflict counts.")) %}
+    {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Job ID") }}</th>
+            <th>{{ t("Mode") }}</th>
+            <th>{{ t("Status") }}</th>
+            <th>{{ t("Planned") }}</th>
+            <th>{{ t("Executed") }}</th>
+            <th>{{ t("Errors") }}</th>
+            <th>{{ t("Started At") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in recent_jobs %}
+          <tr>
+            <td><a href="/jobs/{{ job.job_id }}">{{ job.job_id }}</a></td>
+            <td>{{ t(job.execution_mode) }}</td>
+            <td>{{ ui.badge(t(job.status), 'success' if job.status == 'success' else 'error') }}</td>
+            <td>{{ job.planned_operation_count }}</td>
+            <td>{{ job.executed_operation_count }}</td>
+            <td>{{ job.error_count }}</td>
+            <td>{{ job.started_at }}</td>
+          </tr>
+          {% else %}
+          <tr><td class="table-empty" colspan="7">{{ t("No job history yet.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+  {% endcall %}
+</div>
+{% endblock %}

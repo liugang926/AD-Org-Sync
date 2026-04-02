@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Exception Rules"), t("Use this page for true exceptions only. If a rule would apply to many users, groups, or departments, it probably belongs in the main sync policy instead."), eyebrow=t("Exceptions"), badge_text=t("Organization Scope"), badge_level="warning") %}
+    <div class="surface-inline">
+      {{ ui.badge(t("Use Sparingly"), "warning") }}
+      <span class="muted">{{ t("Exception rules should stay rare and explainable.") }}</span>
+    </div>
+  {% endcall %}
+
+  {% if can("exceptions.write") %}
+  <div class="grid cols-2" id="exception-create">
+    {% call ui.panel(t("User Exceptions"), description=t("Use these rules for named users that should not follow the default sync policy.")) %}
+      <form method="post" action="/exceptions">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-grid">
+          <div>
+            <label>{{ t("Rule") }}</label>
+            <select name="rule_type">
+              {% for rule_type in user_exception_rule_types %}
+              <option value="{{ rule_type }}">{{ t(exception_rule_definitions[rule_type].label) }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label>{{ t("Source User ID") }}</label>
+            <input type="text" name="match_value" required placeholder="alice">
+          </div>
+          <div class="field-span-full">
+            <label>{{ t("Notes") }}</label>
+            <input type="text" name="notes" placeholder="{{ t('Why this user is special') }}">
+          </div>
+          <div>
+            <label>{{ t("Expires At") }}</label>
+            <input type="datetime-local" name="expires_at">
+          </div>
+          <div>
+            <label class="inline-checkbox">
+              <input type="checkbox" name="is_once" value="1">
+              {{ t("One-time Rule") }}
+            </label>
+          </div>
+        </div>
+        <div class="actions">
+          <button type="submit">{{ t("Save Rule") }}</button>
+        </div>
+      </form>
+    {% endcall %}
+
+    {% call ui.panel(t("Department Placement Exceptions"), description=t("Blocked departments will not be selected as OU placement targets, even if they appear in user memberships.")) %}
+      <form method="post" action="/exceptions">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="rule_type" value="skip_department_placement">
+        <div class="form-grid">
+          <div>
+            <label>{{ t("Department ID") }}</label>
+            <input type="text" name="match_value" required placeholder="1001">
+          </div>
+          <div class="field-span-full">
+            <label>{{ t("Notes") }}</label>
+            <input type="text" name="notes" placeholder="{{ t('Placement should stay on another managed department') }}">
+          </div>
+          <div>
+            <label>{{ t("Expires At") }}</label>
+            <input type="datetime-local" name="expires_at">
+          </div>
+          <div>
+            <label class="inline-checkbox">
+              <input type="checkbox" name="is_once" value="1">
+              {{ t("One-time Rule") }}
+            </label>
+          </div>
+        </div>
+        <div class="actions">
+          <button type="submit">{{ t("Save Rule") }}</button>
+        </div>
+      </form>
+    {% endcall %}
+  </div>
+
+  {% call ui.panel(t("Group Cleanup Exceptions"), description=t("These groups will not have stale recursive parent-child relations removed automatically.")) %}
+    <form method="post" action="/exceptions">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="rule_type" value="skip_group_relation_cleanup">
+      <div class="form-grid">
+        <div>
+          <label>{{ t("AD Group sAMAccountName") }}</label>
+          <input type="text" name="match_value" required placeholder="WECOM_D1001">
+        </div>
+        <div class="field-span-full">
+          <label>{{ t("Notes") }}</label>
+          <input type="text" name="notes" placeholder="{{ t('Keep manual parent relations for this group') }}">
+        </div>
+        <div>
+          <label>{{ t("Expires At") }}</label>
+          <input type="datetime-local" name="expires_at">
+        </div>
+        <div>
+          <label class="inline-checkbox">
+            <input type="checkbox" name="is_once" value="1">
+            {{ t("One-time Rule") }}
+          </label>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="submit">{{ t("Save Rule") }}</button>
+      </div>
+    </form>
+  {% endcall %}
+
+  {% call ui.panel(t("Bulk Import"), description=t("CSV format: <code>rule_type,match_value,notes,is_enabled,expires_at,is_once</code>. Header row is optional.")) %}
+    <form method="post" action="/exceptions/import">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>{{ t("Bulk Rules") }}</label>
+      <textarea name="bulk_rules" placeholder="rule_type,match_value,notes,is_enabled,expires_at,is_once&#10;skip_user_disable,alice,Keep account enabled,true,2026-12-31T18:00,true&#10;skip_group_relation_cleanup,WECOM_D1001,Preserve manual parent,false,,false"></textarea>
+      <div class="actions">
+        <button class="secondary" type="submit">{{ t("Import Rules") }}</button>
+      </div>
+    </form>
+  {% endcall %}
+  {% else %}
+  {% call ui.panel(t("Exception Rules")) %}
+    <p class="muted">{{ t("Your role is read-only for exception rules. Review the current whitelist below.") }}</p>
+  {% endcall %}
+  {% endif %}
+
+  {% call ui.panel(t("Search And Filter")) %}
+    <form method="get" action="/exceptions">
+      <div class="form-grid">
+        <div>
+          <label>{{ t("Keyword") }}</label>
+          <input type="text" name="q" value="{{ exception_query or '' }}" placeholder="{{ t('rule, match value, notes') }}">
+        </div>
+        <div>
+          <label>{{ t("Rule Type") }}</label>
+          <select name="rule_type">
+            <option value="all" {% if exception_rule_type == 'all' %}selected{% endif %}>{{ t("All") }}</option>
+            {% for rule_name, definition in exception_rule_definitions.items() %}
+            <option value="{{ rule_name }}" {% if exception_rule_type == rule_name %}selected{% endif %}>{{ t(definition.label) }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>{{ t("Status") }}</label>
+          <select name="status">
+            <option value="all" {% if exception_status == 'all' %}selected{% endif %}>{{ t("All") }}</option>
+            <option value="enabled" {% if exception_status == 'enabled' %}selected{% endif %}>{{ t("Enabled") }}</option>
+            <option value="disabled" {% if exception_status == 'disabled' %}selected{% endif %}>{{ t("Disabled") }}</option>
+          </select>
+        </div>
+      </div>
+      {% if filters_are_remembered %}
+      <p class="section-subtitle">{{ t("Filters are remembered for this browser session.") }}</p>
+      {% endif %}
+      <div class="actions">
+        <button type="submit">{{ t("Search") }}</button>
+        <a class="button secondary" href="/exceptions?clear_filters=1">{{ t("Reset") }}</a>
+        <a class="button secondary" href="/exceptions/export?q={{ exception_query or '' }}&rule_type={{ exception_rule_type or 'all' }}&status={{ exception_status or 'all' }}">{{ t("Export CSV") }}</a>
+        <a class="button ghost" href="/conflicts">{{ t("Open Conflict Queue") }}</a>
+        <a class="button ghost" href="/jobs">{{ t("Open Job Center") }}</a>
+        {% if show_advanced_navigation %}
+        <a class="button ghost" href="/advanced-sync">{{ t("Open Advanced Sync") }}</a>
+        {% endif %}
+      </div>
+    </form>
+  {% endcall %}
+
+  {% call ui.panel(t("Exception Rule List")) %}
+    {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Rule") }}</th>
+            <th>{{ t("Match") }}</th>
+            <th>{{ t("Notes") }}</th>
+            <th>{{ t("Mode") }}</th>
+            <th>{{ t("Expires At") }}</th>
+            <th>{{ t("Last Matched") }}</th>
+            <th>{{ t("Status") }}</th>
+            <th>{{ t("Updated") }}</th>
+            <th>{{ t("Actions") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in exception_rules %}
+          {% set rule_definition = exception_rule_definitions.get(item.rule_type, {}) %}
+          <tr>
+            <td>
+              <div class="cell-strong">{{ t(rule_definition.get("label", item.rule_type)) }}</div>
+              <div class="muted">{{ t(rule_definition.get("description", "")) }}</div>
+            </td>
+            <td>
+              <div>{{ item.match_value }}</div>
+              <div class="muted">{{ t(exception_match_type_labels.get(item.match_type, item.match_type)) }}</div>
+              {% if item.match_type == "department_id" and department_name_map.get(item.match_value) %}
+              <div class="muted">{{ department_name_map.get(item.match_value) }}</div>
+              {% endif %}
+            </td>
+            <td>{{ item.notes or "-" }}</td>
+            <td>{{ t("One-time") if item.is_once else t("Persistent") }}</td>
+            <td>{{ item.expires_at or "-" }}</td>
+            <td>{{ item.last_matched_at or "-" }}</td>
+            <td>{{ t("Enabled") if item.is_enabled else t("Disabled") }}</td>
+            <td>{{ item.updated_at or item.created_at or "-" }}</td>
+            <td>
+              {% if can("exceptions.write") %}
+              <div class="actions flush-top">
+                <form class="inline" method="post" action="/exceptions/{{ item.id }}/toggle">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="enabled" value="{{ 'false' if item.is_enabled else 'true' }}">
+                  <button class="{% if item.is_enabled %}danger{% else %}secondary{% endif %} small" type="submit">
+                    {{ t("Disable") if item.is_enabled else t("Enable") }}
+                  </button>
+                </form>
+                <form class="inline" method="post" action="/exceptions/{{ item.id }}/delete">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button class="danger small" type="submit">{{ t("Delete") }}</button>
+                </form>
+              </div>
+              {% else %}
+              <span class="muted">{{ t("Read only") }}</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td class="table-empty" colspan="9">{{ t("No exception rules yet.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    {% if exception_page_data.total_items == 0 %}
+    {% call ui.empty_state(t("No exception rules yet."), t("Keep the default policy until you discover a real edge case. This page is best used for explicit exceptions, not initial setup."), "info") %}
+      {% if can("exceptions.write") %}
+      <a class="button secondary" href="/exceptions#exception-create">{{ t("Use the forms above") }}</a>
+      {% endif %}
+      <a class="button ghost" href="/conflicts">{{ t("Review Conflict Queue") }}</a>
+    {% endcall %}
+    {% endif %}
+    {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=exception_page_data.total_items, page=exception_page_data.page, pages=exception_page_data.total_pages)) %}
+      {% if exception_page_data.has_previous %}
+      <a class="button secondary" href="/exceptions?q={{ exception_query or '' }}&rule_type={{ exception_rule_type or 'all' }}&status={{ exception_status or 'all' }}&page_number={{ exception_page_data.previous_page }}">{{ t("Previous") }}</a>
+      {% endif %}
+      {% if exception_page_data.has_next %}
+      <a class="button secondary" href="/exceptions?q={{ exception_query or '' }}&rule_type={{ exception_rule_type or 'all' }}&status={{ exception_status or 'all' }}&page_number={{ exception_page_data.next_page }}">{{ t("Next") }}</a>
+      {% endif %}
+    {% endcall %}
+  {% endcall %}
+</div>
+{% endblock %}

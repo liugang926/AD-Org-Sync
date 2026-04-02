@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.panel(t("Database Runtime")) %}
+    <div class="detail-grid">
+      <div class="detail-item">
+        <div class="label">{{ t("Database file") }}</div>
+        <div class="value">{{ db_info.db_path }}</div>
+      </div>
+      <div class="detail-item">
+        <div class="label">{{ t("Backup directory") }}</div>
+        <div class="value">{{ db_info.backup_dir }}</div>
+      </div>
+      <div class="detail-item">
+        <div class="label">{{ t("Last integrity check") }}</div>
+        <div class="value">{{ integrity.result }} / {{ integrity.checked_at }}</div>
+      </div>
+      {% if db_info.last_startup_snapshot_path %}
+      <div class="detail-item">
+        <div class="label">{{ t("Startup snapshot") }}</div>
+        <div class="value">{{ db_info.last_startup_snapshot_path }}</div>
+      </div>
+      {% endif %}
+      {% if db_info.last_migration_source_path %}
+      <div class="detail-item">
+        <div class="label">{{ t("Migration source") }}</div>
+        <div class="value">{{ db_info.last_migration_source_path }}</div>
+      </div>
+      {% endif %}
+    </div>
+  {% endcall %}
+
+  {% call ui.panel(t("Retention Policy")) %}
+    <div class="detail-grid">
+      <div class="detail-item"><div class="label">{{ t("Job history") }}</div><div class="value">{{ retention_settings.job_history_retention_days }} {{ t("days") }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Event history") }}</div><div class="value">{{ retention_settings.event_history_retention_days }} {{ t("days") }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Audit logs") }}</div><div class="value">{{ retention_settings.audit_log_retention_days }} {{ t("days") }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Backups") }}</div><div class="value">{{ retention_settings.backup_retention_days }} {{ t("days") }} / {{ t("max {count} files", count=retention_settings.backup_retention_max_files) }}</div></div>
+    </div>
+  {% endcall %}
+
+  {% call ui.panel(t("Database Actions")) %}
+    {% if can("database.manage") %}
+    <div class="actions">
+      <form class="inline" method="post" action="/database/check">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="secondary" type="submit">{{ t("Run Integrity Check") }}</button>
+      </form>
+      <form class="inline" method="post" action="/database/backup">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit">{{ t("Create Backup") }}</button>
+      </form>
+    </div>
+    {% else %}
+    <p class="muted">{{ t("Current role can only view database status.") }}</p>
+    {% endif %}
+  {% endcall %}
+</div>
+{% endblock %}

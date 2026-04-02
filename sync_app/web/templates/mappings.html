@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Mappings"), t("Create manual bindings only when the default identity matching is not enough. Most teams should come here only after a conflict or a special OU placement case appears."), eyebrow=t("Identity"), badge_text=t("Organization Scope"), badge_level="info") %}
+    <div class="surface-inline">
+      {{ ui.badge(t("Bindings"), "info") }}
+      <span class="muted">{{ t("Manual rules override automatic identity inference.") }}</span>
+    </div>
+  {% endcall %}
+
+  {% if can("mappings.write") %}
+  <div class="grid cols-2" id="mapping-create">
+    {% call ui.panel(t("Identity Binding"), description=t("Create a fixed mapping between a source user ID and an AD `sAMAccountName`.")) %}
+      <form method="post" action="/mappings/bind">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-grid">
+          <div>
+            <label>{{ t("Source User ID") }}</label>
+            <input type="text" name="source_user_id" required>
+          </div>
+          <div>
+            <label>{{ t("AD Username") }}</label>
+            <input type="text" name="ad_username" required>
+          </div>
+          <div class="field-span-full">
+            <label>{{ t("Notes") }}</label>
+            <input type="text" name="notes">
+          </div>
+        </div>
+        <div class="actions">
+          <button type="submit">{{ t("Save Binding") }}</button>
+        </div>
+      </form>
+    {% endcall %}
+
+    {% call ui.panel(t("Primary Department Override"), description=t("Explicitly control which department should be used as the AD OU placement target for a multi-department user.")) %}
+      <form method="post" action="/mappings/override">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-grid">
+          <div>
+            <label>{{ t("Source User ID") }}</label>
+            <input type="text" name="source_user_id" required>
+          </div>
+          <div>
+            <label>{{ t("Primary Department ID") }}</label>
+            <input type="text" name="primary_department_id" required>
+          </div>
+          <div class="field-span-full">
+            <label>{{ t("Notes") }}</label>
+            <input type="text" name="notes">
+          </div>
+        </div>
+        <div class="actions">
+          <button type="submit">{{ t("Save Override") }}</button>
+        </div>
+      </form>
+    {% endcall %}
+  </div>
+
+  {% call ui.panel(t("Bulk Import Identity Bindings"), description=t("One row per line. Format: <code>source_user_id,ad_username,notes</code>. Notes are optional.")) %}
+    <form method="post" action="/mappings/import">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>{{ t("Bulk Content") }}</label>
+      <textarea name="bulk_bindings" placeholder="alice,alice.ad,Headquarters&#10;bob,bob.ad"></textarea>
+      <div class="actions">
+        <button class="secondary" type="submit">{{ t("Import Bindings") }}</button>
+      </div>
+    </form>
+  {% endcall %}
+  {% else %}
+  {% call ui.panel(t("Identity Bindings")) %}
+    <p class="muted">{{ t("Current role can view mappings only.") }}</p>
+  {% endcall %}
+  {% endif %}
+
+  {% call ui.panel(t("Search And Filter")) %}
+    <form method="get" action="/mappings">
+      <div class="form-grid">
+        <div>
+          <label>{{ t("Keyword") }}</label>
+          <input type="text" name="q" value="{{ mapping_query or '' }}" placeholder="{{ t('Search source user, AD user, or notes') }}">
+        </div>
+        <div>
+          <label>{{ t("Status") }}</label>
+          <select name="status">
+            <option value="all" {% if mapping_status == 'all' %}selected{% endif %}>{{ t("All") }}</option>
+            <option value="enabled" {% if mapping_status == 'enabled' %}selected{% endif %}>{{ t("Enabled Only") }}</option>
+            <option value="disabled" {% if mapping_status == 'disabled' %}selected{% endif %}>{{ t("Disabled Only") }}</option>
+          </select>
+        </div>
+      </div>
+      {% if filters_are_remembered %}
+      <p class="section-subtitle">{{ t("Filters are remembered for this browser session.") }}</p>
+      {% endif %}
+      <div class="actions">
+        <button type="submit">{{ t("Search") }}</button>
+        <a class="button secondary" href="/mappings?clear_filters=1">{{ t("Reset") }}</a>
+        <a class="button secondary" href="/mappings/export?q={{ mapping_query or '' }}&status={{ mapping_status or 'all' }}">{{ t("Export CSV") }}</a>
+        <a class="button ghost" href="/conflicts">{{ t("Open Conflict Queue") }}</a>
+        <a class="button ghost" href="/jobs">{{ t("Open Job Center") }}</a>
+        {% if show_advanced_navigation %}
+        <a class="button ghost" href="/advanced-sync">{{ t("Open Advanced Sync") }}</a>
+        {% endif %}
+      </div>
+    </form>
+  {% endcall %}
+
+  {% if binding_page_data.total_items == 0 and override_page_data.total_items == 0 %}
+  {% call ui.panel("") %}
+    {% call ui.empty_state(t("No mapping records yet."), t("Most organizations can start without manual mappings. Add a binding only when a source user must target a specific AD account or department."), "info") %}
+      {% if can("mappings.write") %}
+      <a class="button secondary" href="/mappings#mapping-create">{{ t("Use the forms above") }}</a>
+      {% endif %}
+      <a class="button ghost" href="/conflicts">{{ t("Review Conflict Queue") }}</a>
+    {% endcall %}
+  {% endcall %}
+  {% endif %}
+
+  {% call ui.panel(t("Identity Binding List")) %}
+    {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Source User ID") }}</th>
+            <th>{{ t("AD Username") }}</th>
+            <th>{{ t("Status") }}</th>
+            <th>{{ t("Source") }}</th>
+            <th>{{ t("Notes") }}</th>
+            <th>{{ t("Updated At") }}</th>
+            <th>{{ t("Actions") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in bindings %}
+          <tr>
+            <td class="cell-strong">{{ item.source_user_id or item.wecom_userid }}</td>
+            <td class="cell-mono">{{ item.ad_username }}</td>
+            <td>{{ t("Enabled") if item.is_enabled else t("Disabled") }}</td>
+            <td>{{ item.source }}</td>
+            <td>{{ item.notes or "-" }}</td>
+            <td>{{ item.updated_at or "-" }}</td>
+            <td>
+              {% if can("mappings.write") %}
+              <form class="inline" method="post" action="/mappings/bind/{{ item.source_user_id or item.wecom_userid }}/toggle">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="enabled" value="{{ 'false' if item.is_enabled else 'true' }}">
+                <button class="{% if item.is_enabled %}danger{% else %}secondary{% endif %} small" type="submit">
+                  {{ t("Disable") if item.is_enabled else t("Enable") }}
+                </button>
+              </form>
+              {% else %}
+              <span class="muted">{{ t("Read only") }}</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td class="table-empty" colspan="7">{{ t("No identity bindings matched the current filter.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=binding_page_data.total_items, page=binding_page_data.page, pages=binding_page_data.total_pages)) %}
+      {% if binding_page_data.has_previous %}
+      <a class="button secondary" href="/mappings?q={{ mapping_query or '' }}&status={{ mapping_status or 'all' }}&binding_page={{ binding_page_data.previous_page }}&override_page={{ override_page_data.page }}">{{ t("Previous") }}</a>
+      {% endif %}
+      {% if binding_page_data.has_next %}
+      <a class="button secondary" href="/mappings?q={{ mapping_query or '' }}&status={{ mapping_status or 'all' }}&binding_page={{ binding_page_data.next_page }}&override_page={{ override_page_data.page }}">{{ t("Next") }}</a>
+      {% endif %}
+    {% endcall %}
+  {% endcall %}
+
+  {% call ui.panel(t("Primary Department Override List")) %}
+    {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Source User ID") }}</th>
+            <th>{{ t("Primary Department ID") }}</th>
+            <th>{{ t("Department Name") }}</th>
+            <th>{{ t("Notes") }}</th>
+            <th>{{ t("Updated At") }}</th>
+            <th>{{ t("Actions") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in overrides %}
+          <tr>
+            <td class="cell-strong">{{ item.source_user_id or item.wecom_userid }}</td>
+            <td>{{ item.primary_department_id }}</td>
+            <td>{{ department_name_map.get(item.primary_department_id, "-") }}</td>
+            <td>{{ item.notes or "-" }}</td>
+            <td>{{ item.updated_at or "-" }}</td>
+            <td>
+              {% if can("mappings.write") %}
+              <form class="inline" method="post" action="/mappings/override/{{ item.source_user_id or item.wecom_userid }}/delete">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="danger small" type="submit">{{ t("Delete") }}</button>
+              </form>
+              {% else %}
+              <span class="muted">{{ t("Read only") }}</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td class="table-empty" colspan="6">{{ t("No department overrides matched the current filter.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=override_page_data.total_items, page=override_page_data.page, pages=override_page_data.total_pages)) %}
+      {% if override_page_data.has_previous %}
+      <a class="button secondary" href="/mappings?q={{ mapping_query or '' }}&status={{ mapping_status or 'all' }}&binding_page={{ binding_page_data.page }}&override_page={{ override_page_data.previous_page }}">{{ t("Previous") }}</a>
+      {% endif %}
+      {% if override_page_data.has_next %}
+      <a class="button secondary" href="/mappings?q={{ mapping_query or '' }}&status={{ mapping_status or 'all' }}&binding_page={{ binding_page_data.page }}&override_page={{ override_page_data.next_page }}">{{ t("Next") }}</a>
+      {% endif %}
+    {% endcall %}
+  {% endcall %}
+</div>
+{% endblock %}

@@ -1,0 +1,636 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+{% call ui.page_header(t("Advanced Sync"), t("Turn these capabilities on only when the default single-organization flow no longer fits. Most deployments can ignore this page until after the first successful dry run."), eyebrow=t("Optional"), badge_text=t("Organization Scope"), badge_level="warning") %}
+  {% if current_org %}
+  <div class="surface-inline">
+    <span class="muted">{{ t("Current organization: {name}", name=current_org.name) }}</span>
+  </div>
+  {% endif %}
+{% endcall %}
+
+<div class="dense-two-col">
+  {% call ui.helper_block(t("Use This Page When"), t("Advanced Sync is for non-default routing and lifecycle cases, not for the initial connection setup."), "warning") %}
+    <ul class="helper-list">
+      <li>{{ t("You need more than one AD connector for the same organization.") }}</li>
+      <li>{{ t("You need field mapping, write-back, contractor lifecycle, or custom group sources.") }}</li>
+      <li>{{ t("You need stronger safety controls before unattended apply runs.") }}</li>
+    </ul>
+  {% endcall %}
+  {% call ui.helper_block(t("Keep It Simple By Default"), t("All advanced capabilities are opt-in. Leave them off unless you have a concrete business case."), "info") %}
+    <ul class="helper-list">
+      <li>{{ t("Default mode uses one organization-level directory connection.") }}</li>
+      <li>{{ t("Most teams should enable features one by one after the first rollout succeeds.") }}</li>
+    </ul>
+  {% endcall %}
+</div>
+
+<div class="compact-stats">
+  {{ ui.compact_stat(t("Connectors"), connectors|length) }}
+  {{ ui.compact_stat(t("Attribute Mappings"), attribute_mappings|length) }}
+  {{ ui.compact_stat(t("Pending Offboarding"), offboarding_records|length) }}
+  {{ ui.compact_stat(t("Pending Lifecycle Queue"), lifecycle_records|length) }}
+  {{ ui.compact_stat(t("Custom Managed Groups"), custom_group_bindings|length) }}
+  {{ ui.compact_stat(t("Pending Replay Requests"), replay_requests|length) }}
+</div>
+
+<div class="grid cols-2">
+  {% call ui.panel(t("Feature Switches And Safety Policies"), t("Organization Scope"), "info", t("Start by enabling only the features you truly need. The rest of the policy fields can stay on their defaults.")) %}
+    <form method="post" action="/advanced-sync/policies" class="page-stack tight">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <section class="subcard stack-tight">
+        <div class="section-header">
+          <div class="section-header__copy">
+            <h3 class="section-header__title">{{ t("Quick Feature Switches") }}</h3>
+            <p class="section-header__description">{{ t("Turn on only the capabilities you know you need today.") }}</p>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="advanced_connector_routing_enabled" value="1" {% if policy_settings.advanced_connector_routing_enabled %}checked{% endif %}>
+              {{ t("Enable multi-connector routing") }}
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="attribute_mapping_enabled" value="1" {% if policy_settings.attribute_mapping_enabled %}checked{% endif %}>
+              {{ t("Enable source -> AD attribute mapping") }}
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="write_back_enabled" value="1" {% if policy_settings.write_back_enabled %}checked{% endif %}>
+              {{ t("Enable AD -> source write-back") }}
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="custom_group_sync_enabled" value="1" {% if policy_settings.custom_group_sync_enabled %}checked{% endif %}>
+              {{ t("Enable custom tag and external-chat groups") }}
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="offboarding_lifecycle_enabled" value="1" {% if policy_settings.offboarding_lifecycle_enabled %}checked{% endif %}>
+              {{ t("Enable offboarding lifecycle queue") }}
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="rehire_restore_enabled" value="1" {% if policy_settings.rehire_restore_enabled %}checked{% endif %}>
+              {{ t("Enable rehire account restore") }}
+            </label>
+          </div>
+        </div>
+      </section>
+
+      {% call ui.detail_toggle(t("Lifecycle Fields"), t("Only fill these when the related lifecycle features are enabled."), open=False) %}
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="automatic_replay_enabled" value="1" {% if policy_settings.automatic_replay_enabled %}checked{% endif %}>
+              {{ t("Enable automatic replay on next sync run") }}
+            </label>
+            <div class="muted">{{ t("Persist replay requests when admin actions should be retried on the next sync run.") }}</div>
+          </div>
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="future_onboarding_enabled" value="1" {% if policy_settings.future_onboarding_enabled %}checked{% endif %}>
+              {{ t("Enable future onboarding queue") }}
+            </label>
+          </div>
+          <div class="form-group">
+            <label for="future_onboarding_start_field">{{ t("Future Onboarding Start Field") }}</label>
+            <input id="future_onboarding_start_field" type="text" name="future_onboarding_start_field" value="{{ policy_settings.future_onboarding_start_field }}" placeholder="hire_date">
+            <div class="muted">{{ t("Source field used to delay provisioning until the effective start time.") }}</div>
+          </div>
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="contractor_lifecycle_enabled" value="1" {% if policy_settings.contractor_lifecycle_enabled %}checked{% endif %}>
+              {{ t("Enable contractor lifecycle queue") }}
+            </label>
+          </div>
+          <div class="form-group">
+            <label for="lifecycle_employment_type_field">{{ t("Employment Type Field") }}</label>
+            <input id="lifecycle_employment_type_field" type="text" name="lifecycle_employment_type_field" value="{{ policy_settings.lifecycle_employment_type_field }}" placeholder="employment_type">
+            <div class="muted">{{ t("Source field used to identify contractors, interns, vendors, and other time-bound worker records.") }}</div>
+          </div>
+          <div class="form-group">
+            <label for="contractor_end_field">{{ t("Contractor End Field") }}</label>
+            <input id="contractor_end_field" type="text" name="contractor_end_field" value="{{ policy_settings.contractor_end_field }}" placeholder="contract_end_date">
+            <div class="muted">{{ t("Source field used to end contractor access automatically after the configured date.") }}</div>
+          </div>
+          <div class="form-group">
+            <label for="lifecycle_sponsor_field">{{ t("Sponsor Field") }}</label>
+            <input id="lifecycle_sponsor_field" type="text" name="lifecycle_sponsor_field" value="{{ policy_settings.lifecycle_sponsor_field }}" placeholder="sponsor_userid">
+            <div class="muted">{{ t("Source field used to identify the sponsor or owner of the contractor record.") }}</div>
+          </div>
+          <div class="form-group">
+            <label for="contractor_type_values">{{ t("Contractor Type Values") }}</label>
+            <input id="contractor_type_values" type="text" name="contractor_type_values" value="{{ policy_settings.contractor_type_values }}" placeholder="contractor,intern,vendor,temp">
+            <div class="muted">{{ t("Comma-separated values used to classify contractor-like users.") }}</div>
+          </div>
+          <div class="form-group">
+            <label for="offboarding_grace_days">{{ t("Offboarding Grace Days") }}</label>
+            <input id="offboarding_grace_days" type="number" min="0" name="offboarding_grace_days" value="{{ policy_settings.offboarding_grace_days }}">
+          </div>
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="offboarding_notify_managers" value="1" {% if policy_settings.offboarding_notify_managers %}checked{% endif %}>
+              {{ t("Notify managers during grace period") }}
+            </label>
+          </div>
+        </div>
+      {% endcall %}
+
+      {% call ui.detail_toggle(t("Safety And Group Delivery"), t("Use these controls to limit blast radius and shape how managed groups are created."), open=False) %}
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="managed_group_type">{{ t("Managed Group Type") }}</label>
+            <select id="managed_group_type" name="managed_group_type">
+              {% for value, label in group_type_options %}
+              <option value="{{ value }}" {% if policy_settings.managed_group_type == value %}selected{% endif %}>{{ t(label) }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="managed_group_mail_domain">{{ t("Managed Group Mail Domain") }}</label>
+            <input id="managed_group_mail_domain" type="text" name="managed_group_mail_domain" value="{{ policy_settings.managed_group_mail_domain }}" placeholder="groups.example.com">
+          </div>
+          <div class="form-group">
+            <label for="custom_group_ou_path">{{ t("Custom Group OU Path") }}</label>
+            <input id="custom_group_ou_path" type="text" name="custom_group_ou_path" value="{{ policy_settings.custom_group_ou_path }}" placeholder="Managed Groups/Collaboration">
+          </div>
+          <div class="form-group">
+            <label for="disable_circuit_breaker_percent">{{ t("Disable Circuit Breaker Percent") }}</label>
+            <input id="disable_circuit_breaker_percent" type="number" min="0" step="0.1" name="disable_circuit_breaker_percent" value="{{ policy_settings.disable_circuit_breaker_percent }}">
+          </div>
+          <div class="form-group">
+            <label for="disable_circuit_breaker_min_count">{{ t("Disable Circuit Breaker Minimum Count") }}</label>
+            <input id="disable_circuit_breaker_min_count" type="number" min="0" name="disable_circuit_breaker_min_count" value="{{ policy_settings.disable_circuit_breaker_min_count }}">
+          </div>
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="disable_circuit_breaker_enabled" value="1" {% if policy_settings.disable_circuit_breaker_enabled %}checked{% endif %}>
+              {{ t("Enable disable-user circuit breaker") }}
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="disable_circuit_breaker_requires_approval" value="1" {% if policy_settings.disable_circuit_breaker_requires_approval %}checked{% endif %}>
+              {{ t("Require approval when breaker triggers") }}
+            </label>
+          </div>
+        </div>
+      {% endcall %}
+
+      <div class="actions">
+        <button type="submit">{{ t("Save Policies") }}</button>
+      </div>
+    </form>
+  {% endcall %}
+
+  {% call ui.panel(t("Connector Definition"), t("Organization Scope"), "info", t("Add connectors only when this organization must route departments into different AD domains or policies.")) %}
+    {% call ui.detail_toggle(t("Add Or Update Connector"), t("Leave override fields blank to inherit from the organization"), open=False) %}
+      <form method="post" action="/advanced-sync/connectors">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-grid">
+        <div class="form-group">
+          <label for="connector_id">{{ t("Connector ID") }}</label>
+          <input id="connector_id" type="text" name="connector_id" placeholder="asia">
+        </div>
+        <div class="form-group">
+          <label for="connector_name">{{ t("Name") }}</label>
+          <input id="connector_name" type="text" name="name" placeholder="Asia Domain">
+        </div>
+        <div class="form-group">
+          <label for="connector_config_path">{{ t("Legacy Import Path") }}</label>
+          <input id="connector_config_path" type="text" name="config_path" placeholder="config.asia.ini">
+        </div>
+        <div class="form-group">
+          <label for="connector_ldap_server">{{ t("LDAP Server Override") }}</label>
+          <input id="connector_ldap_server" type="text" name="ldap_server" placeholder="dc01.asia.example.local">
+        </div>
+        <div class="form-group">
+          <label for="connector_ldap_domain">{{ t("LDAP Domain Override") }}</label>
+          <input id="connector_ldap_domain" type="text" name="ldap_domain" placeholder="asia.example.local">
+        </div>
+        <div class="form-group">
+          <label for="connector_ldap_username">{{ t("LDAP Username Override") }}</label>
+          <input id="connector_ldap_username" type="text" name="ldap_username" placeholder="ASIA\\administrator">
+        </div>
+        <div class="form-group">
+          <label for="connector_ldap_password">{{ t("LDAP Password Override") }}</label>
+          <input id="connector_ldap_password" type="password" name="ldap_password" placeholder="{{ t('Leave blank to inherit or keep current') }}">
+        </div>
+        <div class="form-group">
+          <label for="connector_ldap_use_ssl">{{ t("Use SSL Override") }}</label>
+          <select id="connector_ldap_use_ssl" name="ldap_use_ssl">
+            <option value="">{{ t("Inherit Organization Setting") }}</option>
+            <option value="true">{{ t("Enabled") }}</option>
+            <option value="false">{{ t("Disabled") }}</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="connector_ldap_port">{{ t("LDAP Port Override") }}</label>
+          <input id="connector_ldap_port" type="number" name="ldap_port" placeholder="636">
+        </div>
+        <div class="form-group">
+          <label for="connector_ldap_validate_cert">{{ t("Certificate Validation Override") }}</label>
+          <select id="connector_ldap_validate_cert" name="ldap_validate_cert">
+            <option value="">{{ t("Inherit Organization Setting") }}</option>
+            <option value="true">{{ t("Enabled") }}</option>
+            <option value="false">{{ t("Disabled") }}</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="connector_ldap_ca_cert_path">{{ t("CA Certificate Path Override") }}</label>
+          <input id="connector_ldap_ca_cert_path" type="text" name="ldap_ca_cert_path" placeholder="C:\\certs\\asia-ca.pem">
+        </div>
+        <div class="form-group">
+          <label for="connector_default_password">{{ t("Default Password Override") }}</label>
+          <input id="connector_default_password" type="password" name="default_password" placeholder="{{ t('Leave blank to inherit or keep current') }}">
+        </div>
+        <div class="form-group">
+          <label for="connector_force_change_password">{{ t("Force Password Change Override") }}</label>
+          <select id="connector_force_change_password" name="force_change_password">
+            <option value="">{{ t("Inherit Organization Setting") }}</option>
+            <option value="true">{{ t("Enabled") }}</option>
+            <option value="false">{{ t("Disabled") }}</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="connector_password_complexity">{{ t("Password Complexity Override") }}</label>
+          <select id="connector_password_complexity" name="password_complexity">
+            <option value="">{{ t("Inherit Organization Setting") }}</option>
+            <option value="strong">{{ t("Strong") }}</option>
+            <option value="medium">{{ t("Medium") }}</option>
+            <option value="basic">{{ t("Basic") }}</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="root_department_ids">{{ t("Source Root Unit IDs") }}</label>
+          <input id="root_department_ids" type="text" name="root_department_ids" placeholder="2, 8">
+        </div>
+        <div class="form-group">
+          <label for="username_template">{{ t("Username Template") }}</label>
+          <input id="username_template" type="text" name="username_template" placeholder="{pinyin_initials}{employee_id}">
+        </div>
+        <div class="form-group">
+          <label for="disabled_users_ou">{{ t("Disabled Users OU") }}</label>
+          <input id="disabled_users_ou" type="text" name="disabled_users_ou" value="Disabled Users">
+        </div>
+        <div class="form-group">
+          <label for="connector_group_type">{{ t("Managed Group Type") }}</label>
+          <select id="connector_group_type" name="group_type">
+            {% for value, label in group_type_options %}
+            <option value="{{ value }}">{{ t(label) }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="group_mail_domain">{{ t("Group Mail Domain") }}</label>
+          <input id="group_mail_domain" type="text" name="group_mail_domain" placeholder="groups.example.com">
+        </div>
+        <div class="form-group">
+          <label for="connector_custom_group_ou_path">{{ t("Custom Group OU Path") }}</label>
+          <input id="connector_custom_group_ou_path" type="text" name="custom_group_ou_path" placeholder="Managed Groups/Regional">
+        </div>
+        <div class="form-group">
+          <label for="managed_tag_ids">{{ t("Managed Tag IDs") }}</label>
+          <input id="managed_tag_ids" type="text" name="managed_tag_ids" placeholder="1001, 1002">
+        </div>
+        <div class="form-group">
+          <label for="managed_external_chat_ids">{{ t("Managed External Chat IDs") }}</label>
+          <input id="managed_external_chat_ids" type="text" name="managed_external_chat_ids" placeholder="chat_01, chat_02">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="inline-checkbox">
+          <input type="checkbox" name="is_enabled" value="1" checked>
+          {{ t("Enabled") }}
+        </label>
+        </div>
+        <div class="actions">
+          <button type="submit">{{ t("Save Connector") }}</button>
+        </div>
+      </form>
+    {% endcall %}
+  {% endcall %}
+</div>
+
+<div class="grid cols-2">
+  {% call ui.panel(t("Attribute Mapping Rule"), t("Organization Scope"), "info", t("Add these only when the default fixed field behavior is not enough.")) %}
+    {% call ui.detail_toggle(t("Add Mapping Rule"), t("Use connector scope only when a rule should apply to one connector"), open=False) %}
+      <form method="post" action="/advanced-sync/mappings">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-grid">
+        <div class="form-group">
+          <label for="mapping_connector_id">{{ t("Connector Scope") }}</label>
+          <select id="mapping_connector_id" name="connector_id">
+            <option value="">{{ t("Global") }}</option>
+            {% for connector in connectors %}
+            {% if connector.connector_id != "default" %}
+            <option value="{{ connector.connector_id }}">{{ connector.connector_id }} - {{ connector.name }}</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="direction">{{ t("Direction") }}</label>
+          <select id="direction" name="direction">
+            {% for value, label in mapping_direction_options %}
+            <option value="{{ value }}">{{ t(label) }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="source_field">{{ t("Source Field") }}</label>
+          <input id="source_field" type="text" name="source_field" placeholder="position">
+        </div>
+        <div class="form-group">
+          <label for="target_field">{{ t("Target Field") }}</label>
+          <input id="target_field" type="text" name="target_field" placeholder="title">
+        </div>
+        <div class="form-group">
+          <label for="transform_template">{{ t("Transform Template") }}</label>
+          <input id="transform_template" type="text" name="transform_template" placeholder="{pinyin_initials}{employee_id}">
+        </div>
+        <div class="form-group">
+          <label for="sync_mode">{{ t("Sync Mode") }}</label>
+          <select id="sync_mode" name="sync_mode">
+            {% for value, label in mapping_mode_options %}
+            <option value="{{ value }}">{{ t(label) }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="mapping_notes">{{ t("Notes") }}</label>
+        <textarea id="mapping_notes" name="notes" placeholder="{{ t('Map source position into AD title or write Exchange mail back to the source email field.') }}"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="inline-checkbox">
+          <input type="checkbox" name="is_enabled" value="1" checked>
+          {{ t("Enabled") }}
+        </label>
+        </div>
+        <div class="actions">
+          <button type="submit">{{ t("Save Mapping Rule") }}</button>
+        </div>
+      </form>
+    {% endcall %}
+  {% endcall %}
+
+  {% call ui.panel(t("Connector Routing"), t("Organization Scope"), "info") %}
+    <p class="muted">
+      {{ t("Each connector can own one or more source root units. The runtime will route OU placement, user provisioning, group management, and offboarding to the matched connector.") }}
+    </p>
+    {% call ui.table_shell() %}
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t("Connector") }}</th>
+          <th>{{ t("Status") }}</th>
+          <th>{{ t("Settings Source") }}</th>
+          <th>{{ t("Roots") }}</th>
+          <th>{{ t("Template") }}</th>
+          <th>{{ t("Actions") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for connector in connectors %}
+        <tr>
+          <td>
+            <strong>{{ connector.connector_id }}</strong><br>
+            <span class="muted">{{ connector.name }}</span>
+          </td>
+          <td>
+            <span class="badge {% if connector.is_enabled %}badge-success{% else %}badge-warning{% endif %}">
+              {{ t("Enabled") if connector.is_enabled else t("Disabled") }}
+            </span>
+          </td>
+          <td>
+            {{ t(connector_config_sources.get(connector.connector_id, "Inherited Organization Settings")) }}
+            {% if connector.config_path %}
+            <div class="muted text-sm">{{ t("Legacy Import Path") }}: {{ connector.config_path }}</div>
+            {% endif %}
+          </td>
+          <td>{{ connector.root_department_ids|join(", ") if connector.root_department_ids else "-" }}</td>
+          <td><code>{{ connector.username_template or "-" }}</code></td>
+          <td>
+            {% if connector.connector_id != "default" and can("config.write") %}
+            <div class="actions">
+              <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/toggle" onsubmit="return confirm('{{ t('Are you sure you want to perform this action?') }}')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="secondary">{{ t("Disable") if connector.is_enabled else t("Enable") }}</button>
+              </form>
+              <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/delete" onsubmit="return confirm('{{ t('Are you sure you want to perform this action?') }}')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="secondary">{{ t("Delete") }}</button>
+              </form>
+            </div>
+            {% else %}
+            <span class="muted">-</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="muted">{{ t("No connectors configured.") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endcall %}
+  {% endcall %}
+</div>
+
+{% call ui.panel(t("Attribute Mapping Rules"), t("Organization Scope"), "info") %}
+  {% call ui.table_shell() %}
+  <table>
+    <thead>
+      <tr>
+        <th>{{ t("Connector") }}</th>
+        <th>{{ t("Direction") }}</th>
+        <th>{{ t("Source Field") }}</th>
+        <th>{{ t("Target Field") }}</th>
+        <th>{{ t("Sync Mode") }}</th>
+        <th>{{ t("Template") }}</th>
+        <th>{{ t("Status") }}</th>
+        <th>{{ t("Actions") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for rule in attribute_mappings %}
+      <tr>
+        <td>{{ rule.connector_id or t("Global") }}</td>
+        <td>{{ t(mapping_direction_labels.get(rule.direction, rule.direction)) }}</td>
+        <td>{{ rule.source_field }}</td>
+        <td>{{ rule.target_field }}</td>
+        <td>{{ t(rule.sync_mode) }}</td>
+        <td><code>{{ rule.transform_template or "-" }}</code></td>
+        <td>
+          <span class="badge {% if rule.is_enabled %}badge-success{% else %}badge-warning{% endif %}">
+            {{ t("Enabled") if rule.is_enabled else t("Disabled") }}
+          </span>
+        </td>
+        <td>
+          {% if can("config.write") %}
+          <form method="post" action="/advanced-sync/mappings/{{ rule.id }}/delete" onsubmit="return confirm('{{ t('Are you sure you want to perform this action?') }}')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="secondary">{{ t("Delete") }}</button>
+          </form>
+          {% else %}
+          <span class="muted">{{ t("Read only") }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="8" class="muted">{{ t("No attribute mapping rules configured.") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endcall %}
+{% endcall %}
+
+<div class="grid cols-2">
+  {% call ui.panel(t("Pending Offboarding Queue"), t("Organization Scope"), "info") %}
+    {% call ui.table_shell() %}
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t("Connector") }}</th>
+          <th>{{ t("AD Username") }}</th>
+          <th>{{ t("Source User ID") }}</th>
+          <th>{{ t("Due At") }}</th>
+          <th>{{ t("Managers") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in offboarding_records %}
+        <tr>
+          <td>{{ record.connector_id }}</td>
+          <td>{{ record.ad_username }}</td>
+          <td>{{ record.source_user_id or record.wecom_userid or "-" }}</td>
+          <td>{{ record.due_at }}</td>
+          <td>{{ record.manager_userids|join(", ") if record.manager_userids else "-" }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="muted">{{ t("No pending offboarding records.") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endcall %}
+  {% endcall %}
+
+  {% call ui.panel(t("Pending Lifecycle Queue"), t("Organization Scope"), "info") %}
+    <p class="muted">{{ t("Pending lifecycle records are created only when the related feature is enabled.") }}</p>
+    {% call ui.table_shell() %}
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t("Lifecycle Type") }}</th>
+          <th>{{ t("Connector") }}</th>
+          <th>{{ t("AD Username") }}</th>
+          <th>{{ t("Source User ID") }}</th>
+          <th>{{ t("Effective At") }}</th>
+          <th>{{ t("Employment Type") }}</th>
+          <th>{{ t("Sponsor User") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in lifecycle_records %}
+        <tr>
+          <td>{{ t(record.lifecycle_type.replace("_", " ").title()) }}</td>
+          <td>{{ record.connector_id }}</td>
+          <td>{{ record.ad_username or "-" }}</td>
+          <td>{{ record.source_user_id or record.wecom_userid }}</td>
+          <td>{{ record.effective_at or "-" }}</td>
+          <td>{{ record.employment_type or "-" }}</td>
+          <td>{{ record.sponsor_userid or "-" }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="muted">{{ t("No pending lifecycle records.") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endcall %}
+  {% endcall %}
+</div>
+
+<div class="grid cols-2">
+  {% call ui.panel(t("Pending Replay Requests"), t("Organization Scope"), "info") %}
+    {% call ui.table_shell() %}
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t("Request Type") }}</th>
+          <th>{{ t("Mode") }}</th>
+          <th>{{ t("Scope") }}</th>
+          <th>{{ t("Target") }}</th>
+          <th>{{ t("Requested By") }}</th>
+          <th>{{ t("Created At") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in replay_requests %}
+        <tr>
+          <td>{{ record.request_type }}</td>
+          <td>{{ record.execution_mode or "-" }}</td>
+          <td>{{ record.target_scope or "-" }}</td>
+          <td>{{ record.target_id or "-" }}</td>
+          <td>{{ record.requested_by or "-" }}</td>
+          <td>{{ record.created_at or "-" }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="muted">{{ t("No pending replay requests.") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endcall %}
+  {% endcall %}
+
+  {% call ui.panel(t("Custom Managed Groups"), t("Organization Scope"), "info") %}
+    {% call ui.table_shell() %}
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t("Connector") }}</th>
+          <th>{{ t("Source") }}</th>
+          <th>{{ t("AD Group") }}</th>
+          <th>{{ t("Display Name") }}</th>
+          <th>{{ t("Status") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in custom_group_bindings %}
+        <tr>
+          <td>{{ record.connector_id }}</td>
+          <td>{{ t(record.source_type) }} / {{ record.source_key }}</td>
+          <td><code>{{ record.group_sam }}</code></td>
+          <td>{{ record.display_name or "-" }}</td>
+          <td>{{ t(record.status) }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="muted">{{ t("No custom managed groups have been materialized yet.") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endcall %}
+  {% endcall %}
+</div>
+{% endblock %}

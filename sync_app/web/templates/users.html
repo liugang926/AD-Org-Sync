@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.panel(t("Local Admin Users")) %}
+    <form method="post" action="/users">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid">
+        <div><label>{{ t("Username") }}</label><input type="text" name="username" required></div>
+        <div><label>{{ t("Password") }}</label><input type="password" name="password" required></div>
+        <div>
+          <label>{{ t("Role") }}</label>
+          <select name="role">
+            <option value="super_admin">{{ t("super_admin") }}</option>
+            <option value="operator">{{ t("operator") }}</option>
+            <option value="auditor">{{ t("auditor") }}</option>
+          </select>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="submit">{{ t("Create User") }}</button>
+      </div>
+    </form>
+  {% endcall %}
+
+  {% call ui.panel(t("Administrator List")) %}
+    {% call ui.table_shell() %}
+      <table>
+        <thead><tr><th>{{ t("Username") }}</th><th>{{ t("Role") }}</th><th>{{ t("Status") }}</th><th>{{ t("Last Login") }}</th><th>{{ t("Actions") }}</th></tr></thead>
+        <tbody>
+          {% for item in users %}
+          <tr>
+            <td class="cell-strong">{{ item.username }}</td>
+            <td>{{ t(item.role) }}</td>
+            <td>{{ t("Enabled") if item.is_enabled else t("Disabled") }}</td>
+            <td>{{ item.last_login_at or "-" }}</td>
+            <td>
+              <form class="inline" method="post" action="/users/{{ item.id }}/toggle">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="{% if item.is_enabled %}danger{% else %}secondary{% endif %}" type="submit">
+                  {{ t("Disable") if item.is_enabled else t("Enable") }}
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td class="table-empty" colspan="5">{{ t("No local admin users yet.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+  {% endcall %}
+</div>
+{% endblock %}

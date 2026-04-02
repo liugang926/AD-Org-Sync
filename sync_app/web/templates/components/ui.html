@@ -1,0 +1,126 @@
+{% macro card(title='', class='') %}
+<section class="card {{ class }}">
+  {% if title %}<h2>{{ title }}</h2>{% endif %}
+  {{ caller() }}
+</section>
+{% endmacro %}
+
+{% macro panel(title, scope_label='', scope_level='info', description='', class_name='') %}
+<section class="card {{ class_name }}">
+  {% if title or scope_label or description %}
+  {{ section_header(title, scope_label, scope_level, description) }}
+  {% endif %}
+  {{ caller() }}
+</section>
+{% endmacro %}
+
+{% macro stat(label, value, class='') %}
+<div class="stat {{ class }}">
+  <div class="label">{{ label }}</div>
+  <div class="value">{{ value }}</div>
+</div>
+{% endmacro %}
+
+{% macro badge(text, level='info') %}
+<span class="badge badge-{{ level }}">{{ text }}</span>
+{% endmacro %}
+
+{% macro page_header(title, summary='', eyebrow='', badge_text='', badge_level='info', class_name='') %}
+<section class="page-hero {{ class_name }}">
+  <div class="page-hero__main">
+    {% if eyebrow %}<div class="page-hero__eyebrow">{{ eyebrow }}</div>{% endif %}
+    <h1 class="page-hero__title">{{ title }}</h1>
+    {% if summary %}<p class="page-hero__summary">{{ summary }}</p>{% endif %}
+    {% if caller is defined %}
+    <div class="page-hero__meta">
+      {{ caller() }}
+    </div>
+    {% endif %}
+  </div>
+  {% if badge_text %}
+  <div class="page-hero__aside">
+    {{ badge(badge_text, badge_level) }}
+  </div>
+  {% endif %}
+</section>
+{% endmacro %}
+
+{% macro compact_stat(label, value, detail='') %}
+<div class="compact-stat">
+  <div class="compact-stat__label">{{ label }}</div>
+  <div class="compact-stat__value">{{ value }}</div>
+  {% if detail %}<div class="compact-stat__detail">{{ detail }}</div>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro helper_block(title, description='', level='info', badge_text='', class_name='') %}
+<section class="helper-block helper-block--{{ level }} {{ class_name }}">
+  <div class="helper-block__header">
+    <div class="helper-block__title">{{ title }}</div>
+    {% if badge_text %}{{ badge(badge_text, level) }}{% endif %}
+  </div>
+  {% if description %}
+  <p class="helper-block__description">{{ description }}</p>
+  {% endif %}
+  {% if caller is defined %}
+  <div class="helper-block__body">
+    {{ caller() }}
+  </div>
+  {% endif %}
+</section>
+{% endmacro %}
+
+{% macro detail_toggle(title, description='', open=False, class_name='') %}
+<details class="detail-toggle {{ class_name }}" {% if open %}open{% endif %}>
+  <summary class="detail-toggle__summary">
+    <span class="detail-toggle__title">{{ title }}</span>
+    {% if description %}<span class="detail-toggle__description">{{ description }}</span>{% endif %}
+  </summary>
+  <div class="detail-toggle__body">
+    {{ caller() }}
+  </div>
+</details>
+{% endmacro %}
+
+{% macro section_header(title, scope_label='', scope_level='info', description='') %}
+<div class="section-header">
+  <div class="section-header__copy">
+    <h2 class="section-header__title">{{ title }}</h2>
+    {% if description %}
+    <p class="section-header__description">{{ description }}</p>
+    {% endif %}
+  </div>
+  {% if scope_label %}
+  {{ badge(scope_label, scope_level) }}
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro table_shell(class_name='') %}
+<div class="table-shell {{ class_name }}">
+  {{ caller() }}
+</div>
+{% endmacro %}
+
+{% macro pagination(meta_text, class_name='') %}
+<div class="pagination {{ class_name }}">
+  <div class="meta">{{ meta_text }}</div>
+  <div class="actions flush-top">
+    {{ caller() }}
+  </div>
+</div>
+{% endmacro %}
+
+{% macro empty_state(title, description='', level='info', class_name='') %}
+<div class="empty-state {{ class_name }}">
+  <div class="stack-sm">
+    <div>{{ badge(title, level) }}</div>
+    {% if description %}<p class="empty-state__description">{{ description }}</p>{% endif %}
+  </div>
+  {% if caller is defined %}
+  <div class="actions">
+    {{ caller() }}
+  </div>
+  {% endif %}
+</div>
+{% endmacro %}

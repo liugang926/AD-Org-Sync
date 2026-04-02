@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% import "components/forms.html" as forms %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Configuration"), t("Most deployments only need the source connector and LDAP directory fields. Everything else on this page is optional or can be adjusted after the first dry run."), eyebrow=t("Setup"), badge_text=t("Organization Scope"), badge_level="info") %}
+    <div class="surface-inline">
+      <span class="muted">{{ t("Current organization") }}:</span>
+      <strong>{{ current_org.name if current_org else t("Default Organization") }}</strong>
+    </div>
+  {% endcall %}
+
+  <div class="dense-two-col">
+    {% call ui.helper_block(t("Fill These First"), t("If you only want the minimum setup cost, complete these fields and leave the advanced sections collapsed."), "info") %}
+      <ul class="helper-list">
+        <li><strong>{{ t("Source Connector") }}</strong>: {{ t("Source Provider, CorpID, AgentID, and CorpSecret") }}</li>
+        <li><strong>{{ t("LDAP") }}</strong>: {{ t("LDAP Server, LDAP Domain, LDAP Username, and LDAP Password") }}</li>
+        <li><strong>{{ t("Password") }}</strong>: {{ t("Default Password before the first apply run") }}</li>
+      </ul>
+    {% endcall %}
+
+    {% call ui.helper_block(t("Organization Settings"), t("Most of this page belongs to the selected organization and does not change other tenants."), "warning") %}
+      <ul class="helper-list">
+        <li><strong>{{ t("Organization Settings") }}</strong>: {{ t("Use this page to define the current organization's source systems and default sync behavior.") }}</li>
+        <li><strong>{{ t("Global Settings") }}</strong>: {{ t("Web Deployment settings affect the whole server.") }}</li>
+        <li>{{ t("Use Advanced Sync only when the default single-organization flow no longer fits.") }}</li>
+      </ul>
+    {% endcall %}
+  </div>
+
+  {% if config_change_preview %}
+  {% call ui.panel(t("Pending Changes"), t("Preview"), "warning", t("Review the differences below before saving. Confirm to apply them, or keep editing the form underneath."), class_name="card-flat") %}
+    <p class="section-subtitle">
+      {{ t("Detected {count} changed fields.", count=config_change_preview.changed_count) }}
+      {% if config_change_preview.restart_required %}
+      {{ t("Restart the web service after saving to apply deployment changes.") }}
+      {% endif %}
+    </p>
+    <div class="stack-md">
+      {% for group in config_change_preview.groups %}
+      {% call ui.detail_toggle(t(group.title), t("Review changed values"), open=(loop.first)) %}
+        {% call ui.table_shell() %}
+          <table>
+            <thead>
+              <tr>
+                <th>{{ t("Field") }}</th>
+                <th>{{ t("Current Value") }}</th>
+                <th>{{ t("Pending Value") }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for change in group.changes %}
+              <tr>
+                <td>{{ t(change.label) }}</td>
+                <td>{{ t(change.before) if change.translate_before else change.before }}</td>
+                <td>{{ t(change.after) if change.translate_after else change.after }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endcall %}
+      {% endcall %}
+      {% endfor %}
+    </div>
+    <form method="post" action="/config/confirm">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="preview_token" value="{{ config_preview_token }}">
+      <div class="actions">
+        <button type="submit">{{ t("Confirm Save") }}</button>
+      </div>
+    </form>
+  {% endcall %}
+  {% endif %}
+
+  <form method="post" action="/config/preview" class="page-stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    {% call ui.panel(t("Required To Start"), t("Recommended"), "info", t("Complete these fields before the first live connectivity test or dry run.")) %}
+      <div class="dense-two-col">
+        <section class="subcard stack-tight">
+          <div class="section-header">
+            <div class="section-header__copy">
+              <h3 class="section-header__title">{{ t("Source Connector") }}</h3>
+              <p class="section-header__description">{{ t("Choose the source platform, then provide the connector credentials required for user and department data.") }}</p>
+            </div>
+          </div>
+          <div class="form-grid">
+            {{ forms.select("source_provider", t("Source Provider"), source_provider_options, selected_value=editable.source_provider, help_text=t("WeCom is the currently implemented provider in this build."), class_name="field-span-full") }}
+            {{ forms.input("corpid", t("CorpID"), editable.corpid, help_text=t("Your WeCom Corporate ID")) }}
+            {{ forms.input("agentid", t("AgentID"), editable.agentid, help_text=t("Application AgentID")) }}
+            {{ forms.input("corpsecret", t("CorpSecret"), type="password", placeholder=(t("Leave blank to keep current") if editable.corpsecret_configured else t("Enter CorpSecret")), class_name="field-span-full") }}
+          </div>
+        </section>
+
+        <section class="subcard stack-tight">
+          <div class="section-header">
+            <div class="section-header__copy">
+              <h3 class="section-header__title">{{ t("Directory Connection") }}</h3>
+              <p class="section-header__description">{{ t("Required for AD user, OU, and group operations.") }}</p>
+            </div>
+          </div>
+          <div class="form-grid">
+            {{ forms.input("ldap_server", t("LDAP Server"), editable.ldap_server, placeholder="ldap.example.com") }}
+            {{ forms.input("ldap_domain", t("LDAP Domain"), editable.ldap_domain, placeholder="example.com") }}
+            {{ forms.input("ldap_username", t("LDAP Username"), editable.ldap_username) }}
+            {{ forms.input("ldap_password", t("LDAP Password"), type="password", placeholder=(t("Leave blank to keep current") if editable.ldap_password_configured else t("Enter LDAP password"))) }}
+            {{ forms.input("default_password", t("Default Password"), type="password", placeholder=(t("Leave blank to keep current") if editable.default_password_configured else t("Enter default password")), class_name="field-span-full") }}
+          </div>
+        </section>
+      </div>
+    {% endcall %}
+
+    {% call ui.detail_toggle(t("Security And Account Policy"), t("Recommended after the base connection works"), open=True) %}
+      <div class="page-stack tight">
+        {% call ui.panel(t("Connection Settings"), t("Organization Scope"), "info") %}
+          <div class="form-grid">
+            {{ forms.input("webhook_url", t("WeCom Webhook"), type="password", placeholder=(t("Leave blank to keep current") if editable.webhook_url_configured else t("Enter webhook URL")), class_name="field-span-full") }}
+            {{ forms.input("ldap_port", t("LDAP Port"), editable.ldap_port, type="number") }}
+            {{ forms.select("ldap_use_ssl", t("Use SSL"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.ldap_use_ssl|lower) }}
+            {{ forms.select("ldap_validate_cert", t("Certificate Validation"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.ldap_validate_cert|lower) }}
+            {{ forms.input("ldap_ca_cert_path", t("CA Certificate Path"), editable.ldap_ca_cert_path, help_text=t("Optional. Leave blank to use system trust store."), class_name="field-span-full") }}
+          </div>
+        {% endcall %}
+
+        {% call ui.panel(t("Account Policy"), t("Organization Scope"), "info") %}
+          <div class="form-grid">
+            {{ forms.select("force_change_password", t("Force Password Change"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.force_change_password|lower) }}
+            {{ forms.select("password_complexity", t("Password Complexity"), [("strong", t("Strong")), ("medium", t("Medium")), ("basic", t("Basic"))], selected_value=editable.password_complexity) }}
+          </div>
+        {% endcall %}
+
+        {% call ui.panel(t("Directory Safety"), t("Organization Scope"), "warning", t("System-protected accounts are always skipped for binding, create, update, reactivation, and disable actions.")) %}
+          <div class="form-group">
+            <label for="protected_accounts_display">{{ t("Protected Accounts (Read-only)") }}</label>
+            <textarea id="protected_accounts_display" rows="5" readonly>{{ editable.protected_accounts|join('\n') }}</textarea>
+            <div class="help-text">{{ t("These built-in and explicitly excluded AD accounts are never managed by synchronization.") }}</div>
+          </div>
+        {% endcall %}
+      </div>
+    {% endcall %}
+
+    {% call ui.detail_toggle(t("Runtime And Group Behavior"), t("Useful after the first dry run"), open=False) %}
+      <div class="page-stack tight">
+        {% call ui.panel(t("Runtime Policy"), t("Organization Scope"), "info") %}
+          <div class="form-grid">
+            {{ forms.input("schedule_time", t("Daily Schedule Time"), editable.schedule_time, placeholder="HH:mm") }}
+            {{ forms.input("retry_interval", t("Retry Interval (min)"), editable.retry_interval, type="number") }}
+            {{ forms.input("max_retries", t("Max Retries"), editable.max_retries, type="number") }}
+            {{ forms.select("schedule_execution_mode", t("Scheduled Mode"), [("apply", t("Apply")), ("dry_run", t("Dry Run"))], selected_value=editable.schedule_execution_mode) }}
+            {{ forms.select("user_ou_placement_strategy", t("OU Placement Strategy"), translated_placement_strategy_options.items(), selected_value=editable.user_ou_placement_strategy) }}
+            {{ forms.select("group_display_separator", t("Group Separator"), [("-", "-"), ("_", "_"), (" ", t("Space"))], selected_value=editable.group_display_separator) }}
+            {{ forms.select("group_recursive_enabled", t("Recursive Group Sync"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.group_recursive_enabled|lower) }}
+            {{ forms.select("managed_relation_cleanup_enabled", t("Relation Cleanup"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.managed_relation_cleanup_enabled|lower) }}
+          </div>
+        {% endcall %}
+
+        {% call ui.panel(t("Group Rules"), t("Organization Scope"), "info") %}
+          <div class="page-stack tight">
+            {{ forms.textarea("soft_excluded_groups", t("Soft Excluded Groups"), editable.soft_excluded_groups, help_text=t("One group per line. Use this only when a managed group should be ignored."), rows=6) }}
+            {% call ui.table_shell() %}
+              <table>
+                <thead>
+                  <tr><th>{{ t("Protected Group") }}</th><th>{{ t("Match") }}</th><th>{{ t("Source") }}</th></tr>
+                </thead>
+                <tbody>
+                  {% for rule in protected_rules %}
+                  <tr>
+                    <td>{{ rule.display_name or rule.match_value }}</td>
+                    <td>{{ ui.badge(t(rule.match_type), 'info') }}</td>
+                    <td>{{ rule.source }}</td>
+                  </tr>
+                  {% else %}
+                  <tr><td class="table-empty" colspan="3">{{ t("No protected rules.") }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% endcall %}
+          </div>
+        {% endcall %}
+      </div>
+    {% endcall %}
+
+    {% call ui.detail_toggle(t("Web Deployment"), t("Global settings for this server"), open=False) %}
+      {% call ui.panel(t("Web Deployment"), t("Global Scope"), "warning", t("These settings affect the whole server, regardless of which organization is selected.")) %}
+        <p class="section-subtitle">{{ t("Changes take effect after restarting the service.") }}</p>
+        <div class="form-grid">
+          {{ forms.input("web_bind_host", t("Bind Host"), editable.web_bind_host) }}
+          {{ forms.input("web_bind_port", t("Bind Port"), editable.web_bind_port, type="number") }}
+          {{ forms.input("web_public_base_url", t("Public Base URL"), editable.web_public_base_url, placeholder="https://sync.example.com", class_name="field-span-full") }}
+          {{ forms.select("web_session_cookie_secure_mode", t("Secure Cookie Policy"), [("auto", "auto"), ("always", "always"), ("never", "never")], selected_value=editable.web_session_cookie_secure_mode) }}
+          {{ forms.select("web_trust_proxy_headers", t("Trust Proxy Headers"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.web_trust_proxy_headers|lower) }}
+          {{ forms.input("web_forwarded_allow_ips", t("Forwarded Allow IPs"), editable.web_forwarded_allow_ips, placeholder="127.0.0.1, 10.0.0.0/24", class_name="field-span-full") }}
+        </div>
+      {% endcall %}
+    {% endcall %}
+
+    <div class="sticky-submit-bar">
+      <div class="actions flush-top">
+        <button class="block" type="submit">{{ t("Preview Changes") }}</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}

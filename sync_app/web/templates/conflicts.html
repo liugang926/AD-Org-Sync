@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Conflict Queue"), t("Work this page from top to bottom: review the recommendation, apply a manual binding if the target is clear, otherwise whitelist or dismiss with a reason."), eyebrow=t("Review"), badge_text=t(conflict_status|capitalize), badge_level=("warning" if conflict_status == "open" else "info")) %}
+    <div class="surface-inline">
+      {{ ui.badge(t("Open Conflict Queue"), "warning") }}
+      <span class="muted">{{ t("Manual binding and skip rules take effect on the next sync run.") }}</span>
+    </div>
+  {% endcall %}
+
+  {% call ui.panel(t("Conflict Queue"), description=t("Review unresolved identity conflicts from recent jobs. Manual binding and skip rules take effect on the next sync run.")) %}
+    <form method="get" action="/conflicts">
+      <div class="form-grid">
+        <div>
+          <label>{{ t("Keyword") }}</label>
+          <input type="text" name="q" value="{{ conflict_query or '' }}" placeholder="{{ t('userid, ad account, message') }}">
+        </div>
+        <div>
+          <label>{{ t("Status") }}</label>
+          <select name="status">
+            <option value="open" {% if conflict_status == 'open' %}selected{% endif %}>{{ t("Open") }}</option>
+            <option value="resolved" {% if conflict_status == 'resolved' %}selected{% endif %}>{{ t("Resolved") }}</option>
+            <option value="dismissed" {% if conflict_status == 'dismissed' %}selected{% endif %}>{{ t("Dismissed") }}</option>
+            <option value="all" {% if conflict_status == 'all' %}selected{% endif %}>{{ t("All") }}</option>
+          </select>
+        </div>
+        <div>
+          <label>{{ t("Job ID") }}</label>
+          <input type="text" name="job_id" value="{{ conflict_job_id or '' }}" placeholder="{{ t('optional job id') }}">
+        </div>
+      </div>
+      {% if filters_are_remembered %}
+      <p class="section-subtitle">{{ t("Filters are remembered for this browser session.") }}</p>
+      {% endif %}
+      <div class="actions">
+        <button type="submit">{{ t("Search") }}</button>
+        <a class="button secondary" href="/conflicts?clear_filters=1">{{ t("Reset") }}</a>
+        <a class="button ghost" href="/jobs">{{ t("Open Job Center") }}</a>
+        {% if show_advanced_navigation %}
+        <a class="button ghost" href="/mappings">{{ t("Open Mappings") }}</a>
+        {% endif %}
+      </div>
+    </form>
+  {% endcall %}
+
+  {% if can("mappings.write") %}
+  {% call ui.panel(t("Bulk Actions")) %}
+    <form id="bulk-conflicts-form" method="post" action="/conflicts/bulk">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="return_query" value="{{ conflict_query or '' }}">
+      <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
+      <input type="hidden" name="return_job_id" value="{{ conflict_job_id or '' }}">
+      <div class="form-grid">
+        <div>
+          <label>{{ t("Action") }}</label>
+          <select name="action">
+            <option value="apply_recommendation">{{ t("Apply Recommendation") }}</option>
+            <option value="skip_user_sync">{{ t("Add skip_user_sync") }}</option>
+            <option value="dismiss">{{ t("Dismiss") }}</option>
+            <option value="reopen">{{ t("Reopen") }}</option>
+          </select>
+        </div>
+        <div class="field-span-full">
+          <label>{{ t("Notes / Confirmation Reason") }}</label>
+          <input type="text" name="notes" placeholder="{{ t('Required for low-confidence recommendation apply') }}">
+        </div>
+      </div>
+      <div class="actions">
+        <button type="submit">{{ t("Run Bulk Action") }}</button>
+      </div>
+    </form>
+  {% endcall %}
+  {% endif %}
+
+  {% for item in conflicts %}
+  <section class="card">
+    <div class="section-header">
+      <div class="section-header__copy">
+        <h2 class="section-header__title">{{ item.conflict_type }}</h2>
+        <p class="section-header__description">{{ t("Job ID") }} <a href="/jobs/{{ item.job_id }}">{{ item.job_id }}</a> / {{ item.created_at }}</p>
+      </div>
+      <div class="actions flush-top">
+        {% if can("mappings.write") %}
+        <label class="inline-checkbox">
+          <input form="bulk-conflicts-form" type="checkbox" name="conflict_ids" value="{{ item.id }}">
+          {{ t("Select") }}
+        </label>
+        {% endif %}
+        {{ ui.badge(t(item.status), 'warning' if item.status == 'open' else ('success' if item.status == 'resolved' else 'info')) }}
+      </div>
+    </div>
+
+    <div class="stack-sm">
+      <p>{{ item.message }}</p>
+      <p class="muted">{{ t("Source") }}: {{ item.source_id or "-" }} / {{ t("Target") }}: {{ item.target_key or "-" }}</p>
+      {% if item.resolution_hint %}
+      <p class="muted">{{ t("Hint") }}: {{ item.resolution_hint }}</p>
+      {% endif %}
+      <div class="actions flush-top">
+        <a class="button ghost small" href="/jobs/{{ item.job_id }}">{{ t("Open Job Detail") }}</a>
+        {% if item.source_id and show_advanced_navigation %}
+        <a class="button ghost small" href="/mappings?q={{ item.source_id }}">{{ t("Search Mappings") }}</a>
+        {% endif %}
+      </div>
+    </div>
+
+    {% set recommendation = conflict_recommendations.get(item.id) %}
+    {% if recommendation %}
+    <div class="subcard stack-sm">
+      <div class="section-header">
+        <div class="section-header__copy">
+          <h3 class="section-header__title">{{ t("Recommended Action") }}</h3>
+          <p class="section-header__description">{{ recommendation.reason }}</p>
+        </div>
+        {% if recommendation.confidence %}
+        <span class="badge badge-info">{{ recommendation.confidence }}</span>
+        {% endif %}
+      </div>
+      <p>
+        <strong>{{ recommendation.label }}</strong>
+        {% if recommendation.requires_confirmation %}<span class="muted">{{ t("confirmation required") }}</span>{% endif %}
+      </p>
+      {% if recommendation.ad_username %}
+      <p class="muted">{{ t("Target AD Username: {username}", username=recommendation.ad_username) }}</p>
+      {% endif %}
+      {% if item.status == "open" and can("mappings.write") %}
+      <form method="post" action="/conflicts/{{ item.id }}/apply-recommendation">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="return_query" value="{{ conflict_query or '' }}">
+        <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
+        <input type="hidden" name="return_job_id" value="{{ conflict_job_id or item.job_id }}">
+        {% if recommendation.requires_confirmation %}
+        <label>{{ t("Confirmation Reason") }}</label>
+        <input type="text" name="confirmation_reason" placeholder="{{ t('Explain why this lower-confidence recommendation is acceptable') }}" required>
+        {% endif %}
+        <div class="actions">
+          <button type="submit">{{ t("Apply Recommendation") }}</button>
+        </div>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if item.details and item.details.get("candidates") %}
+    <p class="muted">
+      {{ t("Candidates") }}:
+      {% for candidate in item.details.get("candidates", []) %}
+      <span>{{ candidate.username }}</span>{% if not loop.last %} / {% endif %}
+      {% endfor %}
+    </p>
+    {% endif %}
+
+    {% if item.status == "open" and can("mappings.write") %}
+    <div class="grid cols-2">
+      <section class="subcard">
+        <div class="stack-md">
+          <div class="section-header">
+            <div class="section-header__copy">
+              <h3 class="section-header__title">{{ t("Manual Binding") }}</h3>
+            </div>
+          </div>
+          <form method="post" action="/conflicts/{{ item.id }}/resolve-binding">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="return_query" value="{{ conflict_query or '' }}">
+            <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
+            <input type="hidden" name="return_job_id" value="{{ conflict_job_id or item.job_id }}">
+            <label>{{ t("AD Username") }}</label>
+            <input type="text" name="ad_username" value="{{ item.target_key or '' }}" required>
+            <div class="actions">
+              <button type="submit">{{ t("Resolve With Binding") }}</button>
+            </div>
+          </form>
+          {% if item.details and item.details.get("candidates") %}
+          <div class="actions flush-top">
+            {% for candidate in item.details.get("candidates", []) %}
+            <form class="inline" method="post" action="/conflicts/{{ item.id }}/resolve-binding">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="return_query" value="{{ conflict_query or '' }}">
+              <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
+              <input type="hidden" name="return_job_id" value="{{ conflict_job_id or item.job_id }}">
+              <input type="hidden" name="ad_username" value="{{ candidate.username }}">
+              <button class="secondary small" type="submit">{{ candidate.username }}</button>
+            </form>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="subcard">
+        <div class="stack-md">
+          <div class="section-header">
+            <div class="section-header__copy">
+              <h3 class="section-header__title">{{ t("Skip Or Dismiss") }}</h3>
+            </div>
+          </div>
+          <form method="post" action="/conflicts/{{ item.id }}/skip-user">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="return_query" value="{{ conflict_query or '' }}">
+            <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
+            <input type="hidden" name="return_job_id" value="{{ conflict_job_id or item.job_id }}">
+            <label>{{ t("skip_user_sync Notes") }}</label>
+            <input type="text" name="notes" placeholder="{{ t('Optional note for whitelist') }}">
+            <div class="actions">
+              <button class="secondary" type="submit">{{ t("Add skip_user_sync") }}</button>
+            </div>
+          </form>
+          <form method="post" action="/conflicts/{{ item.id }}/dismiss">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="return_query" value="{{ conflict_query or '' }}">
+            <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
+            <input type="hidden" name="return_job_id" value="{{ conflict_job_id or item.job_id }}">
+            <label>{{ t("Dismiss Notes") }}</label>
+            <input type="text" name="notes" placeholder="{{ t('Why this conflict can be ignored') }}">
+            <div class="actions">
+              <button class="danger" type="submit">{{ t("Dismiss Conflict") }}</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
+    {% else %}
+    {% if item.resolution_payload %}
+    <pre>{{ item.resolution_payload | tojson(indent=2) }}</pre>
+    {% endif %}
+    {% if can("mappings.write") %}
+    <form method="post" action="/conflicts/{{ item.id }}/reopen">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="return_query" value="{{ conflict_query or '' }}">
+      <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
+      <input type="hidden" name="return_job_id" value="{{ conflict_job_id or item.job_id }}">
+      <div class="actions">
+        <button class="secondary" type="submit">{{ t("Reopen Conflict") }}</button>
+      </div>
+    </form>
+    {% endif %}
+    {% endif %}
+  </section>
+  {% else %}
+  {% call ui.panel("") %}
+    {% call ui.empty_state(t("No conflicts matched the current filter."), t("This usually means the latest synchronization run is healthy or the current search is too narrow."), "success") %}
+      <a class="button secondary" href="/jobs">{{ t("Open Job Center") }}</a>
+      {% if show_advanced_navigation %}
+      <a class="button ghost" href="/mappings">{{ t("Open Mappings") }}</a>
+      {% endif %}
+    {% endcall %}
+  {% endcall %}
+  {% endfor %}
+
+  {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=conflict_page_data.total_items, page=conflict_page_data.page, pages=conflict_page_data.total_pages)) %}
+    {% if conflict_page_data.has_previous %}
+    <a class="button secondary" href="/conflicts?q={{ conflict_query or '' }}&status={{ conflict_status or 'open' }}&job_id={{ conflict_job_id or '' }}&page_number={{ conflict_page_data.previous_page }}">{{ t("Previous") }}</a>
+    {% endif %}
+    {% if conflict_page_data.has_next %}
+    <a class="button secondary" href="/conflicts?q={{ conflict_query or '' }}&status={{ conflict_status or 'open' }}&job_id={{ conflict_job_id or '' }}&page_number={{ conflict_page_data.next_page }}">{{ t("Next") }}</a>
+    {% endif %}
+  {% endcall %}
+</div>
+{% endblock %}
