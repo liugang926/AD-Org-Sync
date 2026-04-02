@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from sync_app.clients.wecom import WeComAPI
-from sync_app.core.models import AppConfig, DepartmentNode, SourceConnectorConfig, SourceDirectoryUser, WeComConfig
+from sync_app.core.models import AppConfig, DepartmentNode, SourceConnectorConfig, SourceDirectoryUser
 from sync_app.providers.source.base import SourceDirectoryProvider, normalize_source_provider
 
 
@@ -69,7 +69,7 @@ def build_source_provider(
     *,
     app_config: AppConfig | None = None,
     source_connector_config: SourceConnectorConfig | None = None,
-    wecom_config: WeComConfig | None = None,
+    wecom_config: SourceConnectorConfig | None = None,
     provider_type: str | None = None,
     logger=None,
     api_factory: Callable[..., Any] | None = None,

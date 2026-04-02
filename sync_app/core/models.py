@@ -45,7 +45,7 @@ def _normalize_mapping_direction_value(value: Any, default: str = "source_to_ad"
 
 
 @dataclass(slots=True)
-class WeComConfig:
+class SourceConnectorConfig:
     corpid: str
     corpsecret: str
     agentid: Optional[str] = None
@@ -57,7 +57,7 @@ class WeComConfig:
         return data
 
 
-SourceConnectorConfig = WeComConfig
+WeComConfig = SourceConnectorConfig
 
 
 @dataclass(slots=True)
@@ -93,7 +93,7 @@ class AccountConfig:
 
 @dataclass(slots=True)
 class AppConfig:
-    wecom: WeComConfig
+    wecom: SourceConnectorConfig
     ldap: LDAPConfig
     domain: str
     source_provider: str = "wecom"
@@ -139,7 +139,7 @@ class DepartmentNode:
     parent_id: int
     path: list[str] = field(default_factory=list)
     path_ids: list[int] = field(default_factory=list)
-    users: list["WeComUser"] = field(default_factory=list)
+    users: list["SourceDirectoryUser"] = field(default_factory=list)
 
     @classmethod
     def from_wecom_payload(cls, payload: Dict[str, Any]) -> "DepartmentNode":
@@ -162,7 +162,7 @@ class DepartmentNode:
 
 
 @dataclass(slots=True)
-class WeComUser:
+class SourceDirectoryUser:
     userid: str
     name: str
     email: str = ""
@@ -170,7 +170,7 @@ class WeComUser:
     raw_payload: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_wecom_payload(cls, payload: Dict[str, Any]) -> "WeComUser":
+    def from_wecom_payload(cls, payload: Dict[str, Any]) -> "SourceDirectoryUser":
         payload_copy = dict(payload)
         return cls(
             userid=str(payload_copy.get("userid") or ""),
@@ -230,16 +230,16 @@ class WeComUser:
         self.userid = str(value or "").strip()
 
     @classmethod
-    def from_source_payload(cls, payload: Dict[str, Any]) -> "WeComUser":
+    def from_source_payload(cls, payload: Dict[str, Any]) -> "SourceDirectoryUser":
         return cls.from_wecom_payload(payload)
 
 
-SourceDirectoryUser = WeComUser
+WeComUser = SourceDirectoryUser
 
 
 @dataclass(slots=True)
 class UserDepartmentBundle:
-    user: WeComUser
+    user: SourceDirectoryUser
     departments: list[DepartmentNode] = field(default_factory=list)
 
     def add_department(self, department: DepartmentNode) -> None:
