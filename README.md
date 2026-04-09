@@ -76,6 +76,34 @@ without redesigning the synchronization control plane.
 - Tagged releases (`v*`) build and publish a wheel, a Windows `exe`, and a deployable web `zip` through GitHub Actions.
 - The packaged web build now includes both Jinja templates and `sync_app/web/static` assets, so CSS and JS are present in non-source deployments.
 
+## Fast Deployment
+
+For a new Windows environment, the fastest supported deployment path is:
+
+1. Prepare a working directory with either the source tree or the release `zip`.
+2. Copy in a legacy `config.ini` only if you want to import an existing connector configuration.
+3. Create a virtual environment and install deployment dependencies.
+4. Run `install_web_service.ps1` once to initialize the database, bootstrap the admin account, register the Windows service, and run health checks.
+5. Open the web console and finish organization-level configuration from `/config`.
+6. Validate source and LDAP connectivity before the first `dry-run`.
+
+One-command example:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-deploy.txt
+.\install_web_service.ps1 -AdminUsername admin -AdminPassword "simple888"
+```
+
+After installation:
+
+- Web console: `http://127.0.0.1:8010`
+- Health probe: `http://127.0.0.1:8010/healthz`
+- Readiness probe: `http://127.0.0.1:8010/readyz`
+- Service management: `.\manage_web_service.ps1 -Action status`
+
+If you do not pass `-AdminUsername` and `-AdminPassword`, the service still starts, but the first visit will redirect to `/setup` so you can create the initial administrator in the browser.
+
 ## Quick Start
 
 ### 1. Create a virtual environment
