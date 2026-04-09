@@ -61,4 +61,7 @@ Remove the service:
 
 - `install_web_service.ps1` automatically installs the `web` and `deploy` dependency sets.
 - The Windows service stores its runtime configuration in the service registry parameters instead of relying on the current working directory.
+- Organization and connector secrets stored in SQLite are protected with Windows DPAPI when the host supports it.
+- The service writes JSON line logs and also emits Windows service lifecycle events for install, start, stop, and failure paths.
+- Install and upgrade flows configure automatic service recovery so repeated failures trigger a restart instead of leaving the control plane down.
 - Legacy `config.ini` remains a compatibility input only. Database-backed organization settings remain the source of truth.

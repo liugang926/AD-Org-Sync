@@ -234,7 +234,7 @@ class WebAuthorizationTests(unittest.TestCase):
     def test_auditor_sees_readonly_mappings_and_cannot_run_jobs(self):
         self._login("auditor1")
 
-        with patch("sync_app.web.app.WeComAPI") as mock_wecom:
+        with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = []
             response = self._route("/mappings", "GET")(self._request("/mappings"))
         self.assertEqual(response.status_code, 200)
@@ -251,7 +251,7 @@ class WebAuthorizationTests(unittest.TestCase):
     def test_operator_can_view_exceptions_but_cannot_modify_them(self):
         self._login("operator1")
 
-        with patch("sync_app.web.app.WeComAPI") as mock_wecom:
+        with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = []
             response = self._route("/exceptions", "GET")(self._request("/exceptions"))
         self.assertEqual(response.status_code, 200)
@@ -340,7 +340,7 @@ class WebAuthorizationTests(unittest.TestCase):
     def test_super_admin_can_manage_exception_rules(self):
         self._login("superadmin")
 
-        with patch("sync_app.web.app.WeComAPI") as mock_wecom:
+        with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = [{"id": 1, "name": "HQ"}]
             response = self._route("/exceptions", "GET")(self._request("/exceptions"))
         self.assertEqual(response.status_code, 200)
@@ -1205,7 +1205,7 @@ class WebAuthorizationTests(unittest.TestCase):
                 notes=f"override-note-{index:02d}",
             )
 
-        with patch("sync_app.web.app.WeComAPI") as mock_wecom:
+        with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = [
                 {"id": 2000 + index, "name": f"Dept {index:02d}"}
                 for index in range(25)
@@ -1230,7 +1230,7 @@ class WebAuthorizationTests(unittest.TestCase):
             preserve_manual=False,
         )
 
-        with patch("sync_app.web.app.WeComAPI") as mock_wecom:
+        with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = []
             first_response = self._route("/mappings", "GET")(
                 self._request("/mappings", query={"q": "alice", "status": "enabled"})
@@ -1256,7 +1256,7 @@ class WebAuthorizationTests(unittest.TestCase):
                 notes=f"exception-note-{index:02d}",
             )
 
-        with patch("sync_app.web.app.WeComAPI") as mock_wecom:
+        with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = []
             response = self._route("/exceptions", "GET")(
                 self._request("/exceptions", query={"page_number": "2"})
@@ -1275,7 +1275,7 @@ class WebAuthorizationTests(unittest.TestCase):
             notes="remembered-exception",
         )
 
-        with patch("sync_app.web.app.WeComAPI") as mock_wecom:
+        with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = []
             first_response = self._route("/exceptions", "GET")(
                 self._request("/exceptions", query={"q": "alice", "rule_type": "skip_user_disable", "status": "enabled"})
@@ -1904,7 +1904,7 @@ class WebAuthorizationTests(unittest.TestCase):
         )
         self.session["selected_org_id"] = "asia"
 
-        with patch("sync_app.web.app.WeComAPI") as mock_wecom:
+        with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = [{"id": 2002, "name": "Asia Dept"}]
             response = self._route("/mappings", "GET")(self._request("/mappings"))
         self.assertEqual(response.status_code, 200)
@@ -1937,7 +1937,7 @@ class WebAuthorizationTests(unittest.TestCase):
         )
         self.session["selected_org_id"] = "asia"
 
-        with patch("sync_app.web.app.WeComAPI") as mock_wecom:
+        with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = []
             response = self._route("/exceptions", "GET")(self._request("/exceptions"))
         self.assertEqual(response.status_code, 200)
@@ -2070,6 +2070,7 @@ class WebAuthorizationTests(unittest.TestCase):
         organizations_text = self._text(organizations_response)
         self.assertIn("Global Scope", organizations_text)
         self.assertIn("Organization List", organizations_text)
+        self.assertIn("independent source-directory tenants", organizations_text)
 
     def test_favicon_route_serves_icon_file(self):
         response = self._route("/favicon.ico", "GET")(self._request("/favicon.ico"))
@@ -2137,7 +2138,7 @@ class WebAuthorizationTests(unittest.TestCase):
         match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(dashboard))
         self.assertIsNotNone(match)
 
-        with patch("sync_app.web.app.test_wecom_connection", return_value=(True, "WeCom connection succeeded (self-built app), departments: 1")), patch(
+        with patch("sync_app.web.app.test_source_connection", return_value=(True, "WeCom connection succeeded (self-built app), departments: 1")), patch(
             "sync_app.web.app.test_ldap_connection",
             return_value=(True, "LDAP connection succeeded (auth: NTLM, protocol: LDAPS)"),
         ):

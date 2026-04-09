@@ -1,0 +1,183 @@
+import socket
+import threading
+import time
+import unittest
+import urllib.request
+from pathlib import Path
+
+import uvicorn
+
+from sync_app.storage.local_db import DatabaseManager, OrganizationRepository, WebAdminUserRepository
+from sync_app.web.app import create_app
+from sync_app.web.security import hash_password
+
+try:
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import sync_playwright
+except ImportError:  # pragma: no cover - exercised when browser tooling is absent
+    PlaywrightError = Exception
+    sync_playwright = None
+
+
+ARTIFACT_DIR = Path.cwd() / "test_artifacts" / "browser"
+
+
+def _reserve_port() -> int:
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return int(port)
+
+
+def _wait_for_http(url: str, *, timeout_seconds: float = 20.0) -> None:
+    deadline = time.time() + timeout_seconds
+    last_error = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as response:
+                if response.status < 500:
+                    return
+        except Exception as exc:  # pragma: no cover - timing-sensitive
+            last_error = exc
+            time.sleep(0.25)
+    if last_error is not None:
+        raise last_error
+    raise TimeoutError(f"timed out waiting for {url}")
+
+
+class WebBrowserRegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if sync_playwright is None:
+            raise unittest.SkipTest("playwright is not installed")
+
+        ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+        cls.db_path = ARTIFACT_DIR / "browser_regression.db"
+        for suffix in ("", "-wal", "-shm"):
+            candidate = Path(str(cls.db_path) + suffix)
+            if candidate.exists():
+                candidate.unlink()
+
+        manager = DatabaseManager(db_path=str(cls.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        OrganizationRepository(manager).ensure_default(config_path="config.ini")
+        WebAdminUserRepository(manager).create_user("admin", hash_password("simple888"))
+
+        cls.port = _reserve_port()
+        cls.base_url = f"http://127.0.0.1:{cls.port}"
+        cls.server = uvicorn.Server(
+            uvicorn.Config(
+                create_app(db_path=str(cls.db_path), config_path="config.ini", bind_host="127.0.0.1", bind_port=cls.port),
+                host="127.0.0.1",
+                port=cls.port,
+                log_level="warning",
+            )
+        )
+        cls.server.install_signal_handlers = lambda: None
+        cls.server_thread = threading.Thread(target=cls.server.run, name="browser-regression-server", daemon=True)
+        cls.server_thread.start()
+        _wait_for_http(f"{cls.base_url}/login")
+
+        try:
+            cls.playwright = sync_playwright().start()
+            cls.browser = cls.playwright.chromium.launch()
+        except PlaywrightError as exc:  # pragma: no cover - depends on browser install state
+            cls.server.should_exit = True
+            cls.server_thread.join(timeout=10)
+            raise unittest.SkipTest(f"playwright browser is not installed: {exc}")
+
+    @classmethod
+    def tearDownClass(cls):
+        browser = getattr(cls, "browser", None)
+        if browser is not None:
+            browser.close()
+        playwright = getattr(cls, "playwright", None)
+        if playwright is not None:
+            playwright.stop()
+        server = getattr(cls, "server", None)
+        if server is not None:
+            server.should_exit = True
+        thread = getattr(cls, "server_thread", None)
+        if thread is not None:
+            thread.join(timeout=10)
+
+    def setUp(self):
+        self.context = self.browser.new_context(viewport={"width": 1440, "height": 1100})
+        self.page = self.context.new_page()
+
+    def tearDown(self):
+        self.context.close()
+
+    def _capture(self, name: str) -> Path:
+        target = ARTIFACT_DIR / name
+        self.page.screenshot(path=str(target), full_page=True)
+        self.assertTrue(target.exists())
+        self.assertGreater(target.stat().st_size, 0)
+        return target
+
+    def _login(self) -> None:
+        self.page.goto(f"{self.base_url}/login", wait_until="networkidle")
+        self.page.fill("#username", "admin")
+        self.page.fill("#password", "simple888")
+        self.page.click("button[type='submit']")
+        self.page.wait_for_url(f"{self.base_url}/dashboard")
+
+    def _height(self, selector: str) -> float:
+        return float(
+            self.page.eval_on_selector(
+                selector,
+                "element => parseFloat(getComputedStyle(element).height || '0')",
+            )
+        )
+
+    def test_login_page_loads_styles_and_primary_action(self):
+        self.page.goto(f"{self.base_url}/login", wait_until="networkidle")
+        stylesheet_loaded = self.page.evaluate(
+            "() => Array.from(document.styleSheets).some(sheet => (sheet.href || '').includes('/static/app.css'))"
+        )
+        self.assertTrue(stylesheet_loaded)
+        submit_height = self._height("button[type='submit']")
+        self.assertGreaterEqual(submit_height, 42.0)
+        self.assertIn("AD Org Sync", self.page.title())
+        self._capture("login-page.png")
+
+    def test_dashboard_header_controls_share_consistent_height(self):
+        self._login()
+        self.page.goto(f"{self.base_url}/dashboard", wait_until="networkidle")
+        mode_height = self._height(".mode-switcher button.active")
+        language_height = self._height(".language-switcher a.active")
+        signout_height = self._height(".header-signout")
+        self.assertLessEqual(abs(mode_height - language_height), 6.0)
+        self.assertLessEqual(abs(signout_height - language_height), 6.0)
+        self._capture("dashboard-page.png")
+
+    def test_config_page_renders_multi_provider_schema_controls(self):
+        self._login()
+        self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
+        option_text = self.page.locator("#source_provider option").all_inner_texts()
+        self.assertTrue(any("WeCom" in item for item in option_text))
+        self.assertTrue(any("DingTalk" in item for item in option_text))
+        self.assertTrue(any("Feishu" in item for item in option_text))
+        self.assertTrue(self.page.locator("#group-corpid").is_visible())
+        self.assertTrue(self.page.locator("#group-corpsecret").is_visible())
+        self.assertTrue(self.page.locator("#group-webhook_url").is_visible())
+        self._capture("config-page.png")
+
+    def test_jobs_empty_state_actions_remain_visually_consistent(self):
+        self._login()
+        self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
+        self.page.wait_for_selector(".empty-state .button")
+        button_count = self.page.locator(".empty-state .button").count()
+        self.assertGreaterEqual(button_count, 2)
+        heights = self.page.locator(".empty-state .button").evaluate_all(
+            "elements => elements.map(element => parseFloat(getComputedStyle(element).height || '0'))"
+        )
+        first_height = float(heights[0])
+        for height in heights[1:]:
+            self.assertLessEqual(abs(first_height - float(height)), 6.0)
+        self._capture("jobs-page.png")
+
+
+if __name__ == "__main__":
+    unittest.main()

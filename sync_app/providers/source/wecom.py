@@ -4,7 +4,11 @@ from typing import Any, Callable
 
 from sync_app.clients.wecom import WeComAPI
 from sync_app.core.models import AppConfig, DepartmentNode, SourceConnectorConfig, SourceDirectoryUser
-from sync_app.providers.source.base import SourceDirectoryProvider, normalize_source_provider
+from sync_app.providers.source.base import (
+    SourceDirectoryProvider,
+    get_source_provider_schema,
+    normalize_source_provider,
+)
 
 
 class WeComSourceProvider(SourceDirectoryProvider):
@@ -78,7 +82,13 @@ def build_source_provider(
     if resolved_provider is None and app_config is not None:
         resolved_provider = getattr(app_config, "source_provider", None)
     normalized_provider = normalize_source_provider(resolved_provider)
+    provider_schema = get_source_provider_schema(normalized_provider)
     if normalized_provider != "wecom":
+        if not provider_schema.implemented:
+            raise ValueError(
+                provider_schema.implementation_status
+                or f"source provider '{provider_schema.display_name}' is not implemented in this build"
+            )
         raise ValueError(f"unsupported source provider: {normalized_provider}")
 
     config = source_connector_config or wecom_config or (app_config.source_connector if app_config else None)

@@ -3,7 +3,13 @@ from unittest.mock import patch
 
 from sync_app.core.config import test_source_connection
 from sync_app.core.models import AppConfig, LDAPConfig, WeComConfig
-from sync_app.providers.source import build_source_provider, get_source_provider_display_name, normalize_source_provider
+from sync_app.providers.source import (
+    build_source_provider,
+    get_source_provider_display_name,
+    get_source_provider_schema,
+    list_source_provider_options,
+    normalize_source_provider,
+)
 
 
 class FakeWeComClient:
@@ -51,6 +57,14 @@ class SourceProviderTests(unittest.TestCase):
         self.assertEqual(get_source_provider_display_name("WeCom"), "WeCom")
         self.assertEqual(get_source_provider_display_name("custom"), "custom")
 
+    def test_provider_schema_registry_exposes_planned_options(self):
+        options = dict(list_source_provider_options(include_unimplemented=True))
+        self.assertIn("wecom", options)
+        self.assertIn("dingtalk", options)
+        self.assertIn("feishu", options)
+        self.assertTrue(get_source_provider_schema("wecom").implemented)
+        self.assertFalse(get_source_provider_schema("dingtalk").implemented)
+
     def test_build_source_provider_wraps_wecom_client_with_generic_interface(self):
         config = AppConfig(
             wecom=WeComConfig(corpid="corp-id", corpsecret="secret", agentid="10001"),
@@ -80,7 +94,7 @@ class SourceProviderTests(unittest.TestCase):
             provider.close()
 
     def test_build_source_provider_rejects_unknown_provider(self):
-        with self.assertRaisesRegex(ValueError, "unsupported source provider"):
+        with self.assertRaisesRegex(ValueError, "not implemented in this build"):
             build_source_provider(
                 wecom_config=WeComConfig(corpid="corp-id", corpsecret="secret"),
                 provider_type="dingtalk",
@@ -94,11 +108,11 @@ class SourceProviderTests(unittest.TestCase):
             domain="example.com",
             source_provider="dingtalk",
         )
-        with self.assertRaisesRegex(ValueError, "unsupported source provider"):
+        with self.assertRaisesRegex(ValueError, "not implemented in this build"):
             build_source_provider(app_config=config, api_factory=FakeWeComClient)
 
     def test_test_source_connection_uses_provider_display_name(self):
-        with patch("sync_app.core.config.WeComAPI", FakeWeComClient):
+        with patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComClient):
             success, message = test_source_connection("corp-id", "secret", "10001", source_provider="wecom")
 
         self.assertTrue(success)

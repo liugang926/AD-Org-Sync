@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import os
+import subprocess
 import sys
 import threading
 from dataclasses import dataclass
@@ -13,11 +14,13 @@ from typing import Any
 try:  # pragma: no cover - exercised on Windows deployments
     import servicemanager
     import win32event
+    import win32evtlogutil
     import win32service
     import win32serviceutil
 except ImportError:  # pragma: no cover - keeps imports safe for non-service test runs
     servicemanager = None
     win32event = None
+    win32evtlogutil = None
     win32service = None
     win32serviceutil = None
 
@@ -41,6 +44,21 @@ SERVICE_STATE_LABELS = {
     6: "pause_pending",
     7: "paused",
 }
+
+
+class JsonLineFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "service": SERVICE_NAME,
+            "app_version": APP_VERSION,
+        }
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
 
 
 def _require_pywin32() -> None:
@@ -206,16 +224,52 @@ def _configure_logging(log_path: str) -> None:
     resolved_log_path = Path(log_path).expanduser().resolve()
     resolved_log_path.parent.mkdir(parents=True, exist_ok=True)
     root_logger = logging.getLogger()
-    if not any(
-        isinstance(handler, logging.FileHandler) and Path(getattr(handler, "baseFilename", "")) == resolved_log_path
-        for handler in root_logger.handlers
-    ):
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(name)s %(message)s",
-            handlers=[logging.FileHandler(resolved_log_path, encoding="utf-8")],
-            force=True,
+    file_handler = logging.FileHandler(resolved_log_path, encoding="utf-8")
+    file_handler.setFormatter(JsonLineFormatter())
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[file_handler],
+        force=True,
+    )
+
+
+def _emit_service_event(message: str, *, level: str = "info") -> None:
+    normalized_level = str(level or "info").strip().lower()
+    if servicemanager is not None:
+        if normalized_level == "error":
+            servicemanager.LogErrorMsg(message)
+        elif normalized_level == "warning":
+            servicemanager.LogWarningMsg(message)
+        else:
+            servicemanager.LogInfoMsg(message)
+    if win32evtlogutil is None:
+        return
+    try:  # pragma: no cover - depends on host Event Log registration
+        event_type = {
+            "error": 1,
+            "warning": 2,
+        }.get(normalized_level, 4)
+        win32evtlogutil.ReportEvent(
+            SERVICE_NAME,
+            eventID=0x1000,
+            eventCategory=0,
+            eventType=event_type,
+            strings=[message],
         )
+    except Exception:
+        return
+
+
+def _configure_service_recovery_policy(service_name: str = SERVICE_NAME) -> None:
+    commands = [
+        ["sc.exe", "failure", service_name, "reset=", "86400", "actions=", "restart/60000/restart/60000/restart/60000"],
+        ["sc.exe", "failureflag", service_name, "1"],
+    ]
+    for command in commands:
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+        except Exception as exc:  # pragma: no cover - depends on host SCM permissions
+            logging.getLogger(__name__).warning("failed to configure service recovery policy: %s", exc)
 
 
 def _build_runtime(service_name: str = SERVICE_NAME) -> tuple[DatabaseManager, str, dict[str, Any]]:
@@ -277,7 +331,10 @@ class ADOrgSyncWebService(win32serviceutil.ServiceFramework if win32serviceutil 
                 db_manager.db_path,
             )
             if servicemanager is not None:
-                servicemanager.LogInfoMsg(f"{SERVICE_NAME} starting on {web_runtime_settings['bind_host']}:{web_runtime_settings['bind_port']}")
+                _emit_service_event(
+                    f"{SERVICE_NAME} starting on {web_runtime_settings['bind_host']}:{web_runtime_settings['bind_port']}",
+                    level="info",
+                )
 
             app = create_app(
                 db_path=db_manager.db_path,
@@ -317,12 +374,10 @@ class ADOrgSyncWebService(win32serviceutil.ServiceFramework if win32serviceutil 
             if self._server_thread is not None:
                 self._server_thread.join(timeout=30)
             self._logger.info("%s stopped", SERVICE_NAME)
-            if servicemanager is not None:
-                servicemanager.LogInfoMsg(f"{SERVICE_NAME} stopped")
+            _emit_service_event(f"{SERVICE_NAME} stopped", level="info")
         except Exception as exc:
             self._logger.exception("failed to run %s: %s", SERVICE_NAME, exc)
-            if servicemanager is not None:
-                servicemanager.LogErrorMsg(f"{SERVICE_NAME} failed: {exc}")
+            _emit_service_event(f"{SERVICE_NAME} failed: {exc}", level="error")
             raise
         finally:
             self.ReportServiceStatus(win32service.SERVICE_STOPPED)
@@ -411,6 +466,7 @@ def _handle_install(args: argparse.Namespace) -> int:
         delayedstart=delayedstart,
     )
     save_service_options(service_options)
+    _configure_service_recovery_policy(SERVICE_NAME)
     print(f"service installed: {SERVICE_NAME}")
     print(f"log_path: {service_options.log_path}")
     return 0
@@ -437,6 +493,7 @@ def _handle_update(args: argparse.Namespace) -> int:
         delayedstart=delayedstart,
     )
     save_service_options(service_options)
+    _configure_service_recovery_policy(SERVICE_NAME)
     print(f"service updated: {SERVICE_NAME}")
     print(f"log_path: {service_options.log_path}")
     return 0

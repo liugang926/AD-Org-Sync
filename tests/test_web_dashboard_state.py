@@ -53,7 +53,7 @@ class WebDashboardStateTests(unittest.TestCase):
         preflight_snapshot = {
             "checks": [
                 {"key": "config", "status": "success"},
-                {"key": "live_wecom", "status": "success"},
+                {"key": "live_source", "status": "success"},
                 {"key": "live_ldap", "status": "success"},
             ],
             "dry_run_completed": True,
@@ -72,6 +72,27 @@ class WebDashboardStateTests(unittest.TestCase):
         self.assertEqual(data["next_step"]["title"], "Clear blockers and run apply")
         self.assertEqual(data["next_step"]["status"], "current")
         self.assertEqual(data["steps"][2]["href"], "/advanced-sync")
+
+    def test_build_getting_started_data_keeps_legacy_live_wecom_snapshot_compatible(self):
+        preflight_snapshot = {
+            "checks": [
+                {"key": "config", "status": "success"},
+                {"key": "live_wecom", "status": "success"},
+                {"key": "live_ldap", "status": "success"},
+            ],
+            "dry_run_completed": False,
+            "apply_completed": False,
+            "open_conflict_count": 0,
+        }
+
+        data = build_getting_started_data(
+            current_org_name="HQ",
+            preflight_snapshot=preflight_snapshot,
+            ui_mode="basic",
+        )
+
+        self.assertEqual(data["completed_steps"], 3)
+        self.assertEqual(data["next_step"]["title"], "Run the first dry run")
 
 
 if __name__ == "__main__":

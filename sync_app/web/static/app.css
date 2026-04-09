@@ -212,7 +212,7 @@
     }
 
     .header-signout {
-      min-height: 34px;
+      min-height: 36px;
       padding: 0 14px;
       border: 1px solid #cbd5e1;
       border-radius: 999px;
@@ -256,7 +256,11 @@
 
     .language-switcher a,
     .mode-switcher button {
-      padding: 7px 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+      padding: 0 14px;
       border-radius: 999px;
       color: var(--muted);
       text-decoration: none;
@@ -535,7 +539,8 @@
 
     .language-switcher a,
     .mode-switcher button {
-      padding: 8px 14px;
+      min-height: 36px;
+      padding: 0 14px;
     }
 
     .card {
@@ -815,7 +820,7 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 40px;
+      min-height: 42px;
       padding: 0 16px;
       border: 1px solid transparent;
       border-radius: 10px;
@@ -1212,9 +1217,9 @@
 
     button,
     .button {
-      min-height: 38px;
-      padding: 0 14px;
-      font-size: 12px;
+      min-height: 42px;
+      padding: 0 16px;
+      font-size: 13px;
     }
 
     button.small,

@@ -7,7 +7,7 @@
   <div class="grid cols-2">
     {% call ui.panel(t("Organizations"), t("Global Scope"), "warning", t("Organization definitions are global. They define each tenant's database-backed configuration scope and optional legacy import source.")) %}
       <p class="section-subtitle">
-        {{ t("Use organizations to separate WeCom tenants while keeping the default single-organization setup available. Legacy INI paths are optional and only used for import or compatibility.") }}
+        {{ t("Use organizations to separate independent source-directory tenants while keeping the default single-organization setup available. Legacy INI paths are optional and only used for import or compatibility.") }}
       </p>
       <form method="post" action="/organizations">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

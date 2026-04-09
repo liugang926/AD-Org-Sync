@@ -14,7 +14,7 @@
   <div class="dense-two-col">
     {% call ui.helper_block(t("Fill These First"), t("If you only want the minimum setup cost, complete these fields and leave the advanced sections collapsed."), "info") %}
       <ul class="helper-list">
-        <li><strong>{{ t("Source Connector") }}</strong>: {{ t("Source Provider, CorpID, AgentID, and CorpSecret") }}</li>
+        <li><strong>{{ t("Source Connector") }}</strong>: {{ t("Select the source provider and complete its required credentials.") }}</li>
         <li><strong>{{ t("LDAP") }}</strong>: {{ t("LDAP Server, LDAP Domain, LDAP Username, and LDAP Password") }}</li>
         <li><strong>{{ t("Password") }}</strong>: {{ t("Default Password before the first apply run") }}</li>
       </ul>
@@ -82,14 +82,14 @@
           <div class="section-header">
             <div class="section-header__copy">
               <h3 class="section-header__title">{{ t("Source Connector") }}</h3>
-              <p class="section-header__description">{{ t("Choose the source platform, then provide the connector credentials required for user and department data.") }}</p>
+              <p class="section-header__description">{{ t(source_provider_schema.description or "Choose the source platform, then provide the connector credentials required for user and department data.") }}</p>
             </div>
           </div>
           <div class="form-grid">
-            {{ forms.select("source_provider", t("Source Provider"), source_provider_options, selected_value=editable.source_provider, help_text=t("WeCom is the currently implemented provider in this build."), class_name="field-span-full") }}
-            {{ forms.input("corpid", t("CorpID"), editable.corpid, help_text=t("Your WeCom Corporate ID")) }}
-            {{ forms.input("agentid", t("AgentID"), editable.agentid, help_text=t("Application AgentID")) }}
-            {{ forms.input("corpsecret", t("CorpSecret"), type="password", placeholder=(t("Leave blank to keep current") if editable.corpsecret_configured else t("Enter CorpSecret")), class_name="field-span-full") }}
+            {{ forms.select("source_provider", t("Source Provider"), source_provider_options, selected_value=editable.source_provider, help_text=t(source_provider_schema.implementation_status or source_provider_schema.description or ""), class_name="field-span-full") }}
+            {% for field in source_provider_fields %}
+            {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=field.required, class_name=field.class_name, autocomplete=field.autocomplete) }}
+            {% endfor %}
           </div>
         </section>
 
@@ -115,7 +115,6 @@
       <div class="page-stack tight">
         {% call ui.panel(t("Connection Settings"), t("Organization Scope"), "info") %}
           <div class="form-grid">
-            {{ forms.input("webhook_url", t("WeCom Webhook"), type="password", placeholder=(t("Leave blank to keep current") if editable.webhook_url_configured else t("Enter webhook URL")), class_name="field-span-full") }}
             {{ forms.input("ldap_port", t("LDAP Port"), editable.ldap_port, type="number") }}
             {{ forms.select("ldap_use_ssl", t("Use SSL"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.ldap_use_ssl|lower) }}
             {{ forms.select("ldap_validate_cert", t("Certificate Validation"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.ldap_validate_cert|lower) }}

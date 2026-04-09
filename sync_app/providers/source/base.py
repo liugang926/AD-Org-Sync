@@ -1,13 +1,174 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any
 
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
 
 DEFAULT_SOURCE_PROVIDER = "wecom"
+
+
+@dataclass(frozen=True)
+class SourceProviderFieldDefinition:
+    name: str
+    label: str
+    input_type: str = "text"
+    help_text: str = ""
+    placeholder: str = ""
+    required: bool = False
+    secret: bool = False
+    width: str = "half"
+    autocomplete: str = ""
+
+
+@dataclass(frozen=True)
+class SourceProviderSchema:
+    provider_id: str
+    display_name: str
+    description: str = ""
+    implemented: bool = False
+    implementation_status: str = ""
+    connection_fields: tuple[SourceProviderFieldDefinition, ...] = ()
+    notification_fields: tuple[SourceProviderFieldDefinition, ...] = ()
+
+
+SOURCE_PROVIDER_SCHEMAS = {
+    "wecom": SourceProviderSchema(
+        provider_id="wecom",
+        display_name="WeCom",
+        description="Use a WeCom self-built application to read departments and users.",
+        implemented=True,
+        connection_fields=(
+            SourceProviderFieldDefinition(
+                "corpid",
+                "CorpID",
+                help_text="Your WeCom Corporate ID",
+                placeholder="ww1234567890abcdef",
+                required=True,
+            ),
+            SourceProviderFieldDefinition(
+                "agentid",
+                "AgentID",
+                help_text="Application AgentID",
+                placeholder="1000002",
+            ),
+            SourceProviderFieldDefinition(
+                "corpsecret",
+                "CorpSecret",
+                input_type="password",
+                help_text="The secret for the self-built application.",
+                placeholder="Enter CorpSecret",
+                required=True,
+                secret=True,
+                width="full",
+                autocomplete="new-password",
+            ),
+        ),
+        notification_fields=(
+            SourceProviderFieldDefinition(
+                "webhook_url",
+                "WeCom Webhook",
+                input_type="password",
+                help_text="Optional markdown robot webhook for operational notifications.",
+                placeholder="Enter webhook URL",
+                secret=True,
+                width="full",
+                autocomplete="off",
+            ),
+        ),
+    ),
+    "dingtalk": SourceProviderSchema(
+        provider_id="dingtalk",
+        display_name="DingTalk",
+        description="Reserve the connector contract for a DingTalk source adapter.",
+        implementation_status="DingTalk provider schema is available, but the runtime adapter is not implemented in this build.",
+        connection_fields=(
+            SourceProviderFieldDefinition(
+                "corpid",
+                "AppKey / Client ID",
+                help_text="The DingTalk application key or client ID.",
+                placeholder="Enter AppKey",
+                required=True,
+            ),
+            SourceProviderFieldDefinition(
+                "agentid",
+                "Agent ID",
+                help_text="Optional application or suite identifier.",
+                placeholder="Enter Agent ID",
+            ),
+            SourceProviderFieldDefinition(
+                "corpsecret",
+                "AppSecret / Client Secret",
+                input_type="password",
+                help_text="The DingTalk application secret.",
+                placeholder="Enter AppSecret",
+                required=True,
+                secret=True,
+                width="full",
+                autocomplete="new-password",
+            ),
+        ),
+        notification_fields=(
+            SourceProviderFieldDefinition(
+                "webhook_url",
+                "DingTalk Bot Webhook",
+                input_type="password",
+                help_text="Optional bot webhook for notification delivery.",
+                placeholder="Enter webhook URL",
+                secret=True,
+                width="full",
+                autocomplete="off",
+            ),
+        ),
+    ),
+    "feishu": SourceProviderSchema(
+        provider_id="feishu",
+        display_name="Feishu",
+        description="Reserve the connector contract for a Feishu source adapter.",
+        implementation_status="Feishu provider schema is available, but the runtime adapter is not implemented in this build.",
+        connection_fields=(
+            SourceProviderFieldDefinition(
+                "corpid",
+                "App ID",
+                help_text="The Feishu application ID.",
+                placeholder="cli_xxxxxxxxxxxxxxxx",
+                required=True,
+            ),
+            SourceProviderFieldDefinition(
+                "agentid",
+                "App Token / Tenant Key",
+                help_text="Optional tenant-scoped application token.",
+                placeholder="Enter App Token",
+            ),
+            SourceProviderFieldDefinition(
+                "corpsecret",
+                "App Secret",
+                input_type="password",
+                help_text="The Feishu application secret.",
+                placeholder="Enter App Secret",
+                required=True,
+                secret=True,
+                width="full",
+                autocomplete="new-password",
+            ),
+        ),
+        notification_fields=(
+            SourceProviderFieldDefinition(
+                "webhook_url",
+                "Feishu Bot Webhook",
+                input_type="password",
+                help_text="Optional bot webhook for notification delivery.",
+                placeholder="Enter webhook URL",
+                secret=True,
+                width="full",
+                autocomplete="off",
+            ),
+        ),
+    ),
+}
 SOURCE_PROVIDER_DISPLAY_NAMES = {
-    "wecom": "WeCom",
+    provider_id: schema.display_name for provider_id, schema in SOURCE_PROVIDER_SCHEMAS.items()
 }
 
 
@@ -19,6 +180,37 @@ def normalize_source_provider(value: str | None, *, default: str = DEFAULT_SOURC
 def get_source_provider_display_name(value: str | None) -> str:
     normalized = normalize_source_provider(value)
     return SOURCE_PROVIDER_DISPLAY_NAMES.get(normalized, normalized or DEFAULT_SOURCE_PROVIDER)
+
+
+def get_source_provider_schema(value: str | None) -> SourceProviderSchema:
+    normalized = normalize_source_provider(value)
+    return SOURCE_PROVIDER_SCHEMAS.get(normalized, SOURCE_PROVIDER_SCHEMAS[DEFAULT_SOURCE_PROVIDER])
+
+
+def list_source_provider_schemas(*, include_unimplemented: bool = True) -> list[SourceProviderSchema]:
+    schemas = list(SOURCE_PROVIDER_SCHEMAS.values())
+    if include_unimplemented:
+        return schemas
+    return [schema for schema in schemas if schema.implemented]
+
+
+def list_source_provider_options(*, include_unimplemented: bool = True) -> list[tuple[str, str]]:
+    options: list[tuple[str, str]] = []
+    for schema in list_source_provider_schemas(include_unimplemented=include_unimplemented):
+        label = schema.display_name
+        if include_unimplemented and not schema.implemented:
+            label = f"{label} (planned)"
+        options.append((schema.provider_id, label))
+    return options
+
+
+def get_source_provider_secret_field_names(value: str | None) -> set[str]:
+    schema = get_source_provider_schema(value)
+    return {
+        field.name
+        for field in (*schema.connection_fields, *schema.notification_fields)
+        if field.secret
+    }
 
 
 class SourceDirectoryProvider(ABC):

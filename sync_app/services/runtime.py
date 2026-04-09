@@ -1277,7 +1277,7 @@ def run_sync_job(
                 try:
                     wecom_user_detail_cache[userid] = source_provider.get_user_detail(userid) or {}
                 except Exception as detail_error:
-                    logger.warning("failed to load WeCom detail for %s: %s", userid, detail_error)
+                    logger.warning("failed to load %s user detail for %s: %s", source_provider_name, userid, detail_error)
                     wecom_user_detail_cache[userid] = {}
             detail_payload = wecom_user_detail_cache[userid]
             if user and detail_payload:
@@ -1746,7 +1746,7 @@ def run_sync_job(
                         record_event(
                             'WARNING',
                             'tag_group_fetch_failed',
-                            f"failed to load WeCom tag definitions for connector {connector_id}: {tag_error}",
+                            f"failed to load {source_provider_name} tag definitions for connector {connector_id}: {tag_error}",
                             stage_name='plan',
                         )
 
@@ -1760,14 +1760,14 @@ def run_sync_job(
                         record_event(
                             'WARNING',
                             'tag_group_fetch_failed',
-                            f"failed to load WeCom tag {tag_id_text}: {tag_error}",
+                            f"failed to load {source_provider_name} tag {tag_id_text}: {tag_error}",
                             stage_name='plan',
                         )
                         continue
                     display_name = (
                         str(tag_index.get(tag_id_text, {}).get('tagname') or '').strip()
                         or str(tag_membership.get('tagname') or '').strip()
-                        or f"WeCom Tag {tag_id_text}"
+                        or f"{source_provider_name} Tag {tag_id_text}"
                     )
                     group_sam = build_custom_group_sam('tag', tag_id_text)
                     group_policy = evaluate_group_policy(group_sam=group_sam, display_name=display_name)
@@ -1841,11 +1841,14 @@ def run_sync_job(
                         record_event(
                             'WARNING',
                             'external_group_fetch_failed',
-                            f"failed to load WeCom external chat {chat_id_text}: {chat_error}",
+                            f"failed to load {source_provider_name} external chat {chat_id_text}: {chat_error}",
                             stage_name='plan',
                         )
                         continue
-                    display_name = str(chat_info.get('name') or '').strip() or f"WeCom External Chat {chat_id_text}"
+                    display_name = (
+                        str(chat_info.get('name') or '').strip()
+                        or f"{source_provider_name} External Chat {chat_id_text}"
+                    )
                     group_sam = build_custom_group_sam('external_chat', chat_id_text)
                     group_policy = evaluate_group_policy(group_sam=group_sam, display_name=display_name)
                     if group_policy.is_excluded:
@@ -3933,7 +3936,7 @@ def run_sync_job(
         if execution_mode == 'apply' and config.webhook_url:
             try:
                 WeChatBot(config.webhook_url).send_message(
-                    f'## {source_provider_name}-AD sync cancelled (LDAPS)\n\n'
+                    f'## {source_provider_name} to AD sync cancelled (LDAPS)\n\n'
                     f"> Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                     '> Result: canceled by user'
                 )
@@ -3955,7 +3958,7 @@ def run_sync_job(
         if execution_mode == 'apply' and config.webhook_url:
             try:
                 WeChatBot(config.webhook_url).send_message(
-                    f'## {source_provider_name}-AD sync failed (LDAPS)\n\n'
+                    f'## {source_provider_name} to AD sync failed (LDAPS)\n\n'
                     f"> Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
                     f"### Error\n{sync_error}"
                 )

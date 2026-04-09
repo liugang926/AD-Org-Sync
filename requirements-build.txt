@@ -1,1 +1,1 @@
--e .[build]
+-e .[web,desktop,build]

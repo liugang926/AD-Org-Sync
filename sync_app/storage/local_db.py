@@ -45,6 +45,12 @@ from sync_app.storage.config_codec import (
     normalize_org_config_values as _normalize_org_config_values,
     record_has_connector_overrides as _record_has_connector_overrides,
 )
+from sync_app.storage.secret_store import (
+    CONNECTOR_SECRET_FIELDS,
+    ORGANIZATION_SECRET_FIELDS,
+    protect_secret,
+    unprotect_secret,
+)
 from sync_app.storage.schema import (
     DEFAULT_APP_SETTINGS,
     DEFAULT_HARD_PROTECTED_GROUPS,
@@ -118,6 +124,18 @@ def dumps_json(value: Optional[Dict[str, Any]]) -> Optional[str]:
     if value is None:
         return None
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _decode_secret_field(field_name: str, value: Any, *, secret_fields: set[str]) -> Any:
+    if field_name not in secret_fields:
+        return value
+    return unprotect_secret(str(value or ""))
+
+
+def _encode_secret_field(field_name: str, value: Any, *, secret_fields: set[str]) -> Any:
+    if field_name not in secret_fields:
+        return value
+    return protect_secret(str(value or ""))
 
 
 def normalize_org_id(org_id: Optional[str], *, fallback: Optional[str] = None) -> Optional[str]:
@@ -850,6 +868,7 @@ class OrganizationConfigRepository(BaseRepository):
         )
 
     def _decode_value(self, field_name: str, value: str) -> Any:
+        value = _decode_secret_field(field_name, value, secret_fields=ORGANIZATION_SECRET_FIELDS)
         value_type = ORGANIZATION_CONFIG_VALUE_TYPES.get(field_name, "string")
         if value_type == "bool":
             return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -883,7 +902,7 @@ class OrganizationConfigRepository(BaseRepository):
             else:
                 normalized_list = []
             return json.dumps(normalized_list, ensure_ascii=False)
-        return str(value or "")
+        return str(_encode_secret_field(field_name, value, secret_fields=ORGANIZATION_SECRET_FIELDS) or "")
 
     def import_legacy_config(self, org_id: Optional[str] = None, *, config_path: str = "") -> bool:
         normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
@@ -2699,6 +2718,14 @@ class AttributeMappingRuleRepository(BaseRepository):
 
 
 class SyncConnectorRepository(BaseRepository):
+    @staticmethod
+    def _row_with_decrypted_secrets(row: Any) -> dict[str, Any]:
+        data = dict(row)
+        for field_name in CONNECTOR_SECRET_FIELDS:
+            if field_name in data:
+                data[field_name] = _decode_secret_field(field_name, data.get(field_name), secret_fields=CONNECTOR_SECRET_FIELDS)
+        return data
+
     def _import_legacy_connector_config(self, record: SyncConnectorRecord) -> Optional[SyncConnectorRecord]:
         normalized_path = str(record.config_path or "").strip()
         if not normalized_path or not os.path.exists(normalized_path):
@@ -2730,12 +2757,12 @@ class SyncConnectorRepository(BaseRepository):
                     values["ldap_server"],
                     values["ldap_domain"],
                     values["ldap_username"],
-                    values["ldap_password"],
+                    _encode_secret_field("ldap_password", values["ldap_password"], secret_fields=CONNECTOR_SECRET_FIELDS),
                     1 if values["ldap_use_ssl"] else 0 if values["ldap_use_ssl"] is not None else None,
                     values["ldap_port"],
                     1 if values["ldap_validate_cert"] else 0 if values["ldap_validate_cert"] is not None else None,
                     values["ldap_ca_cert_path"],
-                    values["default_password"],
+                    _encode_secret_field("default_password", values["default_password"], secret_fields=CONNECTOR_SECRET_FIELDS),
                     1 if values["force_change_password"] else 0 if values["force_change_password"] is not None else None,
                     values["password_complexity"],
                     now,
@@ -2791,7 +2818,7 @@ class SyncConnectorRepository(BaseRepository):
             )
         if not row:
             return None
-        return SyncConnectorRecord.from_row(row)
+        return SyncConnectorRecord.from_row(self._row_with_decrypted_secrets(row))
 
     def list_connector_records(
         self,
@@ -2811,7 +2838,7 @@ class SyncConnectorRepository(BaseRepository):
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY is_enabled DESC, name COLLATE NOCASE ASC, connector_id ASC"
-        return [SyncConnectorRecord.from_row(row) for row in self._fetchall(sql, tuple(params))]
+        return [SyncConnectorRecord.from_row(self._row_with_decrypted_secrets(row)) for row in self._fetchall(sql, tuple(params))]
 
     def count_connectors(self, *, org_id: Optional[str] = None) -> int:
         normalized_org_id = str(org_id or "").strip()
@@ -2934,12 +2961,20 @@ class SyncConnectorRepository(BaseRepository):
                     normalized_config["ldap_server"],
                     normalized_config["ldap_domain"],
                     normalized_config["ldap_username"],
-                    normalized_config["ldap_password"],
+                    _encode_secret_field(
+                        "ldap_password",
+                        normalized_config["ldap_password"],
+                        secret_fields=CONNECTOR_SECRET_FIELDS,
+                    ),
                     1 if normalized_config["ldap_use_ssl"] else 0 if normalized_config["ldap_use_ssl"] is not None else None,
                     normalized_config["ldap_port"],
                     1 if normalized_config["ldap_validate_cert"] else 0 if normalized_config["ldap_validate_cert"] is not None else None,
                     normalized_config["ldap_ca_cert_path"],
-                    normalized_config["default_password"],
+                    _encode_secret_field(
+                        "default_password",
+                        normalized_config["default_password"],
+                        secret_fields=CONNECTOR_SECRET_FIELDS,
+                    ),
                     1 if normalized_config["force_change_password"] else 0 if normalized_config["force_change_password"] is not None else None,
                     normalized_config["password_complexity"],
                     dumps_json(

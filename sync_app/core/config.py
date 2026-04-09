@@ -4,11 +4,14 @@ import os
 import ssl
 from typing import List, Tuple
 
-from sync_app.clients.wecom import WeComAPI
 from sync_app.core.directory_protection import merge_protected_ad_accounts
 from sync_app.core.models import AccountConfig, AppConfig, LDAPConfig, SourceConnectorConfig
 from sync_app.infra.ldap_compat import ALL, NTLM, SIMPLE, Connection, Server, Tls, ensure_ldap3_available
-from sync_app.providers.source import build_source_provider, get_source_provider_display_name
+from sync_app.providers.source import (
+    build_source_provider,
+    get_source_provider_display_name,
+    get_source_provider_schema,
+)
 from sync_app.providers.source.base import normalize_source_provider
 
 
@@ -102,23 +105,38 @@ def validate_config(config: AppConfig) -> Tuple[bool, List[str]]:
     errors: List[str] = []
     logger = logging.getLogger(__name__)
     source_provider = normalize_source_provider(getattr(config, "source_provider", "wecom"))
+    provider_schema = get_source_provider_schema(source_provider)
+    source_values = {
+        "corpid": str(config.source_connector.corpid or "").strip(),
+        "agentid": str(config.source_connector.agentid or "").strip(),
+        "corpsecret": str(config.source_connector.corpsecret or "").strip(),
+        "webhook_url": str(config.webhook_url or "").strip(),
+    }
 
-    if source_provider != "wecom":
+    if not provider_schema.implemented:
         errors.append(
-            f"Source provider '{get_source_provider_display_name(source_provider)}' is not implemented in this build"
+            provider_schema.implementation_status
+            or f"Source provider '{get_source_provider_display_name(source_provider)}' is not implemented in this build"
         )
-    else:
-        source_connector = config.source_connector
-        if not source_connector.corpid:
-            errors.append("WeCom CorpID is not configured")
-        if not source_connector.corpsecret:
-            errors.append("WeCom CorpSecret is not configured")
+    for field in provider_schema.connection_fields:
+        if field.required and not source_values.get(field.name):
+            errors.append(f"{provider_schema.display_name} {field.label} is not configured")
 
     webhook_url = config.webhook_url
     if not webhook_url:
-        errors.append("WeCom webhook is not configured")
-    elif "key=" not in webhook_url:
-        errors.append("WeCom webhook format is invalid")
+        notification_label = (
+            provider_schema.notification_fields[0].label
+            if provider_schema.notification_fields
+            else "Notification Webhook"
+        )
+        errors.append(f"{notification_label} is not configured")
+    elif source_provider == "wecom" and "key=" not in webhook_url:
+        notification_label = (
+            provider_schema.notification_fields[0].label
+            if provider_schema.notification_fields
+            else "Notification Webhook"
+        )
+        errors.append(f"{notification_label} format is invalid")
 
     ldap_config = config.ldap
     if not ldap_config.server:
@@ -168,7 +186,8 @@ def run_config_security_self_check(config: AppConfig) -> List[str]:
         warnings.append("New users are not forced to change password at first sign-in.")
 
     if config.webhook_url and not config.webhook_url.startswith("https://"):
-        warnings.append("WeCom webhook is not using HTTPS.")
+        provider_name = get_source_provider_display_name(getattr(config, "source_provider", "wecom"))
+        warnings.append(f"{provider_name} webhook is not using HTTPS.")
 
     return warnings
 
@@ -181,17 +200,16 @@ def test_source_connection(
     source_provider: str = "wecom",
 ) -> Tuple[bool, str]:
     logger = logging.getLogger(__name__)
-    source_provider = None
+    provider_client = None
     normalized_provider = normalize_source_provider(source_provider)
     provider_label = get_source_provider_display_name(normalized_provider)
     try:
-        source_provider = build_source_provider(
+        provider_client = build_source_provider(
             source_connector_config=SourceConnectorConfig(corpid=corpid, corpsecret=corpsecret, agentid=agentid),
             provider_type=normalized_provider,
             logger=logger,
-            api_factory=WeComAPI,
         )
-        departments = source_provider.list_departments()
+        departments = provider_client.list_departments()
         auth_type = "self-built app" if agentid else "generic"
         message = f"{provider_label} connection succeeded ({auth_type}), departments: {len(departments)}"
         logger.info(message)
@@ -201,8 +219,8 @@ def test_source_connection(
         logger.error(message)
         return False, message
     finally:
-        if source_provider is not None:
-            source_provider.close()
+        if provider_client is not None:
+            provider_client.close()
 
 
 def test_wecom_connection(corpid: str, corpsecret: str, agentid: str = None) -> Tuple[bool, str]:

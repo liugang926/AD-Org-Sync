@@ -15,6 +15,7 @@ from sync_app.storage.local_db import (
     WebAuditLogRepository,
 )
 from sync_app.services.config_store import save_editable_config
+from sync_app.storage.secret_store import can_use_dpapi, is_encrypted_secret
 from sync_app.web.security import hash_password, verify_password
 
 
@@ -128,6 +129,118 @@ class WebStorageTests(unittest.TestCase):
                     db_path.unlink()
                 except PermissionError:
                     pass
+            if backup_dir.exists():
+                for item in backup_dir.glob("*"):
+                    try:
+                        item.unlink()
+                    except PermissionError:
+                        pass
+
+    def test_organization_config_secrets_are_protected_in_storage(self):
+        test_root = Path(os.getcwd()) / "test_artifacts"
+        test_root.mkdir(exist_ok=True)
+        db_path = test_root / "web_storage_org_secret.db"
+        try:
+            if db_path.exists():
+                db_path.unlink()
+            manager = DatabaseManager(db_path=str(db_path))
+            manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+
+            repo = OrganizationConfigRepository(manager)
+            repo.save_config(
+                "default",
+                {
+                    "source_provider": "wecom",
+                    "corpid": "corp-id",
+                    "agentid": "1001",
+                    "corpsecret": "source-secret",
+                    "webhook_url": "https://example.invalid/cgi-bin/webhook/send?key=test",
+                    "ldap_server": "dc.example.com",
+                    "ldap_domain": "example.com",
+                    "ldap_username": "svc",
+                    "ldap_password": "ldap-secret",
+                    "default_password": "simple888",
+                },
+                config_path="config.ini",
+            )
+
+            with manager._connect() as conn:
+                stored = conn.execute(
+                    "SELECT value FROM app_settings WHERE key = ?",
+                    ("orgcfg:default:corpsecret",),
+                ).fetchone()
+            self.assertIsNotNone(stored)
+            stored_value = str(stored["value"] or "")
+            self.assertNotEqual(stored_value, "source-secret")
+            if can_use_dpapi():
+                self.assertTrue(is_encrypted_secret(stored_value))
+
+            config = repo.get_app_config("default", config_path="config.ini")
+            self.assertEqual(config.source_connector.corpsecret, "source-secret")
+            self.assertEqual(config.ldap.password, "ldap-secret")
+            self.assertEqual(config.account.default_password, "simple888")
+        finally:
+            backup_dir = db_path.parent / "backups"
+            for suffix in ("", "-wal", "-shm"):
+                candidate = Path(str(db_path) + suffix)
+                if candidate.exists():
+                    try:
+                        candidate.unlink()
+                    except PermissionError:
+                        pass
+            if backup_dir.exists():
+                for item in backup_dir.glob("*"):
+                    try:
+                        item.unlink()
+                    except PermissionError:
+                        pass
+
+    def test_connector_override_secrets_are_protected_in_storage(self):
+        test_root = Path(os.getcwd()) / "test_artifacts"
+        test_root.mkdir(exist_ok=True)
+        db_path = test_root / "web_storage_connector_secret.db"
+        try:
+            if db_path.exists():
+                db_path.unlink()
+            manager = DatabaseManager(db_path=str(db_path))
+            manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+
+            repo = SyncConnectorRepository(manager)
+            repo.upsert_connector(
+                connector_id="hq",
+                org_id="default",
+                name="HQ",
+                config_path="connector.ini",
+                ldap_server="dc.example.com",
+                ldap_domain="example.com",
+                ldap_username="svc-hq",
+                ldap_password="hq-secret",
+                default_password="simple888",
+            )
+
+            with manager._connect() as conn:
+                stored = conn.execute(
+                    "SELECT ldap_password, default_password FROM sync_connectors WHERE connector_id = ?",
+                    ("hq",),
+                ).fetchone()
+            self.assertIsNotNone(stored)
+            self.assertNotEqual(str(stored["ldap_password"] or ""), "hq-secret")
+            if can_use_dpapi():
+                self.assertTrue(is_encrypted_secret(str(stored["ldap_password"] or "")))
+
+            record = repo.get_connector_record("hq", org_id="default")
+            self.assertIsNotNone(record)
+            self.assertEqual(record.ldap_password, "hq-secret")
+            self.assertEqual(record.default_password, "simple888")
+        finally:
+            backup_dir = db_path.parent / "backups"
+            for suffix in ("", "-wal", "-shm"):
+                candidate = Path(str(db_path) + suffix)
+                if candidate.exists():
+                    try:
+                        candidate.unlink()
+                    except PermissionError:
+                        pass
             if backup_dir.exists():
                 for item in backup_dir.glob("*"):
                     try:

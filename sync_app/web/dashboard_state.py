@@ -55,9 +55,11 @@ def build_getting_started_data(
         str(item.get("key") or ""): item for item in list(preflight_snapshot.get("checks") or []) if isinstance(item, dict)
     }
     config_ready = str(check_index.get("config", {}).get("status") or "") == "success"
-    live_wecom_ok = str(check_index.get("live_wecom", {}).get("status") or "") == "success"
+    live_source_ok = str(
+        (check_index.get("live_source") or check_index.get("live_wecom") or {}).get("status") or ""
+    ) == "success"
     live_ldap_ok = str(check_index.get("live_ldap", {}).get("status") or "") == "success"
-    live_ready = live_wecom_ok and live_ldap_ok
+    live_ready = live_source_ok and live_ldap_ok
     dry_run_ready = bool(preflight_snapshot.get("dry_run_completed"))
     conflicts_ready = dry_run_ready and int(preflight_snapshot.get("open_conflict_count") or 0) == 0
     apply_ready = bool(preflight_snapshot.get("apply_completed"))

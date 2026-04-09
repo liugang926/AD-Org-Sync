@@ -558,7 +558,7 @@ ZH_CN_TRANSLATIONS.update(
         "Selected": "\u5df2\u9009\u62e9",
         "Select": "\u9009\u62e9",
         "No organizations defined.": "\u5c1a\u672a\u5b9a\u4e49\u4efb\u4f55\u7ec4\u7ec7\u3002",
-        "Use organizations to separate WeCom tenants while keeping the default single-organization setup available. Legacy INI paths are optional and only used for import or compatibility.": "\u4f7f\u7528\u7ec4\u7ec7\u53ef\u4ee5\u5206\u79bb\u4e0d\u540c\u7684\u4f01\u4e1a\u5fae\u4fe1\u79df\u6237\uff0c\u540c\u65f6\u4fdd\u7559\u9ed8\u8ba4\u7684\u5355\u7ec4\u7ec7\u6a21\u5f0f\u3002\u65e7\u7248 INI \u8def\u5f84\u662f\u53ef\u9009\u7684\uff0c\u4ec5\u7528\u4e8e\u5bfc\u5165\u6216\u517c\u5bb9\u3002",
+        "Use organizations to separate independent source-directory tenants while keeping the default single-organization setup available. Legacy INI paths are optional and only used for import or compatibility.": "\u4f7f\u7528\u7ec4\u7ec7\u53ef\u4ee5\u5206\u79bb\u72ec\u7acb\u7684\u6e90\u76ee\u5f55\u79df\u6237\uff0c\u540c\u65f6\u4fdd\u7559\u9ed8\u8ba4\u7684\u5355\u7ec4\u7ec7\u6a21\u5f0f\u3002\u65e7\u7248 INI \u8def\u5f84\u662f\u53ef\u9009\u7684\uff0c\u4ec5\u7528\u4e8e\u5bfc\u5165\u6216\u517c\u5bb9\u3002",
         "Failed to save organization: {error}": "\u4fdd\u5b58\u7ec4\u7ec7\u5931\u8d25\uff1a{error}",
         "Organization {org_id} saved": "\u7ec4\u7ec7 {org_id} \u5df2\u4fdd\u5b58",
         "Organization not found or disabled": "\u672a\u627e\u5230\u7ec4\u7ec7\u6216\u7ec4\u7ec7\u5df2\u7981\u7528",

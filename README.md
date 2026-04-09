@@ -5,7 +5,8 @@
 The current production-ready target is:
 
 - Source side: provider-based source connector framework
-- Implemented provider in this build: WeCom
+- Implemented live adapter in this build: WeCom
+- Planned source schemas already reserved: DingTalk, Feishu
 - Target side: Active Directory / LDAPS
 - Control plane: FastAPI Web console + CLI
 - Local state: SQLite
@@ -68,6 +69,12 @@ This lets the product evolve toward:
 - HR or master-data source systems
 
 without redesigning the synchronization control plane.
+
+## Delivery Pipeline
+
+- CI runs the Python suite on Windows and a dedicated browser-regression job with Playwright Chromium.
+- Tagged releases (`v*`) build and publish a wheel, a Windows `exe`, and a deployable web `zip` through GitHub Actions.
+- The packaged web build now includes both Jinja templates and `sync_app/web/static` assets, so CSS and JS are present in non-source deployments.
 
 ## Quick Start
 
@@ -150,6 +157,16 @@ Health endpoints:
 
 Detailed deployment notes are in [docs/deployment-windows-service.md](docs/deployment-windows-service.md).
 
+## Browser Regression
+
+The project now includes Playwright-backed browser regression coverage for login, dashboard header controls, config provider fields, and jobs empty-state actions.
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-test.txt
+.\.venv\Scripts\python.exe -m playwright install chromium
+.\.venv\Scripts\python.exe -m unittest tests.test_web_browser_regression -v
+```
+
 ## Web Console
 
 Main pages:
@@ -191,6 +208,7 @@ The UI supports:
 - High-risk apply can be forced through dry-run approval
 - Bulk disable circuit breaker can block suspicious mass disable plans
 - Session security, CSRF, role-based access control, and password policy are enforced in the Web plane
+- On Windows, database-backed connector secrets are encrypted at rest with DPAPI when available
 - Audit logs, operation logs, conflict logs, review records, and retention cleanup are built in
 
 ## Configuration Model

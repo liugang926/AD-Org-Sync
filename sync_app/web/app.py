@@ -17,13 +17,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from sync_app.clients.wecom import WeComAPI
 from sync_app.core.common import APP_VERSION
 from sync_app.core.config import (
     load_sync_config,
     run_config_security_self_check,
     test_ldap_connection,
-    test_wecom_connection,
+    test_source_connection,
     validate_config,
 )
 from sync_app.core.directory_protection import is_protected_ad_account_name
@@ -46,6 +45,8 @@ from sync_app.core.models import AppConfig, OrganizationRecord, SyncJobRecord, W
 from sync_app.providers.source import (
     build_source_provider,
     get_source_provider_display_name,
+    get_source_provider_schema,
+    list_source_provider_options,
     normalize_source_provider,
 )
 from sync_app.services.config_bundle import export_organization_bundle, import_organization_bundle
@@ -116,7 +117,8 @@ STATIC_DIR = Path(__file__).with_name("static")
 FAVICON_PATH = STATIC_DIR / "favicon.ico"
 LEGACY_FAVICON_PATH = APP_ROOT / "icon.ico"
 PLACEMENT_STRATEGIES = {
-    "wecom_primary_department": "Prefer WeCom primary department",
+    "source_primary_department": "Prefer source primary department",
+    "wecom_primary_department": "Prefer source primary department",
     "lowest_department_id": "Pick the lowest department ID",
     "shortest_path": "Pick the shortest department path",
     "first_non_excluded_department": "Pick the first valid department in source order",
@@ -125,14 +127,6 @@ SUPPORTED_UI_MODES = {
     "basic": "Basic",
     "advanced": "Advanced",
 }
-SOURCE_PROVIDER_LABELS = {
-    "wecom": "WeCom",
-    "dingtalk": "DingTalk",
-    "feishu": "Feishu",
-}
-CONFIG_SOURCE_PROVIDER_OPTIONS = (
-    ("wecom", "WeCom"),
-)
 ATTRIBUTE_MAPPING_DIRECTION_LABELS = {
     "source_to_ad": "Source -> AD",
     "ad_to_source": "AD -> Source",
@@ -150,69 +144,6 @@ ADVANCED_NAV_PAGES = {
 }
 SESSION_FILTER_PREFIX = "_page_filters"
 CONFIG_PREVIEW_SESSION_KEY = "_config_preview"
-CONFIG_PREVIEW_GROUPS = (
-    (
-        "Connection Settings",
-        (
-            ("source_provider", "Source Provider", "source_provider"),
-            ("corpid", "CorpID", "text"),
-            ("agentid", "AgentID", "text"),
-            ("corpsecret", "CorpSecret", "secret"),
-            ("webhook_url", "WeCom Webhook", "secret"),
-            ("ldap_server", "LDAP Server", "text"),
-            ("ldap_domain", "LDAP Domain", "text"),
-            ("ldap_username", "LDAP Username", "text"),
-            ("ldap_password", "LDAP Password", "secret"),
-            ("ldap_port", "LDAP Port", "number"),
-            ("ldap_use_ssl", "Use SSL", "bool"),
-        ),
-    ),
-    (
-        "LDAP Security",
-        (
-            ("ldap_validate_cert", "Certificate Validation", "bool"),
-            ("ldap_ca_cert_path", "CA Certificate Path", "text"),
-        ),
-    ),
-    (
-        "Account Policy",
-        (
-            ("default_password", "Default Password", "secret"),
-            ("force_change_password", "Force Password Change", "bool"),
-            ("password_complexity", "Password Complexity", "password_complexity"),
-        ),
-    ),
-    (
-        "Runtime Policy",
-        (
-            ("schedule_time", "Daily Schedule Time", "text"),
-            ("retry_interval", "Retry Interval (min)", "number"),
-            ("max_retries", "Max Retries", "number"),
-            ("group_display_separator", "Group Separator", "group_separator"),
-            ("group_recursive_enabled", "Recursive Group Sync", "bool"),
-            ("managed_relation_cleanup_enabled", "Relation Cleanup", "bool"),
-            ("schedule_execution_mode", "Scheduled Mode", "schedule_execution_mode"),
-            ("user_ou_placement_strategy", "OU Placement Strategy", "placement_strategy"),
-        ),
-    ),
-    (
-        "Web Deployment",
-        (
-            ("web_bind_host", "Bind Host", "text"),
-            ("web_bind_port", "Bind Port", "number"),
-            ("web_public_base_url", "Public Base URL", "text"),
-            ("web_session_cookie_secure_mode", "Secure Cookie Policy", "secure_cookie_mode"),
-            ("web_trust_proxy_headers", "Trust Proxy Headers", "bool"),
-            ("web_forwarded_allow_ips", "Forwarded Allow IPs", "text"),
-        ),
-    ),
-    (
-        "Group Rules",
-        (
-            ("soft_excluded_groups", "Soft Excluded Groups", "multiline"),
-        ),
-    ),
-)
 
 
 class CsvStreamingResponse(StreamingResponse):
@@ -521,7 +452,104 @@ def create_app(
 
     def source_provider_label(value: Any) -> str:
         normalized_value = normalize_source_provider(str(value or "").strip() or None)
-        return SOURCE_PROVIDER_LABELS.get(normalized_value, normalized_value or "WeCom")
+        return get_source_provider_display_name(normalized_value)
+
+    def build_source_provider_fields(editable: dict[str, Any]) -> list[dict[str, Any]]:
+        provider_schema = get_source_provider_schema(editable.get("source_provider"))
+        field_models: list[dict[str, Any]] = []
+        for field in (*provider_schema.connection_fields, *provider_schema.notification_fields):
+            configured = bool(editable.get(f"{field.name}_configured")) if field.secret else bool(editable.get(field.name))
+            placeholder = field.placeholder
+            if field.secret:
+                placeholder = "Leave blank to keep current" if configured else (field.placeholder or "Enter value")
+            field_models.append(
+                {
+                    "name": field.name,
+                    "label": field.label,
+                    "value": "" if field.secret else editable.get(field.name, ""),
+                    "type": field.input_type,
+                    "help_text": field.help_text,
+                    "placeholder": placeholder,
+                    "required": field.required,
+                    "configured": configured,
+                    "class_name": "field-span-full" if field.width == "full" else "",
+                    "autocomplete": field.autocomplete,
+                    "secret": field.secret,
+                }
+            )
+        return field_models
+
+    def build_config_preview_groups(provider_schema) -> tuple[tuple[str, tuple[tuple[str, str, str], ...]], ...]:
+        source_fields = [
+            ("source_provider", "Source Provider", "source_provider"),
+        ]
+        for field in (*provider_schema.connection_fields, *provider_schema.notification_fields):
+            source_fields.append(
+                (
+                    field.name,
+                    field.label,
+                    "secret" if field.secret else ("number" if field.input_type == "number" else "text"),
+                )
+            )
+        return (
+            (
+                "Connection Settings",
+                (
+                    *source_fields,
+                    ("ldap_server", "LDAP Server", "text"),
+                    ("ldap_domain", "LDAP Domain", "text"),
+                    ("ldap_username", "LDAP Username", "text"),
+                    ("ldap_password", "LDAP Password", "secret"),
+                    ("ldap_port", "LDAP Port", "number"),
+                    ("ldap_use_ssl", "Use SSL", "bool"),
+                ),
+            ),
+            (
+                "LDAP Security",
+                (
+                    ("ldap_validate_cert", "Certificate Validation", "bool"),
+                    ("ldap_ca_cert_path", "CA Certificate Path", "text"),
+                ),
+            ),
+            (
+                "Account Policy",
+                (
+                    ("default_password", "Default Password", "secret"),
+                    ("force_change_password", "Force Password Change", "bool"),
+                    ("password_complexity", "Password Complexity", "password_complexity"),
+                ),
+            ),
+            (
+                "Runtime Policy",
+                (
+                    ("schedule_time", "Daily Schedule Time", "text"),
+                    ("retry_interval", "Retry Interval (min)", "number"),
+                    ("max_retries", "Max Retries", "number"),
+                    ("group_display_separator", "Group Separator", "group_separator"),
+                    ("group_recursive_enabled", "Recursive Group Sync", "bool"),
+                    ("managed_relation_cleanup_enabled", "Relation Cleanup", "bool"),
+                    ("schedule_execution_mode", "Scheduled Mode", "schedule_execution_mode"),
+                    ("user_ou_placement_strategy", "OU Placement Strategy", "placement_strategy"),
+                ),
+            ),
+            (
+                "Web Deployment",
+                (
+                    ("web_bind_host", "Bind Host", "text"),
+                    ("web_bind_port", "Bind Port", "number"),
+                    ("web_public_base_url", "Public Base URL", "text"),
+                    ("web_session_cookie_secure_mode", "Secure Cookie Policy", "secure_cookie_mode"),
+                    ("web_trust_proxy_headers", "Trust Proxy Headers", "bool"),
+                    ("web_forwarded_allow_ips", "Forwarded Allow IPs", "text"),
+                ),
+            ),
+            (
+                "Group Rules",
+                (
+                    ("soft_excluded_groups", "Soft Excluded Groups", "multiline"),
+                ),
+            ),
+        )
 
     def build_current_config_state(request: Request, current_org: OrganizationRecord) -> dict[str, Any]:
         current_org_config_path = current_org.config_path or request.app.state.config_path
@@ -740,7 +768,8 @@ def create_app(
         }
         groups: list[dict[str, Any]] = []
         changed_count = 0
-        for group_title, fields in CONFIG_PREVIEW_GROUPS:
+        provider_schema = get_source_provider_schema(submission["org_values"].get("source_provider"))
+        for group_title, fields in build_config_preview_groups(provider_schema):
             group_changes: list[dict[str, Any]] = []
             for field_name, label, field_type in fields:
                 current_value = current_state.get(field_name)
@@ -856,15 +885,9 @@ def create_app(
                 config_path=get_org_config_path(request),
             )
             editable["protected_accounts"] = list(effective_config.exclude_accounts)
-        source_provider_options = list(CONFIG_SOURCE_PROVIDER_OPTIONS)
         current_source_provider = normalize_source_provider(editable.get("source_provider"))
-        if current_source_provider not in {option_value for option_value, _ in source_provider_options}:
-            source_provider_options.append(
-                (
-                    current_source_provider,
-                    f"{source_provider_label(current_source_provider)} (unsupported in this build)",
-                )
-            )
+        provider_schema = get_source_provider_schema(current_source_provider)
+        source_provider_options = list_source_provider_options(include_unimplemented=True)
         protected_rules = request.app.state.exclusion_repo.list_rules(
             rule_type="protect",
             protection_level="hard",
@@ -876,6 +899,8 @@ def create_app(
             "editable": editable,
             "current_org": current_org,
             "source_provider_options": source_provider_options,
+            "source_provider_schema": provider_schema,
+            "source_provider_fields": build_source_provider_fields(editable),
             "protected_rules": protected_rules,
             "config_change_preview": config_change_preview,
             "config_preview_token": preview_token,
@@ -1319,32 +1344,32 @@ def create_app(
             if (
                 config
                 and not validation_errors
-                and normalize_source_provider(config.source_provider) == "wecom"
                 and config.source_connector.corpid
                 and config.source_connector.corpsecret
             ):
-                wecom_ok, wecom_message = test_wecom_connection(
+                source_ok, source_message = test_source_connection(
                     config.source_connector.corpid,
                     config.source_connector.corpsecret,
                     config.source_connector.agentid,
+                    source_provider=config.source_provider,
                 )
                 checks.append(
                     {
-                        "key": "live_wecom",
+                        "key": "live_source",
                         "label": f"Live {source_provider_name} connection",
-                        "status": "success" if wecom_ok else "error",
-                        "detail": wecom_message,
+                        "status": "success" if source_ok else "error",
+                        "detail": source_message,
                         "action_url": "/config",
                     }
                 )
             else:
-                if config and normalize_source_provider(config.source_provider) != "wecom":
+                if config and not get_source_provider_schema(config.source_provider).implemented:
                     live_source_detail = f"Skipped because {source_provider_name} is not implemented in this build."
                 else:
                     live_source_detail = f"Skipped because {source_provider_name} credentials are incomplete or still invalid."
                 checks.append(
                     {
-                        "key": "live_wecom",
+                        "key": "live_source",
                         "label": f"Live {source_provider_name} connection",
                         "status": "warning",
                         "detail": live_source_detail,
@@ -1387,7 +1412,8 @@ def create_app(
             next_action_url = "/config"
             next_action_label = "Open Organization Config"
         elif include_live and any(
-            str(item.get("key") or "") in {"live_wecom", "live_ldap"} and str(item.get("status") or "") == "error"
+            str(item.get("key") or "") in {"live_source", "live_wecom", "live_ldap"}
+            and str(item.get("status") or "") == "error"
             for item in checks
         ):
             next_action_url = "/config"
@@ -1531,7 +1557,6 @@ def create_app(
             source_provider = build_source_provider(
                 app_config=config,
                 logger=LOGGER,
-                api_factory=WeComAPI,
             )
             try:
                 department_ids = {
@@ -1575,7 +1600,6 @@ def create_app(
             source_provider = build_source_provider(
                 app_config=config,
                 logger=LOGGER,
-                api_factory=WeComAPI,
             )
             try:
                 department_name_map = {
