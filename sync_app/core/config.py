@@ -17,6 +17,19 @@ def _get_optional_str(parser: configparser.ConfigParser, section: str, option: s
     return value or None
 
 
+def _get_config_value(
+    parser: configparser.ConfigParser,
+    sections: tuple[str, ...],
+    option: str,
+    *,
+    fallback: str = "",
+) -> str:
+    for section in sections:
+        if parser.has_option(section, option):
+            return parser.get(section, option, fallback=fallback)
+    return fallback
+
+
 def build_tls_config(*, validate_cert: bool, ca_cert_path: str = ""):
     if not validate_cert:
         return Tls(validate=ssl.CERT_NONE, version=ssl.PROTOCOL_TLSv1_2)
@@ -34,13 +47,15 @@ def load_sync_config(config_path: str = "config.ini") -> AppConfig:
     config_parser = configparser.ConfigParser()
     config_parser.read(config_path, encoding="utf-8")
 
-    domain_name = config_parser.get("LDAP", "Domain", fallback=config_parser.get("Domain", "Name"))
+    domain_name = config_parser.get("LDAP", "Domain", fallback=config_parser.get("Domain", "Name", fallback=""))
 
     return AppConfig(
         wecom=SourceConnectorConfig(
-            corpid=config_parser.get("WeChat", "CorpID", fallback=""),
-            corpsecret=config_parser.get("WeChat", "CorpSecret", fallback=""),
-            agentid=_get_optional_str(config_parser, "WeChat", "AgentID"),
+            corpid=_get_config_value(config_parser, ("SourceConnector", "WeChat"), "CorpID", fallback=""),
+            corpsecret=_get_config_value(config_parser, ("SourceConnector", "WeChat"), "CorpSecret", fallback=""),
+            agentid=(
+                _get_config_value(config_parser, ("SourceConnector", "WeChat"), "AgentID", fallback="").strip() or None
+            ),
         ),
         ldap=LDAPConfig(
             server=config_parser.get("LDAP", "Server"),
@@ -78,7 +93,7 @@ def load_sync_config(config_path: str = "config.ini") -> AppConfig:
                 ],
             ]
         ),
-        webhook_url=config_parser.get("WeChatBot", "WebhookUrl", fallback=""),
+        webhook_url=_get_config_value(config_parser, ("Notification", "WeChatBot"), "WebhookUrl", fallback=""),
         config_path=config_path,
     )
 

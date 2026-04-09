@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
 
 {% block content %}
@@ -11,32 +12,14 @@
       <form method="post" action="/organizations">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-grid">
-          <div class="form-group">
-            <label for="org_id">{{ t("Organization ID") }}</label>
-            <input id="org_id" type="text" name="org_id" placeholder="asia">
-          </div>
-          <div class="form-group">
-            <label for="org_name">{{ t("Organization Name") }}</label>
-            <input id="org_name" type="text" name="name" placeholder="Asia Region">
-          </div>
-          <div class="form-group field-span-full">
-            <label for="org_config_path">{{ t("Legacy Import Path") }}</label>
-            <input id="org_config_path" type="text" name="config_path" placeholder="config.asia.ini">
-            <div class="field-help">{{ t("Optional. Used only to import older INI-based organization settings into the database.") }}</div>
-          </div>
-          <div class="form-group field-span-full">
-            <label for="org_description">{{ t("Description") }}</label>
-            <textarea id="org_description" name="description" rows="4" placeholder="{{ t('Optional notes for administrators') }}"></textarea>
-          </div>
-          <div class="form-group">
-            <label class="inline-checkbox">
-              <input type="checkbox" name="is_enabled" value="1" checked>
-              {{ t("Enabled") }}
-            </label>
-          </div>
+          {{ forms.input("org_id", t("Organization ID"), placeholder="asia") }}
+          {{ forms.input("name", t("Organization Name"), placeholder="Asia Region", id="org_name") }}
+          {{ forms.input("config_path", t("Legacy Import Path"), placeholder="config.asia.ini", help_text=t("Optional. Used only to import older INI-based organization settings into the database."), class_name="field-span-full", id="org_config_path") }}
+          {{ forms.textarea("description", t("Description"), placeholder=t('Optional notes for administrators'), class_name="field-span-full", id="org_description") }}
+          {{ forms.checkbox("is_enabled", t("Enabled"), checked=True) }}
         </div>
         <div class="actions">
-          <button type="submit">{{ t("Save Organization") }}</button>
+          {{ ui.button(t("Save Organization"), type="submit") }}
         </div>
       </form>
     {% endcall %}
@@ -62,7 +45,7 @@
         </div>
       </div>
       <div class="actions">
-        <a class="button secondary" href="/organizations/{{ current_org.org_id }}/export">{{ t("Export Config Bundle") }}</a>
+        {{ ui.button(t("Export Config Bundle"), href="/organizations/" ~ current_org.org_id ~ "/export", variant="secondary") }}
       </div>
       {% endif %}
     {% endcall %}
@@ -108,20 +91,20 @@
             <td>{{ t("Enabled") if organization.is_enabled else t("Disabled") }}</td>
             <td>
               <div class="actions flush-top">
-                <a class="button secondary small" href="/organizations/{{ organization.org_id }}/export">{{ t("Export Config Bundle") }}</a>
+                {{ ui.button(t("Export Config Bundle"), href="/organizations/" ~ organization.org_id ~ "/export", variant="secondary", size="small") }}
                 <form method="post" action="/organizations/{{ organization.org_id }}/select">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="return_url" value="{{ current_path }}">
-                  <button type="submit" class="secondary small" {% if current_org and organization.org_id == current_org.org_id %}disabled{% endif %}>{{ t("Select") }}</button>
+                  {{ ui.button(t("Select"), type="submit", variant="secondary", size="small", disabled=(current_org and organization.org_id == current_org.org_id)) }}
                 </form>
                 {% if not organization.is_default %}
-                <form method="post" action="/organizations/{{ organization.org_id }}/toggle" onsubmit="return confirm('{{ t('Are you sure you want to perform this action?') }}')">
+                <form method="post" action="/organizations/{{ organization.org_id }}/toggle" data-confirm="{{ t('Are you sure you want to perform this action?') }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                  <button type="submit" class="secondary small">{{ t("Disable") if organization.is_enabled else t("Enable") }}</button>
+                  {{ ui.button(t("Disable") if organization.is_enabled else t("Enable"), type="submit", variant="secondary", size="small") }}
                 </form>
-                <form method="post" action="/organizations/{{ organization.org_id }}/delete" onsubmit="return confirm('{{ t('Are you sure you want to perform this action?') }}')">
+                <form method="post" action="/organizations/{{ organization.org_id }}/delete" data-confirm="{{ t('Are you sure you want to perform this action?') }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                  <button type="submit" class="danger small">{{ t("Delete") }}</button>
+                  {{ ui.button(t("Delete"), type="submit", variant="danger", size="small") }}
                 </form>
                 {% endif %}
               </div>
@@ -141,24 +124,12 @@
     <form method="post" action="/organizations/import">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
-        <div class="form-group field-span-full">
-          <label for="bundle_json">{{ t("Bundle JSON") }}</label>
-          <textarea id="bundle_json" name="bundle_json" rows="10" placeholder='{"bundle_type":"organization_config_bundle"}'></textarea>
-        </div>
-        <div class="form-group">
-          <label for="target_org_id">{{ t("Target Organization ID Override") }}</label>
-          <input id="target_org_id" type="text" name="target_org_id" placeholder="asia-clone">
-          <div class="field-help">{{ t("Optional. Leave blank to keep the organization ID stored inside the bundle.") }}</div>
-        </div>
-        <div class="form-group">
-          <label class="inline-checkbox">
-            <input type="checkbox" name="replace_existing" value="1">
-            {{ t("Replace existing scoped settings, connectors, mappings, and group rules before import") }}
-          </label>
-        </div>
+        {{ forms.textarea("bundle_json", t("Bundle JSON"), placeholder='{"bundle_type":"organization_config_bundle"}', rows=10, class_name="field-span-full") }}
+        {{ forms.input("target_org_id", t("Target Organization ID Override"), placeholder="asia-clone", help_text=t("Optional. Leave blank to keep the organization ID stored inside the bundle.")) }}
+        {{ forms.checkbox("replace_existing", t("Replace existing scoped settings, connectors, mappings, and group rules before import")) }}
       </div>
       <div class="actions">
-        <button type="submit">{{ t("Import Bundle") }}</button>
+        {{ ui.button(t("Import Bundle"), type="submit") }}
       </div>
     </form>
   {% endcall %}

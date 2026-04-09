@@ -188,7 +188,7 @@
       {% endcall %}
 
       <div class="actions">
-        <button type="submit">{{ t("Save Policies") }}</button>
+        {{ ui.button(t("Save Policies"), type="submit") }}
       </div>
     </form>
   {% endcall %}
@@ -315,7 +315,7 @@
         </label>
         </div>
         <div class="actions">
-          <button type="submit">{{ t("Save Connector") }}</button>
+          {{ ui.button(t("Save Connector"), type="submit") }}
         </div>
       </form>
     {% endcall %}
@@ -379,7 +379,7 @@
         </label>
         </div>
         <div class="actions">
-          <button type="submit">{{ t("Save Mapping Rule") }}</button>
+          {{ ui.button(t("Save Mapping Rule"), type="submit") }}
         </div>
       </form>
     {% endcall %}
@@ -424,13 +424,13 @@
           <td>
             {% if connector.connector_id != "default" and can("config.write") %}
             <div class="actions">
-              <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/toggle" onsubmit="return confirm('{{ t('Are you sure you want to perform this action?') }}')">
+              <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/toggle" data-confirm="{{ t('Are you sure you want to perform this action?') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="secondary">{{ t("Disable") if connector.is_enabled else t("Enable") }}</button>
+                {{ ui.button(t("Disable") if connector.is_enabled else t("Enable"), type="submit", variant="secondary") }}
               </form>
-              <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/delete" onsubmit="return confirm('{{ t('Are you sure you want to perform this action?') }}')">
+              <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/delete" data-confirm="{{ t('Are you sure you want to perform this action?') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="secondary">{{ t("Delete") }}</button>
+                {{ ui.button(t("Delete"), type="submit", variant="danger") }}
               </form>
             </div>
             {% else %}
@@ -480,9 +480,9 @@
         </td>
         <td>
           {% if can("config.write") %}
-          <form method="post" action="/advanced-sync/mappings/{{ rule.id }}/delete" onsubmit="return confirm('{{ t('Are you sure you want to perform this action?') }}')">
+          <form method="post" action="/advanced-sync/mappings/{{ rule.id }}/delete" data-confirm="{{ t('Are you sure you want to perform this action?') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="secondary">{{ t("Delete") }}</button>
+            {{ ui.button(t("Delete"), type="submit", variant="danger") }}
           </form>
           {% else %}
           <span class="muted">{{ t("Read only") }}</span>

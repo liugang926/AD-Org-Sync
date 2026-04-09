@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
 
 {% block content %}
@@ -7,19 +8,12 @@
     <form method="post" action="/users">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
-        <div><label>{{ t("Username") }}</label><input type="text" name="username" required></div>
-        <div><label>{{ t("Password") }}</label><input type="password" name="password" required></div>
-        <div>
-          <label>{{ t("Role") }}</label>
-          <select name="role">
-            <option value="super_admin">{{ t("super_admin") }}</option>
-            <option value="operator">{{ t("operator") }}</option>
-            <option value="auditor">{{ t("auditor") }}</option>
-          </select>
-        </div>
+        {{ forms.input("username", t("Username"), required=True, autocomplete="username") }}
+        {{ forms.input("password", t("Password"), type="password", required=True, autocomplete="new-password") }}
+        {{ forms.select("role", t("Role"), [("super_admin", t("super_admin")), ("operator", t("operator")), ("auditor", t("auditor"))], selected_value="super_admin") }}
       </div>
       <div class="actions">
-        <button type="submit">{{ t("Create User") }}</button>
+        {{ ui.button(t("Create User"), type="submit") }}
       </div>
     </form>
   {% endcall %}
@@ -38,9 +32,7 @@
             <td>
               <form class="inline" method="post" action="/users/{{ item.id }}/toggle">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button class="{% if item.is_enabled %}danger{% else %}secondary{% endif %}" type="submit">
-                  {{ t("Disable") if item.is_enabled else t("Enable") }}
-                </button>
+                {{ ui.button(t("Disable") if item.is_enabled else t("Enable"), type="submit", variant=("danger" if item.is_enabled else "secondary")) }}
               </form>
             </td>
           </tr>

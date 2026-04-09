@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
 
 {% block content %}
@@ -16,21 +17,12 @@
       <form method="post" action="/mappings/bind">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-grid">
-          <div>
-            <label>{{ t("Source User ID") }}</label>
-            <input type="text" name="source_user_id" required>
-          </div>
-          <div>
-            <label>{{ t("AD Username") }}</label>
-            <input type="text" name="ad_username" required>
-          </div>
-          <div class="field-span-full">
-            <label>{{ t("Notes") }}</label>
-            <input type="text" name="notes">
-          </div>
+          {{ forms.input("source_user_id", t("Source User ID"), required=True) }}
+          {{ forms.input("ad_username", t("AD Username"), required=True) }}
+          {{ forms.input("notes", t("Notes"), class_name="field-span-full") }}
         </div>
         <div class="actions">
-          <button type="submit">{{ t("Save Binding") }}</button>
+          {{ ui.button(t("Save Binding"), type="submit") }}
         </div>
       </form>
     {% endcall %}
@@ -39,21 +31,12 @@
       <form method="post" action="/mappings/override">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-grid">
-          <div>
-            <label>{{ t("Source User ID") }}</label>
-            <input type="text" name="source_user_id" required>
-          </div>
-          <div>
-            <label>{{ t("Primary Department ID") }}</label>
-            <input type="text" name="primary_department_id" required>
-          </div>
-          <div class="field-span-full">
-            <label>{{ t("Notes") }}</label>
-            <input type="text" name="notes">
-          </div>
+          {{ forms.input("source_user_id", t("Source User ID"), required=True, id="override_source_user_id") }}
+          {{ forms.input("primary_department_id", t("Primary Department ID"), required=True) }}
+          {{ forms.input("notes", t("Notes"), class_name="field-span-full", id="override_notes") }}
         </div>
         <div class="actions">
-          <button type="submit">{{ t("Save Override") }}</button>
+          {{ ui.button(t("Save Override"), type="submit") }}
         </div>
       </form>
     {% endcall %}
@@ -62,10 +45,9 @@
   {% call ui.panel(t("Bulk Import Identity Bindings"), description=t("One row per line. Format: <code>source_user_id,ad_username,notes</code>. Notes are optional.")) %}
     <form method="post" action="/mappings/import">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>{{ t("Bulk Content") }}</label>
-      <textarea name="bulk_bindings" placeholder="alice,alice.ad,Headquarters&#10;bob,bob.ad"></textarea>
+      {{ forms.textarea("bulk_bindings", t("Bulk Content"), placeholder="alice,alice.ad,Headquarters&#10;bob,bob.ad") }}
       <div class="actions">
-        <button class="secondary" type="submit">{{ t("Import Bindings") }}</button>
+        {{ ui.button(t("Import Bindings"), type="submit", variant="secondary") }}
       </div>
     </form>
   {% endcall %}
@@ -78,30 +60,20 @@
   {% call ui.panel(t("Search And Filter")) %}
     <form method="get" action="/mappings">
       <div class="form-grid">
-        <div>
-          <label>{{ t("Keyword") }}</label>
-          <input type="text" name="q" value="{{ mapping_query or '' }}" placeholder="{{ t('Search source user, AD user, or notes') }}">
-        </div>
-        <div>
-          <label>{{ t("Status") }}</label>
-          <select name="status">
-            <option value="all" {% if mapping_status == 'all' %}selected{% endif %}>{{ t("All") }}</option>
-            <option value="enabled" {% if mapping_status == 'enabled' %}selected{% endif %}>{{ t("Enabled Only") }}</option>
-            <option value="disabled" {% if mapping_status == 'disabled' %}selected{% endif %}>{{ t("Disabled Only") }}</option>
-          </select>
-        </div>
+        {{ forms.input("q", t("Keyword"), mapping_query or '', placeholder=t('Search source user, AD user, or notes')) }}
+        {{ forms.select("status", t("Status"), [("all", t("All")), ("enabled", t("Enabled Only")), ("disabled", t("Disabled Only"))], selected_value=(mapping_status or 'all')) }}
       </div>
       {% if filters_are_remembered %}
       <p class="section-subtitle">{{ t("Filters are remembered for this browser session.") }}</p>
       {% endif %}
       <div class="actions">
-        <button type="submit">{{ t("Search") }}</button>
-        <a class="button secondary" href="/mappings?clear_filters=1">{{ t("Reset") }}</a>
-        <a class="button secondary" href="/mappings/export?q={{ mapping_query or '' }}&status={{ mapping_status or 'all' }}">{{ t("Export CSV") }}</a>
-        <a class="button ghost" href="/conflicts">{{ t("Open Conflict Queue") }}</a>
-        <a class="button ghost" href="/jobs">{{ t("Open Job Center") }}</a>
+        {{ ui.button(t("Search"), type="submit") }}
+        {{ ui.button(t("Reset"), href="/mappings?clear_filters=1", variant="secondary") }}
+        {{ ui.button(t("Export CSV"), href="/mappings/export?q=" ~ (mapping_query or '') ~ "&status=" ~ (mapping_status or 'all'), variant="secondary") }}
+        {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
+        {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost") }}
         {% if show_advanced_navigation %}
-        <a class="button ghost" href="/advanced-sync">{{ t("Open Advanced Sync") }}</a>
+        {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost") }}
         {% endif %}
       </div>
     </form>
@@ -111,9 +83,9 @@
   {% call ui.panel("") %}
     {% call ui.empty_state(t("No mapping records yet."), t("Most organizations can start without manual mappings. Add a binding only when a source user must target a specific AD account or department."), "info") %}
       {% if can("mappings.write") %}
-      <a class="button secondary" href="/mappings#mapping-create">{{ t("Use the forms above") }}</a>
+      {{ ui.button(t("Use the forms above"), href="/mappings#mapping-create", variant="secondary") }}
       {% endif %}
-      <a class="button ghost" href="/conflicts">{{ t("Review Conflict Queue") }}</a>
+      {{ ui.button(t("Review Conflict Queue"), href="/conflicts", variant="ghost") }}
     {% endcall %}
   {% endcall %}
   {% endif %}
@@ -146,9 +118,7 @@
               <form class="inline" method="post" action="/mappings/bind/{{ item.source_user_id or item.wecom_userid }}/toggle">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="enabled" value="{{ 'false' if item.is_enabled else 'true' }}">
-                <button class="{% if item.is_enabled %}danger{% else %}secondary{% endif %} small" type="submit">
-                  {{ t("Disable") if item.is_enabled else t("Enable") }}
-                </button>
+                {{ ui.button(t("Disable") if item.is_enabled else t("Enable"), type="submit", variant=("danger" if item.is_enabled else "secondary"), size="small") }}
               </form>
               {% else %}
               <span class="muted">{{ t("Read only") }}</span>
@@ -163,10 +133,10 @@
     {% endcall %}
     {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=binding_page_data.total_items, page=binding_page_data.page, pages=binding_page_data.total_pages)) %}
       {% if binding_page_data.has_previous %}
-      <a class="button secondary" href="/mappings?q={{ mapping_query or '' }}&status={{ mapping_status or 'all' }}&binding_page={{ binding_page_data.previous_page }}&override_page={{ override_page_data.page }}">{{ t("Previous") }}</a>
+      {{ ui.button(t("Previous"), href="/mappings?q=" ~ (mapping_query or '') ~ "&status=" ~ (mapping_status or 'all') ~ "&binding_page=" ~ binding_page_data.previous_page ~ "&override_page=" ~ override_page_data.page, variant="secondary") }}
       {% endif %}
       {% if binding_page_data.has_next %}
-      <a class="button secondary" href="/mappings?q={{ mapping_query or '' }}&status={{ mapping_status or 'all' }}&binding_page={{ binding_page_data.next_page }}&override_page={{ override_page_data.page }}">{{ t("Next") }}</a>
+      {{ ui.button(t("Next"), href="/mappings?q=" ~ (mapping_query or '') ~ "&status=" ~ (mapping_status or 'all') ~ "&binding_page=" ~ binding_page_data.next_page ~ "&override_page=" ~ override_page_data.page, variant="secondary") }}
       {% endif %}
     {% endcall %}
   {% endcall %}
@@ -196,7 +166,7 @@
               {% if can("mappings.write") %}
               <form class="inline" method="post" action="/mappings/override/{{ item.source_user_id or item.wecom_userid }}/delete">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button class="danger small" type="submit">{{ t("Delete") }}</button>
+                {{ ui.button(t("Delete"), type="submit", variant="danger", size="small") }}
               </form>
               {% else %}
               <span class="muted">{{ t("Read only") }}</span>
@@ -211,10 +181,10 @@
     {% endcall %}
     {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=override_page_data.total_items, page=override_page_data.page, pages=override_page_data.total_pages)) %}
       {% if override_page_data.has_previous %}
-      <a class="button secondary" href="/mappings?q={{ mapping_query or '' }}&status={{ mapping_status or 'all' }}&binding_page={{ binding_page_data.page }}&override_page={{ override_page_data.previous_page }}">{{ t("Previous") }}</a>
+      {{ ui.button(t("Previous"), href="/mappings?q=" ~ (mapping_query or '') ~ "&status=" ~ (mapping_status or 'all') ~ "&binding_page=" ~ binding_page_data.page ~ "&override_page=" ~ override_page_data.previous_page, variant="secondary") }}
       {% endif %}
       {% if override_page_data.has_next %}
-      <a class="button secondary" href="/mappings?q={{ mapping_query or '' }}&status={{ mapping_status or 'all' }}&binding_page={{ binding_page_data.page }}&override_page={{ override_page_data.next_page }}">{{ t("Next") }}</a>
+      {{ ui.button(t("Next"), href="/mappings?q=" ~ (mapping_query or '') ~ "&status=" ~ (mapping_status or 'all') ~ "&binding_page=" ~ binding_page_data.page ~ "&override_page=" ~ override_page_data.next_page, variant="secondary") }}
       {% endif %}
     {% endcall %}
   {% endcall %}

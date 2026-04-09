@@ -1,23 +1,27 @@
-{% macro input(name, label, value='', type='text', placeholder='', help_text='', required=False, disabled=False, class_name='') %}
-<div class="form-group {{ class_name }}" id="group-{{ name }}">
+{% macro input(name, label, value='', type='text', placeholder='', help_text='', required=False, disabled=False, class_name='', id='', autocomplete='', input_class='', attrs='', min_value='', max_value='', step='') %}
+{% set field_id = id or name %}
+<div class="form-group {{ class_name }}" id="group-{{ field_id }}">
   {% if label %}
-  <label for="{{ name }}">{{ label }}{% if required %}<span class="required-mark">*</span>{% endif %}</label>
+  <label for="{{ field_id }}">{{ label }}{% if required %}<span class="required-mark">*</span>{% endif %}</label>
   {% endif %}
-  <input type="{{ type }}" id="{{ name }}" name="{{ name }}" value="{{ value }}" 
-         placeholder="{{ placeholder }}" {% if required %}required{% endif %} 
-         {% if disabled %}disabled{% endif %}>
+  <input type="{{ type }}" id="{{ field_id }}" name="{{ name }}" value="{{ value }}"
+         class="{{ input_class }}" placeholder="{{ placeholder }}" {% if required %}required{% endif %}
+         {% if disabled %}disabled{% endif %} {% if autocomplete %}autocomplete="{{ autocomplete }}"{% endif %}
+         {% if min_value != '' %}min="{{ min_value }}"{% endif %} {% if max_value != '' %}max="{{ max_value }}"{% endif %}
+         {% if step != '' %}step="{{ step }}"{% endif %} {{ attrs|safe }}>
   {% if help_text %}
   <div class="help-text">{{ help_text }}</div>
   {% endif %}
 </div>
 {% endmacro %}
 
-{% macro select(name, label, options, selected_value='', help_text='', required=False, class_name='') %}
-<div class="form-group {{ class_name }}" id="group-{{ name }}">
+{% macro select(name, label, options, selected_value='', help_text='', required=False, class_name='', id='', disabled=False, attrs='') %}
+{% set field_id = id or name %}
+<div class="form-group {{ class_name }}" id="group-{{ field_id }}">
   {% if label %}
-  <label for="{{ name }}">{{ label }}</label>
+  <label for="{{ field_id }}">{{ label }}{% if required %}<span class="required-mark">*</span>{% endif %}</label>
   {% endif %}
-  <select id="{{ name }}" name="{{ name }}" {% if required %}required{% endif %}>
+  <select id="{{ field_id }}" name="{{ name }}" {% if required %}required{% endif %} {% if disabled %}disabled{% endif %} {{ attrs|safe }}>
     {% for val, label in options %}
     <option value="{{ val }}" {% if val|string == selected_value|string %}selected{% endif %}>{{ label }}</option>
     {% endfor %}
@@ -28,12 +32,26 @@
 </div>
 {% endmacro %}
 
-{% macro textarea(name, label, value='', placeholder='', help_text='', rows=4, class_name='') %}
-<div class="form-group {{ class_name }}" id="group-{{ name }}">
+{% macro textarea(name, label, value='', placeholder='', help_text='', rows=4, class_name='', id='', disabled=False, attrs='') %}
+{% set field_id = id or name %}
+<div class="form-group {{ class_name }}" id="group-{{ field_id }}">
   {% if label %}
-  <label for="{{ name }}">{{ label }}</label>
+  <label for="{{ field_id }}">{{ label }}</label>
   {% endif %}
-  <textarea id="{{ name }}" name="{{ name }}" placeholder="{{ placeholder }}" rows="{{ rows }}">{{ value }}</textarea>
+  <textarea id="{{ field_id }}" name="{{ name }}" placeholder="{{ placeholder }}" rows="{{ rows }}" {% if disabled %}disabled{% endif %} {{ attrs|safe }}>{{ value }}</textarea>
+  {% if help_text %}
+  <div class="help-text">{{ help_text }}</div>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro checkbox(name, label, value='1', checked=False, help_text='', class_name='', id='') %}
+{% set field_id = id or name %}
+<div class="form-group {{ class_name }}" id="group-{{ field_id }}">
+  <label class="inline-checkbox" for="{{ field_id }}">
+    <input id="{{ field_id }}" type="checkbox" name="{{ name }}" value="{{ value }}" {% if checked %}checked{% endif %}>
+    {{ label }}
+  </label>
   {% if help_text %}
   <div class="help-text">{{ help_text }}</div>
   {% endif %}

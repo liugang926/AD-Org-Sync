@@ -25,6 +25,25 @@
 <span class="badge badge-{{ level }}">{{ text }}</span>
 {% endmacro %}
 
+{% macro button(text='', href='', type='button', variant='primary', size='md', block=False, disabled=False, class_name='', name='', value='', attrs='', confirm_text='') %}
+{% set classes = ['button'] %}
+{% if variant and variant != 'primary' %}{% set _ = classes.append(variant) %}{% endif %}
+{% if size and size != 'md' %}{% set _ = classes.append(size) %}{% endif %}
+{% if block %}{% set _ = classes.append('block') %}{% endif %}
+{% if class_name %}{% set _ = classes.append(class_name) %}{% endif %}
+{% set class_attr = classes | join(' ') %}
+{% if href %}
+<a href="{{ href }}" class="{{ class_attr }}" {% if confirm_text %}data-confirm="{{ confirm_text }}"{% endif %} {{ attrs|safe }}>
+  {% if caller is defined %}{{ caller() }}{% else %}{{ text }}{% endif %}
+</a>
+{% else %}
+<button type="{{ type }}" class="{{ class_attr }}" {% if name %}name="{{ name }}"{% endif %} {% if value %}value="{{ value }}"{% endif %}
+  {% if disabled %}disabled{% endif %} {% if confirm_text %}data-confirm="{{ confirm_text }}"{% endif %} {{ attrs|safe }}>
+  {% if caller is defined %}{{ caller() }}{% else %}{{ text }}{% endif %}
+</button>
+{% endif %}
+{% endmacro %}
+
 {% macro page_header(title, summary='', eyebrow='', badge_text='', badge_level='info', class_name='') %}
 <section class="page-hero {{ class_name }}">
   <div class="page-hero__main">

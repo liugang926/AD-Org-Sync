@@ -31,7 +31,7 @@
 
 建议默认位置：
 
-- Windows: `%APPDATA%/NottingADSync/app.db`
+- Windows: `%APPDATA%/ADOrgSync/app.db`
 
 同目录建议包含：
 

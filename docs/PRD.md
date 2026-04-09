@@ -1,6 +1,6 @@
-# Notting AD Sync 产品需求文档 (PRD)
+# AD Org Sync 产品需求文档 (PRD)
 
-| 项目名称 | Notting AD Sync (企业微信-AD 域同步与自服务引擎) |
+| 项目名称 | AD Org Sync |
 | :--- | :--- |
 | **版本** | v1.0 (Stable) |
 | **作者** | Notting Project Team |

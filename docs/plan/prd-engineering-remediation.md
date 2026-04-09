@@ -1,8 +1,8 @@
-# Notting AD Sync 工程化整改 PRD
+# AD Org Sync 工程化整改 PRD
 
 ## 1. 文档信息
 
-- 项目名称: Notting AD Sync
+- 项目名称: AD Org Sync
 - 文档类型: 工程化整改 PRD
 - 当前版本: v1.0
 - 文档日期: 2026-03-25

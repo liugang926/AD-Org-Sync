@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
 
 {% block content %}
@@ -16,35 +17,21 @@
       <form method="post" action="/exceptions">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-grid">
-          <div>
-            <label>{{ t("Rule") }}</label>
-            <select name="rule_type">
+          <div class="form-group">
+            <label for="user_exception_rule_type">{{ t("Rule") }}</label>
+            <select id="user_exception_rule_type" name="rule_type">
               {% for rule_type in user_exception_rule_types %}
               <option value="{{ rule_type }}">{{ t(exception_rule_definitions[rule_type].label) }}</option>
               {% endfor %}
             </select>
           </div>
-          <div>
-            <label>{{ t("Source User ID") }}</label>
-            <input type="text" name="match_value" required placeholder="alice">
-          </div>
-          <div class="field-span-full">
-            <label>{{ t("Notes") }}</label>
-            <input type="text" name="notes" placeholder="{{ t('Why this user is special') }}">
-          </div>
-          <div>
-            <label>{{ t("Expires At") }}</label>
-            <input type="datetime-local" name="expires_at">
-          </div>
-          <div>
-            <label class="inline-checkbox">
-              <input type="checkbox" name="is_once" value="1">
-              {{ t("One-time Rule") }}
-            </label>
-          </div>
+          {{ forms.input("match_value", t("Source User ID"), placeholder="alice", required=True, id="user_exception_match_value") }}
+          {{ forms.input("notes", t("Notes"), placeholder=t('Why this user is special'), class_name="field-span-full", id="user_exception_notes") }}
+          {{ forms.input("expires_at", t("Expires At"), type="datetime-local", id="user_exception_expires_at") }}
+          {{ forms.checkbox("is_once", t("One-time Rule"), id="user_exception_is_once") }}
         </div>
         <div class="actions">
-          <button type="submit">{{ t("Save Rule") }}</button>
+          {{ ui.button(t("Save Rule"), type="submit") }}
         </div>
       </form>
     {% endcall %}
@@ -54,27 +41,13 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="rule_type" value="skip_department_placement">
         <div class="form-grid">
-          <div>
-            <label>{{ t("Department ID") }}</label>
-            <input type="text" name="match_value" required placeholder="1001">
-          </div>
-          <div class="field-span-full">
-            <label>{{ t("Notes") }}</label>
-            <input type="text" name="notes" placeholder="{{ t('Placement should stay on another managed department') }}">
-          </div>
-          <div>
-            <label>{{ t("Expires At") }}</label>
-            <input type="datetime-local" name="expires_at">
-          </div>
-          <div>
-            <label class="inline-checkbox">
-              <input type="checkbox" name="is_once" value="1">
-              {{ t("One-time Rule") }}
-            </label>
-          </div>
+          {{ forms.input("match_value", t("Department ID"), placeholder="1001", required=True, id="placement_exception_match_value") }}
+          {{ forms.input("notes", t("Notes"), placeholder=t('Placement should stay on another managed department'), class_name="field-span-full", id="placement_exception_notes") }}
+          {{ forms.input("expires_at", t("Expires At"), type="datetime-local", id="placement_exception_expires_at") }}
+          {{ forms.checkbox("is_once", t("One-time Rule"), id="placement_exception_is_once") }}
         </div>
         <div class="actions">
-          <button type="submit">{{ t("Save Rule") }}</button>
+          {{ ui.button(t("Save Rule"), type="submit") }}
         </div>
       </form>
     {% endcall %}
@@ -85,27 +58,13 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="rule_type" value="skip_group_relation_cleanup">
       <div class="form-grid">
-        <div>
-          <label>{{ t("AD Group sAMAccountName") }}</label>
-          <input type="text" name="match_value" required placeholder="WECOM_D1001">
-        </div>
-        <div class="field-span-full">
-          <label>{{ t("Notes") }}</label>
-          <input type="text" name="notes" placeholder="{{ t('Keep manual parent relations for this group') }}">
-        </div>
-        <div>
-          <label>{{ t("Expires At") }}</label>
-          <input type="datetime-local" name="expires_at">
-        </div>
-        <div>
-          <label class="inline-checkbox">
-            <input type="checkbox" name="is_once" value="1">
-            {{ t("One-time Rule") }}
-          </label>
-        </div>
+        {{ forms.input("match_value", t("AD Group sAMAccountName"), placeholder="WECOM_D1001", required=True, id="group_cleanup_match_value") }}
+        {{ forms.input("notes", t("Notes"), placeholder=t('Keep manual parent relations for this group'), class_name="field-span-full", id="group_cleanup_notes") }}
+        {{ forms.input("expires_at", t("Expires At"), type="datetime-local", id="group_cleanup_expires_at") }}
+        {{ forms.checkbox("is_once", t("One-time Rule"), id="group_cleanup_is_once") }}
       </div>
       <div class="actions">
-        <button type="submit">{{ t("Save Rule") }}</button>
+        {{ ui.button(t("Save Rule"), type="submit") }}
       </div>
     </form>
   {% endcall %}
@@ -113,10 +72,9 @@
   {% call ui.panel(t("Bulk Import"), description=t("CSV format: <code>rule_type,match_value,notes,is_enabled,expires_at,is_once</code>. Header row is optional.")) %}
     <form method="post" action="/exceptions/import">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>{{ t("Bulk Rules") }}</label>
-      <textarea name="bulk_rules" placeholder="rule_type,match_value,notes,is_enabled,expires_at,is_once&#10;skip_user_disable,alice,Keep account enabled,true,2026-12-31T18:00,true&#10;skip_group_relation_cleanup,WECOM_D1001,Preserve manual parent,false,,false"></textarea>
+      {{ forms.textarea("bulk_rules", t("Bulk Rules"), placeholder="rule_type,match_value,notes,is_enabled,expires_at,is_once&#10;skip_user_disable,alice,Keep account enabled,true,2026-12-31T18:00,true&#10;skip_group_relation_cleanup,WECOM_D1001,Preserve manual parent,false,,false") }}
       <div class="actions">
-        <button class="secondary" type="submit">{{ t("Import Rules") }}</button>
+        {{ ui.button(t("Import Rules"), type="submit", variant="secondary") }}
       </div>
     </form>
   {% endcall %}
@@ -129,10 +87,7 @@
   {% call ui.panel(t("Search And Filter")) %}
     <form method="get" action="/exceptions">
       <div class="form-grid">
-        <div>
-          <label>{{ t("Keyword") }}</label>
-          <input type="text" name="q" value="{{ exception_query or '' }}" placeholder="{{ t('rule, match value, notes') }}">
-        </div>
+        {{ forms.input("q", t("Keyword"), exception_query or '', placeholder=t('rule, match value, notes')) }}
         <div>
           <label>{{ t("Rule Type") }}</label>
           <select name="rule_type">
@@ -142,26 +97,19 @@
             {% endfor %}
           </select>
         </div>
-        <div>
-          <label>{{ t("Status") }}</label>
-          <select name="status">
-            <option value="all" {% if exception_status == 'all' %}selected{% endif %}>{{ t("All") }}</option>
-            <option value="enabled" {% if exception_status == 'enabled' %}selected{% endif %}>{{ t("Enabled") }}</option>
-            <option value="disabled" {% if exception_status == 'disabled' %}selected{% endif %}>{{ t("Disabled") }}</option>
-          </select>
-        </div>
+        {{ forms.select("status", t("Status"), [("all", t("All")), ("enabled", t("Enabled")), ("disabled", t("Disabled"))], selected_value=(exception_status or 'all')) }}
       </div>
       {% if filters_are_remembered %}
       <p class="section-subtitle">{{ t("Filters are remembered for this browser session.") }}</p>
       {% endif %}
       <div class="actions">
-        <button type="submit">{{ t("Search") }}</button>
-        <a class="button secondary" href="/exceptions?clear_filters=1">{{ t("Reset") }}</a>
-        <a class="button secondary" href="/exceptions/export?q={{ exception_query or '' }}&rule_type={{ exception_rule_type or 'all' }}&status={{ exception_status or 'all' }}">{{ t("Export CSV") }}</a>
-        <a class="button ghost" href="/conflicts">{{ t("Open Conflict Queue") }}</a>
-        <a class="button ghost" href="/jobs">{{ t("Open Job Center") }}</a>
+        {{ ui.button(t("Search"), type="submit") }}
+        {{ ui.button(t("Reset"), href="/exceptions?clear_filters=1", variant="secondary") }}
+        {{ ui.button(t("Export CSV"), href="/exceptions/export?q=" ~ (exception_query or '') ~ "&rule_type=" ~ (exception_rule_type or 'all') ~ "&status=" ~ (exception_status or 'all'), variant="secondary") }}
+        {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
+        {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost") }}
         {% if show_advanced_navigation %}
-        <a class="button ghost" href="/advanced-sync">{{ t("Open Advanced Sync") }}</a>
+        {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost") }}
         {% endif %}
       </div>
     </form>
@@ -210,13 +158,11 @@
                 <form class="inline" method="post" action="/exceptions/{{ item.id }}/toggle">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="enabled" value="{{ 'false' if item.is_enabled else 'true' }}">
-                  <button class="{% if item.is_enabled %}danger{% else %}secondary{% endif %} small" type="submit">
-                    {{ t("Disable") if item.is_enabled else t("Enable") }}
-                  </button>
+                  {{ ui.button(t("Disable") if item.is_enabled else t("Enable"), type="submit", variant=("danger" if item.is_enabled else "secondary"), size="small") }}
                 </form>
                 <form class="inline" method="post" action="/exceptions/{{ item.id }}/delete">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                  <button class="danger small" type="submit">{{ t("Delete") }}</button>
+                  {{ ui.button(t("Delete"), type="submit", variant="danger", size="small") }}
                 </form>
               </div>
               {% else %}
@@ -233,17 +179,17 @@
     {% if exception_page_data.total_items == 0 %}
     {% call ui.empty_state(t("No exception rules yet."), t("Keep the default policy until you discover a real edge case. This page is best used for explicit exceptions, not initial setup."), "info") %}
       {% if can("exceptions.write") %}
-      <a class="button secondary" href="/exceptions#exception-create">{{ t("Use the forms above") }}</a>
+      {{ ui.button(t("Use the forms above"), href="/exceptions#exception-create", variant="secondary") }}
       {% endif %}
-      <a class="button ghost" href="/conflicts">{{ t("Review Conflict Queue") }}</a>
+      {{ ui.button(t("Review Conflict Queue"), href="/conflicts", variant="ghost") }}
     {% endcall %}
     {% endif %}
     {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=exception_page_data.total_items, page=exception_page_data.page, pages=exception_page_data.total_pages)) %}
       {% if exception_page_data.has_previous %}
-      <a class="button secondary" href="/exceptions?q={{ exception_query or '' }}&rule_type={{ exception_rule_type or 'all' }}&status={{ exception_status or 'all' }}&page_number={{ exception_page_data.previous_page }}">{{ t("Previous") }}</a>
+      {{ ui.button(t("Previous"), href="/exceptions?q=" ~ (exception_query or '') ~ "&rule_type=" ~ (exception_rule_type or 'all') ~ "&status=" ~ (exception_status or 'all') ~ "&page_number=" ~ exception_page_data.previous_page, variant="secondary") }}
       {% endif %}
       {% if exception_page_data.has_next %}
-      <a class="button secondary" href="/exceptions?q={{ exception_query or '' }}&rule_type={{ exception_rule_type or 'all' }}&status={{ exception_status or 'all' }}&page_number={{ exception_page_data.next_page }}">{{ t("Next") }}</a>
+      {{ ui.button(t("Next"), href="/exceptions?q=" ~ (exception_query or '') ~ "&rule_type=" ~ (exception_rule_type or 'all') ~ "&status=" ~ (exception_status or 'all') ~ "&page_number=" ~ exception_page_data.next_page, variant="secondary") }}
       {% endif %}
     {% endcall %}
   {% endcall %}

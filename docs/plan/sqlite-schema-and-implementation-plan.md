@@ -1,4 +1,4 @@
-# Notting AD Sync SQLite 表结构设计与实施任务清单
+# AD Org Sync SQLite 表结构设计与实施任务清单
 
 ## 1. 目标
 
@@ -21,7 +21,7 @@ SQLite 文件不应放在源码根目录。
 
 建议默认位置：
 
-- `%APPDATA%/NottingADSync/app.db`
+- `%APPDATA%/ADOrgSync/app.db`
 
 打包版与源码版都应统一走应用数据目录。
 

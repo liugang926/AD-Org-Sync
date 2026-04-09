@@ -864,6 +864,8 @@ ZH_CN_TRANSLATIONS.update(
 
 ZH_CN_TRANSLATIONS.update(
     {
+        "AD Org Sync": "AD 组织同步",
+        "Sign in to manage AD Org Sync": "登录以管理 AD 组织同步",
         "The AD account stays enabled even after the user leaves the managed source scope.": "\u5373\u4f7f\u7528\u6237\u79bb\u5f00\u53d7\u7ba1\u7684\u6e90\u8303\u56f4\uff0cAD \u8d26\u53f7\u4e5f\u4f1a\u4fdd\u6301\u542f\u7528\u3002",
         "Source user ID maps directly to an existing AD username": "\u6e90\u7528\u6237 ID \u53ef\u76f4\u63a5\u5339\u914d\u5230\u5df2\u6709 AD \u7528\u6237\u540d",
         "Source email local part maps to an existing AD username": "\u6e90\u90ae\u7bb1\u524d\u7f00\u53ef\u5339\u914d\u5230\u5df2\u6709 AD \u7528\u6237\u540d",

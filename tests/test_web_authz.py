@@ -311,12 +311,31 @@ class WebAuthorizationTests(unittest.TestCase):
             self._request("/users", "POST"),
             csrf_token=match.group(1),
             username="weakuser",
-            password="Weakpass1",
+            password="short7!",
             role="operator",
         )
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/users")
         self.assertIsNone(self.app.state.user_repo.get_user_record_by_username("weakuser"))
+
+    def test_super_admin_can_create_user_with_simple_eight_character_password(self):
+        self._login("superadmin")
+
+        users_page = self._route("/users", "GET")(self._request("/users"))
+        self.assertEqual(users_page.status_code, 200)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(users_page))
+        self.assertIsNotNone(match)
+
+        response = self._route("/users", "POST")(
+            self._request("/users", "POST"),
+            csrf_token=match.group(1),
+            username="simple8",
+            password="simple88",
+            role="operator",
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/users")
+        self.assertIsNotNone(self.app.state.user_repo.get_user_record_by_username("simple8"))
 
     def test_super_admin_can_manage_exception_rules(self):
         self._login("superadmin")
@@ -2075,7 +2094,7 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn(">仪表盘<", text)
         self.assertIn(">任务<", text)
         self.assertIn("配置校验", text)
-        self.assertIn("企业微信 AD 同步", text)
+        self.assertIn("AD 组织同步", text)
 
 
     def test_dashboard_defaults_to_basic_mode_and_can_switch_to_advanced_mode(self):

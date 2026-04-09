@@ -26,7 +26,7 @@ def __getattr__(name):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="WeCom to AD sync tool (LDAPS)")
+    parser = argparse.ArgumentParser(description="AD Org Sync runtime entry (LDAPS compatibility wrapper)")
     parser.add_argument("--execution-mode", choices=["apply", "dry_run"], default="apply")
     parser.add_argument("--trigger-type", default="cli")
     parser.add_argument("--db-path", default=None)

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
 
 {% block content %}
@@ -6,21 +7,12 @@
   <form method="post" action="/setup">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-grid">
-      <div>
-        <label>{{ t("Username") }}</label>
-        <input type="text" name="username" required>
-      </div>
-      <div>
-        <label>{{ t("Password") }}</label>
-        <input type="password" name="password" required>
-      </div>
-      <div>
-        <label>{{ t("Confirm Password") }}</label>
-        <input type="password" name="confirm_password" required>
-      </div>
+      {{ forms.input("username", t("Username"), required=True, autocomplete="username") }}
+      {{ forms.input("password", t("Password"), type="password", required=True, autocomplete="new-password") }}
+      {{ forms.input("confirm_password", t("Confirm Password"), type="password", required=True, autocomplete="new-password") }}
     </div>
     <div class="actions">
-      <button type="submit">{{ t("Create Administrator") }}</button>
+      {{ ui.button(t("Create Administrator"), type="submit") }}
     </div>
   </form>
 {% endcall %}

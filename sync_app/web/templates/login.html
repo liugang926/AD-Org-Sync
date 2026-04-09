@@ -8,7 +8,7 @@
     <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
   </div>
   <h2 class="hero-title">{{ t("Welcome Back") }}</h2>
-  <p class="section-subtitle">{{ t("Sign in to manage WeCom AD Sync") }}</p>
+  <p class="section-subtitle">{{ t("Sign in to manage AD Org Sync") }}</p>
 </div>
 
 {% call ui.card() %}
@@ -17,12 +17,12 @@
     {{ forms.input("username", t("Username"), required=True, placeholder=t("Enter your username")) }}
     {{ forms.input("password", t("Password"), type="password", required=True, placeholder=t("Enter your password")) }}
     <div class="actions">
-      <button class="block" type="submit">{{ t("Sign In") }}</button>
+      {{ ui.button(t("Sign In"), type="submit", block=True) }}
     </div>
   </form>
 {% endcall %}
 
 <div class="login-footer">
-  <small>&copy; 2026 Notting AD Sync &middot; {{ t("Version") }} {{ app_version }}</small>
+  <small>&copy; 2026 AD Org Sync &middot; {{ t("Version") }} {{ app_version }}</small>
 </div>
 {% endblock %}

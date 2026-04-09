@@ -9,7 +9,7 @@ from collections.abc import MutableMapping
 PASSWORD_SCHEME = "pbkdf2_sha256"
 PASSWORD_ITERATIONS = 200_000
 CSRF_SESSION_KEY = "_csrf_token"
-ADMIN_PASSWORD_MIN_LENGTH = 12
+ADMIN_PASSWORD_MIN_LENGTH = 8
 
 
 def hash_password(password: str, *, iterations: int = PASSWORD_ITERATIONS) -> str:
@@ -71,15 +71,7 @@ def validate_csrf_token(session: MutableMapping[str, str], submitted_token: str)
 
 def validate_admin_password_strength(password: str, *, min_length: int = ADMIN_PASSWORD_MIN_LENGTH) -> str | None:
     normalized_password = str(password or "")
-    minimum = max(int(min_length or ADMIN_PASSWORD_MIN_LENGTH), 8)
+    minimum = max(int(min_length or ADMIN_PASSWORD_MIN_LENGTH), ADMIN_PASSWORD_MIN_LENGTH)
     if len(normalized_password) < minimum:
         return f"Password must be at least {minimum} characters long"
-    if not any(char.islower() for char in normalized_password):
-        return "Password must include a lowercase letter"
-    if not any(char.isupper() for char in normalized_password):
-        return "Password must include an uppercase letter"
-    if not any(char.isdigit() for char in normalized_password):
-        return "Password must include a digit"
-    if not any(not char.isalnum() for char in normalized_password):
-        return "Password must include a symbol"
     return None

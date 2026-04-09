@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
 
 {% block content %}
@@ -6,12 +7,12 @@
   <form method="post" action="/account/password">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-grid">
-      <div><label>{{ t("Current Password") }}</label><input type="password" name="current_password" required></div>
-      <div><label>{{ t("New Password") }}</label><input type="password" name="new_password" required></div>
-      <div><label>{{ t("Confirm New Password") }}</label><input type="password" name="confirm_password" required></div>
+      {{ forms.input("current_password", t("Current Password"), type="password", required=True, autocomplete="current-password") }}
+      {{ forms.input("new_password", t("New Password"), type="password", required=True, autocomplete="new-password") }}
+      {{ forms.input("confirm_password", t("Confirm New Password"), type="password", required=True, autocomplete="new-password") }}
     </div>
     <div class="actions">
-      <button type="submit">{{ t("Update Password") }}</button>
+      {{ ui.button(t("Update Password"), type="submit") }}
     </div>
   </form>
 {% endcall %}

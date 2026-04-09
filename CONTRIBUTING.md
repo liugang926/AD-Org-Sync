@@ -9,8 +9,8 @@
 ## Development Setup
 
 ```powershell
-python -m venv venv
-venv\Scripts\activate
+python -m venv .venv
+.\.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
@@ -20,7 +20,7 @@ pip install -r requirements.txt
 python -m sync_app.cli version
 python -m sync_app.cli --help
 python -m compileall sync_app
-venv\Scripts\python.exe -m PyInstaller --noconfirm --clean WeCom-AD-Sync.spec
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean AD-Org-Sync.spec
 ```
 
 ## Pull Requests

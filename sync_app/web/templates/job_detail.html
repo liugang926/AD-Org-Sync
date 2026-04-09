@@ -90,7 +90,7 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <textarea name="review_notes" placeholder="{{ t('Enter approval notes (optional)...') }}"></textarea>
             <div class="actions">
-              <button class="success block" type="submit">{{ t("Approve High-Risk Plan") }}</button>
+              {{ ui.button(t("Approve High-Risk Plan"), type="submit", variant="success", block=True) }}
             </div>
           </form>
         </div>
@@ -132,10 +132,10 @@
     {% set p_data = planned_operations_page_data %}
     {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=p_data.total_items, page=p_data.page, pages=p_data.total_pages)) %}
       {% if p_data.has_previous %}
-      <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ events_page_data.page }}&planned_page={{ p_data.previous_page }}&operations_page={{ operation_records_page_data.page }}&conflicts_page={{ job_conflicts_page_data.page }}">{{ t("Previous") }}</a>
+      {{ ui.button(t("Previous"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ p_data.previous_page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
       {% endif %}
       {% if p_data.has_next %}
-      <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ events_page_data.page }}&planned_page={{ p_data.next_page }}&operations_page={{ operation_records_page_data.page }}&conflicts_page={{ job_conflicts_page_data.page }}">{{ t("Next") }}</a>
+      {{ ui.button(t("Next"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ p_data.next_page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
       {% endif %}
     {% endcall %}
   {% endcall %}
@@ -165,10 +165,10 @@
     {% set op_data = operation_records_page_data %}
     {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=op_data.total_items, page=op_data.page, pages=op_data.total_pages)) %}
       {% if op_data.has_previous %}
-      <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ events_page_data.page }}&planned_page={{ planned_operations_page_data.page }}&operations_page={{ op_data.previous_page }}&conflicts_page={{ job_conflicts_page_data.page }}">{{ t("Previous") }}</a>
+      {{ ui.button(t("Previous"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ op_data.previous_page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
       {% endif %}
       {% if op_data.has_next %}
-      <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ events_page_data.page }}&planned_page={{ planned_operations_page_data.page }}&operations_page={{ op_data.next_page }}&conflicts_page={{ job_conflicts_page_data.page }}">{{ t("Next") }}</a>
+      {{ ui.button(t("Next"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ op_data.next_page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
       {% endif %}
     {% endcall %}
   {% endcall %}
@@ -195,10 +195,10 @@
       {% set c_data = job_conflicts_page_data %}
       {% call ui.pagination(t("Page {page}/{pages}", page=c_data.page, pages=c_data.total_pages)) %}
         {% if c_data.has_previous %}
-        <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ events_page_data.page }}&planned_page={{ planned_operations_page_data.page }}&operations_page={{ operation_records_page_data.page }}&conflicts_page={{ c_data.previous_page }}">{{ t("Previous") }}</a>
+        {{ ui.button(t("Previous"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ c_data.previous_page, variant="secondary", size="small") }}
         {% endif %}
         {% if c_data.has_next %}
-        <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ events_page_data.page }}&planned_page={{ planned_operations_page_data.page }}&operations_page={{ operation_records_page_data.page }}&conflicts_page={{ c_data.next_page }}">{{ t("Next") }}</a>
+        {{ ui.button(t("Next"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ c_data.next_page, variant="secondary", size="small") }}
         {% endif %}
       {% endcall %}
     {% endcall %}
@@ -223,10 +223,10 @@
       {% set e_data = events_page_data %}
       {% call ui.pagination(t("Page {page}/{pages}", page=e_data.page, pages=e_data.total_pages)) %}
         {% if e_data.has_previous %}
-        <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ e_data.previous_page }}&planned_page={{ planned_operations_page_data.page }}&operations_page={{ operation_records_page_data.page }}&conflicts_page={{ job_conflicts_page_data.page }}">{{ t("Previous") }}</a>
+        {{ ui.button(t("Previous"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ e_data.previous_page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
         {% endif %}
         {% if e_data.has_next %}
-        <a class="button secondary small" href="/jobs/{{ job.job_id }}?events_page={{ e_data.next_page }}&planned_page={{ planned_operations_page_data.page }}&operations_page={{ operation_records_page_data.page }}&conflicts_page={{ job_conflicts_page_data.page }}">{{ t("Next") }}</a>
+        {{ ui.button(t("Next"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ e_data.next_page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
         {% endif %}
       {% endcall %}
     {% endcall %}

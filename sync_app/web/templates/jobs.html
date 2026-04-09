@@ -21,19 +21,19 @@
       <form class="inline" method="post" action="/jobs/run">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="mode" value="dry_run">
-        <button class="secondary" type="submit">{{ t("Run Dry Run") }}</button>
+        {{ ui.button(t("Run Dry Run"), type="submit", variant="secondary") }}
       </form>
       <form class="inline" method="post" action="/jobs/run">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="mode" value="apply">
-        <button type="submit" class="confirm-action success">{{ t("Run Apply") }}</button>
+        {{ ui.button(t("Run Apply"), type="submit", variant="success", confirm_text=t("Are you sure you want to perform this action?")) }}
       </form>
       {% endif %}
-      <a class="button ghost" href="/conflicts">{{ t("Open Conflict Queue") }}</a>
+      {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
       {% if can("config.read") %}
-      <a class="button ghost" href="/config">{{ t("Open Organization Config") }}</a>
+      {{ ui.button(t("Open Organization Config"), href="/config", variant="ghost") }}
       {% endif %}
-      <a class="button ghost" href="/getting-started">{{ t("Open Guided Setup") }}</a>
+      {{ ui.button(t("Open Guided Setup"), href="/getting-started", variant="ghost") }}
     </div>
 
     {% if active_job %}
@@ -105,12 +105,12 @@
       <form class="inline" method="post" action="/jobs/run">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="mode" value="dry_run">
-        <button type="submit">{{ t("Run Your First Dry Run") }}</button>
+        {{ ui.button(t("Run Your First Dry Run"), type="submit") }}
       </form>
       {% endif %}
-      <a class="button secondary" href="/getting-started">{{ t("Open Guided Setup") }}</a>
+      {{ ui.button(t("Open Guided Setup"), href="/getting-started", variant="secondary") }}
       {% if can("config.read") %}
-      <a class="button ghost" href="/config">{{ t("Review Config") }}</a>
+      {{ ui.button(t("Review Config"), href="/config", variant="ghost") }}
       {% endif %}
     {% endcall %}
     {% endif %}

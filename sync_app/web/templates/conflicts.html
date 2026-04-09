@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
 
 {% block content %}
@@ -13,33 +14,19 @@
   {% call ui.panel(t("Conflict Queue"), description=t("Review unresolved identity conflicts from recent jobs. Manual binding and skip rules take effect on the next sync run.")) %}
     <form method="get" action="/conflicts">
       <div class="form-grid">
-        <div>
-          <label>{{ t("Keyword") }}</label>
-          <input type="text" name="q" value="{{ conflict_query or '' }}" placeholder="{{ t('userid, ad account, message') }}">
-        </div>
-        <div>
-          <label>{{ t("Status") }}</label>
-          <select name="status">
-            <option value="open" {% if conflict_status == 'open' %}selected{% endif %}>{{ t("Open") }}</option>
-            <option value="resolved" {% if conflict_status == 'resolved' %}selected{% endif %}>{{ t("Resolved") }}</option>
-            <option value="dismissed" {% if conflict_status == 'dismissed' %}selected{% endif %}>{{ t("Dismissed") }}</option>
-            <option value="all" {% if conflict_status == 'all' %}selected{% endif %}>{{ t("All") }}</option>
-          </select>
-        </div>
-        <div>
-          <label>{{ t("Job ID") }}</label>
-          <input type="text" name="job_id" value="{{ conflict_job_id or '' }}" placeholder="{{ t('optional job id') }}">
-        </div>
+        {{ forms.input("q", t("Keyword"), conflict_query or '', placeholder=t('userid, ad account, message')) }}
+        {{ forms.select("status", t("Status"), [("open", t("Open")), ("resolved", t("Resolved")), ("dismissed", t("Dismissed")), ("all", t("All"))], selected_value=(conflict_status or 'open')) }}
+        {{ forms.input("job_id", t("Job ID"), conflict_job_id or '', placeholder=t('optional job id')) }}
       </div>
       {% if filters_are_remembered %}
       <p class="section-subtitle">{{ t("Filters are remembered for this browser session.") }}</p>
       {% endif %}
       <div class="actions">
-        <button type="submit">{{ t("Search") }}</button>
-        <a class="button secondary" href="/conflicts?clear_filters=1">{{ t("Reset") }}</a>
-        <a class="button ghost" href="/jobs">{{ t("Open Job Center") }}</a>
+        {{ ui.button(t("Search"), type="submit") }}
+        {{ ui.button(t("Reset"), href="/conflicts?clear_filters=1", variant="secondary") }}
+        {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost") }}
         {% if show_advanced_navigation %}
-        <a class="button ghost" href="/mappings">{{ t("Open Mappings") }}</a>
+        {{ ui.button(t("Open Mappings"), href="/mappings", variant="ghost") }}
         {% endif %}
       </div>
     </form>
@@ -53,22 +40,11 @@
       <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
       <input type="hidden" name="return_job_id" value="{{ conflict_job_id or '' }}">
       <div class="form-grid">
-        <div>
-          <label>{{ t("Action") }}</label>
-          <select name="action">
-            <option value="apply_recommendation">{{ t("Apply Recommendation") }}</option>
-            <option value="skip_user_sync">{{ t("Add skip_user_sync") }}</option>
-            <option value="dismiss">{{ t("Dismiss") }}</option>
-            <option value="reopen">{{ t("Reopen") }}</option>
-          </select>
-        </div>
-        <div class="field-span-full">
-          <label>{{ t("Notes / Confirmation Reason") }}</label>
-          <input type="text" name="notes" placeholder="{{ t('Required for low-confidence recommendation apply') }}">
-        </div>
+        {{ forms.select("action", t("Action"), [("apply_recommendation", t("Apply Recommendation")), ("skip_user_sync", t("Add skip_user_sync")), ("dismiss", t("Dismiss")), ("reopen", t("Reopen"))]) }}
+        {{ forms.input("notes", t("Notes / Confirmation Reason"), placeholder=t('Required for low-confidence recommendation apply'), class_name="field-span-full") }}
       </div>
       <div class="actions">
-        <button type="submit">{{ t("Run Bulk Action") }}</button>
+        {{ ui.button(t("Run Bulk Action"), type="submit") }}
       </div>
     </form>
   {% endcall %}
@@ -99,9 +75,9 @@
       <p class="muted">{{ t("Hint") }}: {{ item.resolution_hint }}</p>
       {% endif %}
       <div class="actions flush-top">
-        <a class="button ghost small" href="/jobs/{{ item.job_id }}">{{ t("Open Job Detail") }}</a>
+        {{ ui.button(t("Open Job Detail"), href="/jobs/" ~ item.job_id, variant="ghost", size="small") }}
         {% if item.source_id and show_advanced_navigation %}
-        <a class="button ghost small" href="/mappings?q={{ item.source_id }}">{{ t("Search Mappings") }}</a>
+        {{ ui.button(t("Search Mappings"), href="/mappings?q=" ~ item.source_id, variant="ghost", size="small") }}
         {% endif %}
       </div>
     </div>
@@ -132,11 +108,10 @@
         <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
         <input type="hidden" name="return_job_id" value="{{ conflict_job_id or item.job_id }}">
         {% if recommendation.requires_confirmation %}
-        <label>{{ t("Confirmation Reason") }}</label>
-        <input type="text" name="confirmation_reason" placeholder="{{ t('Explain why this lower-confidence recommendation is acceptable') }}" required>
+        {{ forms.input("confirmation_reason", t("Confirmation Reason"), placeholder=t('Explain why this lower-confidence recommendation is acceptable'), required=True, id="confirmation_reason_" ~ item.id) }}
         {% endif %}
         <div class="actions">
-          <button type="submit">{{ t("Apply Recommendation") }}</button>
+          {{ ui.button(t("Apply Recommendation"), type="submit") }}
         </div>
       </form>
       {% endif %}
@@ -166,10 +141,9 @@
             <input type="hidden" name="return_query" value="{{ conflict_query or '' }}">
             <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
             <input type="hidden" name="return_job_id" value="{{ conflict_job_id or item.job_id }}">
-            <label>{{ t("AD Username") }}</label>
-            <input type="text" name="ad_username" value="{{ item.target_key or '' }}" required>
+            {{ forms.input("ad_username", t("AD Username"), item.target_key or '', required=True, id="ad_username_" ~ item.id) }}
             <div class="actions">
-              <button type="submit">{{ t("Resolve With Binding") }}</button>
+              {{ ui.button(t("Resolve With Binding"), type="submit") }}
             </div>
           </form>
           {% if item.details and item.details.get("candidates") %}
@@ -181,7 +155,7 @@
               <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
               <input type="hidden" name="return_job_id" value="{{ conflict_job_id or item.job_id }}">
               <input type="hidden" name="ad_username" value="{{ candidate.username }}">
-              <button class="secondary small" type="submit">{{ candidate.username }}</button>
+              {{ ui.button(candidate.username, type="submit", variant="secondary", size="small") }}
             </form>
             {% endfor %}
           </div>
@@ -201,10 +175,9 @@
             <input type="hidden" name="return_query" value="{{ conflict_query or '' }}">
             <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
             <input type="hidden" name="return_job_id" value="{{ conflict_job_id or item.job_id }}">
-            <label>{{ t("skip_user_sync Notes") }}</label>
-            <input type="text" name="notes" placeholder="{{ t('Optional note for whitelist') }}">
+            {{ forms.input("notes", t("skip_user_sync Notes"), placeholder=t('Optional note for whitelist'), id="skip_notes_" ~ item.id) }}
             <div class="actions">
-              <button class="secondary" type="submit">{{ t("Add skip_user_sync") }}</button>
+              {{ ui.button(t("Add skip_user_sync"), type="submit", variant="secondary") }}
             </div>
           </form>
           <form method="post" action="/conflicts/{{ item.id }}/dismiss">
@@ -212,10 +185,9 @@
             <input type="hidden" name="return_query" value="{{ conflict_query or '' }}">
             <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
             <input type="hidden" name="return_job_id" value="{{ conflict_job_id or item.job_id }}">
-            <label>{{ t("Dismiss Notes") }}</label>
-            <input type="text" name="notes" placeholder="{{ t('Why this conflict can be ignored') }}">
+            {{ forms.input("notes", t("Dismiss Notes"), placeholder=t('Why this conflict can be ignored'), id="dismiss_notes_" ~ item.id) }}
             <div class="actions">
-              <button class="danger" type="submit">{{ t("Dismiss Conflict") }}</button>
+              {{ ui.button(t("Dismiss Conflict"), type="submit", variant="danger") }}
             </div>
           </form>
         </div>
@@ -232,7 +204,7 @@
       <input type="hidden" name="return_status" value="{{ conflict_status or 'open' }}">
       <input type="hidden" name="return_job_id" value="{{ conflict_job_id or item.job_id }}">
       <div class="actions">
-        <button class="secondary" type="submit">{{ t("Reopen Conflict") }}</button>
+        {{ ui.button(t("Reopen Conflict"), type="submit", variant="secondary") }}
       </div>
     </form>
     {% endif %}
@@ -241,9 +213,9 @@
   {% else %}
   {% call ui.panel("") %}
     {% call ui.empty_state(t("No conflicts matched the current filter."), t("This usually means the latest synchronization run is healthy or the current search is too narrow."), "success") %}
-      <a class="button secondary" href="/jobs">{{ t("Open Job Center") }}</a>
+      {{ ui.button(t("Open Job Center"), href="/jobs", variant="secondary") }}
       {% if show_advanced_navigation %}
-      <a class="button ghost" href="/mappings">{{ t("Open Mappings") }}</a>
+      {{ ui.button(t("Open Mappings"), href="/mappings", variant="ghost") }}
       {% endif %}
     {% endcall %}
   {% endcall %}
@@ -251,10 +223,10 @@
 
   {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=conflict_page_data.total_items, page=conflict_page_data.page, pages=conflict_page_data.total_pages)) %}
     {% if conflict_page_data.has_previous %}
-    <a class="button secondary" href="/conflicts?q={{ conflict_query or '' }}&status={{ conflict_status or 'open' }}&job_id={{ conflict_job_id or '' }}&page_number={{ conflict_page_data.previous_page }}">{{ t("Previous") }}</a>
+    {{ ui.button(t("Previous"), href="/conflicts?q=" ~ (conflict_query or '') ~ "&status=" ~ (conflict_status or 'open') ~ "&job_id=" ~ (conflict_job_id or '') ~ "&page_number=" ~ conflict_page_data.previous_page, variant="secondary") }}
     {% endif %}
     {% if conflict_page_data.has_next %}
-    <a class="button secondary" href="/conflicts?q={{ conflict_query or '' }}&status={{ conflict_status or 'open' }}&job_id={{ conflict_job_id or '' }}&page_number={{ conflict_page_data.next_page }}">{{ t("Next") }}</a>
+    {{ ui.button(t("Next"), href="/conflicts?q=" ~ (conflict_query or '') ~ "&status=" ~ (conflict_status or 'open') ~ "&job_id=" ~ (conflict_job_id or '') ~ "&page_number=" ~ conflict_page_data.next_page, variant="secondary") }}
     {% endif %}
   {% endcall %}
 </div>

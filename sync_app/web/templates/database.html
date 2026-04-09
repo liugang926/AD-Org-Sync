@@ -46,11 +46,11 @@
     <div class="actions">
       <form class="inline" method="post" action="/database/check">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button class="secondary" type="submit">{{ t("Run Integrity Check") }}</button>
+        {{ ui.button(t("Run Integrity Check"), type="submit", variant="secondary") }}
       </form>
       <form class="inline" method="post" action="/database/backup">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit">{{ t("Create Backup") }}</button>
+        {{ ui.button(t("Create Backup"), type="submit") }}
       </form>
     </div>
     {% else %}

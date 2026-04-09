@@ -2,13 +2,10 @@
 setlocal
 chcp 65001 >nul
 
-set TASK_NAME=WeComADSyncWeb
+set ROOT=%~dp0
+cd /d "%ROOT%"
 
-echo [INFO] Removing startup task %TASK_NAME% ...
-schtasks /Delete /F /TN "%TASK_NAME%"
-if errorlevel 1 (
-    echo [ERROR] Failed to remove startup task or task does not exist.
-    exit /b 1
-)
-
-echo [OK] Startup task removed: %TASK_NAME%
+echo [WARN] Scheduled task deployment is deprecated.
+echo [INFO] Removing the Windows service instead...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%uninstall_web_service.ps1" %*
+exit /b %errorlevel%

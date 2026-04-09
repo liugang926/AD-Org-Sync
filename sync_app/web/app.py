@@ -5,7 +5,6 @@ import io
 import json
 import logging
 import secrets
-import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +12,8 @@ from typing import Any, Callable, Iterable, Optional
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -48,8 +48,8 @@ from sync_app.providers.source import (
     get_source_provider_display_name,
     normalize_source_provider,
 )
-from sync_app.services.runtime import run_sync_job
 from sync_app.services.config_bundle import export_organization_bundle, import_organization_bundle
+from sync_app.storage.config_codec import normalize_org_config_values as _normalize_org_config_values
 from sync_app.storage.local_db import (
     AttributeMappingRuleRepository,
     CustomManagedGroupBindingRepository,
@@ -75,9 +75,14 @@ from sync_app.storage.local_db import (
     WebAdminUserRepository,
     WebAuditLogRepository,
     PlannedOperationRepository,
-    _normalize_org_config_values,
 )
-from sync_app.web.authz import WEB_ADMIN_ROLES, has_capability, normalize_role, role_capabilities
+from sync_app.web.authz import has_capability, normalize_role, role_capabilities
+from sync_app.web.dashboard_state import (
+    build_getting_started_data as build_getting_started_view_state,
+    count_check_statuses,
+    merge_saved_preflight_snapshot as merge_saved_preflight_snapshot_data,
+    summarize_check_status,
+)
 from sync_app.web.helpers import parse_bulk_bindings
 from sync_app.web.i18n import (
     DEFAULT_UI_LANGUAGE,
@@ -85,6 +90,15 @@ from sync_app.web.i18n import (
     detect_browser_ui_language,
     normalize_ui_language,
     translate,
+)
+from sync_app.web.routes_admin import register_admin_routes
+from sync_app.web.routes_jobs import register_job_routes
+from sync_app.web.runtime import (
+    LoginRateLimiter,
+    WebSyncRunner,
+    normalize_secure_cookie_mode,
+    resolve_web_runtime_settings,
+    web_runtime_requires_restart,
 )
 from sync_app.web.security import (
     ensure_csrf_token,
@@ -98,24 +112,15 @@ from sync_app.web.security import (
 LOGGER = logging.getLogger(__name__)
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
 APP_ROOT = Path(__file__).resolve().parents[2]
-FAVICON_PATH = APP_ROOT / "icon.ico"
+STATIC_DIR = Path(__file__).with_name("static")
+FAVICON_PATH = STATIC_DIR / "favicon.ico"
+LEGACY_FAVICON_PATH = APP_ROOT / "icon.ico"
 PLACEMENT_STRATEGIES = {
     "wecom_primary_department": "Prefer WeCom primary department",
     "lowest_department_id": "Pick the lowest department ID",
     "shortest_path": "Pick the shortest department path",
     "first_non_excluded_department": "Pick the first valid department in source order",
 }
-LOCAL_WEB_BIND_HOSTS = {"127.0.0.1", "localhost", "::1"}
-SECURE_COOKIE_MODES = {"auto", "always", "never"}
-WEB_RUNTIME_RESTART_KEYS = (
-    "bind_host",
-    "bind_port",
-    "public_base_url",
-    "session_cookie_secure_mode",
-    "session_cookie_secure",
-    "trust_proxy_headers",
-    "forwarded_allow_ips",
-)
 SUPPORTED_UI_MODES = {
     "basic": "Basic",
     "advanced": "Advanced",
@@ -251,213 +256,6 @@ def _split_csv_values(value: str | None) -> list[str]:
     return items
 
 
-def normalize_secure_cookie_mode(value: Optional[str]) -> str:
-    normalized = str(value or "").strip().lower()
-    return normalized if normalized in SECURE_COOKIE_MODES else "auto"
-
-
-def resolve_web_runtime_settings(
-    settings_repo: SettingsRepository,
-    *,
-    bind_host: str | None = None,
-    bind_port: int | None = None,
-    public_base_url: str | None = None,
-    session_cookie_secure_mode: str | None = None,
-    trust_proxy_headers: bool | None = None,
-    forwarded_allow_ips: str | None = None,
-) -> dict[str, Any]:
-    resolved_bind_host = _to_text(
-        bind_host,
-        settings_repo.get_value("web_bind_host", "127.0.0.1") or "127.0.0.1",
-    ) or "127.0.0.1"
-    resolved_bind_port = max(
-        int(bind_port or settings_repo.get_int("web_bind_port", 8000) or 8000),
-        1,
-    )
-    resolved_public_base_url = _clean_public_base_url(
-        public_base_url if public_base_url is not None else settings_repo.get_value("web_public_base_url", "")
-    )
-    resolved_secure_mode = normalize_secure_cookie_mode(
-        session_cookie_secure_mode
-        if session_cookie_secure_mode is not None
-        else settings_repo.get_value("web_session_cookie_secure_mode", "auto")
-    )
-    resolved_trust_proxy_headers = (
-        settings_repo.get_bool("web_trust_proxy_headers", False)
-        if trust_proxy_headers is None
-        else bool(trust_proxy_headers)
-    )
-    resolved_forwarded_allow_ips = _to_text(
-        forwarded_allow_ips,
-        settings_repo.get_value("web_forwarded_allow_ips", "127.0.0.1") or "127.0.0.1",
-    ) or "127.0.0.1"
-    bind_is_local = resolved_bind_host.lower() in LOCAL_WEB_BIND_HOSTS
-    public_url_is_https = resolved_public_base_url.lower().startswith("https://")
-    session_cookie_secure = resolved_secure_mode == "always" or (
-        resolved_secure_mode == "auto" and (public_url_is_https or not bind_is_local)
-    )
-
-    warnings: list[str] = []
-    if resolved_secure_mode == "never":
-        warnings.append("Secure session cookies are disabled.")
-    if resolved_public_base_url and not public_url_is_https:
-        warnings.append("Public base URL does not use HTTPS.")
-    if resolved_trust_proxy_headers and resolved_forwarded_allow_ips in {"*", "0.0.0.0", "0.0.0.0/0", "::/0"}:
-        warnings.append("Forwarded proxy headers are trusted from every IP address.")
-
-    return {
-        "bind_host": resolved_bind_host,
-        "bind_port": resolved_bind_port,
-        "public_base_url": resolved_public_base_url,
-        "session_cookie_secure_mode": resolved_secure_mode,
-        "session_cookie_secure": session_cookie_secure,
-        "trust_proxy_headers": resolved_trust_proxy_headers,
-        "forwarded_allow_ips": resolved_forwarded_allow_ips,
-        "warnings": warnings,
-    }
-
-
-def web_runtime_requires_restart(
-    current_runtime_settings: dict[str, Any],
-    persisted_runtime_settings: dict[str, Any],
-) -> bool:
-    return any(
-        current_runtime_settings.get(key) != persisted_runtime_settings.get(key)
-        for key in WEB_RUNTIME_RESTART_KEYS
-    )
-
-class WebSyncRunner:
-    def __init__(self, *, db_path: str, audit_repo: WebAuditLogRepository):
-        self.db_path = db_path
-        self.audit_repo = audit_repo
-        self._lock = threading.Lock()
-        self._thread: Optional[threading.Thread] = None
-        self.last_error = ""
-
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
-
-    def launch(
-        self,
-        *,
-        mode: str,
-        actor_username: str,
-        org_id: str,
-        config_path: str,
-    ) -> tuple[bool, str]:
-        with self._lock:
-            if self.is_running():
-                return False, "A synchronization job is already running in the background"
-            self.last_error = ""
-            self._thread = threading.Thread(
-                target=self._run_job,
-                kwargs={
-                    "mode": mode,
-                    "actor_username": actor_username,
-                    "org_id": org_id,
-                    "config_path": config_path,
-                },
-                daemon=True,
-                name=f"web-sync-{org_id}-{mode}",
-            )
-            self._thread.start()
-        return True, "Synchronization job started"
-
-    def _run_job(self, *, mode: str, actor_username: str, org_id: str, config_path: str) -> None:
-        try:
-            result = run_sync_job(
-                execution_mode=mode,
-                trigger_type="web",
-                db_path=self.db_path,
-                config_path=config_path,
-                org_id=org_id,
-            )
-            self.audit_repo.add_log(
-                org_id=org_id,
-                actor_username=actor_username,
-                action_type="job.run",
-                target_type="sync_job",
-                target_id=result.get("job_id"),
-                result="success",
-                message=f"Started {mode} synchronization job",
-                payload={
-                    "job_id": result.get("job_id"),
-                    "mode": mode,
-                    "org_id": org_id,
-                    "error_count": result.get("error_count"),
-                },
-            )
-        except Exception as exc:
-            self.last_error = str(exc)
-            LOGGER.exception("web sync job failed")
-            self.audit_repo.add_log(
-                org_id=org_id,
-                actor_username=actor_username,
-                action_type="job.run",
-                target_type="sync_job",
-                target_id="",
-                result="error",
-                message=f"Failed to start synchronization job: {exc}",
-                payload={"mode": mode, "org_id": org_id},
-            )
-
-
-class LoginRateLimiter:
-    def __init__(self, *, max_attempts: int, window_seconds: int, lockout_seconds: int):
-        self.max_attempts = max(int(max_attempts or 1), 1)
-        self.window_seconds = max(int(window_seconds or 1), 1)
-        self.lockout_seconds = max(int(lockout_seconds or 1), 1)
-        self._lock = threading.Lock()
-        self._failed_attempts: dict[str, list[float]] = {}
-        self._locked_until: dict[str, float] = {}
-
-    def _build_key(self, username: str, client_ip: str) -> str:
-        normalized_username = str(username or "").strip().lower() or "-"
-        normalized_ip = str(client_ip or "").strip().lower() or "unknown"
-        return f"{normalized_ip}::{normalized_username}"
-
-    def _prune(self, key: str, *, now: float) -> None:
-        cutoff = now - self.window_seconds
-        failures = [timestamp for timestamp in self._failed_attempts.get(key, []) if timestamp >= cutoff]
-        if failures:
-            self._failed_attempts[key] = failures
-        else:
-            self._failed_attempts.pop(key, None)
-
-        locked_until = self._locked_until.get(key, 0.0)
-        if locked_until and locked_until <= now:
-            self._locked_until.pop(key, None)
-
-    def check(self, username: str, client_ip: str) -> tuple[bool, int]:
-        key = self._build_key(username, client_ip)
-        now = time.time()
-        with self._lock:
-            self._prune(key, now=now)
-            locked_until = self._locked_until.get(key, 0.0)
-            if not locked_until or locked_until <= now:
-                return False, 0
-            return True, max(int(locked_until - now), 1)
-
-    def record_failure(self, username: str, client_ip: str) -> tuple[bool, int]:
-        key = self._build_key(username, client_ip)
-        now = time.time()
-        with self._lock:
-            self._prune(key, now=now)
-            failures = self._failed_attempts.setdefault(key, [])
-            failures.append(now)
-            if len(failures) < self.max_attempts:
-                return False, 0
-            self._locked_until[key] = now + self.lockout_seconds
-            self._failed_attempts.pop(key, None)
-            return True, self.lockout_seconds
-
-    def clear(self, username: str, client_ip: str) -> None:
-        key = self._build_key(username, client_ip)
-        with self._lock:
-            self._failed_attempts.pop(key, None)
-            self._locked_until.pop(key, None)
-
-
 def create_app(
     *,
     db_path: str | None = None,
@@ -516,7 +314,9 @@ def create_app(
         lockout_seconds=settings_repo.get_int("web_login_lockout_seconds", 300),
     )
 
-    app = FastAPI(title="WeCom AD Sync Web", version=APP_VERSION)
+    app = FastAPI(title="AD Org Sync Web", version=APP_VERSION)
+    if STATIC_DIR.exists():
+        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.add_middleware(
         SessionMiddleware,
         secret_key=session_secret,
@@ -1294,7 +1094,7 @@ def create_app(
         return "unknown"
 
     def validate_admin_password(request: Request, password: str) -> Optional[str]:
-        min_length = request.app.state.settings_repo.get_int("web_admin_password_min_length", 12)
+        min_length = request.app.state.settings_repo.get_int("web_admin_password_min_length", 8)
         return validate_admin_password_strength(password, min_length=min_length)
 
     def parse_page_number(raw_value: Optional[str], default: int = 1) -> int:
@@ -1384,46 +1184,6 @@ def create_app(
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
-
-    def summarize_check_status(checks: list[dict[str, Any]]) -> str:
-        if any(str(item.get("status") or "") == "error" for item in checks):
-            return "error"
-        if any(str(item.get("status") or "") == "warning" for item in checks):
-            return "warning"
-        return "success"
-
-    def count_check_statuses(checks: list[dict[str, Any]]) -> dict[str, int]:
-        counts = {"success": 0, "warning": 0, "error": 0}
-        for item in checks:
-            status = str(item.get("status") or "success")
-            if status in counts:
-                counts[status] += 1
-        return counts
-
-    def merge_saved_preflight_snapshot(
-        request: Request,
-        base_snapshot: dict[str, Any],
-    ) -> dict[str, Any]:
-        saved_snapshot = request.session.get("_preflight_snapshot")
-        if not isinstance(saved_snapshot, dict):
-            return base_snapshot
-        if str(saved_snapshot.get("org_id") or "") != str(base_snapshot.get("org_id") or ""):
-            return base_snapshot
-        saved_checks = [
-            item
-            for item in list(saved_snapshot.get("checks") or [])
-            if isinstance(item, dict) and str(item.get("key") or "").startswith("live_")
-        ]
-        if not saved_checks:
-            return base_snapshot
-        merged = dict(base_snapshot)
-        merged_checks = list(base_snapshot.get("checks") or []) + saved_checks
-        merged["checks"] = merged_checks
-        merged["overall_status"] = summarize_check_status(merged_checks)
-        merged["status_counts"] = count_check_statuses(merged_checks)
-        merged["live_ran_at"] = str(saved_snapshot.get("generated_at") or "")
-        merged["has_live_checks"] = True
-        return merged
 
     def build_preflight_snapshot(request: Request, *, include_live: bool = False) -> dict[str, Any]:
         current_org = get_current_org(request)
@@ -1658,112 +1418,6 @@ def create_app(
             "open_conflict_count": open_conflicts_total,
         }
 
-    def build_getting_started_data(
-        request: Request,
-        *,
-        preflight_snapshot: Optional[dict[str, Any]] = None,
-    ) -> dict[str, Any]:
-        current_org = get_current_org(request)
-        preflight = preflight_snapshot or merge_saved_preflight_snapshot(
-            request,
-            build_preflight_snapshot(request, include_live=False),
-        )
-        check_index = {
-            str(item.get("key") or ""): item for item in list(preflight.get("checks") or []) if isinstance(item, dict)
-        }
-        config_ready = str(check_index.get("config", {}).get("status") or "") == "success"
-        live_wecom_ok = str(check_index.get("live_wecom", {}).get("status") or "") == "success"
-        live_ldap_ok = str(check_index.get("live_ldap", {}).get("status") or "") == "success"
-        live_ready = live_wecom_ok and live_ldap_ok
-        dry_run_ready = bool(preflight.get("dry_run_completed"))
-        conflicts_ready = dry_run_ready and int(preflight.get("open_conflict_count") or 0) == 0
-        apply_ready = bool(preflight.get("apply_completed"))
-        current_ui_mode = get_ui_mode(request)
-
-        steps = [
-            {
-                "title": "Configure organization settings",
-                "detail": "Complete the source connector and LDAP values for the current organization.",
-                "href": "/config",
-                "action_label": "Open Config",
-                "capability": "config.read",
-                "done": config_ready,
-            },
-            {
-                "title": "Run live connectivity preflight",
-                "detail": (
-                    "Verify both the source connector and LDAP from this server before the first synchronization run."
-                    if not live_ready
-                    else "Live source connector and LDAP connectivity checks both passed."
-                ),
-                "href": "/dashboard#preflight",
-                "action_label": "Run Preflight",
-                "capability": "dashboard.read",
-                "done": live_ready,
-            },
-            {
-                "title": "Review sync scope",
-                "detail": (
-                    "Basic mode keeps the default single-organization flow. Switch to Advanced mode only if you need routing, write-back, or lifecycle controls."
-                    if current_ui_mode == "basic"
-                    else "Review connectors, mappings, and lifecycle policies before the first rollout."
-                ),
-                "href": "/config" if current_ui_mode == "basic" else "/advanced-sync",
-                "action_label": "Review Scope",
-                "capability": "config.read",
-                "done": config_ready,
-            },
-            {
-                "title": "Run the first dry run",
-                "detail": (
-                    "A successful dry run is already recorded."
-                    if dry_run_ready
-                    else "Preview planned changes before applying them to AD."
-                ),
-                "href": "/jobs",
-                "action_label": "Open Jobs",
-                "capability": "jobs.read",
-                "done": dry_run_ready,
-            },
-            {
-                "title": "Clear blockers and run apply",
-                "detail": (
-                    "Apply is already successful for this organization."
-                    if apply_ready
-                    else (
-                        "Resolve open conflicts before the first apply run."
-                        if dry_run_ready and not conflicts_ready
-                        else "Run the first apply after the dry run looks safe."
-                    )
-                ),
-                "href": "/conflicts" if dry_run_ready and not conflicts_ready else "/jobs",
-                "action_label": "Resolve Conflicts" if dry_run_ready and not conflicts_ready else "Run Apply",
-                "capability": "conflicts.read" if dry_run_ready and not conflicts_ready else "jobs.read",
-                "done": apply_ready,
-            },
-        ]
-
-        current_assigned = False
-        completed_steps = 0
-        for step in steps:
-            if step["done"]:
-                step["status"] = "complete"
-                completed_steps += 1
-            elif not current_assigned:
-                step["status"] = "current"
-                current_assigned = True
-            else:
-                step["status"] = "upcoming"
-
-        next_step = next((step for step in steps if step["status"] == "current"), steps[-1])
-        return {
-            "current_org_name": current_org.name,
-            "steps": steps,
-            "completed_steps": completed_steps,
-            "total_steps": len(steps),
-            "next_step": next_step,
-        }
-
     def load_config_summary(
         organization: Optional[OrganizationRecord] = None,
         *,
@@ -1803,8 +1457,8 @@ def create_app(
         bindings = request.app.state.user_binding_repo.list_enabled_binding_records(org_id=current_org.org_id)
         overrides = request.app.state.department_override_repo.list_override_records(org_id=current_org.org_id)
         exception_rules = request.app.state.exception_rule_repo.list_enabled_rule_records(org_id=current_org.org_id)
-        preflight_snapshot = merge_saved_preflight_snapshot(
-            request,
+        preflight_snapshot = merge_saved_preflight_snapshot_data(
+            request.session.get("_preflight_snapshot"),
             build_preflight_snapshot(request, include_live=False),
         )
         return {
@@ -1824,7 +1478,11 @@ def create_app(
             "binding_count": len(bindings),
             "override_count": len(overrides),
             "preflight_summary": preflight_snapshot,
-            "getting_started": build_getting_started_data(request, preflight_snapshot=preflight_snapshot),
+            "getting_started": build_getting_started_view_state(
+                current_org_name=current_org.name,
+                preflight_snapshot=preflight_snapshot,
+                ui_mode=get_ui_mode(request),
+            ),
             "placement_strategy": request.app.state.settings_repo.get_value(
                 "user_ou_placement_strategy",
                 "wecom_primary_department",
@@ -2192,10 +1850,44 @@ def create_app(
     def healthz():
         return {"status": "ok", "version": APP_VERSION}
 
+    @app.get("/readyz")
+    def readyz(request: Request):
+        db_ok = False
+        db_error = ""
+        try:
+            with request.app.state.db_manager.connection() as conn:
+                conn.execute("SELECT 1").fetchone()
+            db_ok = True
+        except Exception as exc:  # pragma: no cover - defensive reporting path
+            db_error = str(exc)
+
+        default_org = request.app.state.organization_repo.get_organization_record("default")
+        static_assets_ok = STATIC_DIR.exists()
+        admin_bootstrapped = request.app.state.user_repo.has_any_user()
+        ready = db_ok and static_assets_ok and default_org is not None and admin_bootstrapped
+        status = "ready" if ready else ("setup_required" if db_ok and static_assets_ok and default_org else "degraded")
+        payload = {
+            "status": status,
+            "version": APP_VERSION,
+            "checks": {
+                "database": db_ok,
+                "static_assets": static_assets_ok,
+                "default_organization": default_org is not None,
+                "admin_bootstrapped": admin_bootstrapped,
+            },
+            "db_path": request.app.state.db_manager.db_path,
+            "setup_url": "/setup" if not admin_bootstrapped else "",
+        }
+        if db_error:
+            payload["database_error"] = db_error
+        return JSONResponse(payload, status_code=200 if ready else 503)
+
     @app.get("/favicon.ico")
     def favicon(request: Request):
         if FAVICON_PATH.exists():
             return FileResponse(str(FAVICON_PATH), media_type="image/x-icon")
+        if LEGACY_FAVICON_PATH.exists():
+            return FileResponse(str(LEGACY_FAVICON_PATH), media_type="image/x-icon")
         return Response(status_code=204)
 
     @app.get("/", response_class=HTMLResponse)
@@ -2372,8 +2064,9 @@ def create_app(
         user = require_capability(request, "dashboard.read")
         if isinstance(user, RedirectResponse):
             return user
-        preflight_snapshot = merge_saved_preflight_snapshot(
-            request,
+        current_org = get_current_org(request)
+        preflight_snapshot = merge_saved_preflight_snapshot_data(
+            request.session.get("_preflight_snapshot"),
             build_preflight_snapshot(request, include_live=False),
         )
         return render(
@@ -2382,7 +2075,11 @@ def create_app(
             page="getting-started",
             title="Getting Started",
             preflight_summary=preflight_snapshot,
-            getting_started=build_getting_started_data(request, preflight_snapshot=preflight_snapshot),
+            getting_started=build_getting_started_view_state(
+                current_org_name=current_org.name,
+                preflight_snapshot=preflight_snapshot,
+                ui_mode=get_ui_mode(request),
+            ),
         )
 
     @app.post("/preflight/run")
@@ -4660,429 +4357,35 @@ def create_app(
         )
         return RedirectResponse(url=fallback_url, status_code=303)
 
-    @app.get("/jobs", response_class=HTMLResponse)
-    def jobs_page(request: Request):
-        user = require_capability(request, "jobs.read")
-        if isinstance(user, RedirectResponse):
-            return user
-        current_org = get_current_org(request)
-        return render(
-            request,
-            "jobs.html",
-            page="jobs",
-            title="Job Center",
-            jobs=request.app.state.job_repo.list_recent_job_records(limit=30, org_id=current_org.org_id),
-            active_job=request.app.state.job_repo.get_active_job_record(org_id=current_org.org_id),
-            sync_runner_error=request.app.state.sync_runner.last_error,
-            current_org=current_org,
-        )
+    register_job_routes(
+        app,
+        enqueue_replay_request=enqueue_replay_request,
+        fetch_page=fetch_page,
+        flash=flash,
+        flash_t=flash_t,
+        get_current_org=get_current_org,
+        get_ui_language=get_ui_language,
+        parse_page_number=parse_page_number,
+        reject_invalid_csrf=reject_invalid_csrf,
+        render=render,
+        require_capability=require_capability,
+        translate_text=translate_text,
+    )
 
-    @app.post("/jobs/{job_id}/approve")
-    def approve_job_review(
-        request: Request,
-        job_id: str,
-        csrf_token: str = Form(""),
-        review_notes: str = Form(""),
-    ):
-        user = require_capability(request, "jobs.review")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, f"/jobs/{job_id}")
-        if csrf_error:
-            return csrf_error
-
-        review_record = request.app.state.review_repo.get_review_record_by_job_id(job_id)
-        if not review_record:
-            flash(request, "error", "This job does not have a pending high-risk review")
-            return RedirectResponse(url=f"/jobs/{job_id}", status_code=303)
-        current_org = get_current_org(request)
-        job_record = request.app.state.job_repo.get_job_record(job_id)
-        if not job_record or (job_record.org_id and job_record.org_id != current_org.org_id):
-            flash(request, "error", "Job does not belong to the current organization")
-            return RedirectResponse(url="/jobs", status_code=303)
-
-        review_ttl_minutes = max(request.app.state.settings_repo.get_int("high_risk_review_ttl_minutes", 240), 1)
-        expires_at = (time.time() + review_ttl_minutes * 60)
-        expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(timespec="seconds")
-        request.app.state.review_repo.approve_review(
-            job_id,
-            reviewer_username=user.username,
-            review_notes=review_notes.strip(),
-            expires_at=expires_at_iso,
-        )
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="job.review_approve",
-            target_type="sync_job",
-            target_id=job_id,
-            result="success",
-            message="Approved high-risk synchronization plan",
-            payload={"expires_at": expires_at_iso},
-        )
-        enqueue_replay_request(
-            app=request.app,
-            request_type="plan_approval",
-            requested_by=user.username,
-            org_id=current_org.org_id,
-            target_scope="job",
-            target_id=job_id,
-            trigger_reason="high_risk_plan_approved",
-            payload={"expires_at": expires_at_iso},
-        )
-        flash(request, "success", "High-risk plan approved. You can rerun apply now.")
-        return RedirectResponse(url=f"/jobs/{job_id}", status_code=303)
-
-    @app.post("/jobs/run")
-    def run_job(
-        request: Request,
-        csrf_token: str = Form(""),
-        mode: str = Form(...),
-    ):
-        user = require_capability(request, "jobs.run")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/jobs")
-        if csrf_error:
-            return csrf_error
-
-        normalized_mode = "dry_run" if mode == "dry_run" else "apply"
-        current_org = get_current_org(request)
-        ok, message = request.app.state.sync_runner.launch(
-            mode=normalized_mode,
-            actor_username=user.username,
-            org_id=current_org.org_id,
-            config_path=current_org.config_path or request.app.state.config_path,
-        )
-        flash(request, "success" if ok else "error", message)
-        return RedirectResponse(url="/jobs", status_code=303)
-
-    @app.get("/jobs/{job_id}", response_class=HTMLResponse)
-    def job_detail(request: Request, job_id: str):
-        user = require_capability(request, "jobs.read")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        job: Optional[SyncJobRecord] = request.app.state.job_repo.get_job_record(job_id)
-        if not job:
-            flash_t(request, "error", "Job not found: {job_id}", job_id=job_id)
-            return RedirectResponse(url="/jobs", status_code=303)
-        current_org = get_current_org(request)
-        if job.org_id and job.org_id != current_org.org_id:
-            flash(request, "error", "Job does not belong to the current organization")
-            return RedirectResponse(url="/jobs", status_code=303)
-        return render(
-            request,
-            "job_detail.html",
-            page="jobs",
-            title=translate_text(get_ui_language(request), "Job Detail {job_id}", job_id=job_id),
-            job=job,
-            current_org=current_org,
-            events=(events_result := fetch_page(
-                lambda *, limit, offset: request.app.state.event_repo.list_events_for_job_page(
-                    job_id,
-                    limit=limit,
-                    offset=offset,
-                ),
-                page=parse_page_number(request.query_params.get("events_page"), 1),
-                page_size=25,
-            ))[0],
-            events_page_data=events_result[1],
-            planned_operations=(planned_result := fetch_page(
-                lambda *, limit, offset: request.app.state.planned_operation_repo.list_operations_for_job_page(
-                    job_id,
-                    limit=limit,
-                    offset=offset,
-                ),
-                page=parse_page_number(request.query_params.get("planned_page"), 1),
-                page_size=25,
-            ))[0],
-            planned_operations_page_data=planned_result[1],
-            operation_records=(operations_result := fetch_page(
-                lambda *, limit, offset: request.app.state.operation_log_repo.list_records_for_job_page(
-                    job_id,
-                    limit=limit,
-                    offset=offset,
-                ),
-                page=parse_page_number(request.query_params.get("operations_page"), 1),
-                page_size=25,
-            ))[0],
-            operation_records_page_data=operations_result[1],
-            conflicts=(conflicts_result := fetch_page(
-                lambda *, limit, offset: request.app.state.conflict_repo.list_conflicts_for_job_page(
-                    job_id,
-                    limit=limit,
-                    offset=offset,
-                ),
-                page=parse_page_number(request.query_params.get("conflicts_page"), 1),
-                page_size=25,
-            ))[0],
-            job_conflicts_page_data=conflicts_result[1],
-            review_record=request.app.state.review_repo.get_review_record_by_job_id(job_id),
-            summary_json=json.dumps(job.summary or {}, ensure_ascii=False, indent=2),
-        )
-
-    @app.get("/database", response_class=HTMLResponse)
-    def database_page(request: Request):
-        user = require_capability(request, "database.read")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        db_manager = request.app.state.db_manager
-        integrity = db_manager.last_integrity_check or db_manager.run_integrity_check()
-        return render(
-            request,
-            "database.html",
-            page="database",
-            title="Database Operations",
-            db_info=db_manager.runtime_info(),
-            integrity=integrity,
-            retention_settings={
-                "job_history_retention_days": request.app.state.settings_repo.get_int("job_history_retention_days", 30),
-                "event_history_retention_days": request.app.state.settings_repo.get_int("event_history_retention_days", 30),
-                "audit_log_retention_days": request.app.state.settings_repo.get_int("audit_log_retention_days", 90),
-                "backup_retention_days": request.app.state.settings_repo.get_int("backup_retention_days", 30),
-                "backup_retention_max_files": request.app.state.settings_repo.get_int("backup_retention_max_files", 30),
-            },
-        )
-
-    @app.post("/database/check")
-    def database_check(request: Request, csrf_token: str = Form("")):
-        user = require_capability(request, "database.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/database")
-        if csrf_error:
-            return csrf_error
-
-        result = request.app.state.db_manager.run_integrity_check()
-        request.app.state.audit_repo.add_log(
-            actor_username=user.username,
-            action_type="database.check",
-            target_type="sqlite",
-            target_id=request.app.state.db_manager.db_path,
-            result="success" if result.get("ok") else "error",
-            message=f"Ran integrity check: {result.get('result')}",
-            payload=result,
-        )
-        flash_t(
-            request,
-            "success" if result.get("ok") else "error",
-            "Integrity check result: {result}",
-            result=str(result.get("result") or "-"),
-        )
-        return RedirectResponse(url="/database", status_code=303)
-
-    @app.post("/database/backup")
-    def database_backup(request: Request, csrf_token: str = Form("")):
-        user = require_capability(request, "database.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/database")
-        if csrf_error:
-            return csrf_error
-
-        backup_path = request.app.state.db_manager.backup_database(label="web_manual")
-        backup_cleanup = request.app.state.db_manager.cleanup_backups(
-            retention_days=request.app.state.settings_repo.get_int("backup_retention_days", 30),
-            max_files=request.app.state.settings_repo.get_int("backup_retention_max_files", 30),
-        )
-        request.app.state.audit_repo.add_log(
-            actor_username=user.username,
-            action_type="database.backup",
-            target_type="sqlite",
-            target_id=request.app.state.db_manager.db_path,
-            result="success",
-            message="Created database backup",
-            payload={
-                "backup_path": backup_path,
-                "backup_cleanup": backup_cleanup,
-            },
-        )
-        deleted_backups = int(backup_cleanup.get("deleted_backups", 0))
-        if deleted_backups:
-            flash_t(
-                request,
-                "success",
-                "Backup created: {backup_path}. Pruned {deleted_backups} old backups.",
-                backup_path=backup_path,
-                deleted_backups=deleted_backups,
-            )
-        else:
-            flash_t(request, "success", "Backup created: {backup_path}", backup_path=backup_path)
-        return RedirectResponse(url="/database", status_code=303)
-
-    @app.get("/account", response_class=HTMLResponse)
-    def account_page(request: Request):
-        user = require_capability(request, "account.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        return render(request, "account.html", page="account", title="My Account")
-
-    @app.post("/account/password")
-    def change_password(
-        request: Request,
-        csrf_token: str = Form(""),
-        current_password: str = Form(...),
-        new_password: str = Form(...),
-        confirm_password: str = Form(...),
-    ):
-        user = require_capability(request, "account.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/account")
-        if csrf_error:
-            return csrf_error
-
-        if not verify_password(current_password, user.password_hash):
-            flash(request, "error", "Current password is incorrect")
-            return RedirectResponse(url="/account", status_code=303)
-        if new_password != confirm_password:
-            flash(request, "error", "New passwords do not match")
-            return RedirectResponse(url="/account", status_code=303)
-        password_error = validate_admin_password(request, new_password)
-        if password_error:
-            flash(request, "error", password_error)
-            return RedirectResponse(url="/account", status_code=303)
-
-        request.app.state.user_repo.set_password(user.username, hash_password(new_password))
-        request.app.state.audit_repo.add_log(
-            actor_username=user.username,
-            action_type="account.password_change",
-            target_type="web_admin_user",
-            target_id=user.username,
-            result="success",
-            message="Changed account password",
-        )
-        flash(request, "success", "Password updated")
-        return RedirectResponse(url="/account", status_code=303)
-
-    @app.get("/users", response_class=HTMLResponse)
-    def users_page(request: Request):
-        user = require_capability(request, "users.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        return render(
-            request,
-            "users.html",
-            page="users",
-            title="Admin Users",
-            users=request.app.state.user_repo.list_user_records(),
-        )
-
-    @app.post("/users")
-    def create_user(
-        request: Request,
-        csrf_token: str = Form(""),
-        username: str = Form(...),
-        password: str = Form(...),
-        role: str = Form("operator"),
-    ):
-        user = require_capability(request, "users.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/users")
-        if csrf_error:
-            return csrf_error
-
-        username = username.strip()
-        role = normalize_role(role, default="operator")
-        if role not in WEB_ADMIN_ROLES:
-            role = "operator"
-        if not username:
-            flash(request, "error", "Username is required")
-            return RedirectResponse(url="/users", status_code=303)
-        password_error = validate_admin_password(request, password)
-        if password_error:
-            flash(request, "error", password_error)
-            return RedirectResponse(url="/users", status_code=303)
-        if request.app.state.user_repo.get_user_record_by_username(username):
-            flash(request, "error", "Username already exists")
-            return RedirectResponse(url="/users", status_code=303)
-
-        request.app.state.user_repo.create_user(username, hash_password(password), role=role)
-        request.app.state.audit_repo.add_log(
-            actor_username=user.username,
-            action_type="user.create",
-            target_type="web_admin_user",
-            target_id=username,
-            result="success",
-            message="Created local administrator account",
-            payload={"role": role},
-        )
-        flash_t(request, "success", "User {username} created", username=username)
-        return RedirectResponse(url="/users", status_code=303)
-
-    @app.post("/users/{user_id}/toggle")
-    def toggle_user(
-        request: Request,
-        user_id: int,
-        csrf_token: str = Form(""),
-    ):
-        user = require_capability(request, "users.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/users")
-        if csrf_error:
-            return csrf_error
-
-        target = request.app.state.user_repo.get_user_record_by_id(user_id)
-        if not target:
-            flash(request, "error", "Target account was not found")
-            return RedirectResponse(url="/users", status_code=303)
-        if target.username == user.username and target.is_enabled:
-            flash(request, "error", "You cannot disable the account currently signed in")
-            return RedirectResponse(url="/users", status_code=303)
-
-        new_state = not target.is_enabled
-        request.app.state.user_repo.set_enabled(user_id, new_state)
-        request.app.state.audit_repo.add_log(
-            actor_username=user.username,
-            action_type="user.toggle",
-            target_type="web_admin_user",
-            target_id=target.username,
-            result="success",
-            message=f"{'Enabled' if new_state else 'Disabled'} local administrator account",
-        )
-        flash_t(
-            request,
-            "success",
-            "User {username} enabled" if new_state else "User {username} disabled",
-            username=target.username,
-        )
-        return RedirectResponse(url="/users", status_code=303)
-
-    @app.get("/audit", response_class=HTMLResponse)
-    def audit_page(request: Request):
-        user = require_capability(request, "audit.read")
-        if isinstance(user, RedirectResponse):
-            return user
-        current_org = get_current_org(request)
-        remembered_filters = resolve_remembered_filters(
-            request,
-            page_name="audit",
-            defaults={"q": ""},
-        )
-        audit_query = str(remembered_filters["q"])
-        return render(
-            request,
-            "audit.html",
-            page="audit",
-            title="Audit Logs",
-            logs=(audit_result := fetch_page(
-                lambda *, limit, offset: request.app.state.audit_repo.list_recent_logs_page(
-                    limit=limit,
-                    offset=offset,
-                    query=audit_query,
-                    org_id=current_org.org_id,
-                    include_global=True,
-                ),
-                page=parse_page_number(request.query_params.get("page_number"), 1),
-                page_size=50,
-            ))[0],
-            audit_query=audit_query,
-            audit_page_data=audit_result[1],
-            filters_are_remembered=True,
-        )
+    register_admin_routes(
+        app,
+        fetch_page=fetch_page,
+        flash=flash,
+        flash_t=flash_t,
+        get_current_org=get_current_org,
+        hash_password=hash_password,
+        parse_page_number=parse_page_number,
+        reject_invalid_csrf=reject_invalid_csrf,
+        render=render,
+        require_capability=require_capability,
+        resolve_remembered_filters=resolve_remembered_filters,
+        validate_admin_password=validate_admin_password,
+        verify_password=verify_password,
+    )
 
     return app

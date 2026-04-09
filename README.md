@@ -47,7 +47,7 @@ The codebase has already been refactored away from a simple `WeCom -> AD` utilit
 
 ## Product Direction
 
-This repository is no longer structured as a one-off `WeCom AD Sync` script pack.
+This repository is no longer structured as a one-off single-source sync script pack.
 
 The current platform direction is:
 
@@ -74,9 +74,9 @@ without redesigning the synchronization control plane.
 ### 1. Create a virtual environment
 
 ```powershell
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements-web.txt
 ```
 
 ### 2. Initialize or reuse the local database
@@ -85,8 +85,8 @@ The application will initialize SQLite automatically on first use.
 
 Typical local paths:
 
-- `%APPDATA%\NottingADSync\app.db`
-- fallback: `.appdata\NottingADSync\app.db`
+- `%APPDATA%\ADOrgSync\app.db`
+- fallback: `.appdata\ADOrgSync\app.db`
 
 For explicit testing or demo use, pass `--db-path`.
 
@@ -95,9 +95,11 @@ For explicit testing or demo use, pass `--db-path`.
 Database-backed organization config is now the primary configuration source.
 
 ```powershell
-venv\Scripts\python.exe -m sync_app.cli validate-config --db-path test_artifacts\demo_web.db --org-id default
-venv\Scripts\python.exe -m sync_app.cli test-source --db-path test_artifacts\demo_web.db --org-id default
-venv\Scripts\python.exe -m sync_app.cli test-ldap --db-path test_artifacts\demo_web.db --org-id default
+.\.venv\Scripts\python.exe -m sync_app.cli init-web --db-path test_artifacts\demo_web.db --config config.ini
+.\.venv\Scripts\python.exe -m sync_app.cli bootstrap-admin --db-path test_artifacts\demo_web.db --username admin --password simple88
+.\.venv\Scripts\python.exe -m sync_app.cli validate-config --db-path test_artifacts\demo_web.db --org-id default
+.\.venv\Scripts\python.exe -m sync_app.cli test-source --db-path test_artifacts\demo_web.db --org-id default
+.\.venv\Scripts\python.exe -m sync_app.cli test-ldap --db-path test_artifacts\demo_web.db --org-id default
 ```
 
 Legacy `--config config.ini` is still supported as an import / compatibility source.
@@ -105,14 +107,14 @@ Legacy `--config config.ini` is still supported as an import / compatibility sou
 ### 4. Start the Web console
 
 ```powershell
-venv\Scripts\python.exe -m sync_app.cli web --db-path test_artifacts\demo_web.db --host 127.0.0.1 --port 8010
+.\.venv\Scripts\python.exe -m sync_app.cli web --db-path test_artifacts\demo_web.db --host 127.0.0.1 --port 8010
 ```
 
 ### 5. Run synchronization
 
 ```powershell
-venv\Scripts\python.exe -m sync_app.cli sync --mode dry-run --db-path test_artifacts\demo_web.db --org-id default
-venv\Scripts\python.exe -m sync_app.cli sync --mode apply --db-path test_artifacts\demo_web.db --org-id default
+.\.venv\Scripts\python.exe -m sync_app.cli sync --mode dry-run --db-path test_artifacts\demo_web.db --org-id default
+.\.venv\Scripts\python.exe -m sync_app.cli sync --mode apply --db-path test_artifacts\demo_web.db --org-id default
 ```
 
 Recommended rollout path:
@@ -122,6 +124,31 @@ Recommended rollout path:
 3. Review jobs, conflicts, risky operations, and exception hits
 4. Approve high-risk plans if required
 5. Run `apply`
+
+## Windows Service Deployment
+
+For a production-style local deployment on Windows, prefer the service scripts instead of scheduled tasks.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-deploy.txt
+.\install_web_service.ps1 -AdminUsername admin -AdminPassword "simple88"
+```
+
+Daily operations:
+
+```powershell
+.\manage_web_service.ps1 -Action status
+.\upgrade_web_service.ps1
+.\uninstall_web_service.ps1
+```
+
+Health endpoints:
+
+- `GET /healthz` for liveness
+- `GET /readyz` for readiness
+
+Detailed deployment notes are in [docs/deployment-windows-service.md](docs/deployment-windows-service.md).
 
 ## Web Console
 
@@ -185,27 +212,29 @@ Those file paths are now treated as import / compatibility inputs, not the prima
 ## CLI Reference
 
 ```powershell
-venv\Scripts\python.exe -m sync_app.cli version
-venv\Scripts\python.exe -m sync_app.cli validate-config --db-path app.db --org-id default
-venv\Scripts\python.exe -m sync_app.cli test-source --db-path app.db --org-id default
-venv\Scripts\python.exe -m sync_app.cli test-ldap --db-path app.db --org-id default
-venv\Scripts\python.exe -m sync_app.cli sync --mode dry-run --db-path app.db --org-id default
-venv\Scripts\python.exe -m sync_app.cli sync --mode apply --db-path app.db --org-id default
-venv\Scripts\python.exe -m sync_app.cli approve-plan <job_id> --notes "reviewed"
-venv\Scripts\python.exe -m sync_app.cli conflicts list --status open --json
-venv\Scripts\python.exe -m sync_app.cli conflicts apply-recommendation <conflict_id> --reason "checked manually"
-venv\Scripts\python.exe -m sync_app.cli config-export --db-path app.db --org-id default
-venv\Scripts\python.exe -m sync_app.cli config-import --db-path app.db --org-id target --file bundle.json
-venv\Scripts\python.exe -m sync_app.cli db-check
-venv\Scripts\python.exe -m sync_app.cli db-backup --label manual
-venv\Scripts\python.exe -m sync_app.cli web --db-path app.db --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m sync_app.cli version
+.\.venv\Scripts\python.exe -m sync_app.cli init-web --db-path app.db --config config.ini
+.\.venv\Scripts\python.exe -m sync_app.cli bootstrap-admin --db-path app.db --username admin --password simple88
+.\.venv\Scripts\python.exe -m sync_app.cli validate-config --db-path app.db --org-id default
+.\.venv\Scripts\python.exe -m sync_app.cli test-source --db-path app.db --org-id default
+.\.venv\Scripts\python.exe -m sync_app.cli test-ldap --db-path app.db --org-id default
+.\.venv\Scripts\python.exe -m sync_app.cli sync --mode dry-run --db-path app.db --org-id default
+.\.venv\Scripts\python.exe -m sync_app.cli sync --mode apply --db-path app.db --org-id default
+.\.venv\Scripts\python.exe -m sync_app.cli approve-plan <job_id> --notes "reviewed"
+.\.venv\Scripts\python.exe -m sync_app.cli conflicts list --status open --json
+.\.venv\Scripts\python.exe -m sync_app.cli conflicts apply-recommendation <conflict_id> --reason "checked manually"
+.\.venv\Scripts\python.exe -m sync_app.cli config-export --db-path app.db --org-id default
+.\.venv\Scripts\python.exe -m sync_app.cli config-import --db-path app.db --org-id target --file bundle.json
+.\.venv\Scripts\python.exe -m sync_app.cli db-check
+.\.venv\Scripts\python.exe -m sync_app.cli db-backup --label manual
+.\.venv\Scripts\python.exe -m sync_app.cli web --db-path app.db --host 127.0.0.1 --port 8000
 ```
 
 ## Testing
 
 ```powershell
-venv\Scripts\python.exe -m compileall sync_app tests
-venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m compileall sync_app tests
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
 ## Security Notes

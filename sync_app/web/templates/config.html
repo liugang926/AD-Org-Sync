@@ -67,7 +67,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="preview_token" value="{{ config_preview_token }}">
       <div class="actions">
-        <button type="submit">{{ t("Confirm Save") }}</button>
+        {{ ui.button(t("Confirm Save"), type="submit") }}
       </div>
     </form>
   {% endcall %}
@@ -197,7 +197,7 @@
 
     <div class="sticky-submit-bar">
       <div class="actions flush-top">
-        <button class="block" type="submit">{{ t("Preview Changes") }}</button>
+        {{ ui.button(t("Preview Changes"), type="submit", block=True) }}
       </div>
     </div>
   </form>

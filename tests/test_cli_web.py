@@ -65,6 +65,7 @@ class CliWebCommandTests(unittest.TestCase):
         self.assertEqual(called_app.state.web_runtime_settings["public_base_url"], "https://sync.example.com")
         self.assertTrue(called_app.state.web_runtime_settings["trust_proxy_headers"])
         self.assertEqual(called_app.state.web_runtime_settings["forwarded_allow_ips"], "10.0.0.1,10.0.0.2")
+        self.assertIn("/static", {getattr(route, "path", "") for route in called_app.routes})
         self.assertEqual(called_kwargs["host"], "127.0.0.1")
         self.assertEqual(called_kwargs["port"], 8443)
         self.assertTrue(called_kwargs["proxy_headers"])

@@ -19,7 +19,7 @@ import qtawesome as qta
 from sync_app.core.models import SyncRunStats
 from sync_app.storage.local_db import DatabaseManager, GroupExclusionRuleRepository, SettingsRepository
 
-APP_TITLE = "企业微信-AD同步工具"
+APP_TITLE = "AD Org Sync"
 
 # 确定应用程序路径
 def get_application_path():
@@ -1199,7 +1199,7 @@ class MainWindow(QMainWindow):
         tab_widget.addTab(config_tab, qta.icon('fa5s.cog'), "配置")
         main_layout.addWidget(tab_widget, 1)
 
-        footer_label = QLabel("(c) 2026 Notting AD Sync")
+        footer_label = QLabel("(c) 2026 AD Org Sync")
         footer_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(footer_label)
 
@@ -1362,7 +1362,7 @@ class ScheduleThread(QThread):
 def main():
     # 确保只有一个实例运行
     app = QApplication(sys.argv)
-    app.setApplicationName("Notting AD Sync")
+    app.setApplicationName("AD Org Sync")
     app.setApplicationVersion("1.0.0")
     
     # 设置应用程序工作目录

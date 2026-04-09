@@ -7,6 +7,7 @@ from sync_app.core.models import AccountConfig, AppConfig, LDAPConfig, WeComConf
 from sync_app.storage.local_db import (
     DatabaseManager,
     OrganizationConfigRepository,
+    SettingsRepository,
     SyncConnectorRepository,
     UserDepartmentOverrideRepository,
     UserIdentityBindingRepository,
@@ -18,6 +19,39 @@ from sync_app.web.security import hash_password, verify_password
 
 
 class WebStorageTests(unittest.TestCase):
+    def test_web_admin_password_min_length_defaults_to_eight_and_upgrades_legacy_default(self):
+        test_root = Path(os.getcwd()) / "test_artifacts"
+        test_root.mkdir(exist_ok=True)
+        db_path = test_root / "web_storage_settings.db"
+        try:
+            if db_path.exists():
+                db_path.unlink()
+            manager = DatabaseManager(db_path=str(db_path))
+            manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+
+            settings_repo = SettingsRepository(manager)
+            self.assertEqual(settings_repo.get_int("web_admin_password_min_length", 0), 8)
+
+            settings_repo.set_value("web_admin_password_min_length", "12", "int")
+            manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+
+            self.assertEqual(settings_repo.get_int("web_admin_password_min_length", 0), 8)
+        finally:
+            backup_dir = db_path.parent / "backups"
+            for suffix in ("", "-wal", "-shm"):
+                candidate = Path(str(db_path) + suffix)
+                if candidate.exists():
+                    try:
+                        candidate.unlink()
+                    except PermissionError:
+                        pass
+            if backup_dir.exists():
+                for item in backup_dir.glob("*"):
+                    try:
+                        item.unlink()
+                    except PermissionError:
+                        pass
+
     def test_admin_user_and_audit_log_roundtrip(self):
         test_root = Path(os.getcwd()) / "test_artifacts"
         test_root.mkdir(exist_ok=True)

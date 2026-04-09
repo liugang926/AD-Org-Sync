@@ -13,9 +13,9 @@
       <form class="inline" method="post" action="/preflight/run">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="return_url" value="/getting-started">
-        <button type="submit">{{ t("Run Live Preflight") }}</button>
+        {{ ui.button(t("Run Live Preflight"), type="submit") }}
       </form>
-      <a class="button secondary" href="/jobs">{{ t("Open Job Center") }}</a>
+      {{ ui.button(t("Open Job Center"), href="/jobs", variant="secondary") }}
     </div>
   </div>
 
@@ -37,7 +37,7 @@
         </div>
         <div class="actions flush-top">
           {% if not step.capability or can(step.capability) %}
-          <a class="button {% if step.status == 'current' %}secondary{% else %}ghost{% endif %}" href="{{ step.href }}">{{ t(step.action_label) }}</a>
+          {{ ui.button(t(step.action_label), href=step.href, variant=("secondary" if step.status == "current" else "ghost")) }}
           {% endif %}
         </div>
       </div>
@@ -72,11 +72,11 @@
     </div>
     <div class="actions">
       {% if can("config.read") %}
-      <a class="button secondary" href="/config">{{ t("Open Organization Config") }}</a>
+      {{ ui.button(t("Open Organization Config"), href="/config", variant="secondary") }}
       {% endif %}
-      <a class="button ghost" href="/conflicts">{{ t("Open Conflict Queue") }}</a>
+      {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
       {% if ui_mode == "advanced" %}
-      <a class="button ghost" href="/advanced-sync">{{ t("Open Advanced Sync") }}</a>
+      {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost") }}
       {% endif %}
     </div>
   {% endcall %}

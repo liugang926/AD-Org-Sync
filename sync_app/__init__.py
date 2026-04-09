@@ -1,1 +1,1 @@
-"""Structured package for the WeCom-AD sync application."""
+"""Structured package for the AD Org Sync application."""

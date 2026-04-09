@@ -13,7 +13,7 @@ Security fixes are only guaranteed for the latest version on the default branch.
 ## Sensitive Data Handling
 
 - Never commit `config.ini`, SQLite runtime databases, logs, or generated reports.
-- Treat WeCom secrets, webhook URLs, LDAP passwords, and generated default passwords as credentials.
+- Treat source connector secrets, webhook URLs, LDAP passwords, and generated default passwords as credentials.
 - Rotate credentials immediately if they were ever committed or shared in logs.
 
 ## Hardening Expectations

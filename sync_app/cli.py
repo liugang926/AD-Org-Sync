@@ -1,5 +1,6 @@
 import asyncio
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -27,12 +28,15 @@ from sync_app.storage.local_db import (
     DatabaseManager,
     OrganizationConfigRepository,
     OrganizationRepository,
+    SettingsRepository,
     SyncConflictRepository,
     SyncExceptionRuleRepository,
     SyncJobRepository,
     SyncPlanReviewRepository,
     UserIdentityBindingRepository,
+    WebAdminUserRepository,
 )
+from sync_app.web.security import hash_password, validate_admin_password_strength
 
 
 def windows_selector_loop_factory():
@@ -41,13 +45,61 @@ def windows_selector_loop_factory():
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="wecom-ad-sync",
-        description="Source directory to Active Directory sync tool.",
+        prog="ad-org-sync",
+        description="Source directory to Active Directory synchronization tool.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     version_parser = subparsers.add_parser("version", help="Print version information")
     version_parser.set_defaults(handler=_handle_version)
+
+    init_web_parser = subparsers.add_parser(
+        "init-web",
+        help="Initialize the local SQLite database and the default web organization",
+    )
+    init_web_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
+    init_web_parser.add_argument(
+        "--config",
+        default=None,
+        help="Optional legacy config file path to associate with the default organization",
+    )
+    init_web_parser.add_argument(
+        "--no-startup-snapshot",
+        action="store_true",
+        help="Skip creating a startup snapshot when initializing an existing database",
+    )
+    init_web_parser.add_argument("--json", action="store_true", help="Print machine-readable output")
+    init_web_parser.set_defaults(handler=_handle_init_web)
+
+    bootstrap_admin_parser = subparsers.add_parser(
+        "bootstrap-admin",
+        help="Create or reset the initial local administrator account",
+    )
+    bootstrap_admin_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
+    bootstrap_admin_parser.add_argument("--username", default="admin", help="Administrator username")
+    bootstrap_admin_parser.add_argument("--password", default="", help="Administrator password")
+    bootstrap_admin_parser.add_argument(
+        "--password-env",
+        default="",
+        help="Environment variable name that stores the administrator password",
+    )
+    bootstrap_admin_parser.add_argument(
+        "--role",
+        choices=["super_admin", "operator", "auditor"],
+        default="super_admin",
+        help="Role for a newly created account",
+    )
+    bootstrap_admin_parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Reset the password when the administrator already exists",
+    )
+    bootstrap_admin_parser.add_argument(
+        "--enable",
+        action="store_true",
+        help="Re-enable an existing administrator account after resetting the password",
+    )
+    bootstrap_admin_parser.set_defaults(handler=_handle_bootstrap_admin)
 
     validate_parser = subparsers.add_parser("validate-config", help="Validate database-backed org config or a legacy config file")
     validate_parser.add_argument("--org-id", default="default", help="Organization ID to validate when using database-backed configuration")
@@ -233,6 +285,120 @@ def main(argv: list[str] | None = None) -> int:
 
 def _handle_version(_args: argparse.Namespace) -> int:
     print(APP_VERSION)
+    return 0
+
+
+def _resolve_admin_password_input(args: argparse.Namespace) -> str:
+    direct_password = str(getattr(args, "password", "") or "")
+    if direct_password:
+        return direct_password
+
+    password_env = str(getattr(args, "password_env", "") or "").strip()
+    if password_env:
+        env_value = str(os.getenv(password_env) or "")
+        if not env_value:
+            raise ValueError(f"environment variable is empty or missing: {password_env}")
+        return env_value
+
+    password = getpass.getpass("Administrator password: ")
+    confirm_password = getpass.getpass("Confirm administrator password: ")
+    if password != confirm_password:
+        raise ValueError("administrator passwords do not match")
+    return password
+
+
+def _handle_init_web(args: argparse.Namespace) -> int:
+    db_manager = DatabaseManager(db_path=args.db_path)
+    init_result = db_manager.initialize(
+        create_startup_snapshot=not bool(getattr(args, "no_startup_snapshot", False)),
+        verify_integrity=True,
+    )
+    organization_repo = OrganizationRepository(db_manager)
+    org_config_repo = OrganizationConfigRepository(db_manager)
+    existing_default = organization_repo.get_organization_record("default")
+    effective_config_path = (
+        str(getattr(args, "config", "") or "").strip()
+        or (existing_default.config_path if existing_default else "")
+        or "config.ini"
+    )
+    organization_repo.ensure_default(config_path=effective_config_path)
+    org_config_repo.ensure_loaded("default", config_path=effective_config_path)
+
+    result = {
+        "db_path": db_manager.db_path,
+        "backup_dir": db_manager.backup_dir,
+        "config_path": effective_config_path,
+        "organization_id": "default",
+        "created_new_database": bool(init_result.get("created_new_database")),
+        "migration_source_path": init_result.get("migration_source_path") or "",
+        "startup_snapshot_path": init_result.get("startup_snapshot_path") or "",
+        "integrity_result": str((init_result.get("integrity_check") or {}).get("result") or ""),
+    }
+    if getattr(args, "json", False):
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(f"db_path: {result['db_path']}")
+        print(f"backup_dir: {result['backup_dir']}")
+        print(f"organization_id: {result['organization_id']}")
+        print(f"config_path: {result['config_path']}")
+        print(f"created_new_database: {str(result['created_new_database']).lower()}")
+        if result["migration_source_path"]:
+            print(f"migration_source_path: {result['migration_source_path']}")
+        if result["startup_snapshot_path"]:
+            print(f"startup_snapshot_path: {result['startup_snapshot_path']}")
+        if result["integrity_result"]:
+            print(f"integrity: {result['integrity_result']}")
+    return 0
+
+
+def _handle_bootstrap_admin(args: argparse.Namespace) -> int:
+    db_manager = _open_db_manager(args.db_path)
+    user_repo = WebAdminUserRepository(db_manager)
+    settings_repo = SettingsRepository(db_manager)
+
+    username = str(getattr(args, "username", "") or "").strip()
+    if not username:
+        print("administrator username is required", file=sys.stderr)
+        return 1
+
+    try:
+        password = _resolve_admin_password_input(args)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    password_error = validate_admin_password_strength(
+        password,
+        min_length=settings_repo.get_int("web_admin_password_min_length", 8),
+    )
+    if password_error:
+        print(password_error, file=sys.stderr)
+        return 1
+
+    existing_user = user_repo.get_user_record_by_username(username)
+    if existing_user:
+        if not getattr(args, "reset", False):
+            print(
+                f"administrator already exists: {username}. Use --reset to rotate the password.",
+                file=sys.stderr,
+            )
+            return 1
+        user_repo.set_password(username, hash_password(password))
+        if getattr(args, "enable", False) and not existing_user.is_enabled:
+            user_repo.set_enabled(existing_user.id, True)
+        print(f"administrator password updated: {username}")
+        if getattr(args, "enable", False):
+            print("administrator account enabled")
+        return 0
+
+    user_repo.create_user(
+        username=username,
+        password_hash=hash_password(password),
+        role=str(getattr(args, "role", "super_admin") or "super_admin"),
+        is_enabled=True,
+    )
+    print(f"administrator created: {username}")
+    print(f"role: {str(getattr(args, 'role', 'super_admin') or 'super_admin')}")
     return 0
 
 
@@ -1012,7 +1178,7 @@ def _handle_web(args: argparse.Namespace) -> int:
         import uvicorn
     except ImportError as exc:
         print(f"web dependencies not installed: {exc}", file=sys.stderr)
-        print("install FastAPI stack first, then retry `wecom-ad-sync web`", file=sys.stderr)
+        print("install the web dependency set first, then retry `ad-org-sync web`", file=sys.stderr)
         return 1
 
     from sync_app.storage.local_db import SettingsRepository

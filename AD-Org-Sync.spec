@@ -24,7 +24,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['setuptools', 'pip', 'wheel', 'jaraco', 'pkg_resources', 'distutils', 'numpy', 'pandas', 'matplotlib'],
+    excludes=['setuptools', 'pip', 'wheel', 'jaraco', 'pkg_resources', 'numpy', 'pandas', 'matplotlib'],
     noarchive=False,
     optimize=0,
 )
@@ -36,7 +36,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='WeCom-AD-Sync',
+    name='AD-Org-Sync',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
 
 {% block content %}
@@ -13,17 +14,14 @@
   {% call ui.panel(t("Audit Logs"), description=t("Search by actor, action, target, or message.")) %}
     <form method="get" action="/audit">
       <div class="form-grid">
-        <div>
-          <label>{{ t("Keyword") }}</label>
-          <input type="text" name="q" value="{{ audit_query or '' }}" placeholder="login, backup, alice, sync_job">
-        </div>
+        {{ forms.input("q", t("Keyword"), audit_query or '', placeholder="login, backup, alice, sync_job") }}
       </div>
       {% if filters_are_remembered %}
       <p class="section-subtitle">{{ t("Filters are remembered for this browser session.") }}</p>
       {% endif %}
       <div class="actions">
-        <button type="submit">{{ t("Search") }}</button>
-        <a class="button secondary" href="/audit?clear_filters=1">{{ t("Reset") }}</a>
+        {{ ui.button(t("Search"), type="submit") }}
+        {{ ui.button(t("Reset"), href="/audit?clear_filters=1", variant="secondary") }}
       </div>
     </form>
   {% endcall %}
@@ -59,10 +57,10 @@
     {% endcall %}
     {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=audit_page_data.total_items, page=audit_page_data.page, pages=audit_page_data.total_pages)) %}
       {% if audit_page_data.has_previous %}
-      <a class="button secondary" href="/audit?q={{ audit_query or '' }}&page_number={{ audit_page_data.previous_page }}">{{ t("Previous") }}</a>
+      {{ ui.button(t("Previous"), href="/audit?q=" ~ (audit_query or '') ~ "&page_number=" ~ audit_page_data.previous_page, variant="secondary") }}
       {% endif %}
       {% if audit_page_data.has_next %}
-      <a class="button secondary" href="/audit?q={{ audit_query or '' }}&page_number={{ audit_page_data.next_page }}">{{ t("Next") }}</a>
+      {{ ui.button(t("Next"), href="/audit?q=" ~ (audit_query or '') ~ "&page_number=" ~ audit_page_data.next_page, variant="secondary") }}
       {% endif %}
     {% endcall %}
   {% endcall %}
