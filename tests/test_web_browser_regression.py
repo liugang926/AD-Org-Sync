@@ -178,6 +178,18 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(self.page.locator("#group-corpid").is_visible())
         self.assertTrue(self.page.locator("#group-corpsecret").is_visible())
         self.assertTrue(self.page.locator("#group-webhook_url").is_visible())
+        self.page.select_option("#source_provider", "dingtalk")
+        self.page.wait_for_function(
+            "() => document.querySelector('[data-config-provider-card-title]')?.textContent.includes('DingTalk Source Connector')"
+        )
+        self.assertIn("DingTalk Source Connector", self.page.locator("body").inner_text())
+        self.assertIn("AppKey / Client ID", self.page.locator("#group-corpid label").inner_text())
+        self.assertEqual(self.page.locator("#corpid").get_attribute("placeholder"), "Enter AppKey")
+        self.assertIn(
+            "The DingTalk application key or client ID.",
+            self.page.locator("#group-corpid").inner_text(),
+        )
+        self.assertIn("DingTalk Bot Webhook", self.page.locator("#group-webhook_url label").inner_text())
         self._capture("config-page.png")
 
     def test_jobs_empty_state_actions_remain_visually_consistent(self):

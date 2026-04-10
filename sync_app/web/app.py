@@ -42,6 +42,7 @@ from sync_app.providers.source import (
     get_source_provider_display_name,
     get_source_provider_schema,
     list_source_provider_options,
+    list_source_provider_schemas,
     normalize_source_provider,
 )
 from sync_app.services.config_bundle import export_organization_bundle, import_organization_bundle
@@ -488,6 +489,55 @@ def create_app(
             editable,
             (*provider_schema.connection_fields, *provider_schema.notification_fields),
         )
+
+    def build_source_provider_ui_catalog(ui_language: str) -> dict[str, Any]:
+        catalog: dict[str, Any] = {}
+        for schema in list_source_provider_schemas(include_unimplemented=True):
+            localized_provider_name = translate_text(ui_language, schema.display_name)
+            description = translate_text(
+                ui_language,
+                schema.implementation_status or schema.description or "",
+            )
+            field_catalog: dict[str, Any] = {}
+            for field in (*schema.connection_fields, *schema.notification_fields):
+                field_catalog[field.name] = {
+                    "label": translate_text(ui_language, field.label),
+                    "helpText": translate_text(ui_language, field.help_text),
+                    "placeholder": translate_text(ui_language, field.placeholder),
+                    "required": bool(field.required),
+                    "secret": bool(field.secret),
+                }
+            catalog[schema.provider_id] = {
+                "displayName": localized_provider_name,
+                "description": description,
+                "pageTitle": translate_text(
+                    ui_language,
+                    "{provider} Connector Configuration",
+                    provider=localized_provider_name,
+                ),
+                "pageSummary": translate_text(
+                    ui_language,
+                    "This organization currently uses {provider} as its source provider. This is the shared organization settings page, so LDAP, password policy, runtime, and web deployment sections remain consistent across providers.",
+                    provider=localized_provider_name,
+                ),
+                "connectorTitle": translate_text(
+                    ui_language,
+                    "{provider} Source Connector",
+                    provider=localized_provider_name,
+                ),
+                "connectorDescription": translate_text(
+                    ui_language,
+                    "Enter the credentials required by {provider}. Notification delivery is optional.",
+                    provider=localized_provider_name,
+                ),
+                "sourceGuidance": translate_text(
+                    ui_language,
+                    "Select the source provider and complete the credentials required by {provider}.",
+                    provider=localized_provider_name,
+                ),
+                "fields": field_catalog,
+            }
+        return catalog
 
     def build_config_preview_groups(provider_schema) -> tuple[tuple[str, tuple[tuple[str, str, str], ...]], ...]:
         source_fields = [
@@ -969,6 +1019,7 @@ def create_app(
         provider_schema = get_source_provider_schema(current_source_provider)
         source_provider_name = source_provider_label(current_source_provider)
         source_provider_options = list_source_provider_options(include_unimplemented=True)
+        source_provider_ui_catalog = build_source_provider_ui_catalog(get_ui_language(request))
         protected_rules = request.app.state.exclusion_repo.list_rules(
             rule_type="protect",
             protection_level="hard",
@@ -982,6 +1033,7 @@ def create_app(
             "source_provider_name": source_provider_name,
             "source_provider_options": source_provider_options,
             "source_provider_schema": provider_schema,
+            "source_provider_ui_catalog": source_provider_ui_catalog,
             "source_connection_fields": build_source_provider_field_models(editable, provider_schema.connection_fields),
             "source_notification_fields": build_source_provider_field_models(editable, provider_schema.notification_fields),
             "source_provider_fields": build_source_provider_fields(editable),

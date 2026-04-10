@@ -1401,8 +1401,11 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn("Current provider", text)
         self.assertIn("DingTalk Source Connector", text)
         self.assertIn("AppKey / Client ID", text)
-        self.assertIn("DingTalk Bot Webhook", text)
-        self.assertNotIn("WeCom Webhook", text)
+        webhook_group = re.search(r'(?s)<div class="form-group field-span-full" id="group-webhook_url">.*?</div>\s*</div>', text)
+        self.assertIsNotNone(webhook_group)
+        webhook_html = webhook_group.group(0)
+        self.assertIn("DingTalk Bot Webhook", webhook_html)
+        self.assertNotIn("WeCom Webhook", webhook_html)
 
     def test_config_page_persists_web_deployment_settings_and_reloaded_app_uses_them(self):
         self._login("superadmin")

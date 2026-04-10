@@ -2,6 +2,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const defaultConfirmMessage =
     document.body?.dataset.confirmMessage || "Are you sure you want to perform this action?";
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   // Initialize Lucide Icons
   if (window.lucide) {
     window.lucide.createIcons();
@@ -13,6 +22,107 @@ document.addEventListener("DOMContentLoaded", () => {
       el.closest("form")?.submit();
     });
   });
+
+  // --- 1.5. Dynamic Source Provider UI ---
+  const sourceProviderSelect = document.getElementById("source_provider");
+  const sourceProviderCatalogNode = document.getElementById("source-provider-ui-catalog");
+  if (sourceProviderSelect && sourceProviderCatalogNode) {
+    let sourceProviderCatalog = {};
+    try {
+      sourceProviderCatalog = JSON.parse(sourceProviderCatalogNode.textContent || "{}");
+    } catch (_error) {
+      sourceProviderCatalog = {};
+    }
+
+    const setTextContent = (selector, value) => {
+      document.querySelectorAll(selector).forEach((node) => {
+        node.textContent = value || "";
+      });
+    };
+
+    const updateProviderBadge = (label) => {
+      document.querySelectorAll("[data-config-provider-badge]").forEach((node) => {
+        node.innerHTML = `<span class="badge badge-info">${escapeHtml(label || "")}</span>`;
+      });
+    };
+
+    const getFieldHelpNode = (group) => {
+      const children = Array.from(group.children).filter((child) => child.nodeType === Node.ELEMENT_NODE);
+      return children.length > 2 ? children[children.length - 1] : null;
+    };
+
+    const updateProviderField = (fieldName, fieldMeta) => {
+      if (!fieldMeta) {
+        return;
+      }
+      const group = document.getElementById(`group-${fieldName}`);
+      const input = document.getElementById(fieldName);
+      if (!group || !input) {
+        return;
+      }
+
+      const label = group.querySelector("label");
+      if (label) {
+        const requiredMarkup = fieldMeta.required
+          ? '<span style="color: var(--danger); margin-left: 4px;">*</span>'
+          : "";
+        label.innerHTML = `${escapeHtml(fieldMeta.label || "")}${requiredMarkup}`;
+      }
+
+      const isConfiguredSecret = input.dataset.providerSecretConfigured === "true";
+      if (!(fieldMeta.secret && isConfiguredSecret)) {
+        input.setAttribute("placeholder", fieldMeta.placeholder || "");
+      }
+      if (fieldMeta.required) {
+        input.setAttribute("required", "required");
+      } else {
+        input.removeAttribute("required");
+      }
+
+      const helpNode = getFieldHelpNode(group);
+      if (helpNode) {
+        const helpText = fieldMeta.helpText || "";
+        helpNode.textContent = helpText;
+        helpNode.style.display = helpText ? "" : "none";
+      }
+    };
+
+    const updateProviderSelectHelp = (description) => {
+      const providerGroup = document.getElementById("group-source_provider");
+      if (!providerGroup) {
+        return;
+      }
+      const helpNode = getFieldHelpNode(providerGroup);
+      if (helpNode) {
+        const helpText = description || "";
+        helpNode.textContent = helpText;
+        helpNode.style.display = helpText ? "" : "none";
+      }
+    };
+
+    const applySourceProviderUi = () => {
+      const schema = sourceProviderCatalog[sourceProviderSelect.value];
+      if (!schema) {
+        return;
+      }
+
+      setTextContent("[data-config-provider-page-title]", schema.pageTitle || "");
+      setTextContent("[data-config-provider-page-summary]", schema.pageSummary || "");
+      setTextContent("[data-config-provider-current]", schema.displayName || "");
+      setTextContent("[data-config-provider-guidance]", schema.sourceGuidance || "");
+      setTextContent("[data-config-provider-card-title]", schema.connectorTitle || "");
+      setTextContent("[data-config-provider-card-description]", schema.connectorDescription || "");
+      updateProviderBadge(schema.displayName || "");
+      updateProviderSelectHelp(schema.description || "");
+
+      Object.entries(schema.fields || {}).forEach(([fieldName, fieldMeta]) => {
+        updateProviderField(fieldName, fieldMeta);
+      });
+    };
+
+    sourceProviderSelect.addEventListener("change", applySourceProviderUi);
+    applySourceProviderUi();
+  }
 
   // --- 2. Confirmation & Loading States ---
   document.querySelectorAll("button[data-confirm], a[data-confirm]").forEach((el) => {

@@ -4,9 +4,11 @@
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("{provider} Connector Configuration", provider=t(source_provider_name)), t("This organization currently uses {provider} as its source provider. This is the shared organization settings page, so LDAP, password policy, runtime, and web deployment sections remain consistent across providers.", provider=t(source_provider_name)), eyebrow=t("Setup"), badge_text=t("Organization Scope"), badge_level="info") %}
+  {% set provider_page_title %}<span data-config-provider-page-title>{{ t("{provider} Connector Configuration", provider=t(source_provider_name)) }}</span>{% endset %}
+  {% set provider_page_summary %}<span data-config-provider-page-summary>{{ t("This organization currently uses {provider} as its source provider. This is the shared organization settings page, so LDAP, password policy, runtime, and web deployment sections remain consistent across providers.", provider=t(source_provider_name)) }}</span>{% endset %}
+  {% call ui.page_header(provider_page_title|safe, provider_page_summary|safe, eyebrow=t("Setup"), badge_text=t("Organization Scope"), badge_level="info") %}
     <div class="surface-inline">
-      {{ ui.badge(t(source_provider_name), "info") }}
+      <span data-config-provider-badge>{{ ui.badge(t(source_provider_name), "info") }}</span>
       <span class="muted">{{ t("Shared page, provider-specific fields") }}</span>
       <span class="muted">{{ t("Current organization") }}:</span>
       <strong>{{ current_org.name if current_org else t("Default Organization") }}</strong>
@@ -16,15 +18,15 @@
   <div class="dense-two-col">
     {% call ui.helper_block(t("Shared Page, Provider-Specific Fields"), t("Only the source connector card changes with the selected provider. LDAP, password policy, runtime, and web deployment settings remain shared for every provider."), "info") %}
       <ul class="helper-list">
-        <li><strong>{{ t("Current provider") }}</strong>: {{ t(source_provider_name) }}</li>
+        <li><strong>{{ t("Current provider") }}</strong>: <span data-config-provider-current>{{ t(source_provider_name) }}</span></li>
         <li>{{ t("Switch providers only when this organization should sync from a different upstream platform.") }}</li>
-        <li>{{ t("Save or preview after changing the source provider to refresh the provider-specific fields.") }}</li>
+        <li>{{ t("Provider-specific labels and placeholders update immediately when you switch the source provider.") }}</li>
       </ul>
     {% endcall %}
 
     {% call ui.helper_block(t("Fill These First"), t("If you only want the minimum setup cost, complete these fields and leave the advanced sections collapsed."), "info") %}
       <ul class="helper-list">
-        <li><strong>{{ t("Source Connector") }}</strong>: {{ t("Select the source provider and complete the credentials required by {provider}.", provider=t(source_provider_name)) }}</li>
+        <li><strong>{{ t("Source Connector") }}</strong>: <span data-config-provider-guidance>{{ t("Select the source provider and complete the credentials required by {provider}.", provider=t(source_provider_name)) }}</span></li>
         <li><strong>{{ t("LDAP") }}</strong>: {{ t("LDAP Server, LDAP Domain, LDAP Username, and LDAP Password") }}</li>
         <li><strong>{{ t("Password") }}</strong>: {{ t("Default Password before the first apply run") }}</li>
       </ul>
@@ -91,14 +93,18 @@
         <section class="subcard stack-tight">
           <div class="section-header">
             <div class="section-header__copy">
-              <h3 class="section-header__title">{{ t("{provider} Source Connector", provider=t(source_provider_name)) }}</h3>
-              <p class="section-header__description">{{ t("Enter the credentials required by {provider}. Notification delivery is optional.", provider=t(source_provider_name)) }}</p>
+              <h3 class="section-header__title" data-config-provider-card-title>{{ t("{provider} Source Connector", provider=t(source_provider_name)) }}</h3>
+              <p class="section-header__description" data-config-provider-card-description>{{ t("Enter the credentials required by {provider}. Notification delivery is optional.", provider=t(source_provider_name)) }}</p>
             </div>
           </div>
           <div class="form-grid">
             {{ forms.select("source_provider", t("Source Provider"), source_provider_options, selected_value=editable.source_provider, help_text=t(source_provider_schema.implementation_status or source_provider_schema.description or ""), class_name="field-span-full") }}
             {% for field in source_connection_fields %}
-            {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=field.required, class_name=field.class_name, autocomplete=field.autocomplete) }}
+            {% set field_attrs = 'data-source-provider-field="' ~ field.name ~ '"' %}
+            {% if field.secret and field.configured %}
+            {% set field_attrs = field_attrs ~ ' data-provider-secret-configured="true"' %}
+            {% endif %}
+            {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=field.required, class_name=field.class_name, autocomplete=field.autocomplete, attrs=field_attrs) }}
             {% endfor %}
           </div>
         </section>
@@ -129,7 +135,11 @@
         </div>
         <div class="form-grid">
           {% for field in source_notification_fields %}
-          {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=field.required, class_name=field.class_name, autocomplete=field.autocomplete) }}
+          {% set field_attrs = 'data-source-provider-field="' ~ field.name ~ '"' %}
+          {% if field.secret and field.configured %}
+          {% set field_attrs = field_attrs ~ ' data-provider-secret-configured="true"' %}
+          {% endif %}
+          {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=field.required, class_name=field.class_name, autocomplete=field.autocomplete, attrs=field_attrs) }}
           {% endfor %}
         </div>
       </section>
@@ -233,4 +243,5 @@
     </div>
   </form>
 </div>
+<script id="source-provider-ui-catalog" type="application/json">{{ source_provider_ui_catalog | tojson }}</script>
 {% endblock %}
