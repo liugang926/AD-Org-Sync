@@ -469,6 +469,14 @@ tr:hover td { background: #fcfdfe; transition: background 0.2s ease; }
   color: #fff;
 }
 
+.login-mark__text {
+  color: inherit;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .hero-title {
   font-size: 32px;
   font-weight: 800;
@@ -685,9 +693,50 @@ tr:hover td { background: #fcfdfe; transition: background 0.2s ease; }
   font-size: 13px;
 }
 
+.login-language-switcher {
+  justify-content: center;
+  min-width: 240px;
+  box-shadow: var(--shadow-sm);
+}
+
+.login-language-switcher .topbar-segment {
+  min-width: 108px;
+  font-size: 13px;
+}
+
 /* Layout Utilities */
 .page-stack { display: grid; gap: 32px; }
 .stack-tight { display: grid; gap: 16px; }
+.inline { display: inline-flex; }
+form.inline { display: inline-flex; margin: 0; }
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+}
+.actions > * {
+  flex: 0 0 auto;
+}
+.actions .button,
+.actions button:not(.topbar-segment):not(.topbar-icon-button) {
+  flex: 0 0 auto;
+  width: auto;
+  white-space: nowrap;
+}
+.actions form.inline {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+}
+.actions form.inline > .button,
+.actions form.inline > button:not(.topbar-segment):not(.topbar-icon-button) {
+  width: auto;
+}
+.actions.flush-top {
+  margin-top: 0;
+}
 
 .compact-stats {
   display: grid;

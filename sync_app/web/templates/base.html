@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% if title %}{{ title }} | {% endif %}{{ t("AD Org Sync") }}</title>
+  <title>{% if title %}{{ title }} | {% endif %}{{ brand_display_name }}</title>
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="stylesheet" href="/static/app.css">
   <!-- Lucide Icons -->
@@ -17,8 +17,8 @@
   {% if current_user %}
   <aside>
     <div class="brand">
-      <div class="login-mark" style="width: 44px; height: 44px; margin: 0 0 20px; font-size: 20px; border-radius: 12px;">AD</div>
-      <h1>{{ t("AD Org Sync") }}</h1>
+      <div class="login-mark" style="width: 44px; height: 44px; margin: 0 0 20px; font-size: 20px; border-radius: 12px;">{{ brand_mark_text }}</div>
+      <h1>{{ brand_display_name }}</h1>
       <div class="version">{{ t("Build {version}", version=app_version) }}</div>
     </div>
     <nav>
@@ -64,7 +64,7 @@
       {% endif %}
     </nav>
     <div class="footer">
-      &copy; 2026 AD Org Sync
+      {{ brand_attribution }}
     </div>
   </aside>
   {% endif %}

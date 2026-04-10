@@ -217,6 +217,13 @@
           {{ forms.input("web_forwarded_allow_ips", t("Forwarded Allow IPs"), editable.web_forwarded_allow_ips, placeholder="127.0.0.1, 10.0.0.0/24", class_name="field-span-full") }}
         </div>
       {% endcall %}
+      {% call ui.panel(t("Branding"), t("Global Scope"), "info", t("Use these values to control the product title, short mark, and footer attribution shown across login and in-product pages.")) %}
+        <div class="form-grid">
+          {{ forms.input("brand_display_name", t("Brand Display Name"), editable.brand_display_name, help_text=t("Controls the browser title, sidebar label, and login page heading."), class_name="field-span-full") }}
+          {{ forms.input("brand_mark_text", t("Brand Mark Text"), editable.brand_mark_text, help_text=t("Short text shown inside the brand mark on the login page and sidebar.")) }}
+          {{ forms.input("brand_attribution", t("Footer Attribution"), editable.brand_attribution, help_text=t("Footer text shown on the login page and in the in-product sidebar."), class_name="field-span-full") }}
+        </div>
+      {% endcall %}
     {% endcall %}
 
     <div class="sticky-submit-bar">

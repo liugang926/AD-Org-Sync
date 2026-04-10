@@ -68,6 +68,9 @@ def register_config_routes(
         web_session_cookie_secure_mode: str = Form("auto"),
         web_trust_proxy_headers: Optional[str] = Form(None),
         web_forwarded_allow_ips: str = Form("127.0.0.1"),
+        brand_display_name: str = Form("AD Org Sync"),
+        brand_mark_text: str = Form("AD"),
+        brand_attribution: str = Form("微信公众号：大刘讲IT"),
         user_ou_placement_strategy: str = Form("source_primary_department"),
         soft_excluded_groups: str = Form(""),
     ):
@@ -109,6 +112,9 @@ def register_config_routes(
             web_session_cookie_secure_mode=web_session_cookie_secure_mode,
             web_trust_proxy_headers=web_trust_proxy_headers,
             web_forwarded_allow_ips=web_forwarded_allow_ips,
+            brand_display_name=brand_display_name,
+            brand_mark_text=brand_mark_text,
+            brand_attribution=brand_attribution,
             user_ou_placement_strategy=user_ou_placement_strategy,
             soft_excluded_groups=soft_excluded_groups,
         )
@@ -208,6 +214,9 @@ def register_config_routes(
         web_session_cookie_secure_mode: str = Form("auto"),
         web_trust_proxy_headers: Optional[str] = Form(None),
         web_forwarded_allow_ips: str = Form("127.0.0.1"),
+        brand_display_name: str = Form("AD Org Sync"),
+        brand_mark_text: str = Form("AD"),
+        brand_attribution: str = Form("微信公众号：大刘讲IT"),
         user_ou_placement_strategy: str = Form("source_primary_department"),
         soft_excluded_groups: str = Form(""),
     ):
@@ -249,6 +258,9 @@ def register_config_routes(
             web_session_cookie_secure_mode=web_session_cookie_secure_mode,
             web_trust_proxy_headers=web_trust_proxy_headers,
             web_forwarded_allow_ips=web_forwarded_allow_ips,
+            brand_display_name=brand_display_name,
+            brand_mark_text=brand_mark_text,
+            brand_attribution=brand_attribution,
             user_ou_placement_strategy=user_ou_placement_strategy,
             soft_excluded_groups=soft_excluded_groups,
         )

@@ -5,10 +5,10 @@
 {% block content %}
 <div class="login-hero">
   <div class="login-mark">
-    <i data-lucide="shield-check" style="width: 36px; height: 36px;"></i>
+    <span class="login-mark__text">{{ brand_mark_text }}</span>
   </div>
-  <h1 class="hero-title">{{ t("Welcome Back") }}</h1>
-  <p class="section-subtitle">{{ t("Sign in to manage your AD Org Sync operations.") }}</p>
+  <h1 class="hero-title">{{ brand_display_name }}</h1>
+  <p class="section-subtitle">{{ t("Sign in to manage your directory synchronization operations.") }}</p>
 </div>
 
 <div class="card" style="max-width: 400px; margin: 0 auto;">
@@ -29,12 +29,15 @@
 
 <div class="login-footer">
   <div style="margin-bottom: 24px;">
-    <div class="language-switcher">
-      {% for code, label in language_options.items() %}
-      <a href="{{ language_urls.get(code, '/login') }}" class="{% if ui_language == code %}active{% endif %}">{{ label }}</a>
-      {% endfor %}
-    </div>
+    {{ ui.topbar_segmented_links(
+      [
+        ("en", language_options.get("en", "English"), language_urls.get("en", "/login")),
+        ("zh-CN", language_options.get("zh-CN", "简体中文"), language_urls.get("zh-CN", "/login")),
+      ],
+      ui_language,
+      class_name="language-switcher login-language-switcher"
+    ) }}
   </div>
-  <p>&copy; 2026 AD Org Sync &middot; {{ t("Version") }} {{ app_version }}</p>
+  <p>{{ brand_attribution }} &middot; {{ t("Version") }} {{ app_version }}</p>
 </div>
 {% endblock %}

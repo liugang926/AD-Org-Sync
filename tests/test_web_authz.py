@@ -195,6 +195,12 @@ class WebAuthorizationTests(unittest.TestCase):
                 "web_forwarded_allow_ips",
                 "127.0.0.1",
             ),
+            "brand_display_name": self.app.state.settings_repo.get_value("brand_display_name", "AD Org Sync"),
+            "brand_mark_text": self.app.state.settings_repo.get_value("brand_mark_text", "AD"),
+            "brand_attribution": self.app.state.settings_repo.get_value(
+                "brand_attribution",
+                "微信公众号：大刘讲IT",
+            ),
             "user_ou_placement_strategy": self.app.state.settings_repo.get_value(
                 "user_ou_placement_strategy",
                 "source_primary_department",
@@ -1437,6 +1443,9 @@ class WebAuthorizationTests(unittest.TestCase):
             web_session_cookie_secure_mode="always",
             web_trust_proxy_headers="true",
             web_forwarded_allow_ips="10.0.0.1,10.0.0.2",
+            brand_display_name="Directory Hub",
+            brand_mark_text="DH",
+            brand_attribution="微信公众号：大刘讲IT",
             user_ou_placement_strategy="wecom_primary_department",
             soft_excluded_groups="",
         )
@@ -1454,6 +1463,9 @@ class WebAuthorizationTests(unittest.TestCase):
             self.app.state.settings_repo.get_value("web_forwarded_allow_ips", ""),
             "10.0.0.1,10.0.0.2",
         )
+        self.assertEqual(self.app.state.settings_repo.get_value("brand_display_name", ""), "Directory Hub")
+        self.assertEqual(self.app.state.settings_repo.get_value("brand_mark_text", ""), "DH")
+        self.assertEqual(self.app.state.settings_repo.get_value("brand_attribution", ""), "微信公众号：大刘讲IT")
         self.assertIn("Restart the web process", self.session["_flash"]["message"])
 
         reloaded_settings = resolve_web_runtime_settings(self.app.state.settings_repo)
@@ -1464,6 +1476,9 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(reloaded_settings["session_cookie_secure_mode"], "always")
         self.assertTrue(reloaded_settings["trust_proxy_headers"])
         self.assertEqual(reloaded_settings["forwarded_allow_ips"], "10.0.0.1,10.0.0.2")
+        self.session = {}
+        login = self._route("/login", "GET")(self._request("/login"))
+        self.assertIn("Directory Hub", self._text(login))
 
     def test_config_preview_shows_pending_changes_and_confirm_save_persists_them(self):
         self._login("superadmin")
@@ -2166,7 +2181,8 @@ class WebAuthorizationTests(unittest.TestCase):
         response = self._route("/login", "GET")(self._request("/login", query={"lang": "zh-CN"}))
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
-        self.assertIn("欢迎回来", text)
+        self.assertIn("AD 组织同步", text)
+        self.assertIn("登录以管理你的目录同步运维。", text)
         self.assertIn("登录", text)
         self.assertEqual(self.session.get("ui_language"), "zh-CN")
 
@@ -2320,7 +2336,7 @@ class WebAuthorizationTests(unittest.TestCase):
         text = self._text(response)
         self.assertIn("娆㈣繋鍥炴潵", text)
         self.assertIn("鐧诲綍", text)
-        self.assertNotIn("Welcome Back", text)
+        self.assertNotIn("AD Org Sync", text)
         self.assertIsNone(self.session.get("ui_language"))
 
     def test_login_page_defaults_to_english_for_non_chinese_browser_language(self):
@@ -2329,7 +2345,7 @@ class WebAuthorizationTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
-        self.assertIn("Welcome Back", text)
+        self.assertIn("AD Org Sync", text)
         self.assertIn("Sign In", text)
         self.assertNotIn("娆㈣繋鍥炴潵", text)
         self.assertIsNone(self.session.get("ui_language"))
@@ -2341,8 +2357,8 @@ def _patched_test_login_page_defaults_to_browser_language_when_chinese_is_prefer
     self.assertEqual(response.status_code, 200)
     text = self._text(response)
     self.assertIn('<html lang="zh-CN">', text)
-    self.assertIn('class="active">简体中文</a>', text)
-    self.assertNotIn("Welcome Back", text)
+    self.assertIn('class="topbar-segment is-active active">简体中文</a>', text)
+    self.assertNotIn("AD Org Sync", text)
     self.assertIsNone(self.session.get("ui_language"))
 
 
@@ -2353,9 +2369,9 @@ def _patched_test_login_page_defaults_to_english_for_non_chinese_browser_languag
     self.assertEqual(response.status_code, 200)
     text = self._text(response)
     self.assertIn('<html lang="en">', text)
-    self.assertIn("Welcome Back", text)
+    self.assertIn("AD Org Sync", text)
     self.assertIn("Sign In", text)
-    self.assertNotIn('class="active">简体中文</a>', text)
+    self.assertNotIn('class="topbar-segment is-active active">简体中文</a>', text)
     self.assertIsNone(self.session.get("ui_language"))
 
 

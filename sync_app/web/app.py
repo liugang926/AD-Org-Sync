@@ -114,6 +114,9 @@ APP_ROOT = Path(__file__).resolve().parents[2]
 STATIC_DIR = Path(__file__).with_name("static")
 FAVICON_PATH = STATIC_DIR / "favicon.ico"
 LEGACY_FAVICON_PATH = APP_ROOT / "icon.ico"
+DEFAULT_BRAND_DISPLAY_NAME = "AD Org Sync"
+DEFAULT_BRAND_MARK_TEXT = "AD"
+DEFAULT_BRAND_ATTRIBUTION = "微信公众号：大刘讲IT"
 PLACEMENT_STRATEGIES = {
     "source_primary_department": "Prefer source primary department",
     "wecom_primary_department": "Prefer source primary department",
@@ -569,6 +572,14 @@ def create_app(
                 ),
             ),
                 (
+                "Branding",
+                (
+                    ("brand_display_name", "Brand Display Name", "text"),
+                    ("brand_mark_text", "Brand Mark Text", "text"),
+                    ("brand_attribution", "Footer Attribution", "text"),
+                ),
+            ),
+                (
                 "Group Rules",
                 (
                     ("soft_excluded_groups", "Soft Excluded Groups", "multiline"),
@@ -630,6 +641,18 @@ def create_app(
                 "web_forwarded_allow_ips",
                 "127.0.0.1",
             ),
+            "brand_display_name": request.app.state.settings_repo.get_value(
+                "brand_display_name",
+                DEFAULT_BRAND_DISPLAY_NAME,
+            ),
+            "brand_mark_text": request.app.state.settings_repo.get_value(
+                "brand_mark_text",
+                DEFAULT_BRAND_MARK_TEXT,
+            ),
+            "brand_attribution": request.app.state.settings_repo.get_value(
+                "brand_attribution",
+                DEFAULT_BRAND_ATTRIBUTION,
+            ),
             "user_ou_placement_strategy": request.app.state.settings_repo.get_value(
                 "user_ou_placement_strategy",
                 "source_primary_department",
@@ -677,6 +700,9 @@ def create_app(
         web_session_cookie_secure_mode: str = "auto",
         web_trust_proxy_headers: Optional[str] = None,
         web_forwarded_allow_ips: str = "127.0.0.1",
+        brand_display_name: str = DEFAULT_BRAND_DISPLAY_NAME,
+        brand_mark_text: str = DEFAULT_BRAND_MARK_TEXT,
+        brand_attribution: str = DEFAULT_BRAND_ATTRIBUTION,
         user_ou_placement_strategy: str = "source_primary_department",
         soft_excluded_groups: str = "",
     ) -> dict[str, Any]:
@@ -728,6 +754,9 @@ def create_app(
             "web_session_cookie_secure_mode": normalize_secure_cookie_mode(web_session_cookie_secure_mode),
             "web_trust_proxy_headers": _to_bool(web_trust_proxy_headers, False),
             "web_forwarded_allow_ips": web_forwarded_allow_ips.strip() or "127.0.0.1",
+            "brand_display_name": str(brand_display_name or "").strip() or DEFAULT_BRAND_DISPLAY_NAME,
+            "brand_mark_text": str(brand_mark_text or "").strip() or DEFAULT_BRAND_MARK_TEXT,
+            "brand_attribution": str(brand_attribution or "").strip() or DEFAULT_BRAND_ATTRIBUTION,
             "user_ou_placement_strategy": user_ou_placement_strategy,
         }
         return {
@@ -888,6 +917,9 @@ def create_app(
                 "web_session_cookie_secure_mode": submission["settings_values"]["web_session_cookie_secure_mode"],
                 "web_trust_proxy_headers": submission["settings_values"]["web_trust_proxy_headers"],
                 "web_forwarded_allow_ips": submission["settings_values"]["web_forwarded_allow_ips"],
+                "brand_display_name": submission["settings_values"]["brand_display_name"],
+                "brand_mark_text": submission["settings_values"]["brand_mark_text"],
+                "brand_attribution": submission["settings_values"]["brand_attribution"],
                 "user_ou_placement_strategy": submission["settings_values"]["user_ou_placement_strategy"],
                 "soft_excluded_groups": submission["soft_excluded_groups"],
             }
@@ -912,6 +944,27 @@ def create_app(
                 config_path=get_org_config_path(request),
             )
             editable["protected_accounts"] = list(effective_config.exclude_accounts)
+        editable.setdefault(
+            "brand_display_name",
+            request.app.state.settings_repo.get_value(
+                "brand_display_name",
+                DEFAULT_BRAND_DISPLAY_NAME,
+            ),
+        )
+        editable.setdefault(
+            "brand_mark_text",
+            request.app.state.settings_repo.get_value(
+                "brand_mark_text",
+                DEFAULT_BRAND_MARK_TEXT,
+            ),
+        )
+        editable.setdefault(
+            "brand_attribution",
+            request.app.state.settings_repo.get_value(
+                "brand_attribution",
+                DEFAULT_BRAND_ATTRIBUTION,
+            ),
+        )
         current_source_provider = normalize_source_provider(editable.get("source_provider"))
         provider_schema = get_source_provider_schema(current_source_provider)
         source_provider_name = source_provider_label(current_source_provider)
@@ -1009,6 +1062,21 @@ def create_app(
             "string",
         )
         request.app.state.settings_repo.set_value(
+            "brand_display_name",
+            str(submission["settings_values"]["brand_display_name"]),
+            "string",
+        )
+        request.app.state.settings_repo.set_value(
+            "brand_mark_text",
+            str(submission["settings_values"]["brand_mark_text"]),
+            "string",
+        )
+        request.app.state.settings_repo.set_value(
+            "brand_attribution",
+            str(submission["settings_values"]["brand_attribution"]),
+            "string",
+        )
+        request.app.state.settings_repo.set_value(
             "user_ou_placement_strategy",
             str(submission["settings_values"]["user_ou_placement_strategy"]),
             "string",
@@ -1058,6 +1126,23 @@ def create_app(
         current_role = current_user.role if current_user else None
         ui_language = get_ui_language(request)
         ui_mode = get_ui_mode(request)
+        brand_display_name_raw = request.app.state.settings_repo.get_value(
+            "brand_display_name",
+            DEFAULT_BRAND_DISPLAY_NAME,
+        )
+        brand_display_name = (
+            translate_text(ui_language, DEFAULT_BRAND_DISPLAY_NAME)
+            if str(brand_display_name_raw or "").strip() == DEFAULT_BRAND_DISPLAY_NAME
+            else str(brand_display_name_raw or "").strip()
+        )
+        brand_mark_text = request.app.state.settings_repo.get_value(
+            "brand_mark_text",
+            DEFAULT_BRAND_MARK_TEXT,
+        )
+        brand_attribution = request.app.state.settings_repo.get_value(
+            "brand_attribution",
+            DEFAULT_BRAND_ATTRIBUTION,
+        )
         current_path = request.url.path
         if request.url.query:
             current_path = f"{current_path}?{request.url.query}"
@@ -1081,6 +1166,9 @@ def create_app(
         context.setdefault("request", request)
         context.setdefault("flash", localized_flash)
         context.setdefault("app_version", APP_VERSION)
+        context.setdefault("brand_display_name", brand_display_name)
+        context.setdefault("brand_mark_text", str(brand_mark_text or "").strip() or DEFAULT_BRAND_MARK_TEXT)
+        context.setdefault("brand_attribution", str(brand_attribution or "").strip() or DEFAULT_BRAND_ATTRIBUTION)
         context.setdefault("has_users", request.app.state.user_repo.has_any_user())
         context.setdefault(
             "organizations",

@@ -146,7 +146,10 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.assertTrue(stylesheet_loaded)
         submit_height = self._height("button[type='submit']")
+        language_height = self._height(".login-language-switcher a.active")
         self.assertGreaterEqual(submit_height, 42.0)
+        self.assertGreaterEqual(language_height, 40.0)
+        self.assertLessEqual(abs(submit_height - language_height), 10.0)
         self.assertIn("AD Org Sync", self.page.title())
         self._capture("login-page.png")
 
@@ -180,6 +183,14 @@ class WebBrowserRegressionTests(unittest.TestCase):
     def test_jobs_empty_state_actions_remain_visually_consistent(self):
         self._login()
         self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
+        dry_run_button = self.page.locator("button:has-text('Run Dry Run')").first
+        apply_button = self.page.locator("button:has-text('Run Apply')").first
+        dry_run_box = dry_run_button.bounding_box()
+        apply_box = apply_button.bounding_box()
+        self.assertIsNotNone(dry_run_box)
+        self.assertIsNotNone(apply_box)
+        self.assertLessEqual(abs(float(dry_run_box["y"]) - float(apply_box["y"])), 8.0)
+        self.assertGreater(float(apply_box["x"]) - float(dry_run_box["x"]), 20.0)
         self.page.wait_for_selector(".empty-state .button")
         button_count = self.page.locator(".empty-state .button").count()
         self.assertGreaterEqual(button_count, 2)
