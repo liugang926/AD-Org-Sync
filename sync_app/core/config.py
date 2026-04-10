@@ -122,22 +122,6 @@ def validate_config(config: AppConfig) -> Tuple[bool, List[str]]:
         if field.required and not source_values.get(field.name):
             errors.append(f"{provider_schema.display_name} {field.label} is not configured")
 
-    webhook_url = config.webhook_url
-    if not webhook_url:
-        notification_label = (
-            provider_schema.notification_fields[0].label
-            if provider_schema.notification_fields
-            else "Notification Webhook"
-        )
-        errors.append(f"{notification_label} is not configured")
-    elif source_provider == "wecom" and "key=" not in webhook_url:
-        notification_label = (
-            provider_schema.notification_fields[0].label
-            if provider_schema.notification_fields
-            else "Notification Webhook"
-        )
-        errors.append(f"{notification_label} format is invalid")
-
     ldap_config = config.ldap
     if not ldap_config.server:
         errors.append("LDAP server is not configured")
@@ -169,6 +153,8 @@ def validate_config(config: AppConfig) -> Tuple[bool, List[str]]:
 
 def run_config_security_self_check(config: AppConfig) -> List[str]:
     warnings: List[str] = []
+    source_provider = normalize_source_provider(getattr(config, "source_provider", "wecom"))
+    provider_schema = get_source_provider_schema(source_provider)
 
     if not config.ldap.use_ssl:
         warnings.append("LDAP is not using SSL/TLS.")
@@ -185,8 +171,17 @@ def run_config_security_self_check(config: AppConfig) -> List[str]:
     if default_password and not config.account.force_change_password:
         warnings.append("New users are not forced to change password at first sign-in.")
 
-    if config.webhook_url and not config.webhook_url.startswith("https://"):
-        provider_name = get_source_provider_display_name(getattr(config, "source_provider", "wecom"))
+    webhook_url = str(config.webhook_url or "").strip()
+    if webhook_url and source_provider == "wecom" and "key=" not in webhook_url:
+        notification_label = (
+            provider_schema.notification_fields[0].label
+            if provider_schema.notification_fields
+            else "Notification Webhook"
+        )
+        warnings.append(f"{notification_label} format is invalid")
+
+    if webhook_url and not webhook_url.startswith("https://"):
+        provider_name = get_source_provider_display_name(source_provider)
         warnings.append(f"{provider_name} webhook is not using HTTPS.")
 
     return warnings

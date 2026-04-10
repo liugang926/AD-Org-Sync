@@ -1334,6 +1334,36 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn("LDAPS certificate validation is disabled.", dashboard_text)
         self.assertIn("Default password is still a sample or weak password. Replace it immediately.", dashboard_text)
 
+    def test_config_page_separates_optional_notification_settings(self):
+        self._login("superadmin")
+
+        response = self._route("/config", "GET")(self._request("/config"))
+        self.assertEqual(response.status_code, 200)
+        text = self._text(response)
+        self.assertIn("Optional Notifications", text)
+        self.assertIn("does not block preflight, dry run, or apply", text)
+
+    def test_dashboard_does_not_block_when_webhook_is_not_configured(self):
+        current_org = self.app.state.organization_repo.get_default_organization_record()
+        self.assertIsNotNone(current_org)
+        values = self.app.state.org_config_repo.get_raw_config(
+            current_org.org_id,
+            config_path=str(self.config_path),
+        )
+        values["webhook_url"] = ""
+        self.app.state.org_config_repo.save_config(
+            current_org.org_id,
+            values,
+            config_path=str(self.config_path),
+        )
+
+        self._login("superadmin")
+        response = self._route("/dashboard", "GET")(self._request("/dashboard"))
+        self.assertEqual(response.status_code, 200)
+        text = self._text(response)
+        self.assertNotIn("Webhook is not configured", text)
+        self.assertIn("Required WeCom and LDAP settings are complete.", text)
+
     def test_config_page_surfaces_selected_provider_context_for_dingtalk(self):
         current_org = self.app.state.organization_repo.get_default_organization_record()
         self.assertIsNotNone(current_org)

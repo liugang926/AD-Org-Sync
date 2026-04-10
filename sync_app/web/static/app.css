@@ -277,7 +277,7 @@ input:focus, select:focus, textarea:focus {
 }
 
 /* Buttons with High Visibility */
-button, .button {
+button:not(.topbar-segment):not(.topbar-icon-button), .button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -296,12 +296,12 @@ button, .button {
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
 }
 
-button span, .button span,
-button i, .button i {
+button:not(.topbar-segment):not(.topbar-icon-button) span, .button span,
+button:not(.topbar-segment):not(.topbar-icon-button) i, .button i {
   color: inherit !important; /* Inherit white from button */
 }
 
-button:hover, .button:hover {
+button:not(.topbar-segment):not(.topbar-icon-button):hover, .button:hover {
   background: var(--primary-hover);
   border-color: var(--primary-hover);
   transform: translateY(-1px);
@@ -482,53 +482,200 @@ tr:hover td { background: #fcfdfe; transition: background 0.2s ease; }
   font-size: 16px;
 }
 
-.language-switcher, .mode-switcher {
-  display: inline-flex;
-  gap: 4px;
-  padding: 4px;
-  background: #f1f5f9;
-  border-radius: 99px;
-  border: 1px solid var(--border);
+.header-leading,
+.header-trailing {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
 }
 
-.language-switcher a, .mode-switcher button, .header-signout {
+.header-trailing {
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.topbar-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.topbar-divider {
+  width: 1px;
+  height: 28px;
+  background: var(--border);
+  flex: 0 0 auto;
+}
+
+.topbar-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.96), 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.topbar-chip__content,
+.topbar-chip__actions,
+.topbar-chip__form {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+}
+
+.topbar-chip__icon {
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.topbar-chip__label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar-select {
+  width: auto;
+  min-width: 0;
+  padding: 0 20px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.topbar-select:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.topbar-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #eef4fb 0%, #e7edf6 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.topbar-segmented .topbar-segment {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 16px;
-  border-radius: 99px;
-  color: var(--text-muted);
+  min-height: 40px;
+  min-width: 0;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted) !important;
   text-decoration: none;
   font-size: 12px;
   font-weight: 700;
   line-height: 1;
-  min-height: 32px;
   box-sizing: border-box;
-  transition: all 0.2s;
-  border: 0;
-  background: transparent;
+  box-shadow: none;
+  transform: none;
+  transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
   cursor: pointer;
 }
 
+.topbar-segmented .topbar-segment span,
+.topbar-segmented .topbar-segment i {
+  color: inherit !important;
+}
+
+.topbar-segmented .topbar-segment:hover {
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--text) !important;
+  box-shadow: none;
+  transform: none;
+}
+
+.topbar-segmented .topbar-segment.is-active {
+  background: #ffffff;
+  color: var(--primary) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.mode-switcher,
+.language-switcher {
+  display: inline-flex;
+}
+
+.topbar-account {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.topbar-account__meta {
+  text-align: right;
+}
+
+.topbar-account__name {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.topbar-account__secondary {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.topbar-account__action {
+  margin: 0;
+}
+
+.topbar-icon-button,
 .header-signout {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 32px;
+  min-height: 40px;
   min-width: 44px;
+  padding: 0 12px;
   border: 1px solid var(--border);
-  background: #f8fafc;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  color: var(--text) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transform: none;
 }
 
+.topbar-icon-button:hover,
 .header-signout:hover {
-  background: #fff;
-  color: var(--primary);
-}
-
-.language-switcher a.active, .mode-switcher button.active {
-  background: #fff;
-  color: var(--primary);
-  box-shadow: var(--shadow-sm);
+  background: #ffffff;
+  border-color: var(--border-strong);
+  color: var(--primary) !important;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+  transform: none;
 }
 
 .login-footer {
@@ -654,4 +801,18 @@ tr:hover td { background: #fcfdfe; transition: background 0.2s ease; }
   header { padding: 16px 20px; flex-direction: column; align-items: stretch; gap: 16px; }
   .content-wrapper { padding: 32px 20px; }
   .dense-two-col { grid-template-columns: 1fr; }
+  .header-trailing { justify-content: flex-start; }
+  .topbar-cluster { justify-content: flex-start; }
+  .topbar-divider { display: none; }
+  .topbar-chip,
+  .topbar-segmented {
+    width: 100%;
+  }
+  .topbar-chip {
+    justify-content: space-between;
+  }
+  .topbar-account {
+    width: 100%;
+    justify-content: space-between;
+  }
 }

@@ -92,12 +92,12 @@
           <div class="section-header">
             <div class="section-header__copy">
               <h3 class="section-header__title">{{ t("{provider} Source Connector", provider=t(source_provider_name)) }}</h3>
-              <p class="section-header__description">{{ t("Enter the credentials and notification settings required by {provider}.", provider=t(source_provider_name)) }}</p>
+              <p class="section-header__description">{{ t("Enter the credentials required by {provider}. Notification delivery is optional.", provider=t(source_provider_name)) }}</p>
             </div>
           </div>
           <div class="form-grid">
             {{ forms.select("source_provider", t("Source Provider"), source_provider_options, selected_value=editable.source_provider, help_text=t(source_provider_schema.implementation_status or source_provider_schema.description or ""), class_name="field-span-full") }}
-            {% for field in source_provider_fields %}
+            {% for field in source_connection_fields %}
             {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=field.required, class_name=field.class_name, autocomplete=field.autocomplete) }}
             {% endfor %}
           </div>
@@ -119,6 +119,21 @@
           </div>
         </section>
       </div>
+      {% if source_notification_fields %}
+      <section class="subcard stack-tight">
+        <div class="section-header">
+          <div class="section-header__copy">
+            <h3 class="section-header__title">{{ t("Optional Notifications") }}</h3>
+            <p class="section-header__description">{{ t("Webhook delivery is only used for operational notifications. It does not block preflight, dry run, or apply.") }}</p>
+          </div>
+        </div>
+        <div class="form-grid">
+          {% for field in source_notification_fields %}
+          {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=field.required, class_name=field.class_name, autocomplete=field.autocomplete) }}
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
     {% endcall %}
 
     {% call ui.detail_toggle(t("Security And Account Policy"), t("Recommended after the base connection works"), open=True) %}

@@ -452,10 +452,12 @@ def create_app(
         normalized_value = normalize_source_provider(str(value or "").strip() or None)
         return get_source_provider_display_name(normalized_value)
 
-    def build_source_provider_fields(editable: dict[str, Any]) -> list[dict[str, Any]]:
-        provider_schema = get_source_provider_schema(editable.get("source_provider"))
+    def build_source_provider_field_models(
+        editable: dict[str, Any],
+        fields: tuple[Any, ...],
+    ) -> list[dict[str, Any]]:
         field_models: list[dict[str, Any]] = []
-        for field in (*provider_schema.connection_fields, *provider_schema.notification_fields):
+        for field in fields:
             configured = bool(editable.get(f"{field.name}_configured")) if field.secret else bool(editable.get(field.name))
             placeholder = field.placeholder
             if field.secret:
@@ -477,11 +479,18 @@ def create_app(
             )
         return field_models
 
+    def build_source_provider_fields(editable: dict[str, Any]) -> list[dict[str, Any]]:
+        provider_schema = get_source_provider_schema(editable.get("source_provider"))
+        return build_source_provider_field_models(
+            editable,
+            (*provider_schema.connection_fields, *provider_schema.notification_fields),
+        )
+
     def build_config_preview_groups(provider_schema) -> tuple[tuple[str, tuple[tuple[str, str, str], ...]], ...]:
         source_fields = [
             ("source_provider", "Source Provider", "source_provider"),
         ]
-        for field in (*provider_schema.connection_fields, *provider_schema.notification_fields):
+        for field in provider_schema.connection_fields:
             source_fields.append(
                 (
                     field.name,
@@ -489,7 +498,15 @@ def create_app(
                     "secret" if field.secret else ("number" if field.input_type == "number" else "text"),
                 )
             )
-        return (
+        notification_fields = tuple(
+            (
+                field.name,
+                field.label,
+                "secret" if field.secret else ("number" if field.input_type == "number" else "text"),
+            )
+            for field in provider_schema.notification_fields
+        )
+        groups: list[tuple[str, tuple[tuple[str, str, str], ...]]] = [
             (
                 "Connection Settings",
                 (
@@ -502,14 +519,24 @@ def create_app(
                     ("ldap_use_ssl", "Use SSL", "bool"),
                 ),
             ),
-            (
+        ]
+        if notification_fields:
+            groups.append(
+                (
+                    "Optional Notifications",
+                    notification_fields,
+                )
+            )
+        groups.extend(
+            [
+                (
                 "LDAP Security",
                 (
                     ("ldap_validate_cert", "Certificate Validation", "bool"),
                     ("ldap_ca_cert_path", "CA Certificate Path", "text"),
                 ),
             ),
-            (
+                (
                 "Account Policy",
                 (
                     ("default_password", "Default Password", "secret"),
@@ -517,7 +544,7 @@ def create_app(
                     ("password_complexity", "Password Complexity", "password_complexity"),
                 ),
             ),
-            (
+                (
                 "Runtime Policy",
                 (
                     ("schedule_time", "Daily Schedule Time", "text"),
@@ -530,7 +557,7 @@ def create_app(
                     ("user_ou_placement_strategy", "OU Placement Strategy", "placement_strategy"),
                 ),
             ),
-            (
+                (
                 "Web Deployment",
                 (
                     ("web_bind_host", "Bind Host", "text"),
@@ -541,13 +568,15 @@ def create_app(
                     ("web_forwarded_allow_ips", "Forwarded Allow IPs", "text"),
                 ),
             ),
-            (
+                (
                 "Group Rules",
                 (
                     ("soft_excluded_groups", "Soft Excluded Groups", "multiline"),
                 ),
             ),
+            ]
         )
+        return tuple(groups)
 
     def build_current_config_state(request: Request, current_org: OrganizationRecord) -> dict[str, Any]:
         current_org_config_path = current_org.config_path or request.app.state.config_path
@@ -900,6 +929,8 @@ def create_app(
             "source_provider_name": source_provider_name,
             "source_provider_options": source_provider_options,
             "source_provider_schema": provider_schema,
+            "source_connection_fields": build_source_provider_field_models(editable, provider_schema.connection_fields),
+            "source_notification_fields": build_source_provider_field_models(editable, provider_schema.notification_fields),
             "source_provider_fields": build_source_provider_fields(editable),
             "protected_rules": protected_rules,
             "config_change_preview": config_change_preview,

@@ -131,6 +131,14 @@ class WebBrowserRegressionTests(unittest.TestCase):
             )
         )
 
+    def _style(self, selector: str, prop: str) -> str:
+        return str(
+            self.page.eval_on_selector(
+                selector,
+                f"element => getComputedStyle(element).getPropertyValue('{prop}')",
+            )
+        ).strip()
+
     def test_login_page_loads_styles_and_primary_action(self):
         self.page.goto(f"{self.base_url}/login", wait_until="networkidle")
         stylesheet_loaded = self.page.evaluate(
@@ -150,6 +158,9 @@ class WebBrowserRegressionTests(unittest.TestCase):
         signout_height = self._height(".header-signout")
         self.assertLessEqual(abs(mode_height - language_height), 6.0)
         self.assertLessEqual(abs(signout_height - language_height), 6.0)
+        self.assertNotEqual(self._style(".mode-switcher button.active", "color"), "rgb(255, 255, 255)")
+        self.assertNotEqual(self._style(".language-switcher a.active", "color"), "rgb(255, 255, 255)")
+        self.assertNotEqual(self._style(".header-signout", "border-top-color"), "rgba(0, 0, 0, 0)")
         self._capture("dashboard-page.png")
 
     def test_config_page_renders_multi_provider_schema_controls(self):

@@ -1,3 +1,4 @@
+{% import "components/ui.html" as ui %}
 <!DOCTYPE html>
 <html lang="{{ ui_language if ui_language == 'zh-CN' else 'en' }}">
 <head>
@@ -73,14 +74,12 @@
     <header>
       <div class="header-leading">
         {% if current_org %}
-        <div style="display: flex; align-items: center; gap: 16px; background: #f1f5f9; padding: 6px 16px; border-radius: 99px; border: 1px solid var(--border);">
-          <i data-lucide="building" style="width: 16px; height: 16px; color: var(--text-muted);"></i>
-          <span style="font-weight: 700; font-size: 13px;">{{ current_org.name }}</span>
+        {% call ui.topbar_chip(current_org.name, icon="building", class_name="topbar-org-chip") %}
           {% if enabled_organizations and enabled_organizations|length > 1 %}
-          <form action="/organization-switch" method="post" style="margin: 0; display: flex;">
+          <form action="/organization-switch" method="post" class="topbar-chip__form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="return_url" value="{{ current_path }}">
-            <select name="org_id" data-auto-submit="true" style="background: transparent; border: 0; padding: 0 24px 0 0; font-size: 12px; font-weight: 700; width: auto; min-width: 0; cursor: pointer; color: var(--primary);">
+            <select name="org_id" data-auto-submit="true" class="topbar-select">
               <option value="" disabled>{{ t("Switch...") }}</option>
               {% for organization in enabled_organizations %}
               <option value="{{ organization.org_id }}" {% if organization.org_id == current_org.org_id %}selected{% endif %}>{{ organization.name }}</option>
@@ -88,39 +87,40 @@
             </select>
           </form>
           {% endif %}
-        </div>
+        {% endcall %}
         {% endif %}
       </div>
       
       <div class="header-trailing">
-        <div style="display: flex; align-items: center; gap: 20px;">
-          <form class="mode-switcher" action="/ui-mode" method="post">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="return_url" value="{{ current_path }}">
-            <button type="submit" name="ui_mode" value="basic" class="{% if ui_mode != 'advanced' %}active{% endif %}">{{ t("Basic") }}</button>
-            <button type="submit" name="ui_mode" value="advanced" class="{% if ui_mode == 'advanced' %}active{% endif %}">{{ t("Advanced") }}</button>
-          </form>
+        <div class="topbar-cluster">
+          {{ ui.topbar_segmented_form(
+            "/ui-mode",
+            csrf_token,
+            current_path,
+            "ui_mode",
+            [("basic", t("Basic")), ("advanced", t("Advanced"))],
+            (ui_mode if ui_mode == "advanced" else "basic"),
+            class_name="mode-switcher"
+          ) }}
 
-          <div class="language-switcher">
-            {% for code, label in language_options.items() %}
-            <a href="{{ language_urls.get(code, current_path) }}" class="{% if ui_language == code %}active{% endif %}">{{ label }}</a>
-            {% endfor %}
-          </div>
+          {{ ui.topbar_segmented_links(
+            [
+              ("en", language_options.get("en", "English"), language_urls.get("en", current_path)),
+              ("zh-CN", language_options.get("zh-CN", "简体中文"), language_urls.get("zh-CN", current_path)),
+            ],
+            ui_language,
+            class_name="language-switcher"
+          ) }}
 
-          <div style="height: 24px; width: 1px; background: var(--border);"></div>
+          <div class="topbar-divider" aria-hidden="true"></div>
 
-          <div style="display: flex; align-items: center; gap: 12px;">
-            <div style="text-align: right;">
-              <div style="font-weight: 700; font-size: 13px;">{{ current_user.username }}</div>
-              <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase;">{{ t(current_user.role) }}</div>
-            </div>
-            <form action="/logout" method="post" style="margin: 0;">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button class="header-signout" type="submit">
-                <i data-lucide="log-out" style="width: 16px; height: 16px;"></i>
-              </button>
-            </form>
-          </div>
+          {{ ui.topbar_account(
+            current_user.username,
+            secondary_text=t(current_user.role),
+            logout_action="/logout",
+            csrf_token=csrf_token,
+            logout_label=t("Sign Out")
+          ) }}
         </div>
       </div>
     </header>

@@ -169,3 +169,64 @@
   </div>
 </div>
 {% endmacro %}
+
+{% macro topbar_chip(text, icon='building', class_name='') %}
+<div class="topbar-chip {{ class_name }}">
+  <div class="topbar-chip__content">
+    {% if icon %}<i class="topbar-chip__icon" data-lucide="{{ icon }}" style="width: 16px; height: 16px;"></i>{% endif %}
+    <span class="topbar-chip__label">{{ text }}</span>
+  </div>
+  {% if caller is defined %}
+  <div class="topbar-chip__actions">
+    {{ caller() }}
+  </div>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro topbar_segmented_form(action, csrf_token, return_url, field_name, options, active_value, class_name='') %}
+<form class="topbar-segmented {{ class_name }}" action="{{ action }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="return_url" value="{{ return_url }}">
+  {% for option in options %}
+  {% set option_value = option.value if option.value is defined else option[0] %}
+  {% set option_label = option.label if option.label is defined else option[1] %}
+  <button
+    type="submit"
+    class="topbar-segment {% if option_value == active_value %}is-active active{% endif %}"
+    name="{{ field_name }}"
+    value="{{ option_value }}"
+  >
+    <span>{{ option_label }}</span>
+  </button>
+  {% endfor %}
+</form>
+{% endmacro %}
+
+{% macro topbar_segmented_links(options, active_value, class_name='') %}
+<nav class="topbar-segmented {{ class_name }}">
+  {% for option in options %}
+  {% set option_value = option.value if option.value is defined else option[0] %}
+  {% set option_label = option.label if option.label is defined else option[1] %}
+  {% set option_href = option.href if option.href is defined else option[2] %}
+  <a href="{{ option_href }}" class="topbar-segment {% if option_value == active_value %}is-active active{% endif %}">{{ option_label }}</a>
+  {% endfor %}
+</nav>
+{% endmacro %}
+
+{% macro topbar_account(username, secondary_text='', logout_action='/logout', csrf_token='', logout_label='Sign Out', class_name='') %}
+<div class="topbar-account {{ class_name }}">
+  <div class="topbar-account__meta">
+    <div class="topbar-account__name">{{ username }}</div>
+    {% if secondary_text %}
+    <div class="topbar-account__secondary">{{ secondary_text }}</div>
+    {% endif %}
+  </div>
+  <form action="{{ logout_action }}" method="post" class="topbar-account__action">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="topbar-icon-button header-signout" type="submit" aria-label="{{ logout_label }}">
+      <i data-lucide="log-out" style="width: 16px; height: 16px;"></i>
+    </button>
+  </form>
+</div>
+{% endmacro %}

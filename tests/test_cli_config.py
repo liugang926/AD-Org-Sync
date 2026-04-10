@@ -73,6 +73,34 @@ class CliConfigCommandTests(unittest.TestCase):
         self.assertIn("config valid: db:org:default", stdout)
         self.assertIn("organization: default", stdout)
 
+    def test_validate_config_accepts_missing_optional_webhook(self):
+        OrganizationConfigRepository(self.db_manager).save_config(
+            "default",
+            {
+                "corpid": "corp-cli",
+                "agentid": "10001",
+                "corpsecret": "secret-cli",
+                "webhook_url": "",
+                "ldap_server": "dc01.cli.local",
+                "ldap_domain": "cli.local",
+                "ldap_username": "cli-admin",
+                "ldap_password": "Password123!",
+                "ldap_use_ssl": True,
+                "ldap_port": 636,
+                "ldap_validate_cert": True,
+                "default_password": "ChangeMe123!",
+                "force_change_password": True,
+                "password_complexity": "strong",
+            },
+            config_path="config.ini",
+        )
+
+        exit_code, stdout, stderr = self._run_cli(["validate-config", "--db-path", str(self.db_path)])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("config valid: db:org:default", stdout)
+
     def test_test_source_uses_database_backed_org_config_by_default(self):
         OrganizationConfigRepository(self.db_manager).save_config(
             "default",
