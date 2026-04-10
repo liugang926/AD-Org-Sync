@@ -149,6 +149,54 @@ class ConfigStoreTests(unittest.TestCase):
             if config_path.exists():
                 config_path.unlink()
 
+    def test_load_sync_config_accepts_generic_source_sections_without_legacy_wechat_sections(self):
+        test_root = Path(os.getcwd()) / "test_artifacts"
+        test_root.mkdir(exist_ok=True)
+        config_path = test_root / "config_store_generic_sections.ini"
+        try:
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "[Source]",
+                        "Provider = dingtalk",
+                        "",
+                        "[SourceConnector]",
+                        "CorpID = ding-app-key",
+                        "AgentID = 9001",
+                        "CorpSecret = ding-app-secret",
+                        "",
+                        "[Notification]",
+                        "WebhookUrl = https://oapi.dingtalk.com/robot/send?access_token=test",
+                        "",
+                        "[LDAP]",
+                        "Server = dc01.example.local",
+                        "Domain = example.local",
+                        "Username = EXAMPLE\\\\administrator",
+                        "Password = Password123!",
+                        "UseSSL = true",
+                        "Port = 636",
+                        "",
+                        "[Account]",
+                        "DefaultPassword = simple888",
+                        "ForceChangePassword = true",
+                        "PasswordComplexity = medium",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_sync_config(str(config_path))
+            self.assertEqual(config.source_provider, "dingtalk")
+            self.assertEqual(config.source_connector.corpid, "ding-app-key")
+            self.assertEqual(config.source_connector.agentid, "9001")
+            self.assertEqual(config.source_connector.corpsecret, "ding-app-secret")
+            self.assertEqual(config.webhook_url, "https://oapi.dingtalk.com/robot/send?access_token=test")
+            self.assertEqual(config.ldap.server, "dc01.example.local")
+            self.assertEqual(config.account.default_password, "simple888")
+        finally:
+            if config_path.exists():
+                config_path.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

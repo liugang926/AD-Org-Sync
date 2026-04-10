@@ -32,6 +32,10 @@ class WebStorageTests(unittest.TestCase):
 
             settings_repo = SettingsRepository(manager)
             self.assertEqual(settings_repo.get_int("web_admin_password_min_length", 0), 8)
+            self.assertEqual(
+                settings_repo.get_value("user_ou_placement_strategy", ""),
+                "source_primary_department",
+            )
 
             settings_repo.set_value("web_admin_password_min_length", "12", "int")
             manager.initialize(create_startup_snapshot=False, verify_integrity=True)
@@ -91,12 +95,19 @@ class WebStorageTests(unittest.TestCase):
             self.assertEqual(logs[0].action_type, "auth.login")
             self.assertEqual(logs[0].payload["ip"], "127.0.0.1")
 
-            binding_repo.upsert_binding("alice", "alice.ad", source="manual", notes="manual bind", preserve_manual=False)
+            binding_repo.upsert_binding_for_source_user(
+                "alice",
+                "alice.ad",
+                source="manual",
+                notes="manual bind",
+                preserve_manual=False,
+            )
             binding = binding_repo.get_binding_record_by_source_user_id("alice")
             self.assertIsNotNone(binding)
             self.assertEqual(binding.ad_username, "alice.ad")
             self.assertEqual(binding.source, "manual")
             self.assertEqual(binding.source_user_id, "alice")
+            self.assertEqual(binding_repo.get_binding_record_by_wecom_userid("alice").ad_username, "alice.ad")
             self.assertEqual(binding.to_dict()["source_user_id"], "alice")
             self.assertEqual(
                 binding_repo.get_binding_record_by_source_user_id("alice").ad_username,
@@ -105,11 +116,15 @@ class WebStorageTests(unittest.TestCase):
             binding_repo.set_enabled_for_source_user("alice", False)
             self.assertFalse(binding_repo.get_binding_record_by_source_user_id("alice").is_enabled)
 
-            override_repo.upsert_override("alice", "2001", notes="main dept")
+            override_repo.upsert_override_for_source_user("alice", "2001", notes="main dept")
             override = override_repo.get_override_record_by_source_user_id("alice")
             self.assertIsNotNone(override)
             self.assertEqual(override.primary_department_id, "2001")
             self.assertEqual(override.source_user_id, "alice")
+            self.assertEqual(
+                override_repo.get_override_record_by_wecom_userid("alice").primary_department_id,
+                "2001",
+            )
             self.assertEqual(override.to_dict()["source_user_id"], "alice")
             self.assertEqual(
                 override_repo.get_override_record_by_source_user_id("alice").primary_department_id,

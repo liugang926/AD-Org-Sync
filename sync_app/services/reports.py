@@ -100,7 +100,7 @@ def generate_skip_detail_report(sync_stats: dict) -> str:
         return ""
 
 
-def generate_sync_validation_report(sync_stats: dict, wecom_users: set, ad_users: Iterable[str]) -> str:
+def generate_sync_validation_report(sync_stats: dict, source_users: set, ad_users: Iterable[str]) -> str:
     try:
         stats = SyncRunStats.from_mapping(sync_stats)
         log_dir = "logs"
@@ -108,7 +108,7 @@ def generate_sync_validation_report(sync_stats: dict, wecom_users: set, ad_users
         report_filename = os.path.join(log_dir, f"sync_validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
 
         ad_users_set = set(ad_users)
-        should_be_in_ad = set(wecom_users)
+        should_be_in_ad = set(source_users)
         actually_in_ad = should_be_in_ad & ad_users_set
         missing_users = should_be_in_ad - actually_in_ad
         extra_users = ad_users_set - should_be_in_ad

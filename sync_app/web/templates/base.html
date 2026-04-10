@@ -6,30 +6,64 @@
   <title>{% if title %}{{ title }} | {% endif %}{{ t("AD Org Sync") }}</title>
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="stylesheet" href="/static/app.css">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body class="{% if not current_user %}login-page{% endif %}" data-confirm-message="{{ t('Are you sure you want to perform this action?') }}">
   {% if current_user %}
   <aside>
     <div class="brand">
+      <div class="login-mark" style="width: 44px; height: 44px; margin: 0 0 20px; font-size: 20px; border-radius: 12px;">AD</div>
       <h1>{{ t("AD Org Sync") }}</h1>
       <div class="version">{{ t("Build {version}", version=app_version) }}</div>
     </div>
     <nav>
-      {% if can("dashboard.read") %}<a href="/dashboard" class="{% if page == 'dashboard' %}active{% endif %}"><span>{{ t("Dashboard") }}</span></a>{% endif %}
-      {% if can("jobs.read") %}<a href="/jobs" class="{% if page == 'jobs' %}active{% endif %}"><span>{{ t("Jobs") }}</span></a>{% endif %}
-      {% if can("conflicts.read") %}<a href="/conflicts" class="{% if page == 'conflicts' %}active{% endif %}"><span>{{ t("Conflicts") }}</span></a>{% endif %}
-      {% if can("account.manage") %}<a href="/account" class="{% if page == 'account' %}active{% endif %}"><span>{{ t("Account") }}</span></a>{% endif %}
-      {% if can("exceptions.read") and show_advanced_navigation %}<a href="/exceptions" class="{% if page == 'exceptions' %}active{% endif %}"><span>{{ t("Exceptions") }}</span></a>{% endif %}
-      {% if can("organizations.manage") and show_advanced_navigation %}<a href="/organizations" class="{% if page == 'organizations' %}active{% endif %}"><span>{{ t("Organizations") }}</span></a>{% endif %}
-      {% if can("config.read") %}<a href="/config" class="{% if page == 'config' %}active{% endif %}"><span>{{ t("Config") }}</span></a>{% endif %}
-      {% if can("config.read") and show_advanced_navigation %}<a href="/advanced-sync" class="{% if page == 'advanced-sync' %}active{% endif %}"><span>{{ t("Advanced Sync") }}</span></a>{% endif %}
-      {% if can("mappings.read") and show_advanced_navigation %}<a href="/mappings" class="{% if page == 'mappings' %}active{% endif %}"><span>{{ t("Mappings") }}</span></a>{% endif %}
-      {% if can("database.read") and show_advanced_navigation %}<a href="/database" class="{% if page == 'database' %}active{% endif %}"><span>{{ t("Database") }}</span></a>{% endif %}
-      {% if can("users.manage") and show_advanced_navigation %}<a href="/users" class="{% if page == 'users' %}active{% endif %}"><span>{{ t("Users") }}</span></a>{% endif %}
-      {% if can("audit.read") and show_advanced_navigation %}<a href="/audit" class="{% if page == 'audit' %}active{% endif %}"><span>{{ t("Audit") }}</span></a>{% endif %}
+      {% if can("dashboard.read") %}
+      <a href="/dashboard" class="{% if page == 'dashboard' %}active{% endif %}">
+        <i data-lucide="layout-grid" style="width: 18px; height: 18px; margin-right: 12px;"></i>
+        <span>{{ t("Dashboard") }}</span>
+      </a>
+      {% endif %}
+      
+      {% if can("jobs.read") %}
+      <a href="/jobs" class="{% if page == 'jobs' %}active{% endif %}">
+        <i data-lucide="refresh-cw" style="width: 18px; height: 18px; margin-right: 12px;"></i>
+        <span>{{ t("Jobs") }}</span>
+      </a>
+      {% endif %}
+
+      {% if can("conflicts.read") %}
+      <a href="/conflicts" class="{% if page == 'conflicts' %}active{% endif %}">
+        <i data-lucide="shield-alert" style="width: 18px; height: 18px; margin-right: 12px;"></i>
+        <span>{{ t("Conflicts") }}</span>
+      </a>
+      {% endif %}
+
+      {% if can("config.read") %}
+      <a href="/config" class="{% if page == 'config' %}active{% endif %}">
+        <i data-lucide="settings-2" style="width: 18px; height: 18px; margin-right: 12px;"></i>
+        <span>{{ t("Config") }}</span>
+      </a>
+      {% endif %}
+
+      {% if show_advanced_navigation %}
+      <div style="margin: 32px 16px 12px; font-size: 11px; font-weight: 800; color: rgba(255,255,255,0.25); text-transform: uppercase; letter-spacing: 0.1em;">
+        {{ t("Management") }}
+      </div>
+      
+      {% if can("account.manage") %}<a href="/account" class="{% if page == 'account' %}active{% endif %}"><i data-lucide="user-cog" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Account") }}</span></a>{% endif %}
+      {% if can("exceptions.read") %}<a href="/exceptions" class="{% if page == 'exceptions' %}active{% endif %}"><i data-lucide="ban" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Exceptions") }}</span></a>{% endif %}
+      {% if can("organizations.manage") %}<a href="/organizations" class="{% if page == 'organizations' %}active{% endif %}"><i data-lucide="building-2" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Organizations") }}</span></a>{% endif %}
+      {% if can("mappings.read") %}<a href="/mappings" class="{% if page == 'mappings' %}active{% endif %}"><i data-lucide="layers" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Mappings") }}</span></a>{% endif %}
+      {% if can("database.read") %}<a href="/database" class="{% if page == 'database' %}active{% endif %}"><i data-lucide="database" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Database") }}</span></a>{% endif %}
+      {% if can("audit.read") %}<a href="/audit" class="{% if page == 'audit' %}active{% endif %}"><i data-lucide="scroll-text" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Audit") }}</span></a>{% endif %}
+      {% endif %}
     </nav>
     <div class="footer">
-      Copyright 2026 AD Org Sync
+      &copy; 2026 AD Org Sync
     </div>
   </aside>
   {% endif %}
@@ -38,79 +72,87 @@
     {% if current_user %}
     <header>
       <div class="header-leading">
-        {% if enabled_organizations and enabled_organizations|length > 1 and current_org %}
-        <form class="org-switcher" action="/organization-switch" method="post">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <input type="hidden" name="return_url" value="{{ current_path }}">
-          <label for="header-org-switch">{{ t("Organization") }}</label>
-          <select id="header-org-switch" name="org_id" data-auto-submit="true">
-            {% for organization in enabled_organizations %}
-            <option value="{{ organization.org_id }}" {% if organization.org_id == current_org.org_id %}selected{% endif %}>
-              {{ organization.name }}
-            </option>
-            {% endfor %}
-          </select>
-          {% if can("organizations.manage") and show_advanced_navigation|default(true) %}<a href="/organizations">{{ t("Manage") }}</a>{% endif %}
-        </form>
-        {% elif current_org %}
-        <div class="org-switcher">
-          <label>{{ t("Organization") }}</label>
-          <strong>{{ current_org.name }}</strong>
-          {% if can("organizations.manage") and show_advanced_navigation|default(true) %}<a href="/organizations">{{ t("Manage") }}</a>{% endif %}
+        {% if current_org %}
+        <div style="display: flex; align-items: center; gap: 16px; background: #f1f5f9; padding: 6px 16px; border-radius: 99px; border: 1px solid var(--border);">
+          <i data-lucide="building" style="width: 16px; height: 16px; color: var(--text-muted);"></i>
+          <span style="font-weight: 700; font-size: 13px;">{{ current_org.name }}</span>
+          {% if enabled_organizations and enabled_organizations|length > 1 %}
+          <form action="/organization-switch" method="post" style="margin: 0; display: flex;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="return_url" value="{{ current_path }}">
+            <select name="org_id" data-auto-submit="true" style="background: transparent; border: 0; padding: 0 24px 0 0; font-size: 12px; font-weight: 700; width: auto; min-width: 0; cursor: pointer; color: var(--primary);">
+              <option value="" disabled>{{ t("Switch...") }}</option>
+              {% for organization in enabled_organizations %}
+              <option value="{{ organization.org_id }}" {% if organization.org_id == current_org.org_id %}selected{% endif %}>{{ organization.name }}</option>
+              {% endfor %}
+            </select>
+          </form>
+          {% endif %}
         </div>
         {% endif %}
       </div>
+      
       <div class="header-trailing">
-        <form class="mode-switcher" action="/ui-mode" method="post">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <input type="hidden" name="return_url" value="{{ current_path }}">
-          {% for code, label in (ui_mode_options | default({'basic': 'Basic', 'advanced': 'Advanced'}, true)).items() %}
-          <button type="submit" name="ui_mode" value="{{ code }}" class="{% if (ui_mode | default('basic', true)) == code %}active{% endif %}">{{ t(label) }}</button>
-          {% endfor %}
-        </form>
-        <div class="language-switcher">
-          {% for code, label in language_options.items() %}
-          <a href="{{ language_urls.get(code, current_path) }}" class="{% if ui_language == code %}active{% endif %}">{{ label }}</a>
-          {% endfor %}
-        </div>
-        <div class="header-account">
-          <div class="user-info">
-            <span class="name">{{ current_user.username }}</span>
-            <span class="role">{{ t(current_user.role) }}</span>
-          </div>
-          <form action="/logout" method="post">
+        <div style="display: flex; align-items: center; gap: 20px;">
+          <form class="mode-switcher" action="/ui-mode" method="post">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="header-signout" type="submit">{{ t("Sign Out") }}</button>
+            <input type="hidden" name="return_url" value="{{ current_path }}">
+            <button type="submit" name="ui_mode" value="basic" class="{% if ui_mode != 'advanced' %}active{% endif %}">{{ t("Basic") }}</button>
+            <button type="submit" name="ui_mode" value="advanced" class="{% if ui_mode == 'advanced' %}active{% endif %}">{{ t("Advanced") }}</button>
           </form>
+
+          <div class="language-switcher">
+            {% for code, label in language_options.items() %}
+            <a href="{{ language_urls.get(code, current_path) }}" class="{% if ui_language == code %}active{% endif %}">{{ label }}</a>
+            {% endfor %}
+          </div>
+
+          <div style="height: 24px; width: 1px; background: var(--border);"></div>
+
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="text-align: right;">
+              <div style="font-weight: 700; font-size: 13px;">{{ current_user.username }}</div>
+              <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase;">{{ t(current_user.role) }}</div>
+            </div>
+            <form action="/logout" method="post" style="margin: 0;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="header-signout" type="submit">
+                <i data-lucide="log-out" style="width: 16px; height: 16px;"></i>
+              </button>
+            </form>
+          </div>
         </div>
       </div>
     </header>
-    {% else %}
-    <div class="login-topbar">
-      <div class="language-switcher">
-        {% for code, label in language_options.items() %}
-        <a href="{{ language_urls.get(code, current_path) }}" class="{% if ui_language == code %}active{% endif %}">{{ label }}</a>
-        {% endfor %}
-      </div>
-    </div>
     {% endif %}
 
     <div class="{% if current_user %}content-wrapper{% else %}login-shell{% endif %}">
       {% if flash %}
       <div class="flash {{ flash.level }}" id="global-flash">
-        <span>{{ flash.message }}</span>
-        <span class="close" data-dismiss-target="#global-flash" role="button" tabindex="0" aria-label="{{ t('Dismiss') }}">&times;</span>
+        <div style="width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: var(--{{ flash.level }}-bg);">
+          <i data-lucide="{% if flash.level == 'success' %}check-circle-2{% elif flash.level == 'error' %}alert-circle{% else %}alert-triangle{% endif %}" style="width: 20px; height: 20px; color: var(--{{ flash.level }});"></i>
+        </div>
+        <div style="flex: 1;">
+          <div style="font-weight: 700; font-size: 14px; margin-bottom: 2px; color: var(--text);">{{ t(flash.level|capitalize) }}</div>
+          <div style="font-size: 13px; color: var(--text-muted);">{{ flash.message }}</div>
+        </div>
+        <button class="ghost" type="button" data-dismiss-closest=".flash" style="padding: 0; min-height: auto; min-width: auto; border: 0; color: var(--text-muted);">
+          <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+        </button>
       </div>
       {% endif %}
-      {% if current_user and ui_mode == "basic" and is_advanced_page %}
-      <div class="panel-note info">
-        {{ t("You are viewing an advanced administration page while the workspace is in Basic mode. Switch to Advanced mode in the header to keep these pages in the main navigation.") }}
-      </div>
-      {% endif %}
+      
       {% block content %}{% endblock %}
     </div>
   </main>
 
   <script src="/static/app.js" defer></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      if (window.lucide) {
+        window.lucide.createIcons();
+      }
+    });
+  </script>
 </body>
 </html>

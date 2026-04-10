@@ -42,14 +42,30 @@ LOGS_DIR = os.path.join(APP_PATH, "logs")
 if not os.path.exists(LOGS_DIR):
     os.makedirs(LOGS_DIR)
 
+
+def _get_config_value(
+    parser: configparser.ConfigParser,
+    sections: tuple[str, ...],
+    option: str,
+    *,
+    fallback: str = "",
+) -> str:
+    for section in sections:
+        if parser.has_option(section, option):
+            return parser.get(section, option, fallback=fallback)
+    return fallback
+
+
+def _ensure_config_sections(parser: configparser.ConfigParser, sections: tuple[str, ...]) -> None:
+    for section in sections:
+        if not parser.has_section(section):
+            parser.add_section(section)
+
 # 导入主程序模块
 try:
-    from sync_app.clients.wechat_bot import WeChatBot
-    from sync_app.clients.wecom import WeComAPI
     from sync_app.core.logging_utils import setup_logging
     from sync_app.services.ad_sync import ADSyncLDAPS
     from sync_app.services.entry import main as sync_main
-    import wecom_sync_ad_ldaps
 except ImportError as e:
     print(f"导入模块错误: {str(e)}")
     QMessageBox.critical(None, "导入错误", f"无法导入必要模块: {str(e)}\n请确保所有依赖已正确安装。")
@@ -1032,19 +1048,19 @@ class MainWindow(QMainWindow):
         config_scroll.setWidget(config_scroll_content)
         config_outer_layout.addWidget(config_scroll, 1)
 
-        wecom_group = QGroupBox("企业微信配置")
-        wecom_layout = QFormLayout(wecom_group)
-        configure_form_layout(wecom_layout)
+        source_group = QGroupBox("源平台连接配置")
+        source_layout = QFormLayout(source_group)
+        configure_form_layout(source_layout)
 
         self.corpid_edit = QLineEdit()
-        wecom_layout.addRow("企业ID (CorpID):", self.corpid_edit)
+        source_layout.addRow("连接器 ID (CorpID/AppKey):", self.corpid_edit)
 
         self.corpsecret_edit = QLineEdit()
-        wecom_layout.addRow("应用 Secret:", self.corpsecret_edit)
+        source_layout.addRow("连接器 Secret:", self.corpsecret_edit)
 
         self.webhook_edit = QLineEdit()
-        wecom_layout.addRow("机器人 Webhook:", self.webhook_edit)
-        config_layout.addWidget(wecom_group)
+        source_layout.addRow("通知 Webhook:", self.webhook_edit)
+        config_layout.addWidget(source_group)
 
         ldap_group = QGroupBox("LDAP/AD 域配置")
         ldap_layout = QFormLayout(ldap_group)
@@ -1212,9 +1228,13 @@ class MainWindow(QMainWindow):
             config = configparser.ConfigParser()
             config.read(config_path, encoding='utf-8')
 
-            self.corpid_edit.setText(config.get('WeChat', 'CorpID', fallback=''))
-            self.corpsecret_edit.setText(config.get('WeChat', 'CorpSecret', fallback=''))
-            self.webhook_edit.setText(config.get('WeChatBot', 'WebhookUrl', fallback=''))
+            self.corpid_edit.setText(_get_config_value(config, ('SourceConnector', 'WeChat'), 'CorpID', fallback=''))
+            self.corpsecret_edit.setText(
+                _get_config_value(config, ('SourceConnector', 'WeChat'), 'CorpSecret', fallback='')
+            )
+            self.webhook_edit.setText(
+                _get_config_value(config, ('Notification', 'WeChatBot'), 'WebhookUrl', fallback='')
+            )
 
             self.ldap_server_edit.setText(config.get('LDAP', 'Server', fallback=''))
             self.ldap_domain_edit.setText(
@@ -1263,15 +1283,37 @@ class MainWindow(QMainWindow):
             if os.path.exists(config_path):
                 config.read(config_path, encoding='utf-8')
 
-            for section in [
-                'WeChat', 'WeChatBot', 'Domain', 'LDAP', 'ExcludeUsers', 'ExcludeDepartments',
-                'Sync', 'Account', 'Schedule', 'Logging'
-            ]:
-                if not config.has_section(section):
-                    config.add_section(section)
+            _ensure_config_sections(
+                config,
+                (
+                    'Source',
+                    'SourceConnector',
+                    'Notification',
+                    'WeChat',
+                    'WeChatBot',
+                    'Domain',
+                    'LDAP',
+                    'ExcludeUsers',
+                    'ExcludeDepartments',
+                    'Sync',
+                    'Account',
+                    'Schedule',
+                    'Logging',
+                ),
+            )
+
+            source_provider = _get_config_value(config, ('Source',), 'Provider', fallback='wecom').strip() or 'wecom'
+            agent_id = _get_config_value(config, ('SourceConnector', 'WeChat'), 'AgentID', fallback='')
+
+            config.set('Source', 'Provider', source_provider)
+            config.set('SourceConnector', 'CorpID', self.corpid_edit.text())
+            config.set('SourceConnector', 'CorpSecret', self.corpsecret_edit.text())
+            config.set('SourceConnector', 'AgentID', agent_id)
+            config.set('Notification', 'WebhookUrl', self.webhook_edit.text())
 
             config.set('WeChat', 'CorpID', self.corpid_edit.text())
             config.set('WeChat', 'CorpSecret', self.corpsecret_edit.text())
+            config.set('WeChat', 'AgentID', agent_id)
             config.set('WeChatBot', 'WebhookUrl', self.webhook_edit.text())
 
             config.set('LDAP', 'Server', self.ldap_server_edit.text())
@@ -1376,8 +1418,20 @@ def main():
         # 如果配置文件不存在，创建默认配置
         config_path = os.path.join(APP_PATH, "config.ini")
         if not os.path.exists(config_path):
-            default_config = """[WeChat]
+            default_config = """[Source]
+Provider = wecom
+
+[SourceConnector]
+CorpID =
+AgentID =
+CorpSecret =
+
+[Notification]
+WebhookUrl =
+
+[WeChat]
 CorpID = 
+AgentID =
 CorpSecret = 
 
 [WeChatBot]

@@ -81,8 +81,8 @@ SOURCE_PROVIDER_SCHEMAS = {
     "dingtalk": SourceProviderSchema(
         provider_id="dingtalk",
         display_name="DingTalk",
-        description="Reserve the connector contract for a DingTalk source adapter.",
-        implementation_status="DingTalk provider schema is available, but the runtime adapter is not implemented in this build.",
+        description="Use a DingTalk internal application to read departments and users.",
+        implemented=True,
         connection_fields=(
             SourceProviderFieldDefinition(
                 "corpid",
@@ -215,7 +215,7 @@ def get_source_provider_secret_field_names(value: str | None) -> set[str]:
 
 class SourceDirectoryProvider(ABC):
     provider_id = DEFAULT_SOURCE_PROVIDER
-    display_name = "WeCom"
+    display_name = "Source Provider"
 
     @abstractmethod
     def list_departments(self) -> list[DepartmentNode]:

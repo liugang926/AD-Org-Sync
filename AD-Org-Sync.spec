@@ -4,6 +4,7 @@ from PyInstaller.utils.hooks import collect_submodules
 
 datas = []
 hiddenimports = ['ldap3.core.exceptions', 'ldap3.protocol.formatters.formatters', 'ldap3.strategy.sync', 'ldap3.strategy.asynchronous', 'ldap3.strategy.asyncStream', 'ldap3.utils.conv', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'PyQt5.sip']
+datas += collect_data_files('sync_app')
 datas += collect_data_files('certifi')
 datas += collect_data_files('qtawesome')
 hiddenimports += collect_submodules('certifi')

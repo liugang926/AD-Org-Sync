@@ -1,5 +1,4 @@
 import csv
-import hashlib
 import json
 import math
 import os
@@ -7,15 +6,14 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sync_app.clients.wechat_bot import WeChatBot
-from sync_app.clients.wecom import WeComAPI
+from sync_app.clients.wechat_bot import WebhookNotificationClient
 from sync_app.core import logging_utils as sync_logging
 from sync_app.core.common import APP_VERSION, format_time_duration, generate_job_id, hash_department_state
 from sync_app.core.config import (
     load_sync_config,
     run_config_security_self_check,
     test_ldap_connection,
-    test_wecom_connection,
+    test_source_connection,
     validate_config,
 )
 from sync_app.core.directory_protection import is_protected_ad_account_name
@@ -24,12 +22,10 @@ from sync_app.core.exception_rules import (
     normalize_exception_match_value,
 )
 from sync_app.core.sync_policies import (
-    build_ad_to_wecom_mapping_payload,
-    build_identity_candidates as build_identity_candidates_from_policy,
-    build_wecom_to_ad_mapping_payload,
+    build_ad_to_source_mapping_payload,
+    build_source_to_ad_mapping_payload,
     extract_manager_userids,
     normalize_mapping_direction,
-    normalize_group_type,
     render_template,
 )
 from sync_app.core.models import (
@@ -52,6 +48,7 @@ from sync_app.core.models import (
     UserDepartmentBundle,
 )
 from sync_app.providers.source import build_source_provider, get_source_provider_display_name
+from sync_app.providers.target import TargetDirectoryProvider, build_target_provider
 from sync_app.services.ad_sync import (
     ADSyncLDAPS,
     build_custom_group_sam,
@@ -63,44 +60,30 @@ from sync_app.services.reports import (
     _generate_sync_operation_log,
     _generate_sync_validation_report,
 )
-from sync_app.services.state import SyncStateManager
-from sync_app.storage.local_db import (
-    DatabaseManager,
-    GroupExclusionRuleRepository,
-    ManagedGroupBindingRepository,
-    ObjectStateRepository,
-    OrganizationConfigRepository,
-    OrganizationRepository,
-    PlannedOperationRepository,
-    SettingsRepository,
-    SyncConnectorRepository,
-    SyncConflictRepository,
-    SyncExceptionRuleRepository,
-    SyncEventRepository,
-    SyncJobRepository,
-    SyncOperationLogRepository,
-    AttributeMappingRuleRepository,
-    CustomManagedGroupBindingRepository,
-    OffboardingQueueRepository,
-    SyncReplayRequestRepository,
-    SyncPlanReviewRepository,
-    UserDepartmentOverrideRepository,
-    UserIdentityBindingRepository,
-    UserLifecycleQueueRepository,
+from sync_app.services.runtime_bootstrap import bootstrap_sync_runtime
+from sync_app.services.runtime_connectors import (
+    build_department_connector_map,
+    load_connector_specs,
+    sanitize_source_writeback_payload,
+    select_mapping_rules,
 )
+from sync_app.services.runtime_identity import build_identity_candidates, resolve_target_department
+from sync_app.services.runtime_lifecycle import build_user_lifecycle_profile, serialize_lifecycle_profile
+from sync_app.services.runtime_plan import complete_dry_run, compute_plan_fingerprint, handle_plan_review_gate
+from sync_app.storage.local_db import SyncConnectorRepository
 
 
 FIELD_OWNERSHIP_POLICY = {
-    'display_name': 'wecom_authoritative',
+    'display_name': 'source_authoritative',
     'email': 'initialize_if_missing_then_preserve_ad',
     'user_principal_name': 'sync_managed',
-    'account_status': 'managed_scope_follows_wecom_membership',
-    'ou_placement': 'department_override_then_wecom_strategy',
+    'account_status': 'managed_scope_follows_source_membership',
+    'ou_placement': 'department_override_then_source_strategy',
     'group_membership': 'managed_department_groups_only',
-    'custom_attribute_mapping': 'connector_specific_wecom_to_ad_rules',
-    'write_back': 'configured_ad_to_wecom_rules_after_apply',
+    'custom_attribute_mapping': 'connector_specific_source_to_ad_rules',
+    'write_back': 'configured_ad_to_source_rules_after_apply',
     'connector_routing': 'top_level_department_connector_assignment',
-    'offboarding': 'wecom_departure_enters_grace_period_before_disable',
+    'offboarding': 'source_departure_enters_grace_period_before_disable',
     'group_type': 'connector_specific_security_distribution_policy',
     'disable_circuit_breaker': 'block_apply_when_disable_threshold_exceeds_policy',
 }
@@ -117,181 +100,13 @@ HIGH_RISK_OPERATION_TYPES = {
     'disable_user',
     'remove_group_from_group',
 }
-
-
-def _compute_plan_fingerprint(items: list[dict[str, Any]]) -> str:
-    normalized = []
-    for item in items:
-        normalized.append(
-            {
-                'object_type': str(item.get('object_type') or ''),
-                'operation_type': str(item.get('operation_type') or ''),
-                'source_id': str(item.get('source_id') or ''),
-                'department_id': str(item.get('department_id') or ''),
-                'target_dn': str(item.get('target_dn') or ''),
-                'risk_level': str(item.get('risk_level') or 'normal'),
-            }
-        )
-    normalized = sorted(
-        normalized,
-        key=lambda item: (
-            item['object_type'],
-            item['operation_type'],
-            item['source_id'],
-            item['department_id'],
-            item['target_dn'],
-            item['risk_level'],
-        ),
-    )
-    payload = json.dumps(normalized, ensure_ascii=False, sort_keys=True)
-    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
-
-
-def _build_identity_candidates(user: SourceDirectoryUser, *, username_template: str = "") -> list[dict[str, str]]:
-    return build_identity_candidates_from_policy(user, username_template=username_template)
-
-
-def _resolve_target_department(
-    bundle: UserDepartmentBundle,
-    *,
-    placement_strategy: str,
-    is_department_excluded,
-    override_department_id: Optional[int] = None,
-) -> tuple[Optional[DepartmentNode], str]:
-    valid_departments = [
-        department
-        for department in bundle.departments
-        if department.path and not is_department_excluded(department)
-    ]
-    if not valid_departments:
-        return None, 'all_departments_excluded'
-
-    departments_by_id = {
-        department.department_id: department for department in valid_departments
-    }
-
-    if override_department_id is not None and override_department_id in departments_by_id:
-        return departments_by_id[override_department_id], 'manual_override'
-
-    strategy = (placement_strategy or 'wecom_primary_department').strip().lower()
-    if strategy == 'wecom_primary_department':
-        declared_primary_id = bundle.user.declared_primary_department_id()
-        if declared_primary_id is not None and declared_primary_id in departments_by_id:
-            return departments_by_id[declared_primary_id], 'wecom_primary_department'
-
-    if strategy == 'lowest_department_id':
-        department = min(valid_departments, key=lambda item: (item.department_id, len(item.path_ids), item.name))
-        return department, 'lowest_department_id'
-
-    if strategy == 'shortest_path':
-        department = min(valid_departments, key=lambda item: (len(item.path_ids), item.department_id, item.name))
-        return department, 'shortest_path'
-
-    department = sorted(valid_departments, key=lambda item: (item.department_id, len(item.path_ids), item.name))[0]
-    return department, 'first_non_excluded_department'
-
-
-def _load_connector_specs(
-    config,
-    connector_repo: SyncConnectorRepository,
-    *,
-    connectors_enabled: bool = False,
-    org_id: str = 'default',
-) -> list[dict[str, Any]]:
-    specs: list[dict[str, Any]] = [
-        {
-            'connector_id': 'default',
-            'org_id': org_id,
-            'name': 'Default Connector',
-            'config_path': config.config_path,
-            'root_department_ids': [],
-            'username_template': '',
-            'disabled_users_ou': 'Disabled Users',
-            'group_type': 'security',
-            'group_mail_domain': '',
-            'custom_group_ou_path': 'Managed Groups',
-            'managed_tag_ids': [],
-            'managed_external_chat_ids': [],
-            'config': config,
-        }
-    ]
-    if not connectors_enabled:
-        return specs
-    for record in connector_repo.list_connector_records(enabled_only=True, org_id=org_id):
-        connector_config = connector_repo.get_connector_app_config(
-            record.connector_id,
-            base_config=config,
-            org_id=org_id,
-        )
-        if connector_config is None:
-            connector_config = load_sync_config(record.config_path)
-        specs.append(
-            {
-                'connector_id': record.connector_id,
-                'org_id': record.org_id,
-                'name': record.name,
-                'config_path': record.config_path,
-                'root_department_ids': list(record.root_department_ids),
-                'username_template': record.username_template,
-                'disabled_users_ou': record.disabled_users_ou or 'Disabled Users',
-                'group_type': normalize_group_type(record.group_type),
-                'group_mail_domain': record.group_mail_domain,
-                'custom_group_ou_path': record.custom_group_ou_path,
-                'managed_tag_ids': list(record.managed_tag_ids),
-                'managed_external_chat_ids': list(record.managed_external_chat_ids),
-                'config': connector_config,
-            }
-        )
-    return specs
-
-
-def _build_department_connector_map(
-    dept_tree: dict[int, DepartmentNode],
-    connector_specs: list[dict[str, Any]],
-) -> dict[int, str]:
-    mapping: dict[int, str] = {}
-    explicit_root_departments = {
-        int(root_id): spec['connector_id']
-        for spec in connector_specs
-        for root_id in spec.get('root_department_ids') or []
-        if str(root_id).strip()
-    }
-    for department_id, department in dept_tree.items():
-        selected_connector_id = 'default'
-        for ancestor_id in department.path_ids:
-            if ancestor_id in explicit_root_departments:
-                selected_connector_id = explicit_root_departments[ancestor_id]
-                break
-        mapping[department_id] = selected_connector_id
-    return mapping
-
-
-def _select_mapping_rules(
-    rules: list[AttributeMappingRuleRecord],
-    *,
-    direction: str,
-    connector_id: str,
-) -> list[AttributeMappingRuleRecord]:
-    normalized_direction = normalize_mapping_direction(direction)
-    return [
-        rule
-        for rule in rules
-        if rule.is_enabled
-        and normalize_mapping_direction(rule.direction) == normalized_direction
-        and (not rule.connector_id or rule.connector_id == connector_id)
-    ]
-
-
-def _sanitize_wecom_writeback_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    sanitized: dict[str, Any] = {}
-    for key, value in dict(payload or {}).items():
-        if value in (None, ''):
-            continue
-        if key == 'department':
-            continue
-        sanitized[key] = value
-    return sanitized
-
+_compute_plan_fingerprint = compute_plan_fingerprint
+_build_identity_candidates = build_identity_candidates
+_resolve_target_department = resolve_target_department
+_load_connector_specs = load_connector_specs
+_build_department_connector_map = build_department_connector_map
+_select_mapping_rules = select_mapping_rules
+_sanitize_source_writeback_payload = sanitize_source_writeback_payload
 
 def run_sync_job(
     stats_callback=None,
@@ -314,165 +129,84 @@ def run_sync_job(
     sync_stats = SyncRunStats(execution_mode=execution_mode)
     sync_stats['field_ownership_policy'] = dict(FIELD_OWNERSHIP_POLICY)
 
-    logger = sync_logging.setup_logging()
+    bootstrap = bootstrap_sync_runtime(
+        config_path=config_path,
+        db_path=db_path,
+        org_id=org_id,
+        load_sync_config_fn=load_sync_config,
+    )
+    logger = bootstrap.logger
     sync_stats['log_file'] = sync_logging.log_filename
 
-    db_manager = DatabaseManager(db_path=db_path)
-    db_init_result = db_manager.initialize()
+    db_manager = bootstrap.db_manager
+    db_init_result = bootstrap.db_init_result
     sync_stats['db_path'] = db_manager.db_path
     sync_stats['db_backup_dir'] = db_manager.backup_dir
     sync_stats['db_startup_snapshot_path'] = db_init_result.get('startup_snapshot_path') or ''
     sync_stats['db_migration_source_path'] = db_init_result.get('migration_source_path') or ''
     sync_stats['db_integrity_check'] = db_init_result.get('integrity_check') or {}
 
-    settings_repo = SettingsRepository(db_manager)
-    organization_repo = OrganizationRepository(db_manager)
-    organization_config_repo = OrganizationConfigRepository(db_manager)
-    exclusion_repo = GroupExclusionRuleRepository(db_manager)
-    connector_repo = SyncConnectorRepository(db_manager)
-    mapping_rule_repo = AttributeMappingRuleRepository(db_manager)
-    job_repo = SyncJobRepository(db_manager)
-    event_repo = SyncEventRepository(db_manager)
-    plan_repo = PlannedOperationRepository(db_manager)
-    operation_log_repo = SyncOperationLogRepository(db_manager)
-    conflict_repo = SyncConflictRepository(db_manager)
-    review_repo = SyncPlanReviewRepository(db_manager)
-    organization_repo.ensure_default(config_path=config_path)
-    organization = organization_repo.get_organization_record(org_id)
-    if not organization:
-        raise ValueError(f"organization not found: {org_id}")
-    if not organization.is_enabled:
-        raise ValueError(f"organization is disabled: {org_id}")
-    exclusion_repo = GroupExclusionRuleRepository(db_manager, default_org_id=organization.org_id)
-    binding_repo = ManagedGroupBindingRepository(db_manager, default_org_id=organization.org_id)
-    user_binding_repo = UserIdentityBindingRepository(db_manager, default_org_id=organization.org_id)
-    department_override_repo = UserDepartmentOverrideRepository(db_manager, default_org_id=organization.org_id)
-    custom_group_binding_repo = CustomManagedGroupBindingRepository(db_manager, default_org_id=organization.org_id)
-    offboarding_repo = OffboardingQueueRepository(db_manager, default_org_id=organization.org_id)
-    lifecycle_repo = UserLifecycleQueueRepository(db_manager, default_org_id=organization.org_id)
-    replay_request_repo = SyncReplayRequestRepository(db_manager, default_org_id=organization.org_id)
-    state_repo = ObjectStateRepository(db_manager, default_org_id=organization.org_id)
-    exception_rule_repo = SyncExceptionRuleRepository(db_manager, default_org_id=organization.org_id)
-    state_manager = SyncStateManager(db_manager=db_manager, org_id=organization.org_id)
+    repositories = bootstrap.repositories
+    policy_settings = bootstrap.policy_settings
+    organization = bootstrap.organization
+    config = bootstrap.config
+    config_hash = bootstrap.config_hash
     resolved_config_path = organization.config_path or config_path
+    settings_repo = repositories.settings_repo
+    connector_repo = repositories.connector_repo
+    job_repo = repositories.job_repo
+    event_repo = repositories.event_repo
+    plan_repo = repositories.plan_repo
+    operation_log_repo = repositories.operation_log_repo
+    conflict_repo = repositories.conflict_repo
+    review_repo = repositories.review_repo
+    binding_repo = repositories.binding_repo
+    user_binding_repo = repositories.user_binding_repo
+    department_override_repo = repositories.department_override_repo
+    custom_group_binding_repo = repositories.custom_group_binding_repo
+    offboarding_repo = repositories.offboarding_repo
+    lifecycle_repo = repositories.lifecycle_repo
+    replay_request_repo = repositories.replay_request_repo
+    state_repo = repositories.state_repo
+    exception_rule_repo = repositories.exception_rule_repo
+    state_manager = repositories.state_manager
+    enabled_group_rules = policy_settings.enabled_group_rules
+    enabled_exception_rules = policy_settings.enabled_exception_rules
+    exception_match_values_by_rule_type = policy_settings.exception_match_values_by_rule_type
+    connector_routing_enabled = policy_settings.connector_routing_enabled
+    attribute_mapping_enabled = policy_settings.attribute_mapping_enabled
+    write_back_enabled = policy_settings.write_back_enabled
+    custom_group_sync_enabled = policy_settings.custom_group_sync_enabled
+    offboarding_lifecycle_enabled = policy_settings.offboarding_lifecycle_enabled
+    field_conflict_queue_enabled = policy_settings.field_conflict_queue_enabled
+    rehire_restore_enabled = policy_settings.rehire_restore_enabled
+    custom_group_archive_enabled = policy_settings.custom_group_archive_enabled
+    scheduled_review_execution_enabled = policy_settings.scheduled_review_execution_enabled
+    automatic_replay_enabled = policy_settings.automatic_replay_enabled
+    future_onboarding_enabled = policy_settings.future_onboarding_enabled
+    future_onboarding_start_field = policy_settings.future_onboarding_start_field
+    contractor_lifecycle_enabled = policy_settings.contractor_lifecycle_enabled
+    lifecycle_employment_type_field = policy_settings.lifecycle_employment_type_field
+    contractor_end_field = policy_settings.contractor_end_field
+    lifecycle_sponsor_field = policy_settings.lifecycle_sponsor_field
+    contractor_type_values = policy_settings.contractor_type_values
+    enabled_mapping_rules = policy_settings.enabled_mapping_rules
+    group_recursive_enabled = policy_settings.group_recursive_enabled
+    managed_relation_cleanup_enabled = policy_settings.managed_relation_cleanup_enabled
+    user_ou_placement_strategy = policy_settings.user_ou_placement_strategy
+    offboarding_grace_days = policy_settings.offboarding_grace_days
+    offboarding_notify_managers = policy_settings.offboarding_notify_managers
+    disable_breaker_enabled = policy_settings.disable_breaker_enabled
+    disable_breaker_percent = policy_settings.disable_breaker_percent
+    disable_breaker_min_count = policy_settings.disable_breaker_min_count
+    disable_breaker_requires_approval = policy_settings.disable_breaker_requires_approval
+    global_group_type = policy_settings.global_group_type
+    global_group_mail_domain = policy_settings.global_group_mail_domain
+    global_custom_group_ou_path = policy_settings.global_custom_group_ou_path
+    display_separator = policy_settings.display_separator
     sync_stats['org_id'] = organization.org_id
     sync_stats['organization_name'] = organization.name
-    sync_stats['organization_config_path'] = f"db:org:{organization.org_id}"
-
-    def get_org_setting_value(key: str, default: Optional[str] = None) -> Optional[str]:
-        return settings_repo.get_value(key, default, org_id=organization.org_id)
-
-    def get_org_setting_bool(key: str, default: bool = False) -> bool:
-        return settings_repo.get_bool(key, default, org_id=organization.org_id)
-
-    def get_org_setting_int(key: str, default: int = 0) -> int:
-        return settings_repo.get_int(key, default, org_id=organization.org_id)
-
-    def get_org_setting_float(key: str, default: float = 0.0) -> float:
-        return settings_repo.get_float(key, default, org_id=organization.org_id)
-
-    enabled_group_rules = exclusion_repo.list_enabled_rule_records()
-    enabled_exception_rules = exception_rule_repo.list_enabled_rule_records()
-    connector_routing_enabled = get_org_setting_bool('advanced_connector_routing_enabled', False)
-    attribute_mapping_enabled = get_org_setting_bool('attribute_mapping_enabled', False)
-    write_back_enabled = get_org_setting_bool('write_back_enabled', False)
-    custom_group_sync_enabled = get_org_setting_bool('custom_group_sync_enabled', False)
-    offboarding_lifecycle_enabled = get_org_setting_bool('offboarding_lifecycle_enabled', False)
-    field_conflict_queue_enabled = get_org_setting_bool('field_conflict_queue_enabled', False)
-    rehire_restore_enabled = get_org_setting_bool('rehire_restore_enabled', False)
-    custom_group_archive_enabled = get_org_setting_bool('custom_group_archive_enabled', False)
-    scheduled_review_execution_enabled = get_org_setting_bool('scheduled_review_execution_enabled', False)
-    automatic_replay_enabled = get_org_setting_bool('automatic_replay_enabled', False)
-    future_onboarding_enabled = get_org_setting_bool('future_onboarding_enabled', False)
-    future_onboarding_start_field = get_org_setting_value('future_onboarding_start_field', 'hire_date') or 'hire_date'
-    contractor_lifecycle_enabled = get_org_setting_bool('contractor_lifecycle_enabled', False)
-    lifecycle_employment_type_field = (
-        get_org_setting_value('lifecycle_employment_type_field', 'employment_type') or 'employment_type'
-    )
-    contractor_end_field = get_org_setting_value('contractor_end_field', 'contract_end_date') or 'contract_end_date'
-    lifecycle_sponsor_field = get_org_setting_value('lifecycle_sponsor_field', 'sponsor_userid') or 'sponsor_userid'
-    contractor_type_values = {
-        str(value).strip().lower()
-        for value in str(get_org_setting_value('contractor_type_values', 'contractor,intern,vendor,temp') or '')
-        .split(',')
-        if str(value).strip()
-    }
-    enabled_mapping_rules = mapping_rule_repo.list_rule_records(enabled_only=True, org_id=organization.org_id)
-    group_recursive_enabled = get_org_setting_bool('group_recursive_enabled', True)
-    managed_relation_cleanup_enabled = get_org_setting_bool('managed_relation_cleanup_enabled', False)
-    user_ou_placement_strategy = get_org_setting_value(
-        'user_ou_placement_strategy',
-        'wecom_primary_department',
-    ) or 'wecom_primary_department'
-    offboarding_grace_days = max(get_org_setting_int('offboarding_grace_days', 0), 0)
-    offboarding_notify_managers = get_org_setting_bool('offboarding_notify_managers', False)
-    if not offboarding_lifecycle_enabled:
-        offboarding_grace_days = 0
-        offboarding_notify_managers = False
-    disable_breaker_enabled = get_org_setting_bool('disable_circuit_breaker_enabled', False)
-    disable_breaker_percent = max(get_org_setting_float('disable_circuit_breaker_percent', 5.0), 0.0)
-    disable_breaker_min_count = max(get_org_setting_int('disable_circuit_breaker_min_count', 10), 0)
-    disable_breaker_requires_approval = get_org_setting_bool(
-        'disable_circuit_breaker_requires_approval',
-        True,
-    )
-    global_group_type = normalize_group_type(get_org_setting_value('managed_group_type', 'security'))
-    global_group_mail_domain = get_org_setting_value('managed_group_mail_domain', '') or ''
-    global_custom_group_ou_path = get_org_setting_value('custom_group_ou_path', 'Managed Groups') or 'Managed Groups'
-    exception_match_values_by_rule_type: Dict[str, set[str]] = {}
-    for rule in enabled_exception_rules:
-        exception_match_values_by_rule_type.setdefault(rule.rule_type, set()).add(rule.match_value)
-
-    active_job = job_repo.get_active_job_record()
-    if active_job:
-        raise RuntimeError(f"active sync job already exists: {active_job.job_id}")
-
-    if organization_config_repo.has_config(organization.org_id) or os.path.exists(resolved_config_path):
-        config = organization_config_repo.get_app_config(organization.org_id, config_path=resolved_config_path)
-    else:
-        config = load_sync_config(resolved_config_path)
     sync_stats['organization_config_path'] = config.config_path
-    config_snapshot_payload = {
-        'organization': organization.to_dict(),
-        'primary_config': config.to_hash_payload(),
-        'connectors': [
-            record.to_dict()
-            for record in connector_repo.list_connector_records(enabled_only=True, org_id=organization.org_id)
-        ],
-        'attribute_mappings': [record.to_dict() for record in enabled_mapping_rules],
-        'settings': {
-            'advanced_connector_routing_enabled': connector_routing_enabled,
-            'attribute_mapping_enabled': attribute_mapping_enabled,
-            'write_back_enabled': write_back_enabled,
-            'custom_group_sync_enabled': custom_group_sync_enabled,
-            'offboarding_lifecycle_enabled': offboarding_lifecycle_enabled,
-            'field_conflict_queue_enabled': field_conflict_queue_enabled,
-            'rehire_restore_enabled': rehire_restore_enabled,
-            'custom_group_archive_enabled': custom_group_archive_enabled,
-            'scheduled_review_execution_enabled': scheduled_review_execution_enabled,
-            'automatic_replay_enabled': automatic_replay_enabled,
-            'future_onboarding_enabled': future_onboarding_enabled,
-            'future_onboarding_start_field': future_onboarding_start_field,
-            'contractor_lifecycle_enabled': contractor_lifecycle_enabled,
-            'lifecycle_employment_type_field': lifecycle_employment_type_field,
-            'contractor_end_field': contractor_end_field,
-            'lifecycle_sponsor_field': lifecycle_sponsor_field,
-            'contractor_type_values': sorted(contractor_type_values),
-            'group_recursive_enabled': group_recursive_enabled,
-            'managed_relation_cleanup_enabled': managed_relation_cleanup_enabled,
-            'user_ou_placement_strategy': user_ou_placement_strategy,
-            'offboarding_grace_days': offboarding_grace_days,
-            'disable_circuit_breaker_percent': disable_breaker_percent,
-            'disable_circuit_breaker_min_count': disable_breaker_min_count,
-            'managed_group_type': global_group_type,
-            'managed_group_mail_domain': global_group_mail_domain,
-            'custom_group_ou_path': global_custom_group_ou_path,
-        },
-    }
-    config_hash = hashlib.md5(
-        json.dumps(config_snapshot_payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
-    ).hexdigest()
-    display_separator = get_org_setting_value('group_display_separator', '-') or '-'
     job_id = generate_job_id()
     sync_stats['job_id'] = job_id
     planned_count = 0
@@ -705,83 +439,6 @@ def run_sync_job(
             matched_rules=matched_rules,
         )
 
-    def normalize_lifecycle_field_name(value: Optional[str]) -> str:
-        normalized = "".join(
-            char.lower() if char.isalnum() else "_"
-            for char in str(value or "").strip()
-        )
-        return normalized.strip("_")
-
-    def get_payload_field_value(payload: Dict[str, Any], field_name: str) -> str:
-        normalized_field_name = normalize_lifecycle_field_name(field_name)
-        if not normalized_field_name:
-            return ""
-        for key, value in (payload or {}).items():
-            if normalize_lifecycle_field_name(str(key)) != normalized_field_name:
-                continue
-            if value in (None, ""):
-                return ""
-            if isinstance(value, (list, tuple)):
-                return ",".join(str(item).strip() for item in value if str(item).strip())
-            return str(value).strip()
-        return ""
-
-    def parse_lifecycle_datetime(value: str) -> Optional[datetime]:
-        text = str(value or "").strip()
-        if not text:
-            return None
-        normalized_text = text.replace("Z", "+00:00")
-        for candidate in (
-            normalized_text,
-            normalized_text.replace("/", "-"),
-        ):
-            try:
-                parsed = datetime.fromisoformat(candidate)
-                if parsed.tzinfo is None:
-                    return parsed.replace(tzinfo=timezone.utc)
-                return parsed.astimezone(timezone.utc)
-            except ValueError:
-                pass
-        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
-            try:
-                return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
-            except ValueError:
-                continue
-        return None
-
-    def get_user_lifecycle_profile(user: SourceDirectoryUser) -> Dict[str, Any]:
-        payload = user.to_state_payload()
-        start_value = get_payload_field_value(payload, future_onboarding_start_field)
-        end_value = get_payload_field_value(payload, contractor_end_field)
-        employment_type = get_payload_field_value(payload, lifecycle_employment_type_field)
-        sponsor_userid = get_payload_field_value(payload, lifecycle_sponsor_field)
-        start_at = parse_lifecycle_datetime(start_value)
-        end_at = parse_lifecycle_datetime(end_value)
-        normalized_employment_type = str(employment_type or "").strip().lower()
-        return {
-            'start_field': future_onboarding_start_field,
-            'start_value': start_value,
-            'start_at': start_at,
-            'end_field': contractor_end_field,
-            'end_value': end_value,
-            'end_at': end_at,
-            'employment_type_field': lifecycle_employment_type_field,
-            'employment_type': str(employment_type or "").strip(),
-            'normalized_employment_type': normalized_employment_type,
-            'is_contractor': bool(normalized_employment_type and normalized_employment_type in contractor_type_values),
-            'sponsor_field': lifecycle_sponsor_field,
-            'sponsor_userid': sponsor_userid,
-        }
-
-    def serialize_lifecycle_profile(profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        serialized: Dict[str, Any] = {}
-        for key, value in dict(profile or {}).items():
-            if isinstance(value, datetime):
-                serialized[key] = value.astimezone(timezone.utc).isoformat(timespec='seconds')
-            else:
-                serialized[key] = value
-        return serialized
-
     def has_exception_rule(rule_type: str, match_value: Optional[str]) -> bool:
         normalized_rule_type = str(rule_type or '').strip().lower()
         normalized_match_type = get_exception_rule_match_type(normalized_rule_type)
@@ -831,7 +488,7 @@ def run_sync_job(
 
     bot = None
     enabled_ad_users: List[str] = []
-    wecom_users = set()
+    source_user_ids = set()
     source_provider = None
     source_provider_name = get_source_provider_display_name(getattr(config, 'source_provider', 'wecom'))
 
@@ -842,19 +499,21 @@ def run_sync_job(
         if not is_valid:
             raise ValueError("config validation failed:\n" + "\n".join([f"  - {err}" for err in validation_errors]))
 
-        wecom_success, wecom_msg = test_wecom_connection(
+        source_success, source_message = test_source_connection(
             config.source_connector.corpid,
             config.source_connector.corpsecret,
             config.source_connector.agentid,
+            source_provider=getattr(config, 'source_provider', 'wecom'),
         )
-        if not wecom_success:
-            raise ConnectionError(f"{source_provider_name} connection test failed: {wecom_msg}")
+        if not source_success:
+            raise ConnectionError(f"{source_provider_name} connection test failed: {source_message}")
 
-        connector_specs = _load_connector_specs(
+        connector_specs = load_connector_specs(
             config,
             connector_repo,
             connectors_enabled=connector_routing_enabled,
             org_id=organization.org_id,
+            load_sync_config_fn=load_sync_config,
         )
         for connector_spec in connector_specs:
             connector_config = connector_spec['config']
@@ -880,17 +539,17 @@ def run_sync_job(
                 logger.warning("security self-check warning: %s", warning)
 
         if execution_mode == 'apply' and config.webhook_url:
-            bot = WeChatBot(config.webhook_url)
+            bot = WebhookNotificationClient(config.webhook_url)
 
         source_provider = build_source_provider(
             app_config=config,
             logger=logger,
-            api_factory=WeComAPI,
         )
-        ad_sync_clients: Dict[str, ADSyncLDAPS] = {}
+        ad_sync_clients: Dict[str, TargetDirectoryProvider] = {}
         for connector_spec in connector_specs:
             connector_config = connector_spec['config']
-            ad_sync_clients[connector_spec['connector_id']] = ADSyncLDAPS(
+            ad_sync_clients[connector_spec['connector_id']] = build_target_provider(
+                client_factory=ADSyncLDAPS,
                 server=connector_config.ldap.server,
                 domain=connector_config.ldap.domain,
                 username=connector_config.ldap.username,
@@ -937,7 +596,7 @@ def run_sync_job(
                 current_id = dept_tree[current_id].parent_id
             dept_tree[dept_id].set_hierarchy(path_names, path_ids)
 
-        department_connector_map = _build_department_connector_map(dept_tree, connector_specs)
+        department_connector_map = build_department_connector_map(dept_tree, connector_specs)
         connector_specs_by_id = {spec['connector_id']: spec for spec in connector_specs}
         excluded_department_names = set(config.exclude_departments)
         department_group_targets: Dict[int, ManagedGroupTarget] = {}
@@ -963,7 +622,7 @@ def run_sync_job(
         def get_connector_spec(connector_id: str) -> dict[str, Any]:
             return connector_specs_by_id.get(connector_id, connector_specs_by_id['default'])
 
-        def get_ad_sync(connector_id: str) -> ADSyncLDAPS:
+        def get_ad_sync(connector_id: str) -> TargetDirectoryProvider:
             return ad_sync_clients.get(connector_id, default_ad_sync)
 
         def is_protected_ad_account(username: str, connector_id: str) -> bool:
@@ -1188,7 +847,10 @@ def run_sync_job(
                     group_cn=group_cn,
                     group_dn=group_dn,
                     display_name=display_name,
-                    description=f"source=wecom; dept_id={dept_id}; path={'/'.join(dept_info.path)}",
+                    description=(
+                        f"source={getattr(config, 'source_provider', 'wecom')}; "
+                        f"dept_id={dept_id}; path={'/'.join(dept_info.path)}"
+                    ),
                     binding_source='binding',
                     created=False,
                 )
@@ -1252,7 +914,7 @@ def run_sync_job(
                 dept_info.users = users
                 for user in users:
                     userid = user.userid
-                    wecom_users.add(userid)
+                    source_user_ids.add(userid)
                     if userid not in user_departments:
                         user_departments[userid] = UserDepartmentBundle(user=user)
                     else:
@@ -1261,25 +923,25 @@ def run_sync_job(
             except Exception as fetch_error:
                 logger.error(f"failed to load users from department {dept_info.name}: {fetch_error}")
 
-        sync_stats['total_users'] = len(wecom_users)
+        sync_stats['total_users'] = len(source_user_ids)
         if stats_callback:
-            stats_callback('total_users', len(wecom_users))
+            stats_callback('total_users', len(source_user_ids))
 
         active_user_bindings: Dict[str, str] = {}
         binding_resolution_details: Dict[str, Dict[str, Any]] = {}
         user_connector_id_by_userid: Dict[str, str] = {}
         disabled_bound_userids = set()
-        current_wecom_ad_usernames_by_connector: Dict[str, set[str]] = {}
-        wecom_user_detail_cache: Dict[str, Dict[str, Any]] = {}
+        current_source_ad_usernames_by_connector: Dict[str, set[str]] = {}
+        source_user_detail_cache: Dict[str, Dict[str, Any]] = {}
 
-        def get_wecom_user_detail_cached(userid: str, user: Optional[SourceDirectoryUser] = None) -> Dict[str, Any]:
-            if userid not in wecom_user_detail_cache:
+        def get_source_user_detail_cached(userid: str, user: Optional[SourceDirectoryUser] = None) -> Dict[str, Any]:
+            if userid not in source_user_detail_cache:
                 try:
-                    wecom_user_detail_cache[userid] = source_provider.get_user_detail(userid) or {}
+                    source_user_detail_cache[userid] = source_provider.get_user_detail(userid) or {}
                 except Exception as detail_error:
                     logger.warning("failed to load %s user detail for %s: %s", source_provider_name, userid, detail_error)
-                    wecom_user_detail_cache[userid] = {}
-            detail_payload = wecom_user_detail_cache[userid]
+                    source_user_detail_cache[userid] = {}
+            detail_payload = source_user_detail_cache[userid]
             if user and detail_payload:
                 user.merge_payload(detail_payload)
             return detail_payload
@@ -1287,7 +949,7 @@ def run_sync_job(
         identity_candidates_by_userid: Dict[str, list[dict[str, str]]] = {}
         identity_candidate_usernames_by_connector: Dict[str, set[str]] = {}
         for userid, bundle in user_departments.items():
-            get_wecom_user_detail_cached(userid, bundle.user)
+            get_source_user_detail_cached(userid, bundle.user)
             connector_candidates = {
                 get_connector_id_for_department(department)
                 for department in bundle.departments
@@ -1312,7 +974,7 @@ def run_sync_job(
             connector_id = next(iter(connector_candidates))
             user_connector_id_by_userid[userid] = connector_id
             connector_spec = get_connector_spec(connector_id)
-            candidates = _build_identity_candidates(
+            candidates = build_identity_candidates(
                 bundle.user,
                 username_template=connector_spec.get('username_template') or '',
             )
@@ -1431,7 +1093,7 @@ def run_sync_job(
                     'binding_record_source': binding_record.source,
                     'is_manual': binding_record.source == 'manual',
                 }
-                current_wecom_ad_usernames_by_connector.setdefault(
+                current_source_ad_usernames_by_connector.setdefault(
                     binding_connector_id,
                     set(),
                 ).add(binding_record.ad_username)
@@ -1449,7 +1111,7 @@ def run_sync_job(
                 )
                 continue
 
-            candidates = identity_candidates_by_userid.get(userid) or _build_identity_candidates(
+            candidates = identity_candidates_by_userid.get(userid) or build_identity_candidates(
                 user_departments[userid].user,
                 username_template=get_connector_spec(connector_id).get('username_template') or '',
             )
@@ -1632,7 +1294,7 @@ def run_sync_job(
             )
             active_user_bindings[userid] = resolved_username
             binding_resolution_details[userid] = resolution
-            current_wecom_ad_usernames_by_connector.setdefault(resolved_connector_id, set()).add(resolved_username)
+            current_source_ad_usernames_by_connector.setdefault(resolved_connector_id, set()).add(resolved_username)
             record_operation(
                 stage_name='plan',
                 object_type='user_binding',
@@ -1649,7 +1311,7 @@ def run_sync_job(
         existing_users_map_by_connector: Dict[str, Dict[str, Any]] = {}
         enabled_ad_users_by_connector: Dict[str, List[str]] = {}
         enabled_ad_users = []
-        for connector_id, connector_usernames in current_wecom_ad_usernames_by_connector.items():
+        for connector_id, connector_usernames in current_source_ad_usernames_by_connector.items():
             existing_users_map_by_connector[connector_id] = get_ad_sync(connector_id).get_users_batch(
                 sorted(connector_usernames)
             )
@@ -1955,7 +1617,7 @@ def run_sync_job(
                 except (TypeError, ValueError):
                     override_department_id = None
 
-            target_dept, placement_reason = _resolve_target_department(
+            target_dept, placement_reason = resolve_target_department(
                 info,
                 placement_strategy=user_ou_placement_strategy,
                 is_department_excluded=is_department_blocked_for_placement,
@@ -2021,7 +1683,14 @@ def run_sync_job(
                 email = ''
             connector_existing_users = existing_users_map_by_connector.get(connector_id, {})
             connector_enabled_usernames = set(enabled_ad_users_by_connector.get(connector_id, []))
-            user_lifecycle_profile = get_user_lifecycle_profile(user)
+            user_lifecycle_profile = build_user_lifecycle_profile(
+                user,
+                future_onboarding_start_field=future_onboarding_start_field,
+                contractor_end_field=contractor_end_field,
+                lifecycle_employment_type_field=lifecycle_employment_type_field,
+                lifecycle_sponsor_field=lifecycle_sponsor_field,
+                contractor_type_values=contractor_type_values,
+            )
             lifecycle_now = datetime.now(timezone.utc)
             lifecycle_manager_userids = extract_manager_userids(user)
             lifecycle_payload = {
@@ -2243,7 +1912,7 @@ def run_sync_job(
                 },
             )
             connector_writeback_rules = (
-                _select_mapping_rules(
+                select_mapping_rules(
                     enabled_mapping_rules,
                     direction='ad_to_source',
                     connector_id=connector_id,
@@ -2585,7 +2254,7 @@ def run_sync_job(
                 return extract_manager_userids(user_departments[source_user_id].user)
             if not source_user_id:
                 return []
-            state_row = state_repo.get_state('wecom', 'user', source_user_id)
+            state_row = state_manager.get_user_state_record(source_user_id)
             if not state_row:
                 return []
             try:
@@ -2600,14 +2269,14 @@ def run_sync_job(
         now_dt = datetime.now(timezone.utc)
         now_iso = now_dt.isoformat(timespec='seconds')
         for connector_id, connector_enabled_users in enabled_ad_users_by_connector.items():
-            connector_current_usernames = current_wecom_ad_usernames_by_connector.get(connector_id, set())
+            connector_current_usernames = current_source_ad_usernames_by_connector.get(connector_id, set())
             connector_enabled_set = set(connector_enabled_users)
 
             for username in sorted(connector_enabled_set):
                 identity_key = (connector_id, username)
                 skipped_source_user_id = all_enabled_binding_source_user_id_by_identity.get(identity_key, '')
                 if identity_key in skip_sync_ad_identities:
-                    if not skipped_source_user_id or skipped_source_user_id in wecom_users:
+                    if not skipped_source_user_id or skipped_source_user_id in source_user_ids:
                         continue
                     record_exception_skip(
                         stage_name='plan',
@@ -2652,7 +2321,7 @@ def run_sync_job(
                         risk_level='high',
                         details={
                             'source_user_id': managed_source_user_id,
-                            'reason': 'missing_from_wecom',
+                            'reason': 'missing_from_source',
                         },
                     )
                     continue
@@ -2672,7 +2341,7 @@ def run_sync_job(
                             source_user_id=managed_source_user_id,
                             ad_username=username,
                             due_at=due_at,
-                            reason='missing_from_wecom',
+                            reason='missing_from_source',
                             manager_userids=manager_userids,
                             last_job_id=job_id,
                         )
@@ -2706,7 +2375,7 @@ def run_sync_job(
                         connector_id=connector_id,
                         username=username,
                         source_user_id=managed_source_user_id,
-                        reason='missing_from_wecom',
+                        reason='missing_from_source',
                     )
                 )
                 add_planned_operation(
@@ -2717,7 +2386,7 @@ def run_sync_job(
                     desired_state={
                         'connector_id': connector_id,
                         'ad_username': username,
-                        'reason': 'missing_from_wecom',
+                        'reason': 'missing_from_source',
                     },
                 )
 
@@ -2749,139 +2418,32 @@ def run_sync_job(
                         'percent_threshold': disable_breaker_percent,
                     },
                 )
-        plan_fingerprint = _compute_plan_fingerprint(plan_fingerprint_items)
-        review_required_for_high_risk = settings_repo.get_bool('high_risk_apply_requires_review', True)
-        review_ttl_minutes = max(settings_repo.get_int('high_risk_review_ttl_minutes', 240), 1)
-        approved_review = None
-        if disable_breaker_triggered and disable_breaker_requires_approval:
-            sync_stats['review_required'] = True
-            breaker_summary = {
-                'org_id': organization.org_id,
-                'organization_name': organization.name,
-                'mode': execution_mode,
-                'pending_disable_count': len(disable_actions),
-                'threshold_count': disable_breaker_threshold,
-                'percent_threshold': disable_breaker_percent,
-                'managed_user_baseline': managed_user_baseline,
-                'review_required': True,
-                'plan_fingerprint': plan_fingerprint,
-                'reason': 'disable_circuit_breaker',
-            }
-            if execution_mode == 'dry_run':
-                review_repo.upsert_review_request(
-                    job_id=job_id,
-                    plan_fingerprint=plan_fingerprint,
-                    config_snapshot_hash=config_hash,
-                    high_risk_operation_count=high_risk_operation_count,
-                )
-            else:
-                sync_stats['summary'] = breaker_summary
-                sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(sync_stats).to_dict()
-                mark_job('REVIEW_REQUIRED', ended=True, summary=breaker_summary)
-                record_operation(
-                    stage_name='plan',
-                    object_type='review',
-                    operation_type='disable_circuit_breaker',
-                    status='review_required',
-                    message='apply blocked by disable circuit breaker policy',
-                    source_id=job_id,
-                    risk_level='high',
-                    reason_code='disable_circuit_breaker',
-                    details=breaker_summary,
-                )
-                if bot:
-                    bot.send_message(
-                        f"## {source_provider_name}-AD sync blocked by circuit breaker\n\n"
-                        f"> Pending disables: {len(disable_actions)}\n"
-                        f"> Threshold: {disable_breaker_threshold}\n"
-                        f"> Managed user baseline: {managed_user_baseline}"
-                    )
-                return sync_stats.to_dict()
-        if high_risk_operation_count and review_required_for_high_risk:
-            sync_stats['review_required'] = True
-            if execution_mode == 'dry_run':
-                review_repo.upsert_review_request(
-                    job_id=job_id,
-                    plan_fingerprint=plan_fingerprint,
-                    config_snapshot_hash=config_hash,
-                    high_risk_operation_count=high_risk_operation_count,
-                )
-                record_event(
-                    'WARNING',
-                    'high_risk_review_pending',
-                    f"dry-run generated {high_risk_operation_count} high-risk operations and requires approval before apply",
-                    stage_name='plan',
-                    payload={
-                        'plan_fingerprint': plan_fingerprint,
-                        'high_risk_operation_count': high_risk_operation_count,
-                    },
-                )
-                record_operation(
-                    stage_name='plan',
-                    object_type='review',
-                    operation_type='require_high_risk_review',
-                    status='pending',
-                    message='dry-run generated high-risk operations and created a pending review request',
-                    source_id=job_id,
-                    risk_level='high',
-                    reason_code='high_risk_review_required',
-                    details={
-                        'plan_fingerprint': plan_fingerprint,
-                        'high_risk_operation_count': high_risk_operation_count,
-                    },
-                )
-            else:
-                approved_review = review_repo.find_matching_approved_review(
-                    plan_fingerprint=plan_fingerprint,
-                    config_snapshot_hash=config_hash,
-                    now_iso=datetime.now(timezone.utc).isoformat(timespec='seconds'),
-                )
-                if not approved_review:
-                    summary = {
-                        'org_id': organization.org_id,
-                        'organization_name': organization.name,
-                        'mode': execution_mode,
-                        'planned_operation_count': planned_count,
-                        'executed_operation_count': 0,
-                        'error_count': sync_stats['error_count'],
-                        'conflict_count': sync_stats['conflict_count'],
-                        'high_risk_operation_count': high_risk_operation_count,
-                        'review_required': True,
-                        'plan_fingerprint': plan_fingerprint,
-                        'review_hint': 'Approve the matching dry-run review before rerunning apply',
-                    }
-                    sync_stats['summary'] = summary
-                    sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(sync_stats).to_dict()
-                    mark_job('REVIEW_REQUIRED', ended=True, summary=summary)
-                    record_event(
-                        'WARNING',
-                        'review_required',
-                        f"apply blocked: {high_risk_operation_count} high-risk operations require approved dry-run review",
-                        stage_name='plan',
-                        payload={
-                            'plan_fingerprint': plan_fingerprint,
-                            'high_risk_operation_count': high_risk_operation_count,
-                        },
-                    )
-                    record_operation(
-                        stage_name='plan',
-                        object_type='review',
-                        operation_type='require_high_risk_review',
-                        status='review_required',
-                        message='apply blocked until a matching dry-run plan is approved',
-                        source_id=job_id,
-                        risk_level='high',
-                        reason_code='high_risk_review_required',
-                        details=summary,
-                    )
-                    if bot:
-                        bot.send_message(
-                            f'## {source_provider_name}-AD sync review required\n\n'
-                            f"> Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                            f"> High-risk operations: {high_risk_operation_count}\n"
-                            '> Result: blocked pending dry-run approval'
-                        )
-                    return sync_stats.to_dict()
+        plan_fingerprint = compute_plan_fingerprint(plan_fingerprint_items)
+        approved_review, early_response, review_required_for_high_risk = handle_plan_review_gate(
+            execution_mode=execution_mode,
+            settings_repo=settings_repo,
+            review_repo=review_repo,
+            sync_stats=sync_stats,
+            organization=organization,
+            config_hash=config_hash,
+            plan_fingerprint=plan_fingerprint,
+            job_id=job_id,
+            planned_count=planned_count,
+            high_risk_operation_count=high_risk_operation_count,
+            disable_action_count=len(disable_actions),
+            disable_breaker_triggered=disable_breaker_triggered,
+            disable_breaker_requires_approval=disable_breaker_requires_approval,
+            disable_breaker_threshold=disable_breaker_threshold,
+            disable_breaker_percent=disable_breaker_percent,
+            managed_user_baseline=managed_user_baseline,
+            source_provider_name=source_provider_name,
+            bot=bot,
+            mark_job=mark_job,
+            record_event=record_event,
+            record_operation=record_operation,
+        )
+        if early_response is not None:
+            return early_response
 
         mark_job('READY')
         record_event(
@@ -2903,33 +2465,26 @@ def run_sync_job(
         )
 
         if execution_mode == 'dry_run':
-            sync_stats['skip_detail_report'] = _generate_skip_detail_report(sync_stats)
-            sync_stats['review_required'] = bool(high_risk_operation_count and review_required_for_high_risk)
-            summary = {
-                'org_id': organization.org_id,
-                'organization_name': organization.name,
-                'mode': execution_mode,
-                'planned_operation_count': planned_count,
-                'executed_operation_count': 0,
-                'department_actions': len(department_actions),
-                'user_actions': len(user_actions),
-                'membership_actions': len(membership_actions),
-                'group_hierarchy_actions': len(group_hierarchy_actions),
-                'group_cleanup_actions': len(group_cleanup_actions),
-                'disable_actions': len(disable_actions),
-                'conflict_count': sync_stats['conflict_count'],
-                'high_risk_operation_count': high_risk_operation_count,
-                'review_required': sync_stats['review_required'],
-                'plan_fingerprint': plan_fingerprint,
-                'field_ownership_policy': dict(FIELD_OWNERSHIP_POLICY),
-                'skipped_operation_count': sync_stats['skipped_operations']['total'],
-                'skipped_by_action': dict(sync_stats['skipped_operations']['by_action']),
-            }
-            sync_stats['summary'] = summary
-            sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(sync_stats).to_dict()
-            sync_stats['disabled_users'] = [f"{action.connector_id}:{action.username}" for action in disable_actions]
-            mark_job('COMPLETED', ended=True, summary=summary)
-            return sync_stats.to_dict()
+            return complete_dry_run(
+                sync_stats=sync_stats,
+                organization=organization,
+                execution_mode=execution_mode,
+                planned_count=planned_count,
+                conflict_count=sync_stats['conflict_count'],
+                high_risk_operation_count=high_risk_operation_count,
+                plan_fingerprint=plan_fingerprint,
+                review_required_for_high_risk=review_required_for_high_risk,
+                department_action_count=len(department_actions),
+                user_action_count=len(user_actions),
+                membership_action_count=len(membership_actions),
+                group_hierarchy_action_count=len(group_hierarchy_actions),
+                group_cleanup_action_count=len(group_cleanup_actions),
+                disable_action_count=len(disable_actions),
+                disabled_users=[f"{action.connector_id}:{action.username}" for action in disable_actions],
+                field_ownership_policy=FIELD_OWNERSHIP_POLICY,
+                generate_skip_detail_report=_generate_skip_detail_report,
+                mark_job=mark_job,
+            )
 
         mark_job('RUNNING')
         if bot:
@@ -2993,7 +2548,7 @@ def run_sync_job(
                         )
 
                     state_repo.upsert_state(
-                        source_type='wecom',
+                        source_type='source',
                         object_type='department',
                         source_id=str(action.department_id),
                         source_hash=hash_department_state(
@@ -3205,8 +2760,8 @@ def run_sync_job(
                 bucket = 'user_update_errors'
             try:
                 connector_ad_sync = get_ad_sync(action.connector_id)
-                connector_wecom_to_ad_rules = (
-                    _select_mapping_rules(
+                connector_source_to_ad_rules = (
+                    select_mapping_rules(
                         enabled_mapping_rules,
                         direction='source_to_ad',
                         connector_id=action.connector_id,
@@ -3214,13 +2769,13 @@ def run_sync_job(
                     if attribute_mapping_enabled
                     else []
                 )
-                extra_attributes = build_wecom_to_ad_mapping_payload(
+                extra_attributes = build_source_to_ad_mapping_payload(
                     action.user,
                     connector_id=action.connector_id,
                     ad_username=action.username,
                     email=action.email,
                     target_department=dept_tree.get(action.target_department_id),
-                    rules=connector_wecom_to_ad_rules,
+                    rules=connector_source_to_ad_rules,
                 )
                 if action.operation_type == 'update_user':
                     success = connector_ad_sync.update_user(
@@ -3294,7 +2849,7 @@ def run_sync_job(
                     },
                 )
                 connector_writeback_rules = (
-                    _select_mapping_rules(
+                    select_mapping_rules(
                         enabled_mapping_rules,
                         direction='ad_to_source',
                         connector_id=action.connector_id,
@@ -3304,8 +2859,8 @@ def run_sync_job(
                 )
                 if connector_writeback_rules:
                     ad_attributes = connector_ad_sync.get_user_details(action.username)
-                    writeback_payload = _sanitize_wecom_writeback_payload(
-                        build_ad_to_wecom_mapping_payload(
+                    writeback_payload = sanitize_source_writeback_payload(
+                        build_ad_to_source_mapping_payload(
                             ad_attributes,
                             action.user.to_state_payload(),
                             connector_id=action.connector_id,
@@ -3767,7 +3322,7 @@ def run_sync_job(
                             source_id=action.source_user_id or action.username,
                             target_id=action.username,
                             risk_level='high',
-                            reason_code=action.reason or 'missing_from_wecom',
+                            reason_code=action.reason or 'missing_from_source',
                             details={
                                 'source_user_id': action.source_user_id,
                                 'connector_id': action.connector_id,
@@ -3805,7 +3360,7 @@ def run_sync_job(
                             source_id=action.source_user_id or action.username,
                             target_id=action.username,
                             risk_level='high',
-                            reason_code=action.reason or 'missing_from_wecom',
+                            reason_code=action.reason or 'missing_from_source',
                             details={
                                 'error': str(disable_error),
                                 'source_user_id': action.source_user_id,
@@ -3817,7 +3372,7 @@ def run_sync_job(
 
                 sync_stats['disabled_users'] = [f"{action.connector_id}:{action.username}" for action in disable_actions]
 
-        state_manager.cleanup_old_users(wecom_users)
+        state_manager.cleanup_old_users(source_user_ids)
         state_manager.set_sync_complete(sync_stats['error_count'] == 0)
 
         duration = format_time_duration(time.time() - start_time)
@@ -3840,10 +3395,10 @@ def run_sync_job(
 
         sync_stats['skip_detail_report'] = _generate_skip_detail_report(sync_stats)
         _generate_sync_operation_log(sync_stats, start_time, config)
-        current_wecom_ad_usernames = sorted(
+        current_source_ad_usernames = sorted(
             {
                 f"{connector_id}:{username}"
-                for connector_id, usernames in current_wecom_ad_usernames_by_connector.items()
+                for connector_id, usernames in current_source_ad_usernames_by_connector.items()
                 for username in usernames
             }
         )
@@ -3853,12 +3408,12 @@ def run_sync_job(
                 for connector_id, connector_enabled_users in enabled_ad_users_by_connector.items()
                 for username in connector_enabled_users
                 if (connector_id, username) in managed_ad_identities
-                and username not in current_wecom_ad_usernames_by_connector.get(connector_id, set())
+                and username not in current_source_ad_usernames_by_connector.get(connector_id, set())
             }
         )
         _generate_sync_validation_report(
             sync_stats,
-            current_wecom_ad_usernames,
+            current_source_ad_usernames,
             managed_missing_ad_usernames,
         )
 
@@ -3935,7 +3490,7 @@ def run_sync_job(
         sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(sync_stats).to_dict()
         if execution_mode == 'apply' and config.webhook_url:
             try:
-                WeChatBot(config.webhook_url).send_message(
+                WebhookNotificationClient(config.webhook_url).send_message(
                     f'## {source_provider_name} to AD sync cancelled (LDAPS)\n\n'
                     f"> Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                     '> Result: canceled by user'
@@ -3957,7 +3512,7 @@ def run_sync_job(
         sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(sync_stats).to_dict()
         if execution_mode == 'apply' and config.webhook_url:
             try:
-                WeChatBot(config.webhook_url).send_message(
+                WebhookNotificationClient(config.webhook_url).send_message(
                     f'## {source_provider_name} to AD sync failed (LDAPS)\n\n'
                     f"> Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
                     f"### Error\n{sync_error}"

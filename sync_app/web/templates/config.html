@@ -4,30 +4,40 @@
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Configuration"), t("Most deployments only need the source connector and LDAP directory fields. Everything else on this page is optional or can be adjusted after the first dry run."), eyebrow=t("Setup"), badge_text=t("Organization Scope"), badge_level="info") %}
+  {% call ui.page_header(t("{provider} Connector Configuration", provider=t(source_provider_name)), t("This organization currently uses {provider} as its source provider. This is the shared organization settings page, so LDAP, password policy, runtime, and web deployment sections remain consistent across providers.", provider=t(source_provider_name)), eyebrow=t("Setup"), badge_text=t("Organization Scope"), badge_level="info") %}
     <div class="surface-inline">
+      {{ ui.badge(t(source_provider_name), "info") }}
+      <span class="muted">{{ t("Shared page, provider-specific fields") }}</span>
       <span class="muted">{{ t("Current organization") }}:</span>
       <strong>{{ current_org.name if current_org else t("Default Organization") }}</strong>
     </div>
   {% endcall %}
 
   <div class="dense-two-col">
+    {% call ui.helper_block(t("Shared Page, Provider-Specific Fields"), t("Only the source connector card changes with the selected provider. LDAP, password policy, runtime, and web deployment settings remain shared for every provider."), "info") %}
+      <ul class="helper-list">
+        <li><strong>{{ t("Current provider") }}</strong>: {{ t(source_provider_name) }}</li>
+        <li>{{ t("Switch providers only when this organization should sync from a different upstream platform.") }}</li>
+        <li>{{ t("Save or preview after changing the source provider to refresh the provider-specific fields.") }}</li>
+      </ul>
+    {% endcall %}
+
     {% call ui.helper_block(t("Fill These First"), t("If you only want the minimum setup cost, complete these fields and leave the advanced sections collapsed."), "info") %}
       <ul class="helper-list">
-        <li><strong>{{ t("Source Connector") }}</strong>: {{ t("Select the source provider and complete its required credentials.") }}</li>
+        <li><strong>{{ t("Source Connector") }}</strong>: {{ t("Select the source provider and complete the credentials required by {provider}.", provider=t(source_provider_name)) }}</li>
         <li><strong>{{ t("LDAP") }}</strong>: {{ t("LDAP Server, LDAP Domain, LDAP Username, and LDAP Password") }}</li>
         <li><strong>{{ t("Password") }}</strong>: {{ t("Default Password before the first apply run") }}</li>
       </ul>
     {% endcall %}
-
-    {% call ui.helper_block(t("Organization Settings"), t("Most of this page belongs to the selected organization and does not change other tenants."), "warning") %}
-      <ul class="helper-list">
-        <li><strong>{{ t("Organization Settings") }}</strong>: {{ t("Use this page to define the current organization's source systems and default sync behavior.") }}</li>
-        <li><strong>{{ t("Global Settings") }}</strong>: {{ t("Web Deployment settings affect the whole server.") }}</li>
-        <li>{{ t("Use Advanced Sync only when the default single-organization flow no longer fits.") }}</li>
-      </ul>
-    {% endcall %}
   </div>
+
+  {% call ui.helper_block(t("Organization Settings"), t("Most of this page belongs to the selected organization and does not change other tenants."), "warning") %}
+    <ul class="helper-list">
+      <li><strong>{{ t("Organization Settings") }}</strong>: {{ t("Use this page to define the current organization's source systems and default sync behavior.") }}</li>
+      <li><strong>{{ t("Global Settings") }}</strong>: {{ t("Web Deployment settings affect the whole server.") }}</li>
+      <li>{{ t("Use Advanced Sync only when the default single-organization flow no longer fits.") }}</li>
+    </ul>
+  {% endcall %}
 
   {% if config_change_preview %}
   {% call ui.panel(t("Pending Changes"), t("Preview"), "warning", t("Review the differences below before saving. Confirm to apply them, or keep editing the form underneath."), class_name="card-flat") %}
@@ -81,8 +91,8 @@
         <section class="subcard stack-tight">
           <div class="section-header">
             <div class="section-header__copy">
-              <h3 class="section-header__title">{{ t("Source Connector") }}</h3>
-              <p class="section-header__description">{{ t(source_provider_schema.description or "Choose the source platform, then provide the connector credentials required for user and department data.") }}</p>
+              <h3 class="section-header__title">{{ t("{provider} Source Connector", provider=t(source_provider_name)) }}</h3>
+              <p class="section-header__description">{{ t("Enter the credentials and notification settings required by {provider}.", provider=t(source_provider_name)) }}</p>
             </div>
           </div>
           <div class="form-grid">

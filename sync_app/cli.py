@@ -13,7 +13,6 @@ from sync_app.core.config import (
     run_config_security_self_check,
     test_ldap_connection,
     test_source_connection,
-    test_wecom_connection,
     validate_config,
 )
 from sync_app.core.directory_protection import is_protected_ad_account_name
@@ -115,15 +114,6 @@ def build_parser() -> argparse.ArgumentParser:
     test_source_parser.add_argument("--config", default=None, help="Optional legacy config file path to test directly or import from")
     test_source_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
     test_source_parser.set_defaults(handler=_handle_test_source)
-
-    test_wecom_parser = subparsers.add_parser(
-        "test-wecom",
-        help="Legacy alias for test-source when the organization uses the WeCom provider",
-    )
-    test_wecom_parser.add_argument("--org-id", default="default", help="Organization ID to test when using database-backed configuration")
-    test_wecom_parser.add_argument("--config", default=None, help="Optional legacy config file path to test directly or import from")
-    test_wecom_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
-    test_wecom_parser.set_defaults(handler=_handle_test_source)
 
     test_ldap_parser = subparsers.add_parser("test-ldap", help="Test LDAP/LDAPS connectivity from org config or a legacy config file")
     test_ldap_parser.add_argument("--org-id", default="default", help="Organization ID to test when using database-backed configuration")
@@ -279,8 +269,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    normalized_argv = _normalize_legacy_command_aliases(list(argv) if argv is not None else sys.argv[1:])
+    args = parser.parse_args(normalized_argv)
     return int(args.handler(args))
+
+
+def _normalize_legacy_command_aliases(argv: list[str]) -> list[str]:
+    if not argv:
+        return []
+    normalized = list(argv)
+    if normalized[0] == "test-wecom":
+        normalized[0] = "test-source"
+    return normalized
 
 
 def _handle_version(_args: argparse.Namespace) -> int:
@@ -494,9 +494,9 @@ def _handle_test_source(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     success, message = test_source_connection(
-        config.wecom.corpid,
-        config.wecom.corpsecret,
-        config.wecom.agentid,
+        config.source_connector.corpid,
+        config.source_connector.corpsecret,
+        config.source_connector.agentid,
         source_provider=getattr(config, "source_provider", "wecom"),
     )
     stream = sys.stdout if success else sys.stderr

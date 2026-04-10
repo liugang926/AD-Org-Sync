@@ -10,8 +10,8 @@ def mask_webhook_url(webhook_url: str) -> str:
     return f"{webhook_url[:12]}***{webhook_url[-8:]}"
 
 
-class WeChatBot:
-    """WeCom bot webhook client."""
+class WebhookNotificationClient:
+    """Webhook notification client using markdown payloads."""
 
     def __init__(self, webhook_url: str):
         ensure_requests_available()
@@ -29,7 +29,7 @@ class WeChatBot:
         )
         adapter = requests.adapters.HTTPAdapter(max_retries=retry_strategy)
         self.session.mount("https://", adapter)
-        self.logger.info(f"WeCom bot initialized: {mask_webhook_url(webhook_url)}")
+        self.logger.info(f"notification webhook initialized: {mask_webhook_url(webhook_url)}")
 
     def send_message(self, content: str) -> bool:
         try:
@@ -41,16 +41,16 @@ class WeChatBot:
             response.raise_for_status()
             result = response.json()
             if result.get("errcode") == 0:
-                self.logger.info("WeCom bot message sent")
+                self.logger.info("notification message sent")
                 return True
 
-            self.logger.error(f"WeCom bot send failed: {result}")
+            self.logger.error(f"notification send failed: {result}")
             return False
         except requests.RequestException as exc:
-            self.logger.error(f"WeCom bot request failed: {exc}")
+            self.logger.error(f"notification request failed: {exc}")
             return False
         except Exception as exc:
-            self.logger.error(f"WeCom bot send failed: {exc}")
+            self.logger.error(f"notification send failed: {exc}")
             return False
 
     def close(self):
@@ -63,3 +63,6 @@ class WeChatBot:
             self.close()
         except Exception:
             pass
+
+
+WeChatBot = WebhookNotificationClient

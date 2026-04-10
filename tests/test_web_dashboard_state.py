@@ -64,6 +64,7 @@ class WebDashboardStateTests(unittest.TestCase):
         data = build_getting_started_data(
             current_org_name="HQ",
             preflight_snapshot=preflight_snapshot,
+            source_provider_name="WeCom",
             ui_mode="advanced",
         )
 
@@ -88,6 +89,7 @@ class WebDashboardStateTests(unittest.TestCase):
         data = build_getting_started_data(
             current_org_name="HQ",
             preflight_snapshot=preflight_snapshot,
+            source_provider_name="WeCom",
             ui_mode="basic",
         )
 

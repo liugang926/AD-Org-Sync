@@ -298,7 +298,7 @@ def build_app_config_from_org_values(values: Dict[str, Any], *, config_source: s
     )
     domain_name = normalized["ldap_domain"]
     return AppConfig(
-        wecom=SourceConnectorConfig(
+        source_connector=SourceConnectorConfig(
             corpid=normalized["corpid"],
             corpsecret=normalized["corpsecret"],
             agentid=normalized["agentid"] or None,
@@ -455,7 +455,7 @@ def build_app_config_from_connector_record(
         password_complexity=record.password_complexity or base_config.account.password_complexity,
     )
     return AppConfig(
-        wecom=SourceConnectorConfig(
+        source_connector=SourceConnectorConfig(
             corpid=base_config.source_connector.corpid,
             corpsecret=base_config.source_connector.corpsecret,
             agentid=base_config.source_connector.agentid,

@@ -197,7 +197,7 @@ class WebAuthorizationTests(unittest.TestCase):
             ),
             "user_ou_placement_strategy": self.app.state.settings_repo.get_value(
                 "user_ou_placement_strategy",
-                "wecom_primary_department",
+                "source_primary_department",
                 org_id=current_org.org_id,
             ),
             "soft_excluded_groups": "\n".join(
@@ -546,6 +546,27 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertIsNone(self.app.state.user_binding_repo.get_binding_record_by_source_user_id("alice"))
         self.assertIn("system-protected", self.session["_flash"]["message"])
+
+    def test_mappings_and_advanced_sync_pages_use_generic_source_wording(self):
+        self._login("superadmin")
+
+        mappings_response = self._route("/mappings", "GET")(self._request("/mappings"))
+        self.assertEqual(mappings_response.status_code, 200)
+        mappings_text = self._text(mappings_response)
+        self.assertIn("Source User ID", mappings_text)
+        self.assertIn("Search source user, AD user, or notes", mappings_text)
+        self.assertNotIn("WeCom User ID", mappings_text)
+        self.assertNotIn("Search WeCom user, AD user, or notes", mappings_text)
+
+        advanced_response = self._route("/advanced-sync", "GET")(self._request("/advanced-sync"))
+        self.assertEqual(advanced_response.status_code, 200)
+        advanced_text = self._text(advanced_response)
+        self.assertIn("Enable source -&gt; AD attribute mapping", advanced_text)
+        self.assertIn("Enable AD -&gt; source write-back", advanced_text)
+        self.assertIn("Source Root Unit IDs", advanced_text)
+        self.assertNotIn("Enable WeCom -&gt; AD attribute mapping", advanced_text)
+        self.assertNotIn("Enable AD -&gt; WeCom write-back", advanced_text)
+        self.assertNotIn("WeCom Root Department IDs", advanced_text)
 
     def test_advanced_sync_policies_and_mappings_are_scoped_to_selected_organization(self):
         self._login("superadmin")
@@ -1312,6 +1333,40 @@ class WebAuthorizationTests(unittest.TestCase):
         dashboard_text = self._text(dashboard)
         self.assertIn("LDAPS certificate validation is disabled.", dashboard_text)
         self.assertIn("Default password is still a sample or weak password. Replace it immediately.", dashboard_text)
+
+    def test_config_page_surfaces_selected_provider_context_for_dingtalk(self):
+        current_org = self.app.state.organization_repo.get_default_organization_record()
+        self.assertIsNotNone(current_org)
+        values = self.app.state.org_config_repo.get_raw_config(
+            current_org.org_id,
+            config_path=str(self.config_path),
+        )
+        values.update(
+            {
+                "source_provider": "dingtalk",
+                "corpid": "ding-app-key",
+                "corpsecret": "ding-app-secret",
+                "agentid": "50001",
+                "webhook_url": "https://oapi.dingtalk.com/robot/send?access_token=test",
+            }
+        )
+        self.app.state.org_config_repo.save_config(
+            current_org.org_id,
+            values,
+            config_path=str(self.config_path),
+        )
+
+        self._login("superadmin")
+        response = self._route("/config", "GET")(self._request("/config"))
+        self.assertEqual(response.status_code, 200)
+        text = self._text(response)
+        self.assertIn("DingTalk Connector Configuration", text)
+        self.assertIn("Shared Page, Provider-Specific Fields", text)
+        self.assertIn("Current provider", text)
+        self.assertIn("DingTalk Source Connector", text)
+        self.assertIn("AppKey / Client ID", text)
+        self.assertIn("DingTalk Bot Webhook", text)
+        self.assertNotIn("WeCom Webhook", text)
 
     def test_config_page_persists_web_deployment_settings_and_reloaded_app_uses_them(self):
         self._login("superadmin")
@@ -2156,6 +2211,55 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn("Deployment Preflight", dashboard_text)
         self.assertIn("Live WeCom connection", dashboard_text)
         self.assertIn("Last live check", dashboard_text)
+
+    def test_preflight_and_getting_started_use_selected_provider_context_for_dingtalk(self):
+        current_org = self.app.state.organization_repo.get_default_organization_record()
+        self.assertIsNotNone(current_org)
+        values = self.app.state.org_config_repo.get_raw_config(
+            current_org.org_id,
+            config_path=str(self.config_path),
+        )
+        values.update(
+            {
+                "source_provider": "dingtalk",
+                "corpid": "ding-app-key",
+                "corpsecret": "ding-app-secret",
+                "agentid": "50001",
+            }
+        )
+        self.app.state.org_config_repo.save_config(
+            current_org.org_id,
+            values,
+            config_path=str(self.config_path),
+        )
+
+        self._login("superadmin")
+        dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))
+        self.assertEqual(dashboard.status_code, 200)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(dashboard))
+        self.assertIsNotNone(match)
+
+        with patch("sync_app.web.app.test_source_connection", return_value=(True, "DingTalk connection succeeded (generic), departments: 1")), patch(
+            "sync_app.web.app.test_ldap_connection",
+            return_value=(True, "LDAP connection succeeded (auth: NTLM, protocol: LDAPS)"),
+        ):
+            response = self._route("/preflight/run", "POST")(
+                self._request("/preflight/run", "POST"),
+                csrf_token=match.group(1),
+                return_url="/dashboard",
+            )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/dashboard")
+
+        refreshed_dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))
+        dashboard_text = self._text(refreshed_dashboard)
+        self.assertIn("Live DingTalk connection", dashboard_text)
+
+        getting_started = self._route("/getting-started", "GET")(self._request("/getting-started"))
+        self.assertEqual(getting_started.status_code, 200)
+        getting_started_text = self._text(getting_started)
+        self.assertIn("Complete the DingTalk and LDAP values for the current organization.", getting_started_text)
+        self.assertIn("Live DingTalk connection", getting_started_text)
 
     def test_getting_started_page_renders_rollout_steps(self):
         self._login("superadmin")

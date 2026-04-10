@@ -37,6 +37,13 @@ class CliConfigCommandTests(unittest.TestCase):
             exit_code = cli.main(argv)
         return exit_code, stdout.getvalue(), stderr.getvalue()
 
+    def test_legacy_test_wecom_alias_is_hidden_from_help_but_still_parseable(self):
+        parser = cli.build_parser()
+
+        self.assertNotIn("test-wecom", parser.format_help())
+        args = parser.parse_args(cli._normalize_legacy_command_aliases(["test-wecom"]))
+        self.assertEqual(args.command, "test-source")
+
     def test_validate_config_uses_database_backed_org_config_by_default(self):
         OrganizationConfigRepository(self.db_manager).save_config(
             "default",

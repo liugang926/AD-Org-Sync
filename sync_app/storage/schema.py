@@ -7,7 +7,7 @@ DEFAULT_APP_SETTINGS = {
     "group_recursive_enabled": ("true", "bool"),
     "schedule_execution_mode": ("apply", "string"),
     "managed_relation_cleanup_enabled": ("false", "bool"),
-    "user_ou_placement_strategy": ("wecom_primary_department", "string"),
+    "user_ou_placement_strategy": ("source_primary_department", "string"),
     "job_history_retention_days": ("30", "int"),
     "event_history_retention_days": ("30", "int"),
     "audit_log_retention_days": ("90", "int"),

@@ -2,79 +2,97 @@ document.addEventListener("DOMContentLoaded", () => {
   const defaultConfirmMessage =
     document.body?.dataset.confirmMessage || "Are you sure you want to perform this action?";
 
-  document.querySelectorAll("[data-auto-submit]").forEach((element) => {
-    element.addEventListener("change", () => {
-      const form = element.form;
-      if (!form) {
-        return;
-      }
-      if (typeof form.requestSubmit === "function") {
-        form.requestSubmit();
-        return;
-      }
-      form.submit();
-    });
-  });
-
-  document.querySelectorAll("[data-dismiss-target]").forEach((element) => {
-    const dismiss = () => {
-      const target = document.querySelector(element.dataset.dismissTarget || "");
-      if (target) {
-        target.remove();
-      }
-    };
-    element.addEventListener("click", dismiss);
-    element.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        dismiss();
-      }
-    });
-  });
-
-  document.querySelectorAll("form").forEach((form) => {
-    form.addEventListener("submit", (event) => {
-      const submitter =
-        event.submitter ||
-        form.querySelector('button[type="submit"], input[type="submit"]');
-
-      if (!submitter) {
-        return;
-      }
-
-      const confirmMessage =
-        submitter.dataset.confirm ||
-        form.dataset.confirm ||
-        (submitter.classList.contains("confirm-action") || form.classList.contains("confirm-action")
-          ? defaultConfirmMessage
-          : "");
-
-      if (confirmMessage && !window.confirm(confirmMessage)) {
-        event.preventDefault();
-        return;
-      }
-
-      const skipLoader =
-        submitter.classList.contains("no-loader") ||
-        submitter.hasAttribute("data-no-loader") ||
-        form.hasAttribute("data-no-loader");
-      if (skipLoader) {
-        return;
-      }
-
-      window.requestAnimationFrame(() => {
-        submitter.classList.add("btn-loading");
-        submitter.disabled = true;
-      });
-    });
-  });
-
-  const flash = document.getElementById("global-flash");
-  if (flash && flash.classList.contains("success")) {
-    window.setTimeout(() => {
-      flash.style.opacity = "0";
-      flash.style.transition = "opacity 0.5s ease";
-      window.setTimeout(() => flash.remove(), 500);
-    }, 5000);
+  // Initialize Lucide Icons
+  if (window.lucide) {
+    window.lucide.createIcons();
   }
+
+  // --- 1. Auto-submit Forms ---
+  document.querySelectorAll("[data-auto-submit]").forEach((el) => {
+    el.addEventListener("change", () => {
+      el.closest("form")?.submit();
+    });
+  });
+
+  // --- 2. Confirmation & Loading States ---
+  document.querySelectorAll("button[data-confirm], a[data-confirm]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      const message = el.getAttribute("data-confirm") || defaultConfirmMessage;
+      if (!confirm(message)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
+      
+      if (el.tagName === "BUTTON" && el.type === "submit") {
+        setLoading(el);
+      }
+    });
+  });
+
+  // --- 3. Global Form Loading Feedback ---
+  document.querySelectorAll("form").forEach(form => {
+    form.addEventListener("submit", (e) => {
+      const submitBtn = form.querySelector('button[type="submit"]:not(.secondary):not(.ghost)');
+      if (submitBtn && !submitBtn.hasAttribute('data-confirm')) {
+        // Slight delay to allow native validation
+        setTimeout(() => {
+          if (!e.defaultPrevented) {
+            setLoading(submitBtn);
+          }
+        }, 10);
+      }
+    });
+  });
+
+  function setLoading(btn) {
+    btn.classList.add("btn-loading");
+    // Preserve width to prevent layout shift
+    const width = btn.offsetWidth;
+    btn.style.width = width + 'px';
+  }
+
+  // --- 4. Toast (Flash) Notifications ---
+  const flashMessages = document.querySelectorAll(".flash");
+  flashMessages.forEach((flash) => {
+    // Auto-dismiss success messages
+    if (flash.classList.contains("success")) {
+      setTimeout(() => {
+        dismissFlash(flash);
+      }, 6000);
+    }
+  });
+
+  document.querySelectorAll("[data-dismiss-closest]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const selector = el.getAttribute("data-dismiss-closest");
+      const target = selector ? el.closest(selector) : null;
+      if (target) {
+        dismissFlash(target);
+      }
+    });
+  });
+
+  window.dismissFlash = function(el) {
+    el.style.transform = "translateX(120%)";
+    el.style.opacity = "0";
+    el.style.transition = "all 0.5s cubic-bezier(0.4, 0, 0.2, 1)";
+    setTimeout(() => el.remove(), 500);
+  };
+
+  // --- 5. Navigation Active State ---
+  const currentPath = window.location.pathname;
+  document.querySelectorAll("nav a").forEach(link => {
+    const href = link.getAttribute("href");
+    if (href === currentPath || (href !== "/" && currentPath.startsWith(href))) {
+      link.classList.add("active");
+    }
+  });
+
+  // --- 6. Table Row Hover Enhancements ---
+  document.querySelectorAll("tr").forEach(tr => {
+    tr.addEventListener("mouseenter", () => {
+      tr.style.transition = "background-color 0.2s ease";
+    });
+  });
 });

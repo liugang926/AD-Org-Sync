@@ -344,7 +344,7 @@ class ADSyncLDAPS:
         group_sam = build_group_sam(department_id)
         group_cn = build_group_cn(ou_name, department_id)
         display_name = build_group_display_name(full_path, department_id, display_separator)
-        description = f"source=wecom; dept_id={department_id}; path={'/'.join(full_path)}"
+        description = f"source=directory; dept_id={department_id}; path={'/'.join(full_path)}"
 
         managed_group = self.get_group_by_sam(group_sam)
         if managed_group:
@@ -492,7 +492,7 @@ class ADSyncLDAPS:
     ) -> DepartmentGroupInfo:
         group_sam = build_custom_group_sam(source_type, source_key)
         existing_group = self.get_group_by_sam(group_sam)
-        description = f"source=wecom_{source_type}; source_key={source_key}; display_name={display_name}"
+        description = f"source=custom_{source_type}; source_key={source_key}; display_name={display_name}"
         group_cn = build_custom_group_cn(source_type, display_name, source_key)
         if existing_group:
             return DepartmentGroupInfo(
@@ -1153,7 +1153,7 @@ class ADSyncLDAPS:
             # 禁用账户（设置userAccountControl的第2位）
             changes = {
                 'userAccountControl': [(MODIFY_REPLACE, [514])],  # 514 = 512 + 2 (启用+禁用)
-                'description': [(MODIFY_REPLACE, [f"Account disabled - Not found in WeChat Work - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"])]
+                'description': [(MODIFY_REPLACE, [f"Account disabled - Not found in source directory - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"])]
             }
             
             if self.connection.modify(user_dn, changes):
@@ -1414,7 +1414,7 @@ class ADSyncLDAPS:
                 'description': [
                     (
                         MODIFY_REPLACE,
-                        [f"Account disabled - Not found in WeCom - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"],
+                        [f"Account disabled - Not found in source directory - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"],
                     )
                 ],
             }

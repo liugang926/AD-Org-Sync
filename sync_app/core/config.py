@@ -53,7 +53,7 @@ def load_sync_config(config_path: str = "config.ini") -> AppConfig:
     domain_name = config_parser.get("LDAP", "Domain", fallback=config_parser.get("Domain", "Name", fallback=""))
 
     return AppConfig(
-        wecom=SourceConnectorConfig(
+        source_connector=SourceConnectorConfig(
             corpid=_get_config_value(config_parser, ("SourceConnector", "WeChat"), "CorpID", fallback=""),
             corpsecret=_get_config_value(config_parser, ("SourceConnector", "WeChat"), "CorpSecret", fallback=""),
             agentid=(

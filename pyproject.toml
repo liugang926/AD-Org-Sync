@@ -66,4 +66,4 @@ include-package-data = true
 include = ["sync_app*"]
 
 [tool.setuptools.package-data]
-"sync_app.web" = ["templates/*.html", "templates/components/*.html", "static/*"]
+"sync_app.web" = ["templates/*.html", "templates/components/*.html", "static/*", "locales/*.json"]

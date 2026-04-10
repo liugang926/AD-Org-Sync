@@ -478,6 +478,34 @@ class DepartmentPlacementStrategyTests(unittest.TestCase):
         self.assertEqual(target.department_id, 2)
         self.assertEqual(reason, "manual_override")
 
+    def test_resolve_target_department_accepts_source_and_legacy_primary_department_aliases(self):
+        user = WeComUser(userid="alice", name="Alice", departments=[30, 5], raw_payload={"main_department": 30})
+        bundle = UserDepartmentBundle(
+            user=user,
+            departments=[
+                DepartmentNode(department_id=30, name="Branch", parent_id=0, path=["Root", "Branch"], path_ids=[10, 30]),
+                DepartmentNode(department_id=5, name="HQ", parent_id=0, path=["Root", "HQ"], path_ids=[10, 5]),
+            ],
+        )
+
+        target, reason = runtime._resolve_target_department(
+            bundle,
+            placement_strategy="source_primary_department",
+            is_department_excluded=lambda _: False,
+        )
+        legacy_target, legacy_reason = runtime._resolve_target_department(
+            bundle,
+            placement_strategy="wecom_primary_department",
+            is_department_excluded=lambda _: False,
+        )
+
+        self.assertIsNotNone(target)
+        self.assertEqual(target.department_id, 30)
+        self.assertEqual(reason, "source_primary_department")
+        self.assertIsNotNone(legacy_target)
+        self.assertEqual(legacy_target.department_id, 30)
+        self.assertEqual(legacy_reason, "source_primary_department")
+
     def test_resolve_target_department_uses_configured_strategy(self):
         user = WeComUser(userid="alice", name="Alice", departments=[30, 5])
         bundle = UserDepartmentBundle(
@@ -535,10 +563,10 @@ class RunSyncDryRunTests(unittest.TestCase):
 
         with patch.object(runtime, "load_sync_config", return_value=config), \
             patch.object(runtime, "validate_config", return_value=(True, [])), \
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")), \
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")), \
             patch.object(runtime, "run_config_security_self_check", return_value=[]), \
-            patch.object(runtime, "WeComAPI", FakeWeComAPI), \
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComAPI), \
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncLDAPS), \
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")), \
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"), \
@@ -621,10 +649,10 @@ class RunSyncDryRunTests(unittest.TestCase):
 
         with patch.object(runtime, "load_sync_config", return_value=config), \
             patch.object(runtime, "validate_config", return_value=(True, [])), \
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")), \
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")), \
             patch.object(runtime, "run_config_security_self_check", return_value=[]), \
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI), \
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI), \
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncLDAPS), \
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")), \
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"), \
@@ -701,10 +729,10 @@ class RunSyncDryRunTests(unittest.TestCase):
 
         with patch.object(runtime, "load_sync_config", return_value=config), \
             patch.object(runtime, "validate_config", return_value=(True, [])), \
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")), \
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")), \
             patch.object(runtime, "run_config_security_self_check", return_value=[]), \
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI), \
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI), \
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncProtectedDisable), \
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")), \
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"), \
@@ -762,10 +790,10 @@ class RunSyncDryRunTests(unittest.TestCase):
 
         with patch.object(runtime, "load_sync_config", return_value=config), \
             patch.object(runtime, "validate_config", return_value=(True, [])), \
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")), \
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")), \
             patch.object(runtime, "run_config_security_self_check", return_value=[]), \
-            patch.object(runtime, "WeComAPI", FakeWeComConflictAPI), \
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComConflictAPI), \
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncConflict), \
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")), \
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"), \
@@ -823,10 +851,10 @@ class RunSyncDryRunTests(unittest.TestCase):
 
         with patch.object(runtime, "load_sync_config", return_value=config), \
             patch.object(runtime, "validate_config", return_value=(True, [])), \
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")), \
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")), \
             patch.object(runtime, "run_config_security_self_check", return_value=[]), \
-            patch.object(runtime, "WeComAPI", FakeWeComAPI), \
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComAPI), \
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncLDAPS), \
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")), \
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"), \
@@ -881,10 +909,10 @@ class RunSyncDryRunTests(unittest.TestCase):
 
         with patch.object(runtime, "load_sync_config", return_value=config), \
             patch.object(runtime, "validate_config", return_value=(True, [])), \
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")), \
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")), \
             patch.object(runtime, "run_config_security_self_check", return_value=[]), \
-            patch.object(runtime, "WeComAPI", FakeWeComAPI), \
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComAPI), \
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncLDAPS), \
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")), \
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"), \
@@ -957,10 +985,10 @@ class RunSyncDryRunTests(unittest.TestCase):
 
         with patch.object(runtime, "load_sync_config", return_value=config), \
             patch.object(runtime, "validate_config", return_value=(True, [])), \
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")), \
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")), \
             patch.object(runtime, "run_config_security_self_check", return_value=[]), \
-            patch.object(runtime, "WeComAPI", FakeWeComAPI), \
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComAPI), \
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncCleanup), \
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")), \
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"), \
@@ -1019,10 +1047,10 @@ class RunSyncDryRunTests(unittest.TestCase):
 
         with patch.object(runtime, "load_sync_config", return_value=config), \
             patch.object(runtime, "validate_config", return_value=(True, [])), \
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")), \
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")), \
             patch.object(runtime, "run_config_security_self_check", return_value=[]), \
-            patch.object(runtime, "WeComAPI", FakeWeComAPI), \
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComAPI), \
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncApply), \
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")), \
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"), \
@@ -1109,10 +1137,10 @@ class RunSyncDryRunTests(unittest.TestCase):
         patches = [
             patch.object(runtime, "load_sync_config", return_value=config),
             patch.object(runtime, "validate_config", return_value=(True, [])),
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
             patch.object(runtime, "run_config_security_self_check", return_value=[]),
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
@@ -1217,10 +1245,10 @@ class RunSyncDryRunTests(unittest.TestCase):
         patches = [
             patch.object(runtime, "load_sync_config", side_effect=fake_load_config),
             patch.object(runtime, "validate_config", return_value=(True, [])),
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
             patch.object(runtime, "run_config_security_self_check", return_value=[]),
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
@@ -1310,12 +1338,12 @@ class RunSyncDryRunTests(unittest.TestCase):
         patches = [
             patch.object(runtime, "load_sync_config", return_value=config),
             patch.object(runtime, "validate_config", return_value=(True, [])),
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
             patch.object(runtime, "run_config_security_self_check", return_value=[]),
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
-            patch.object(runtime, "WeChatBot", FakeWeChatBot),
+            patch.object(runtime, "WebhookNotificationClient", FakeWeChatBot),
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
             patch.object(runtime, "_generate_skip_detail_report", return_value="skip-details.csv"),
@@ -1401,10 +1429,10 @@ class RunSyncDryRunTests(unittest.TestCase):
         patches = [
             patch.object(runtime, "load_sync_config", return_value=config),
             patch.object(runtime, "validate_config", return_value=(True, [])),
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
             patch.object(runtime, "run_config_security_self_check", return_value=[]),
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
@@ -1486,10 +1514,10 @@ class RunSyncDryRunTests(unittest.TestCase):
         patches = [
             patch.object(runtime, "load_sync_config", return_value=config),
             patch.object(runtime, "validate_config", return_value=(True, [])),
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
             patch.object(runtime, "run_config_security_self_check", return_value=[]),
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
@@ -1552,7 +1580,7 @@ class RunSyncDryRunTests(unittest.TestCase):
             request_type="conflict_resolution",
             execution_mode="apply",
             requested_by="superadmin",
-            target_scope="wecom_user",
+            target_scope="source_user",
             target_id="alice",
             trigger_reason="unit_test",
         )
@@ -1563,10 +1591,10 @@ class RunSyncDryRunTests(unittest.TestCase):
         patches = [
             patch.object(runtime, "load_sync_config", return_value=config),
             patch.object(runtime, "validate_config", return_value=(True, [])),
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
             patch.object(runtime, "run_config_security_self_check", return_value=[]),
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
@@ -1642,12 +1670,12 @@ class RunSyncDryRunTests(unittest.TestCase):
         patches = [
             patch.object(runtime, "load_sync_config", return_value=config),
             patch.object(runtime, "validate_config", return_value=(True, [])),
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
             patch.object(runtime, "run_config_security_self_check", return_value=[]),
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
-            patch.object(runtime, "WeChatBot", FakeWeChatBot),
+            patch.object(runtime, "WebhookNotificationClient", FakeWeChatBot),
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
             patch.object(runtime, "_generate_skip_detail_report", return_value="skip-details.csv"),
@@ -1751,10 +1779,10 @@ class RunSyncDryRunTests(unittest.TestCase):
         patches = [
             patch.object(runtime, "load_sync_config", side_effect=fake_load_config),
             patch.object(runtime, "validate_config", return_value=(True, [])),
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
             patch.object(runtime, "run_config_security_self_check", return_value=[]),
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
@@ -1822,10 +1850,10 @@ class RunSyncDryRunTests(unittest.TestCase):
         patches = [
             patch.object(runtime, "load_sync_config", return_value=config),
             patch.object(runtime, "validate_config", return_value=(True, [])),
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
             patch.object(runtime, "run_config_security_self_check", return_value=[]),
-            patch.object(runtime, "WeComAPI", FakeWeComAPI),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComAPI),
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncApply),
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
@@ -2004,10 +2032,10 @@ class RunSyncDryRunTests(unittest.TestCase):
         patches = [
             patch.object(runtime, "load_sync_config", side_effect=fake_load_config),
             patch.object(runtime, "validate_config", return_value=(True, [])),
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
             patch.object(runtime, "run_config_security_self_check", return_value=[]),
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
@@ -2154,10 +2182,10 @@ class RunSyncDryRunTests(unittest.TestCase):
         patches = [
             patch.object(runtime, "load_sync_config", side_effect=fake_load_config),
             patch.object(runtime, "validate_config", return_value=(True, [])),
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
             patch.object(runtime, "run_config_security_self_check", return_value=[]),
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
@@ -2273,10 +2301,10 @@ class RunSyncDryRunTests(unittest.TestCase):
         patches = [
             patch.object(runtime, "load_sync_config", side_effect=fake_load_config),
             patch.object(runtime, "validate_config", return_value=(True, [])),
-            patch.object(runtime, "test_wecom_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
             patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
             patch.object(runtime, "run_config_security_self_check", return_value=[]),
-            patch.object(runtime, "WeComAPI", FakeWeComProgrammableAPI),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
             patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
             patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
             patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
@@ -2301,3 +2329,4 @@ class RunSyncDryRunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

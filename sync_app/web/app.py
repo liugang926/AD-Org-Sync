@@ -8,6 +8,7 @@ import secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Optional
 from urllib.parse import urlencode
 
@@ -30,12 +31,6 @@ from sync_app.core.conflict_recommendations import (
     recommend_conflict_resolution,
     recommendation_requires_confirmation,
 )
-from sync_app.core.exception_rules import (
-    EXCEPTION_MATCH_TYPE_LABELS,
-    EXCEPTION_RULE_DEFINITIONS,
-    get_exception_rule_definition,
-    normalize_exception_rule_type,
-)
 from sync_app.core.sync_policies import (
     ATTRIBUTE_SYNC_MODES,
     MANAGED_GROUP_TYPES,
@@ -56,8 +51,6 @@ from sync_app.storage.local_db import (
     CustomManagedGroupBindingRepository,
     DatabaseManager,
     GroupExclusionRuleRepository,
-    ManagedGroupBindingRepository,
-    ObjectStateRepository,
     OffboardingQueueRepository,
     OrganizationConfigRepository,
     OrganizationRepository,
@@ -93,7 +86,12 @@ from sync_app.web.i18n import (
     translate,
 )
 from sync_app.web.routes_admin import register_admin_routes
+from sync_app.web.routes_conflicts import register_conflict_routes
+from sync_app.web.routes_config import register_config_routes
+from sync_app.web.routes_exceptions import register_exception_routes
 from sync_app.web.routes_jobs import register_job_routes
+from sync_app.web.routes_mappings import register_mapping_routes
+from sync_app.web.routes_organizations import register_organization_routes
 from sync_app.web.runtime import (
     LoginRateLimiter,
     WebSyncRunner,
@@ -605,7 +603,7 @@ def create_app(
             ),
             "user_ou_placement_strategy": request.app.state.settings_repo.get_value(
                 "user_ou_placement_strategy",
-                "wecom_primary_department",
+                "source_primary_department",
                 org_id=current_org.org_id,
             ),
             "soft_excluded_groups": normalize_soft_excluded_groups_text(
@@ -650,7 +648,7 @@ def create_app(
         web_session_cookie_secure_mode: str = "auto",
         web_trust_proxy_headers: Optional[str] = None,
         web_forwarded_allow_ips: str = "127.0.0.1",
-        user_ou_placement_strategy: str = "wecom_primary_department",
+        user_ou_placement_strategy: str = "source_primary_department",
         soft_excluded_groups: str = "",
     ) -> dict[str, Any]:
         current_org = get_current_org(request)
@@ -660,7 +658,7 @@ def create_app(
             config_path=current_org_config_path,
         )
         if user_ou_placement_strategy not in PLACEMENT_STRATEGIES:
-            user_ou_placement_strategy = "wecom_primary_department"
+            user_ou_placement_strategy = "source_primary_department"
         if password_complexity not in {"basic", "medium", "strong"}:
             password_complexity = "strong"
         normalized_org_values = _normalize_org_config_values(
@@ -887,6 +885,7 @@ def create_app(
             editable["protected_accounts"] = list(effective_config.exclude_accounts)
         current_source_provider = normalize_source_provider(editable.get("source_provider"))
         provider_schema = get_source_provider_schema(current_source_provider)
+        source_provider_name = source_provider_label(current_source_provider)
         source_provider_options = list_source_provider_options(include_unimplemented=True)
         protected_rules = request.app.state.exclusion_repo.list_rules(
             rule_type="protect",
@@ -895,9 +894,10 @@ def create_app(
         )
         return {
             "page": "config",
-            "title": "Configuration",
+            "title": f"{source_provider_name} Configuration",
             "editable": editable,
             "current_org": current_org,
+            "source_provider_name": source_provider_name,
             "source_provider_options": source_provider_options,
             "source_provider_schema": provider_schema,
             "source_provider_fields": build_source_provider_fields(editable),
@@ -1238,7 +1238,8 @@ def create_app(
                     "key": "config",
                     "label": "Organization configuration",
                     "status": "success",
-                    "detail": "Required source and LDAP settings are complete.",
+                    "detail": "Required {provider} and LDAP settings are complete.",
+                    "detail_params": {"provider": source_provider_name},
                     "action_url": "/config",
                 }
             )
@@ -1356,7 +1357,8 @@ def create_app(
                 checks.append(
                     {
                         "key": "live_source",
-                        "label": f"Live {source_provider_name} connection",
+                        "label": "Live {provider} connection",
+                        "label_params": {"provider": source_provider_name},
                         "status": "success" if source_ok else "error",
                         "detail": source_message,
                         "action_url": "/config",
@@ -1364,15 +1366,19 @@ def create_app(
                 )
             else:
                 if config and not get_source_provider_schema(config.source_provider).implemented:
-                    live_source_detail = f"Skipped because {source_provider_name} is not implemented in this build."
+                    live_source_detail = "Skipped because {provider} is not implemented in this build."
+                    live_source_detail_params = {"provider": source_provider_name}
                 else:
-                    live_source_detail = f"Skipped because {source_provider_name} credentials are incomplete or still invalid."
+                    live_source_detail = "Skipped because {provider} credentials are incomplete or still invalid."
+                    live_source_detail_params = {"provider": source_provider_name}
                 checks.append(
                     {
                         "key": "live_source",
-                        "label": f"Live {source_provider_name} connection",
+                        "label": "Live {provider} connection",
+                        "label_params": {"provider": source_provider_name},
                         "status": "warning",
                         "detail": live_source_detail,
+                        "detail_params": live_source_detail_params,
                         "action_url": "/config",
                     }
                 )
@@ -1487,6 +1493,7 @@ def create_app(
             request.session.get("_preflight_snapshot"),
             build_preflight_snapshot(request, include_live=False),
         )
+        open_conflicts_count = int(preflight_snapshot.get("open_conflict_count") or 0)
         return {
             "active_job": active_job,
             "recent_jobs": recent_jobs,
@@ -1500,6 +1507,7 @@ def create_app(
             "db_info": db_info,
             "enabled_rule_count": len(enabled_rules),
             "exception_rule_count": len(exception_rules),
+            "open_conflicts_count": open_conflicts_count,
             "user_count": request.app.state.user_repo.count_users(),
             "binding_count": len(bindings),
             "override_count": len(overrides),
@@ -1507,11 +1515,12 @@ def create_app(
             "getting_started": build_getting_started_view_state(
                 current_org_name=current_org.name,
                 preflight_snapshot=preflight_snapshot,
+                source_provider_name=source_provider_label(config.source_provider if config else "wecom"),
                 ui_mode=get_ui_mode(request),
             ),
             "placement_strategy": request.app.state.settings_repo.get_value(
                 "user_ou_placement_strategy",
-                "wecom_primary_department",
+                "source_primary_department",
                 org_id=current_org.org_id,
             ),
             "web_runtime": web_runtime_settings,
@@ -1747,7 +1756,7 @@ def create_app(
             return False, conflict_message, 0
 
         binding_notes = str(notes or "").strip() or f"resolved from conflict {conflict.id}"
-        app.state.user_binding_repo.upsert_binding(
+        app.state.user_binding_repo.upsert_binding_for_source_user(
             conflict.source_id,
             normalized_ad_username,
             org_id=org_id,
@@ -1772,7 +1781,7 @@ def create_app(
             request_type="conflict_resolution",
             requested_by=actor_username,
             org_id=org_id,
-            target_scope="wecom_user",
+            target_scope="source_user",
             target_id=conflict.source_id,
             trigger_reason="manual_binding_resolved",
             payload={
@@ -1819,7 +1828,7 @@ def create_app(
             request_type="conflict_resolution",
             requested_by=actor_username,
             org_id=org_id,
-            target_scope="wecom_user",
+            target_scope="source_user",
             target_id=conflict.source_id,
             trigger_reason="skip_user_sync_added",
             payload={
@@ -2075,12 +2084,14 @@ def create_app(
         user = require_capability(request, "dashboard.read")
         if isinstance(user, RedirectResponse):
             return user
+        dashboard_data = build_dashboard_data(request)
         return render(
             request,
             "dashboard.html",
             page="dashboard",
             title="Dashboard",
-            **build_dashboard_data(request),
+            dashboard=SimpleNamespace(**dashboard_data),
+            **dashboard_data,
         )
 
     @app.get("/getting-started", response_class=HTMLResponse)
@@ -2089,6 +2100,7 @@ def create_app(
         if isinstance(user, RedirectResponse):
             return user
         current_org = get_current_org(request)
+        current_config, _, _ = load_config_summary(current_org)
         preflight_snapshot = merge_saved_preflight_snapshot_data(
             request.session.get("_preflight_snapshot"),
             build_preflight_snapshot(request, include_live=False),
@@ -2102,6 +2114,7 @@ def create_app(
             getting_started=build_getting_started_view_state(
                 current_org_name=current_org.name,
                 preflight_snapshot=preflight_snapshot,
+                source_provider_name=source_provider_label(current_config.source_provider if current_config else "wecom"),
                 ui_mode=get_ui_mode(request),
             ),
         )
@@ -2145,520 +2158,6 @@ def create_app(
             return csrf_error
         request.session["ui_mode"] = normalize_ui_mode(ui_mode)
         return RedirectResponse(url=fallback_url, status_code=303)
-
-    @app.get("/organizations", response_class=HTMLResponse)
-    def organizations_page(request: Request):
-        user = require_capability(request, "organizations.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        return render(
-            request,
-            "organizations.html",
-            page="organizations",
-            title="Organizations",
-        )
-
-    @app.post("/organization-switch")
-    def organization_switch(
-        request: Request,
-        csrf_token: str = Form(""),
-        org_id: str = Form("default"),
-        return_url: str = Form("/dashboard"),
-    ):
-        user = require_user(request)
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, _safe_redirect_target(return_url, "/dashboard"))
-        if csrf_error:
-            return csrf_error
-        organization = request.app.state.organization_repo.get_organization_record(org_id)
-        if not organization or not organization.is_enabled:
-            flash(request, "error", "Organization not found or disabled")
-            return RedirectResponse(url="/dashboard", status_code=303)
-        request.session["selected_org_id"] = organization.org_id
-        flash_t(request, "success", "Switched to organization {name}", name=organization.name)
-        return RedirectResponse(url=_safe_redirect_target(return_url, "/dashboard"), status_code=303)
-
-    @app.post("/organizations")
-    def organization_submit(
-        request: Request,
-        csrf_token: str = Form(""),
-        org_id: str = Form(""),
-        name: str = Form(""),
-        config_path_value: str = Form("", alias="config_path"),
-        description: str = Form(""),
-        is_enabled: Optional[str] = Form(None),
-    ):
-        user = require_capability(request, "organizations.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/organizations")
-        if csrf_error:
-            return csrf_error
-        normalized_org_id = str(org_id or "").strip()
-        if not normalized_org_id:
-            flash(request, "error", "Organization ID is required")
-            return RedirectResponse(url="/organizations", status_code=303)
-        try:
-            request.app.state.organization_repo.upsert_organization(
-                org_id=normalized_org_id,
-                name=name,
-                config_path=config_path_value,
-                description=description,
-                is_enabled=_to_bool(is_enabled, True),
-            )
-        except Exception as exc:
-            flash_t(request, "error", "Failed to save organization: {error}", error=str(exc))
-            return RedirectResponse(url="/organizations", status_code=303)
-        request.app.state.org_config_repo.ensure_loaded(normalized_org_id, config_path=config_path_value)
-        organization = request.app.state.organization_repo.get_organization_record(normalized_org_id)
-        request.app.state.audit_repo.add_log(
-            actor_username=user.username,
-            action_type="organization.upsert",
-            target_type="organization",
-            target_id=normalized_org_id.lower(),
-            result="success",
-            message="Saved organization definition",
-            payload=organization.to_dict() if organization else {"org_id": org_id},
-        )
-        flash_t(request, "success", "Organization {org_id} saved", org_id=normalized_org_id.lower())
-        return RedirectResponse(url="/organizations", status_code=303)
-
-    @app.post("/organizations/{org_id}/select")
-    def organization_select(
-        request: Request,
-        org_id: str,
-        csrf_token: str = Form(""),
-        return_url: str = Form("/dashboard"),
-    ):
-        user = require_capability(request, "organizations.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/organizations")
-        if csrf_error:
-            return csrf_error
-        organization = request.app.state.organization_repo.get_organization_record(org_id)
-        if not organization or not organization.is_enabled:
-            flash(request, "error", "Organization not found or disabled")
-            return RedirectResponse(url="/organizations", status_code=303)
-        request.session["selected_org_id"] = organization.org_id
-        flash_t(request, "success", "Switched to organization {name}", name=organization.name)
-        return RedirectResponse(url=_safe_redirect_target(return_url, "/dashboard"), status_code=303)
-
-    @app.get("/organizations/{org_id}/export")
-    def organization_export(request: Request, org_id: str):
-        user = require_capability(request, "organizations.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        organization = request.app.state.organization_repo.get_organization_record(org_id)
-        if not organization:
-            flash(request, "error", "Organization not found")
-            return RedirectResponse(url="/organizations", status_code=303)
-        try:
-            bundle = export_organization_bundle(request.app.state.db_manager, organization.org_id)
-        except Exception as exc:
-            flash_t(request, "error", "Failed to export organization bundle: {error}", error=str(exc))
-            return RedirectResponse(url="/organizations", status_code=303)
-        request.app.state.audit_repo.add_log(
-            org_id=organization.org_id,
-            actor_username=user.username,
-            action_type="organization.bundle_export",
-            target_type="organization",
-            target_id=organization.org_id,
-            result="success",
-            message="Exported configuration bundle",
-            payload={"organization_name": organization.name},
-        )
-        filename = f"{organization.org_id}-config-bundle.json"
-        return Response(
-            content=json.dumps(bundle, ensure_ascii=False, indent=2).encode("utf-8"),
-            media_type="application/json; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-    @app.post("/organizations/import")
-    def organization_import(
-        request: Request,
-        csrf_token: str = Form(""),
-        bundle_json: str = Form(""),
-        target_org_id: str = Form(""),
-        replace_existing: Optional[str] = Form(None),
-    ):
-        user = require_capability(request, "organizations.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/organizations")
-        if csrf_error:
-            return csrf_error
-        bundle_payload = str(bundle_json or "").strip()
-        if not bundle_payload:
-            flash(request, "error", "Configuration bundle content is required")
-            return RedirectResponse(url="/organizations", status_code=303)
-        try:
-            bundle = json.loads(bundle_payload)
-        except json.JSONDecodeError as exc:
-            flash_t(request, "error", "Invalid configuration bundle JSON: {error}", error=str(exc))
-            return RedirectResponse(url="/organizations", status_code=303)
-        try:
-            summary = import_organization_bundle(
-                request.app.state.db_manager,
-                bundle,
-                target_org_id=str(target_org_id or "").strip() or None,
-                replace_existing=_to_bool(replace_existing, False),
-            )
-        except Exception as exc:
-            flash_t(request, "error", "Failed to import organization bundle: {error}", error=str(exc))
-            return RedirectResponse(url="/organizations", status_code=303)
-        request.app.state.audit_repo.add_log(
-            org_id=summary["org_id"],
-            actor_username=user.username,
-            action_type="organization.bundle_import",
-            target_type="organization",
-            target_id=summary["org_id"],
-            result="success",
-            message="Imported configuration bundle",
-            payload=summary,
-        )
-        flash_t(
-            request,
-            "success",
-            "Imported configuration bundle into {org_id} ({connectors} connectors, {mappings} mappings, {rules} group rules)",
-            org_id=summary["org_id"],
-            connectors=summary["imported_connectors"],
-            mappings=summary["imported_mappings"],
-            rules=summary["imported_group_rules"],
-        )
-        return RedirectResponse(url="/organizations", status_code=303)
-
-    @app.post("/organizations/{org_id}/toggle")
-    def organization_toggle(
-        request: Request,
-        org_id: str,
-        csrf_token: str = Form(""),
-    ):
-        user = require_capability(request, "organizations.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/organizations")
-        if csrf_error:
-            return csrf_error
-        organization = request.app.state.organization_repo.get_organization_record(org_id)
-        if not organization:
-            flash(request, "error", "Organization not found")
-            return RedirectResponse(url="/organizations", status_code=303)
-        try:
-            request.app.state.organization_repo.set_enabled(org_id, not organization.is_enabled)
-        except Exception as exc:
-            flash_t(request, "error", "Failed to update organization: {error}", error=str(exc))
-            return RedirectResponse(url="/organizations", status_code=303)
-        if request.session.get("selected_org_id") == organization.org_id and organization.is_enabled:
-            request.session["selected_org_id"] = "default"
-        flash_t(
-            request,
-            "success",
-            "Organization {name} enabled" if not organization.is_enabled else "Organization {name} disabled",
-            name=organization.name,
-        )
-        return RedirectResponse(url="/organizations", status_code=303)
-
-    @app.post("/organizations/{org_id}/delete")
-    def organization_delete(
-        request: Request,
-        org_id: str,
-        csrf_token: str = Form(""),
-    ):
-        user = require_capability(request, "organizations.manage")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/organizations")
-        if csrf_error:
-            return csrf_error
-        organization = request.app.state.organization_repo.get_organization_record(org_id)
-        if not organization:
-            flash(request, "error", "Organization not found")
-            return RedirectResponse(url="/organizations", status_code=303)
-        if request.app.state.job_repo.count_jobs(org_id=organization.org_id):
-            flash(request, "error", "Organization has job history and cannot be deleted")
-            return RedirectResponse(url="/organizations", status_code=303)
-        request.app.state.connector_repo.delete_connectors_for_org(organization.org_id)
-        request.app.state.exclusion_repo.delete_rules_for_org(organization.org_id)
-        ManagedGroupBindingRepository(request.app.state.db_manager).delete_bindings_for_org(organization.org_id)
-        ObjectStateRepository(request.app.state.db_manager).delete_states_for_org(organization.org_id)
-        request.app.state.attribute_mapping_repo.delete_rules_for_org(organization.org_id)
-        request.app.state.user_binding_repo.delete_bindings_for_org(organization.org_id)
-        request.app.state.department_override_repo.delete_overrides_for_org(organization.org_id)
-        request.app.state.exception_rule_repo.delete_rules_for_org(organization.org_id)
-        request.app.state.offboarding_repo.delete_records_for_org(organization.org_id)
-        request.app.state.lifecycle_repo.delete_records_for_org(organization.org_id)
-        request.app.state.custom_group_binding_repo.delete_bindings_for_org(organization.org_id)
-        request.app.state.replay_request_repo.delete_requests_for_org(organization.org_id)
-        request.app.state.audit_repo.delete_logs_for_org(organization.org_id)
-        request.app.state.org_config_repo.delete_config(organization.org_id)
-        request.app.state.settings_repo.delete_org_scoped_values(organization.org_id)
-        try:
-            request.app.state.organization_repo.delete_organization(organization.org_id)
-        except Exception as exc:
-            flash_t(request, "error", "Failed to delete organization: {error}", error=str(exc))
-            return RedirectResponse(url="/organizations", status_code=303)
-        if request.session.get("selected_org_id") == organization.org_id:
-            request.session["selected_org_id"] = "default"
-        request.app.state.audit_repo.add_log(
-            actor_username=user.username,
-            action_type="organization.delete",
-            target_type="organization",
-            target_id=organization.org_id,
-            result="success",
-            message="Deleted organization definition",
-            payload={"name": organization.name},
-        )
-        flash_t(request, "success", "Organization {name} deleted", name=organization.name)
-        return RedirectResponse(url="/organizations", status_code=303)
-
-    @app.get("/config", response_class=HTMLResponse)
-    def config_page(request: Request):
-        user = require_capability(request, "config.read")
-        if isinstance(user, RedirectResponse):
-            return user
-        request.session.pop(CONFIG_PREVIEW_SESSION_KEY, None)
-        return render(
-            request,
-            "config.html",
-            **build_config_page_context(request),
-        )
-
-    @app.post("/config/preview")
-    def config_preview(
-        request: Request,
-        csrf_token: str = Form(""),
-        source_provider: str = Form("wecom"),
-        corpid: str = Form(""),
-        agentid: str = Form(""),
-        corpsecret: str = Form(""),
-        webhook_url: str = Form(""),
-        ldap_server: str = Form(""),
-        ldap_domain: str = Form(""),
-        ldap_username: str = Form(""),
-        ldap_password: str = Form(""),
-        ldap_port: int = Form(636),
-        ldap_use_ssl: Optional[str] = Form(None),
-        ldap_validate_cert: Optional[str] = Form(None),
-        ldap_ca_cert_path: str = Form(""),
-        default_password: str = Form(""),
-        force_change_password: Optional[str] = Form(None),
-        password_complexity: str = Form("strong"),
-        schedule_time: str = Form("03:00"),
-        retry_interval: int = Form(60),
-        max_retries: int = Form(3),
-        group_display_separator: str = Form("-"),
-        group_recursive_enabled: Optional[str] = Form(None),
-        managed_relation_cleanup_enabled: Optional[str] = Form(None),
-        schedule_execution_mode: str = Form("apply"),
-        web_bind_host: str = Form("127.0.0.1"),
-        web_bind_port: int = Form(8000),
-        web_public_base_url: str = Form(""),
-        web_session_cookie_secure_mode: str = Form("auto"),
-        web_trust_proxy_headers: Optional[str] = Form(None),
-        web_forwarded_allow_ips: str = Form("127.0.0.1"),
-        user_ou_placement_strategy: str = Form("wecom_primary_department"),
-        soft_excluded_groups: str = Form(""),
-    ):
-        user = require_capability(request, "config.write")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/config")
-        if csrf_error:
-            return csrf_error
-
-        submission = build_config_submission(
-            request,
-            source_provider=source_provider,
-            corpid=corpid,
-            agentid=agentid,
-            corpsecret=corpsecret,
-            webhook_url=webhook_url,
-            ldap_server=ldap_server,
-            ldap_domain=ldap_domain,
-            ldap_username=ldap_username,
-            ldap_password=ldap_password,
-            ldap_port=ldap_port,
-            ldap_use_ssl=ldap_use_ssl,
-            ldap_validate_cert=ldap_validate_cert,
-            ldap_ca_cert_path=ldap_ca_cert_path,
-            default_password=default_password,
-            force_change_password=force_change_password,
-            password_complexity=password_complexity,
-            schedule_time=schedule_time,
-            retry_interval=retry_interval,
-            max_retries=max_retries,
-            group_display_separator=group_display_separator,
-            group_recursive_enabled=group_recursive_enabled,
-            managed_relation_cleanup_enabled=managed_relation_cleanup_enabled,
-            schedule_execution_mode=schedule_execution_mode,
-            web_bind_host=web_bind_host,
-            web_bind_port=web_bind_port,
-            web_public_base_url=web_public_base_url,
-            web_session_cookie_secure_mode=web_session_cookie_secure_mode,
-            web_trust_proxy_headers=web_trust_proxy_headers,
-            web_forwarded_allow_ips=web_forwarded_allow_ips,
-            user_ou_placement_strategy=user_ou_placement_strategy,
-            soft_excluded_groups=soft_excluded_groups,
-        )
-        preview = build_config_change_preview(request, submission)
-        if preview["changed_count"] == 0:
-            request.session.pop(CONFIG_PREVIEW_SESSION_KEY, None)
-            flash(request, "warning", "No configuration changes were detected")
-            return RedirectResponse(url="/config", status_code=303)
-
-        preview_token = secrets.token_urlsafe(12)
-        request.session[CONFIG_PREVIEW_SESSION_KEY] = {
-            "token": preview_token,
-            "submission": submission,
-        }
-        return render(
-            request,
-            "config.html",
-            **build_config_page_context(
-                request,
-                editable_override=build_config_editable_override(request, submission),
-                config_change_preview=preview,
-                preview_token=preview_token,
-            ),
-        )
-
-    @app.post("/config/confirm")
-    def config_confirm(request: Request, csrf_token: str = Form(""), preview_token: str = Form("")):
-        user = require_capability(request, "config.write")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/config")
-        if csrf_error:
-            return csrf_error
-
-        preview_payload = request.session.get(CONFIG_PREVIEW_SESSION_KEY)
-        if not isinstance(preview_payload, dict) or str(preview_payload.get("token") or "") != str(preview_token or ""):
-            flash(request, "error", "The pending configuration preview has expired. Preview the changes again.")
-            return RedirectResponse(url="/config", status_code=303)
-
-        try:
-            apply_config_submission(
-                request,
-                user=user,
-                submission=dict(preview_payload.get("submission") or {}),
-            )
-        except ValueError as exc:
-            flash(request, "error", str(exc))
-            return RedirectResponse(url="/config", status_code=303)
-        finally:
-            request.session.pop(CONFIG_PREVIEW_SESSION_KEY, None)
-
-        persisted_web_runtime_settings = resolve_web_runtime_settings(request.app.state.settings_repo)
-        flash(
-            request,
-            "success",
-            (
-                "Configuration saved. Restart the web process to apply deployment security changes."
-                if web_runtime_requires_restart(
-                    request.app.state.web_runtime_settings,
-                    persisted_web_runtime_settings,
-                )
-                else "Configuration saved"
-            ),
-        )
-        return RedirectResponse(url="/config", status_code=303)
-
-    @app.post("/config")
-    def config_submit(
-        request: Request,
-        csrf_token: str = Form(""),
-        source_provider: str = Form("wecom"),
-        corpid: str = Form(""),
-        agentid: str = Form(""),
-        corpsecret: str = Form(""),
-        webhook_url: str = Form(""),
-        ldap_server: str = Form(""),
-        ldap_domain: str = Form(""),
-        ldap_username: str = Form(""),
-        ldap_password: str = Form(""),
-        ldap_port: int = Form(636),
-        ldap_use_ssl: Optional[str] = Form(None),
-        ldap_validate_cert: Optional[str] = Form(None),
-        ldap_ca_cert_path: str = Form(""),
-        default_password: str = Form(""),
-        force_change_password: Optional[str] = Form(None),
-        password_complexity: str = Form("strong"),
-        schedule_time: str = Form("03:00"),
-        retry_interval: int = Form(60),
-        max_retries: int = Form(3),
-        group_display_separator: str = Form("-"),
-        group_recursive_enabled: Optional[str] = Form(None),
-        managed_relation_cleanup_enabled: Optional[str] = Form(None),
-        schedule_execution_mode: str = Form("apply"),
-        web_bind_host: str = Form("127.0.0.1"),
-        web_bind_port: int = Form(8000),
-        web_public_base_url: str = Form(""),
-        web_session_cookie_secure_mode: str = Form("auto"),
-        web_trust_proxy_headers: Optional[str] = Form(None),
-        web_forwarded_allow_ips: str = Form("127.0.0.1"),
-        user_ou_placement_strategy: str = Form("wecom_primary_department"),
-        soft_excluded_groups: str = Form(""),
-    ):
-        user = require_capability(request, "config.write")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/config")
-        if csrf_error:
-            return csrf_error
-
-        submission = build_config_submission(
-            request,
-            source_provider=source_provider,
-            corpid=corpid,
-            agentid=agentid,
-            corpsecret=corpsecret,
-            webhook_url=webhook_url,
-            ldap_server=ldap_server,
-            ldap_domain=ldap_domain,
-            ldap_username=ldap_username,
-            ldap_password=ldap_password,
-            ldap_port=ldap_port,
-            ldap_use_ssl=ldap_use_ssl,
-            ldap_validate_cert=ldap_validate_cert,
-            ldap_ca_cert_path=ldap_ca_cert_path,
-            default_password=default_password,
-            force_change_password=force_change_password,
-            password_complexity=password_complexity,
-            schedule_time=schedule_time,
-            retry_interval=retry_interval,
-            max_retries=max_retries,
-            group_display_separator=group_display_separator,
-            group_recursive_enabled=group_recursive_enabled,
-            managed_relation_cleanup_enabled=managed_relation_cleanup_enabled,
-            schedule_execution_mode=schedule_execution_mode,
-            web_bind_host=web_bind_host,
-            web_bind_port=web_bind_port,
-            web_public_base_url=web_public_base_url,
-            web_session_cookie_secure_mode=web_session_cookie_secure_mode,
-            web_trust_proxy_headers=web_trust_proxy_headers,
-            web_forwarded_allow_ips=web_forwarded_allow_ips,
-            user_ou_placement_strategy=user_ou_placement_strategy,
-            soft_excluded_groups=soft_excluded_groups,
-        )
-        apply_config_submission(request, user=user, submission=submission)
-        request.session.pop(CONFIG_PREVIEW_SESSION_KEY, None)
-        persisted_web_runtime_settings = resolve_web_runtime_settings(request.app.state.settings_repo)
-        flash(
-            request,
-            "success",
-            (
-                "Configuration saved. Restart the web process to apply deployment security changes."
-                if web_runtime_requires_restart(
-                    request.app.state.web_runtime_settings,
-                    persisted_web_runtime_settings,
-                )
-                else "Configuration saved"
-            ),
-        )
-        return RedirectResponse(url="/config", status_code=303)
 
     @app.get("/advanced-sync", response_class=HTMLResponse)
     def advanced_sync_page(request: Request):
@@ -3236,1151 +2735,6 @@ def create_app(
         flash_t(request, "success", "Mapping rule deleted")
         return RedirectResponse(url="/advanced-sync", status_code=303)
 
-    @app.get("/mappings", response_class=HTMLResponse)
-    def mappings_page(request: Request):
-        user = require_capability(request, "mappings.read")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        current_org = get_current_org(request)
-        remembered_filters = resolve_remembered_filters(
-            request,
-            page_name="mappings",
-            defaults={"q": "", "status": "all"},
-        )
-        query = str(remembered_filters["q"])
-        status = str(remembered_filters["status"] or "all").strip().lower()
-        binding_page = parse_page_number(request.query_params.get("binding_page"), 1)
-        override_page = parse_page_number(request.query_params.get("override_page"), 1)
-        bindings, binding_page_data = fetch_page(
-            lambda *, limit, offset: request.app.state.user_binding_repo.list_binding_records_page(
-                limit=limit,
-                offset=offset,
-                query=query,
-                status=status,
-                org_id=current_org.org_id,
-            ),
-            page=binding_page,
-            page_size=20,
-        )
-        overrides, override_page_data = fetch_page(
-            lambda *, limit, offset: request.app.state.department_override_repo.list_override_records_page(
-                limit=limit,
-                offset=offset,
-                query=query,
-                org_id=current_org.org_id,
-            ),
-            page=override_page,
-            page_size=20,
-        )
-        return render(
-            request,
-            "mappings.html",
-            page="mappings",
-            title="Mappings",
-            bindings=bindings,
-            overrides=overrides,
-            mapping_query=query,
-            mapping_status=status,
-            binding_page_data=binding_page_data,
-            override_page_data=override_page_data,
-            department_name_map=load_department_name_map(request),
-            filters_are_remembered=True,
-        )
-
-    @app.get("/mappings/export")
-    def mappings_export(request: Request):
-        user = require_capability(request, "mappings.read")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        query = (request.query_params.get("q") or "").strip()
-        status = (request.query_params.get("status") or "all").strip().lower()
-        current_org = get_current_org(request)
-
-        def iter_rows():
-            for item in iter_all_pages(
-                lambda *, limit, offset: request.app.state.user_binding_repo.list_binding_records_page(
-                    limit=limit,
-                    offset=offset,
-                    query=query,
-                    status=status,
-                    org_id=current_org.org_id,
-                )
-            ):
-                yield [
-                    "binding",
-                    item.source_user_id,
-                    item.ad_username,
-                    "",
-                    "true" if item.is_enabled else "false",
-                    item.source,
-                    item.notes,
-                    item.updated_at,
-                ]
-            for item in iter_all_pages(
-                lambda *, limit, offset: request.app.state.department_override_repo.list_override_records_page(
-                    limit=limit,
-                    offset=offset,
-                    query=query,
-                    org_id=current_org.org_id,
-                )
-            ):
-                yield [
-                    "override",
-                    item.source_user_id,
-                    "",
-                    item.primary_department_id,
-                    "",
-                    "",
-                    item.notes,
-                    item.updated_at,
-                ]
-
-        return stream_csv(
-            header=[
-                "record_type",
-                "source_user_id",
-                "ad_username",
-                "primary_department_id",
-                "is_enabled",
-                "source",
-                "notes",
-                "updated_at",
-            ],
-            row_iterable=iter_rows(),
-            filename="mappings-export.csv",
-        )
-
-    @app.post("/mappings/bind")
-    def mappings_bind_submit(
-        request: Request,
-        csrf_token: str = Form(""),
-        source_user_id: str = Form(""),
-        legacy_source_user_id: str = Form("", alias="wecom_userid"),
-        ad_username: str = Form(...),
-        notes: str = Form(""),
-    ):
-        user = require_capability(request, "mappings.write")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/mappings")
-        if csrf_error:
-            return csrf_error
-
-        source_user_id = (source_user_id or "").strip() or (legacy_source_user_id or "").strip()
-        ad_username = ad_username.strip()
-        if not source_user_id or not ad_username:
-            flash(request, "error", "Source user ID and AD username are required")
-            return RedirectResponse(url="/mappings", status_code=303)
-
-        conflict_message = validate_binding_target(request, source_user_id, ad_username)
-        if conflict_message:
-            flash(request, "error", conflict_message)
-            return RedirectResponse(url="/mappings", status_code=303)
-
-        current_org = get_current_org(request)
-        request.app.state.user_binding_repo.upsert_binding_for_source_user(
-            source_user_id,
-            ad_username,
-            org_id=current_org.org_id,
-            source="manual",
-            notes=notes.strip(),
-            preserve_manual=False,
-        )
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="mapping.bind_upsert",
-            target_type="user_identity_binding",
-            target_id=source_user_id,
-            result="success",
-            message="Saved source to AD identity binding",
-            payload={"source_user_id": source_user_id, "ad_username": ad_username},
-        )
-        flash(request, "success", "Identity binding saved")
-        return RedirectResponse(url="/mappings", status_code=303)
-
-    @app.post("/mappings/import")
-    def mappings_import_submit(
-        request: Request,
-        csrf_token: str = Form(""),
-        bulk_bindings: str = Form(""),
-    ):
-        user = require_capability(request, "mappings.write")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/mappings")
-        if csrf_error:
-            return csrf_error
-
-        rows, parse_errors = parse_bulk_bindings(bulk_bindings)
-        if parse_errors:
-            flash(request, "error", "; ".join(parse_errors[:5]))
-            return RedirectResponse(url="/mappings", status_code=303)
-        if not rows:
-            flash(request, "error", "Bulk import content is empty")
-            return RedirectResponse(url="/mappings", status_code=303)
-
-        imported_count = 0
-        conflicts: list[str] = []
-        current_org = get_current_org(request)
-        for row in rows:
-            conflict_message = validate_binding_target(request, row["source_user_id"], row["ad_username"])
-            if conflict_message:
-                conflicts.append(conflict_message)
-                continue
-            request.app.state.user_binding_repo.upsert_binding_for_source_user(
-                row["source_user_id"],
-                row["ad_username"],
-                org_id=current_org.org_id,
-                source="manual",
-                notes=row["notes"],
-                preserve_manual=False,
-            )
-            imported_count += 1
-
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="mapping.bind_import",
-            target_type="user_identity_binding",
-            target_id="bulk",
-            result="success" if not conflicts else "warning",
-            message="Imported identity bindings in bulk",
-            payload={"imported_count": imported_count, "conflict_count": len(conflicts)},
-        )
-        if conflicts:
-            flash(
-                request,
-                "error",
-                f"Imported {imported_count} rows, skipped {len(conflicts)} conflict rows: "
-                f"{'; '.join(conflicts[:3])}",
-            )
-        else:
-            flash_t(request, "success", "Imported {imported_count} identity bindings", imported_count=imported_count)
-        return RedirectResponse(url="/mappings", status_code=303)
-
-    @app.post("/mappings/bind/{source_user_id}/toggle")
-    def mappings_toggle_binding(
-        request: Request,
-        source_user_id: str,
-        csrf_token: str = Form(""),
-        enabled: str = Form(...),
-    ):
-        user = require_capability(request, "mappings.write")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/mappings")
-        if csrf_error:
-            return csrf_error
-
-        current_org = get_current_org(request)
-        binding = request.app.state.user_binding_repo.get_binding_record_by_source_user_id(
-            source_user_id,
-            org_id=current_org.org_id,
-        )
-        if not binding:
-            flash_t(request, "error", "Binding not found: {source_user_id}", source_user_id=source_user_id)
-            return RedirectResponse(url="/mappings", status_code=303)
-
-        new_state = _to_bool(enabled, binding.is_enabled)
-        request.app.state.user_binding_repo.set_enabled_for_source_user(
-            source_user_id,
-            new_state,
-            org_id=current_org.org_id,
-        )
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="mapping.bind_toggle",
-            target_type="user_identity_binding",
-            target_id=source_user_id,
-            result="success",
-            message=f"{'Enabled' if new_state else 'Disabled'} identity binding",
-            payload={"source_user_id": source_user_id, "ad_username": binding.ad_username},
-        )
-        flash_t(
-            request,
-            "success",
-            "Binding {source_user_id} enabled" if new_state else "Binding {source_user_id} disabled",
-            source_user_id=source_user_id,
-        )
-        return RedirectResponse(url="/mappings", status_code=303)
-
-    @app.post("/mappings/override")
-    def mappings_override_submit(
-        request: Request,
-        csrf_token: str = Form(""),
-        source_user_id: str = Form(""),
-        legacy_source_user_id: str = Form("", alias="wecom_userid"),
-        primary_department_id: str = Form(...),
-        notes: str = Form(""),
-    ):
-        user = require_capability(request, "mappings.write")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/mappings")
-        if csrf_error:
-            return csrf_error
-
-        source_user_id = (source_user_id or "").strip() or (legacy_source_user_id or "").strip()
-        primary_department_id = primary_department_id.strip()
-        if not source_user_id or not primary_department_id:
-            flash(request, "error", "Source user ID and primary department ID are required")
-            return RedirectResponse(url="/mappings", status_code=303)
-
-        department_exists, department_error = department_exists_in_source_provider(request, primary_department_id)
-        if not department_exists:
-            flash(request, "error", department_error or "Primary department validation failed")
-            return RedirectResponse(url="/mappings", status_code=303)
-
-        current_org = get_current_org(request)
-        request.app.state.department_override_repo.upsert_override_for_source_user(
-            source_user_id,
-            primary_department_id,
-            org_id=current_org.org_id,
-            notes=notes.strip(),
-        )
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="mapping.department_override_upsert",
-            target_type="user_department_override",
-            target_id=source_user_id,
-            result="success",
-            message="Saved primary department override",
-            payload={"source_user_id": source_user_id, "primary_department_id": primary_department_id},
-        )
-        flash(request, "success", "Primary department override saved")
-        return RedirectResponse(url="/mappings", status_code=303)
-
-    @app.post("/mappings/override/{source_user_id}/delete")
-    def mappings_override_delete(
-        request: Request,
-        source_user_id: str,
-        csrf_token: str = Form(""),
-    ):
-        user = require_capability(request, "mappings.write")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/mappings")
-        if csrf_error:
-            return csrf_error
-
-        request.app.state.department_override_repo.delete_override_for_source_user(
-            source_user_id,
-            org_id=get_current_org(request).org_id,
-        )
-        request.app.state.audit_repo.add_log(
-            org_id=get_current_org(request).org_id,
-            actor_username=user.username,
-            action_type="mapping.department_override_delete",
-            target_type="user_department_override",
-            target_id=source_user_id,
-            result="success",
-            message="Deleted primary department override",
-        )
-        flash_t(
-            request,
-            "success",
-            "Deleted primary department override for {source_user_id}",
-            source_user_id=source_user_id,
-        )
-        return RedirectResponse(url="/mappings", status_code=303)
-    @app.get("/exceptions", response_class=HTMLResponse)
-    def exceptions_page(request: Request):
-        user = require_capability(request, "exceptions.read")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        current_org = get_current_org(request)
-        remembered_filters = resolve_remembered_filters(
-            request,
-            page_name="exceptions",
-            defaults={"q": "", "status": "all", "rule_type": "all"},
-        )
-        query = str(remembered_filters["q"])
-        status = str(remembered_filters["status"] or "all").strip().lower()
-        requested_rule_type = str(remembered_filters["rule_type"] or "all").strip().lower()
-        normalized_rule_type = normalize_exception_rule_type(requested_rule_type)
-        page_number = parse_page_number(request.query_params.get("page_number"), 1)
-        rules, page_data = fetch_page(
-            lambda *, limit, offset: request.app.state.exception_rule_repo.list_rule_records_page(
-                limit=limit,
-                offset=offset,
-                query=query,
-                rule_type="" if requested_rule_type == "all" else normalized_rule_type,
-                status=status,
-                org_id=current_org.org_id,
-            ),
-            page=page_number,
-            page_size=25,
-        )
-        return render(
-            request,
-            "exceptions.html",
-            page="exceptions",
-            title="Exception Rules",
-            exception_rules=rules,
-            exception_page_data=page_data,
-            exception_query=query,
-            exception_status=status,
-            exception_rule_type=normalized_rule_type if normalized_rule_type else "all",
-            exception_rule_definitions=EXCEPTION_RULE_DEFINITIONS,
-            exception_match_type_labels=EXCEPTION_MATCH_TYPE_LABELS,
-            user_exception_rule_types=[
-                rule_name
-                for rule_name, definition in EXCEPTION_RULE_DEFINITIONS.items()
-                if definition.get("match_type") in {"source_user_id", "wecom_userid"}
-            ],
-            department_exception_rule_types=[
-                rule_name
-                for rule_name, definition in EXCEPTION_RULE_DEFINITIONS.items()
-                if definition.get("match_type") == "department_id"
-            ],
-            group_exception_rule_types=[
-                rule_name
-                for rule_name, definition in EXCEPTION_RULE_DEFINITIONS.items()
-                if definition.get("match_type") == "group_sam"
-            ],
-            department_name_map=load_department_name_map(request),
-            filters_are_remembered=True,
-        )
-
-    @app.post("/exceptions")
-    def exceptions_submit(
-        request: Request,
-        csrf_token: str = Form(""),
-        rule_type: str = Form(...),
-        match_value: str = Form(...),
-        notes: str = Form(""),
-        expires_at: str = Form(""),
-        is_once: Optional[str] = Form(None),
-    ):
-        user = require_capability(request, "exceptions.write")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/exceptions")
-        if csrf_error:
-            return csrf_error
-
-        normalized_rule_type = normalize_exception_rule_type(rule_type)
-        rule_definition = get_exception_rule_definition(normalized_rule_type)
-        normalized_match_value = match_value.strip()
-        if not rule_definition or not normalized_match_value:
-            flash(request, "error", "Invalid exception rule input")
-            return RedirectResponse(url="/exceptions", status_code=303)
-
-        if rule_definition.get("match_type") == "department_id":
-            department_exists, department_error = department_exists_in_source_provider(request, normalized_match_value)
-            if not department_exists:
-                flash(request, "error", department_error or "Invalid department id")
-                return RedirectResponse(url="/exceptions", status_code=303)
-        try:
-            normalized_expires_at = normalize_optional_datetime_input(expires_at)
-        except ValueError as exc:
-            flash(request, "error", str(exc))
-            return RedirectResponse(url="/exceptions", status_code=303)
-
-        try:
-            current_org = get_current_org(request)
-            request.app.state.exception_rule_repo.upsert_rule(
-                rule_type=normalized_rule_type,
-                match_value=normalized_match_value,
-                org_id=current_org.org_id,
-                notes=notes.strip(),
-                expires_at=normalized_expires_at,
-                is_once=_to_bool(is_once, False),
-            )
-        except ValueError as exc:
-            flash(request, "error", str(exc))
-            return RedirectResponse(url="/exceptions", status_code=303)
-        enqueue_replay_request(
-            app=request.app,
-            request_type="exception_rule_changed",
-            requested_by=user.username,
-            org_id=current_org.org_id,
-            target_scope="rule",
-            target_id=f"{normalized_rule_type}:{normalized_match_value}",
-            trigger_reason="exception_rule_saved",
-            payload={
-                "rule_type": normalized_rule_type,
-                "match_value": normalized_match_value,
-            },
-        )
-
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="exception_rule.upsert",
-            target_type="sync_exception_rule",
-            target_id=f"{normalized_rule_type}:{normalized_match_value}",
-            result="success",
-            message="Saved sync exception rule",
-            payload={
-                "rule_type": normalized_rule_type,
-                "match_type": rule_definition.get("match_type"),
-                "match_value": normalized_match_value,
-                "expires_at": normalized_expires_at,
-                "is_once": _to_bool(is_once, False),
-            },
-        )
-        flash(request, "success", "Exception rule saved")
-        return RedirectResponse(url="/exceptions", status_code=303)
-
-    @app.post("/exceptions/import")
-    def exceptions_import_submit(
-        request: Request,
-        csrf_token: str = Form(""),
-        bulk_rules: str = Form(""),
-    ):
-        user = require_capability(request, "exceptions.write")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/exceptions")
-        if csrf_error:
-            return csrf_error
-
-        rows, parse_errors = parse_bulk_exception_rules(bulk_rules)
-        if parse_errors:
-            flash(request, "error", "; ".join(parse_errors[:5]))
-            return RedirectResponse(url="/exceptions", status_code=303)
-        if not rows:
-            flash(request, "error", "Bulk exception rule content is empty")
-            return RedirectResponse(url="/exceptions", status_code=303)
-
-        imported_count = 0
-        import_errors: list[str] = []
-        current_org = get_current_org(request)
-        for row in rows:
-            normalized_rule_type = normalize_exception_rule_type(row["rule_type"])
-            rule_definition = get_exception_rule_definition(normalized_rule_type)
-            if not rule_definition:
-                import_errors.append(f"Line {row['line_number']}: unsupported rule_type {row['rule_type']}")
-                continue
-            if rule_definition.get("match_type") == "department_id":
-                department_exists, department_error = department_exists_in_source_provider(request, str(row["match_value"]))
-                if not department_exists:
-                    import_errors.append(
-                        f"Line {row['line_number']}: {department_error or 'invalid department id'}"
-                    )
-                    continue
-            try:
-                normalized_expires_at = normalize_optional_datetime_input(str(row["expires_at"]))
-                request.app.state.exception_rule_repo.upsert_rule(
-                    rule_type=normalized_rule_type,
-                    match_value=str(row["match_value"]),
-                    org_id=current_org.org_id,
-                    notes=str(row["notes"]),
-                    is_enabled=bool(row["is_enabled"]),
-                    expires_at=normalized_expires_at,
-                    is_once=bool(row["is_once"]),
-                )
-            except ValueError as exc:
-                import_errors.append(f"Line {row['line_number']}: {exc}")
-                continue
-            imported_count += 1
-        if imported_count:
-            enqueue_replay_request(
-                app=request.app,
-                request_type="exception_rule_import",
-                requested_by=user.username,
-                org_id=current_org.org_id,
-                target_scope="bulk",
-                target_id="exceptions",
-                trigger_reason="exception_rules_imported",
-                payload={"imported_count": imported_count},
-            )
-
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="exception_rule.import",
-            target_type="sync_exception_rule",
-            target_id="bulk",
-            result="success" if not import_errors else "warning",
-            message="Imported sync exception rules",
-            payload={"imported_count": imported_count, "error_count": len(import_errors)},
-        )
-        if import_errors:
-            flash(
-                request,
-                "error",
-                f"Imported {imported_count} rows, skipped {len(import_errors)} rows: "
-                f"{'; '.join(import_errors[:3])}",
-            )
-        else:
-            flash_t(request, "success", "Imported {imported_count} exception rules", imported_count=imported_count)
-        return RedirectResponse(url="/exceptions", status_code=303)
-
-    @app.get("/exceptions/export")
-    def exceptions_export(request: Request):
-        user = require_capability(request, "exceptions.read")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        query = (request.query_params.get("q") or "").strip()
-        status = (request.query_params.get("status") or "all").strip().lower()
-        requested_rule_type = (request.query_params.get("rule_type") or "all").strip().lower()
-        current_org = get_current_org(request)
-
-        def iter_rows():
-            for item in iter_all_pages(
-                lambda *, limit, offset: request.app.state.exception_rule_repo.list_rule_records_page(
-                    limit=limit,
-                    offset=offset,
-                    query=query,
-                    rule_type="" if requested_rule_type == "all" else normalize_exception_rule_type(requested_rule_type),
-                    status=status,
-                    org_id=current_org.org_id,
-                )
-            ):
-                yield [
-                    item.rule_type,
-                    item.match_value,
-                    item.notes or "",
-                    "true" if item.is_enabled else "false",
-                    item.expires_at or "",
-                    "true" if item.is_once else "false",
-                ]
-
-        return stream_csv(
-            header=["rule_type", "match_value", "notes", "is_enabled", "expires_at", "is_once"],
-            row_iterable=iter_rows(),
-            filename="exception-rules-export.csv",
-        )
-
-    @app.post("/exceptions/{rule_id}/toggle")
-    def exceptions_toggle(
-        request: Request,
-        rule_id: int,
-        csrf_token: str = Form(""),
-        enabled: str = Form(...),
-    ):
-        user = require_capability(request, "exceptions.write")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/exceptions")
-        if csrf_error:
-            return csrf_error
-
-        current_org = get_current_org(request)
-        rule_record = request.app.state.exception_rule_repo.get_rule_record(rule_id, org_id=current_org.org_id)
-        if not rule_record:
-            flash(request, "error", "Exception rule not found")
-            return RedirectResponse(url="/exceptions", status_code=303)
-
-        new_state = _to_bool(enabled, rule_record.is_enabled)
-        request.app.state.exception_rule_repo.set_enabled(rule_id, new_state, org_id=current_org.org_id)
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="exception_rule.toggle",
-            target_type="sync_exception_rule",
-            target_id=str(rule_id),
-            result="success",
-            message=f"{'Enabled' if new_state else 'Disabled'} sync exception rule",
-            payload={
-                "rule_type": rule_record.rule_type,
-                "match_type": rule_record.match_type,
-                "match_value": rule_record.match_value,
-            },
-        )
-        flash(
-            request,
-            "success",
-            "Exception rule enabled" if new_state else "Exception rule disabled",
-        )
-        return RedirectResponse(url="/exceptions", status_code=303)
-
-    @app.post("/exceptions/{rule_id}/delete")
-    def exceptions_delete(
-        request: Request,
-        rule_id: int,
-        csrf_token: str = Form(""),
-    ):
-        user = require_capability(request, "exceptions.write")
-        if isinstance(user, RedirectResponse):
-            return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/exceptions")
-        if csrf_error:
-            return csrf_error
-
-        current_org = get_current_org(request)
-        rule_record = request.app.state.exception_rule_repo.get_rule_record(rule_id, org_id=current_org.org_id)
-        if not rule_record:
-            flash(request, "error", "Exception rule not found")
-            return RedirectResponse(url="/exceptions", status_code=303)
-
-        request.app.state.exception_rule_repo.delete_rule(rule_id, org_id=current_org.org_id)
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="exception_rule.delete",
-            target_type="sync_exception_rule",
-            target_id=str(rule_id),
-            result="success",
-            message="Deleted sync exception rule",
-            payload={
-                "rule_type": rule_record.rule_type,
-                "match_type": rule_record.match_type,
-                "match_value": rule_record.match_value,
-            },
-        )
-        flash(request, "success", "Exception rule deleted")
-        return RedirectResponse(url="/exceptions", status_code=303)
-
-    @app.get("/conflicts", response_class=HTMLResponse)
-    def conflicts_page(request: Request):
-        user = require_capability(request, "jobs.read")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        current_org = get_current_org(request)
-        remembered_filters = resolve_remembered_filters(
-            request,
-            page_name="conflicts",
-            defaults={"q": "", "status": "open", "job_id": ""},
-        )
-        query = str(remembered_filters["q"])
-        status = str(remembered_filters["status"] or "open").strip().lower()
-        job_id = str(remembered_filters["job_id"])
-        page_number = parse_page_number(request.query_params.get("page_number"), 1)
-
-        status_filter = status if status in {"open", "resolved", "dismissed"} else None
-        conflicts, page_data = fetch_page(
-            lambda *, limit, offset: request.app.state.conflict_repo.list_conflict_records_page(
-                limit=limit,
-                offset=offset,
-                job_id=job_id or None,
-                status=status_filter,
-                query=query,
-                org_id=current_org.org_id,
-            ),
-            page=page_number,
-            page_size=30,
-        )
-        conflict_recommendations = {
-            item.id: recommend_conflict_resolution(item)
-            for item in conflicts
-        }
-        return render(
-            request,
-            "conflicts.html",
-            page="conflicts",
-            title="Conflict Queue",
-            conflicts=conflicts,
-            conflict_recommendations=conflict_recommendations,
-            conflict_page_data=page_data,
-            conflict_query=query,
-            conflict_status=status if status_filter else "all",
-            conflict_job_id=job_id,
-            current_org=current_org,
-            filters_are_remembered=True,
-        )
-
-    @app.post("/conflicts/{conflict_id}/resolve-binding")
-    def resolve_conflict_binding(
-        request: Request,
-        conflict_id: int,
-        csrf_token: str = Form(""),
-        ad_username: str = Form(...),
-        return_query: str = Form(""),
-        return_status: str = Form(""),
-        return_job_id: str = Form(""),
-    ):
-        user = require_capability(request, "mappings.write")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        current_org = get_current_org(request)
-        conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
-        if not conflict:
-            flash(request, "error", "Conflict record not found")
-            return RedirectResponse(url="/conflicts", status_code=303)
-        fallback_url = build_conflicts_return_url(_to_text(return_query), _to_text(return_status), _to_text(return_job_id) or conflict.job_id)
-        csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
-        if csrf_error:
-            return csrf_error
-        if conflict.status != "open":
-            flash(request, "error", "Conflict is already processed")
-            return RedirectResponse(url=fallback_url, status_code=303)
-
-        ok, normalized_ad_username, resolved_count = apply_conflict_manual_binding(
-            app=request.app,
-            conflict=conflict,
-            ad_username=ad_username,
-            actor_username=user.username,
-            org_id=current_org.org_id,
-        )
-        if not ok:
-            flash(request, "error", normalized_ad_username)
-            return RedirectResponse(url=fallback_url, status_code=303)
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="conflict.resolve_manual_binding",
-            target_type="sync_conflict",
-            target_id=str(conflict.id),
-            result="success",
-            message="Resolved conflict by creating manual binding",
-            payload={
-                "job_id": conflict.job_id,
-                "source_user_id": conflict.source_id,
-                "ad_username": normalized_ad_username,
-                "resolved_count": resolved_count,
-            },
-        )
-        flash_t(
-            request,
-            "success",
-            "Resolved conflict with manual binding {source_id} -> {ad_username}",
-            source_id=conflict.source_id,
-            ad_username=normalized_ad_username,
-        )
-        return RedirectResponse(url=fallback_url, status_code=303)
-
-    @app.post("/conflicts/{conflict_id}/skip-user")
-    def resolve_conflict_with_skip_user(
-        request: Request,
-        conflict_id: int,
-        csrf_token: str = Form(""),
-        notes: str = Form(""),
-        return_query: str = Form(""),
-        return_status: str = Form(""),
-        return_job_id: str = Form(""),
-    ):
-        user = require_capability(request, "mappings.write")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        current_org = get_current_org(request)
-        conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
-        if not conflict:
-            flash(request, "error", "Conflict record not found")
-            return RedirectResponse(url="/conflicts", status_code=303)
-        fallback_url = build_conflicts_return_url(_to_text(return_query), _to_text(return_status), _to_text(return_job_id) or conflict.job_id)
-        csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
-        if csrf_error:
-            return csrf_error
-        if conflict.status != "open":
-            flash(request, "error", "Conflict is already processed")
-            return RedirectResponse(url=fallback_url, status_code=303)
-        if not conflict.source_id:
-            flash(request, "error", "Conflict does not have a source user to whitelist")
-            return RedirectResponse(url=fallback_url, status_code=303)
-
-        ok, rule_notes, resolved_count = apply_conflict_skip_user_sync(
-            app=request.app,
-            conflict=conflict,
-            actor_username=user.username,
-            org_id=current_org.org_id,
-            notes=_to_text(notes),
-        )
-        if not ok:
-            flash(request, "error", rule_notes)
-            return RedirectResponse(url=fallback_url, status_code=303)
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="conflict.resolve_skip_user",
-            target_type="sync_conflict",
-            target_id=str(conflict.id),
-            result="success",
-            message="Resolved conflict by adding skip_user_sync exception",
-            payload={
-                "job_id": conflict.job_id,
-                "source_user_id": conflict.source_id,
-                "notes": rule_notes,
-                "resolved_count": resolved_count,
-            },
-        )
-        flash_t(request, "success", "Added skip_user_sync for {source_id}", source_id=conflict.source_id)
-        return RedirectResponse(url=fallback_url, status_code=303)
-
-    @app.post("/conflicts/{conflict_id}/apply-recommendation")
-    def apply_conflict_recommendation_route(
-        request: Request,
-        conflict_id: int,
-        csrf_token: str = Form(""),
-        confirmation_reason: str = Form(""),
-        return_query: str = Form(""),
-        return_status: str = Form(""),
-        return_job_id: str = Form(""),
-    ):
-        user = require_capability(request, "mappings.write")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        current_org = get_current_org(request)
-        conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
-        if not conflict:
-            flash(request, "error", "Conflict record not found")
-            return RedirectResponse(url="/conflicts", status_code=303)
-        fallback_url = build_conflicts_return_url(_to_text(return_query), _to_text(return_status), _to_text(return_job_id) or conflict.job_id)
-        csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
-        if csrf_error:
-            return csrf_error
-        if conflict.status != "open":
-            flash(request, "error", "Conflict is already processed")
-            return RedirectResponse(url=fallback_url, status_code=303)
-
-        ok, detail, resolved_count, recommendation = apply_conflict_recommendation(
-            app=request.app,
-            conflict=conflict,
-            actor_username=user.username,
-            org_id=current_org.org_id,
-            confirmation_reason=_to_text(confirmation_reason),
-        )
-        if not ok:
-            flash(request, "error", detail)
-            return RedirectResponse(url=fallback_url, status_code=303)
-
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="conflict.apply_recommendation",
-            target_type="sync_conflict",
-            target_id=str(conflict.id),
-            result="success",
-            message="Applied recommended conflict resolution",
-            payload={
-                "job_id": conflict.job_id,
-                "source_user_id": conflict.source_id,
-                "recommendation": recommendation,
-                "detail": detail,
-                "resolved_count": resolved_count,
-            },
-        )
-        flash_t(
-            request,
-            "success",
-            "Applied recommendation: {label}",
-            label=str(recommendation.get("label") or "-"),
-        )
-        return RedirectResponse(url=fallback_url, status_code=303)
-
-    @app.post("/conflicts/{conflict_id}/dismiss")
-    def dismiss_conflict(
-        request: Request,
-        conflict_id: int,
-        csrf_token: str = Form(""),
-        notes: str = Form(""),
-        return_query: str = Form(""),
-        return_status: str = Form(""),
-        return_job_id: str = Form(""),
-    ):
-        user = require_capability(request, "mappings.write")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        current_org = get_current_org(request)
-        conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
-        if not conflict:
-            flash(request, "error", "Conflict record not found")
-            return RedirectResponse(url="/conflicts", status_code=303)
-        fallback_url = build_conflicts_return_url(_to_text(return_query), _to_text(return_status), _to_text(return_job_id) or conflict.job_id)
-        csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
-        if csrf_error:
-            return csrf_error
-
-        request.app.state.conflict_repo.update_conflict_status(
-            conflict.id,
-            status="dismissed",
-            resolution_payload={
-                "action": "dismissed",
-                "notes": _to_text(notes),
-                "actor_username": user.username,
-            },
-            resolved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        )
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="conflict.dismiss",
-            target_type="sync_conflict",
-            target_id=str(conflict.id),
-            result="success",
-            message="Dismissed sync conflict",
-            payload={"job_id": conflict.job_id, "notes": _to_text(notes)},
-        )
-        flash(request, "success", "Conflict dismissed")
-        return RedirectResponse(url=fallback_url, status_code=303)
-
-    @app.post("/conflicts/{conflict_id}/reopen")
-    def reopen_conflict(
-        request: Request,
-        conflict_id: int,
-        csrf_token: str = Form(""),
-        return_query: str = Form(""),
-        return_status: str = Form(""),
-        return_job_id: str = Form(""),
-    ):
-        user = require_capability(request, "mappings.write")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        current_org = get_current_org(request)
-        conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
-        if not conflict:
-            flash(request, "error", "Conflict record not found")
-            return RedirectResponse(url="/conflicts", status_code=303)
-        fallback_url = build_conflicts_return_url(_to_text(return_query), _to_text(return_status), _to_text(return_job_id) or conflict.job_id)
-        csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
-        if csrf_error:
-            return csrf_error
-        if conflict.status == "open":
-            flash(request, "error", "Conflict is already open")
-            return RedirectResponse(url=fallback_url, status_code=303)
-
-        request.app.state.conflict_repo.update_conflict_status(
-            conflict.id,
-            status="open",
-            resolution_payload=None,
-            resolved_at=None,
-        )
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="conflict.reopen",
-            target_type="sync_conflict",
-            target_id=str(conflict.id),
-            result="success",
-            message="Reopened sync conflict",
-            payload={"job_id": conflict.job_id, "previous_status": conflict.status},
-        )
-        flash(request, "success", "Conflict reopened")
-        return RedirectResponse(url=fallback_url, status_code=303)
-
-    @app.post("/conflicts/bulk")
-    def bulk_conflict_action(
-        request: Request,
-        csrf_token: str = Form(""),
-        action: str = Form(...),
-        conflict_ids: list[str] = Form([]),
-        notes: str = Form(""),
-        return_query: str = Form(""),
-        return_status: str = Form(""),
-        return_job_id: str = Form(""),
-    ):
-        user = require_capability(request, "mappings.write")
-        if isinstance(user, RedirectResponse):
-            return user
-
-        fallback_url = build_conflicts_return_url(_to_text(return_query), _to_text(return_status), _to_text(return_job_id))
-        csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
-        if csrf_error:
-            return csrf_error
-
-        normalized_action = _to_text(action).lower()
-        current_org = get_current_org(request)
-        raw_conflict_ids = [str(item or "").strip() for item in conflict_ids] if isinstance(conflict_ids, list) else []
-        selected_conflict_ids = [int(item) for item in raw_conflict_ids if item.isdigit()]
-        if normalized_action not in {"apply_recommendation", "skip_user_sync", "dismiss", "reopen"}:
-            flash(request, "error", "Unsupported bulk conflict action")
-            return RedirectResponse(url=fallback_url, status_code=303)
-        if not selected_conflict_ids:
-            flash(request, "error", "No conflicts selected")
-            return RedirectResponse(url=fallback_url, status_code=303)
-        if normalized_action == "apply_recommendation" and not _to_text(notes):
-            for conflict_id in selected_conflict_ids:
-                conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
-                if not conflict or conflict.status != "open":
-                    continue
-                if recommendation_requires_confirmation(recommend_conflict_resolution(conflict)):
-                    flash(request, "error", "Low-confidence recommendations require a confirmation reason for bulk apply")
-                    return RedirectResponse(url=fallback_url, status_code=303)
-
-        updated_count = 0
-        skipped_count = 0
-        for conflict_id in selected_conflict_ids:
-            conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
-            if not conflict:
-                skipped_count += 1
-                continue
-
-            if normalized_action == "reopen":
-                if conflict.status == "open":
-                    skipped_count += 1
-                    continue
-                request.app.state.conflict_repo.update_conflict_status(
-                    conflict.id,
-                    status="open",
-                    resolution_payload=None,
-                    resolved_at=None,
-                )
-                updated_count += 1
-                continue
-
-            if conflict.status != "open":
-                skipped_count += 1
-                continue
-
-            if normalized_action == "dismiss":
-                request.app.state.conflict_repo.update_conflict_status(
-                    conflict.id,
-                    status="dismissed",
-                    resolution_payload={
-                        "action": "dismissed",
-                        "notes": _to_text(notes),
-                        "actor_username": user.username,
-                        "bulk": True,
-                    },
-                    resolved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                )
-                updated_count += 1
-                continue
-
-            if normalized_action == "apply_recommendation":
-                ok, _detail, resolved_count, _recommendation = apply_conflict_recommendation(
-                    app=request.app,
-                    conflict=conflict,
-                    actor_username=user.username,
-                    org_id=current_org.org_id,
-                    confirmation_reason=_to_text(notes),
-                )
-                if ok and resolved_count:
-                    updated_count += 1
-                else:
-                    skipped_count += 1
-                continue
-
-            if normalized_action == "skip_user_sync":
-                ok, _rule_notes, resolved_count = apply_conflict_skip_user_sync(
-                    app=request.app,
-                    conflict=conflict,
-                    actor_username=user.username,
-                    org_id=current_org.org_id,
-                    notes=_to_text(notes) or f"bulk resolved from conflict {conflict.id}",
-                )
-                if ok and resolved_count:
-                    updated_count += 1
-                else:
-                    skipped_count += 1
-
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="conflict.bulk_action",
-            target_type="sync_conflict",
-            target_id="bulk",
-            result="success" if updated_count else "warning",
-            message="Executed bulk conflict action",
-            payload={
-                "action": normalized_action,
-                "selected_count": len(selected_conflict_ids),
-                "updated_count": updated_count,
-                "skipped_count": skipped_count,
-            },
-        )
-        flash(
-            request,
-            "success" if updated_count else "warning",
-            f"Bulk action {normalized_action} updated {updated_count} conflicts, skipped {skipped_count}",
-        )
-        return RedirectResponse(url=fallback_url, status_code=303)
-
     register_job_routes(
         app,
         enqueue_replay_request=enqueue_replay_request,
@@ -4394,6 +2748,95 @@ def create_app(
         render=render,
         require_capability=require_capability,
         translate_text=translate_text,
+    )
+
+    register_organization_routes(
+        app,
+        export_organization_bundle=export_organization_bundle,
+        flash=flash,
+        flash_t=flash_t,
+        import_organization_bundle=import_organization_bundle,
+        reject_invalid_csrf=reject_invalid_csrf,
+        render=render,
+        require_capability=require_capability,
+        require_user=require_user,
+        safe_redirect_target=_safe_redirect_target,
+        to_bool=_to_bool,
+    )
+
+    register_config_routes(
+        app,
+        apply_config_submission=apply_config_submission,
+        build_config_change_preview=build_config_change_preview,
+        build_config_editable_override=build_config_editable_override,
+        build_config_page_context=build_config_page_context,
+        build_config_submission=build_config_submission,
+        config_preview_session_key=CONFIG_PREVIEW_SESSION_KEY,
+        flash=flash,
+        reject_invalid_csrf=reject_invalid_csrf,
+        render=render,
+        require_capability=require_capability,
+        resolve_web_runtime_settings=resolve_web_runtime_settings,
+        web_runtime_requires_restart=web_runtime_requires_restart,
+    )
+
+    register_mapping_routes(
+        app,
+        department_exists_in_source_provider=department_exists_in_source_provider,
+        fetch_page=fetch_page,
+        flash=flash,
+        flash_t=flash_t,
+        get_current_org=get_current_org,
+        iter_all_pages=iter_all_pages,
+        load_department_name_map=load_department_name_map,
+        parse_bulk_bindings=parse_bulk_bindings,
+        parse_page_number=parse_page_number,
+        reject_invalid_csrf=reject_invalid_csrf,
+        render=render,
+        require_capability=require_capability,
+        resolve_remembered_filters=resolve_remembered_filters,
+        stream_csv=stream_csv,
+        to_bool=_to_bool,
+        validate_binding_target=validate_binding_target,
+    )
+
+    register_exception_routes(
+        app,
+        department_exists_in_source_provider=department_exists_in_source_provider,
+        enqueue_replay_request=enqueue_replay_request,
+        fetch_page=fetch_page,
+        flash=flash,
+        flash_t=flash_t,
+        get_current_org=get_current_org,
+        iter_all_pages=iter_all_pages,
+        load_department_name_map=load_department_name_map,
+        normalize_optional_datetime_input=normalize_optional_datetime_input,
+        parse_bulk_exception_rules=parse_bulk_exception_rules,
+        parse_page_number=parse_page_number,
+        reject_invalid_csrf=reject_invalid_csrf,
+        render=render,
+        require_capability=require_capability,
+        resolve_remembered_filters=resolve_remembered_filters,
+        stream_csv=stream_csv,
+        to_bool=_to_bool,
+    )
+
+    register_conflict_routes(
+        app,
+        apply_conflict_manual_binding=apply_conflict_manual_binding,
+        apply_conflict_recommendation=apply_conflict_recommendation,
+        apply_conflict_skip_user_sync=apply_conflict_skip_user_sync,
+        build_conflicts_return_url=build_conflicts_return_url,
+        fetch_page=fetch_page,
+        flash=flash,
+        flash_t=flash_t,
+        get_current_org=get_current_org,
+        parse_page_number=parse_page_number,
+        reject_invalid_csrf=reject_invalid_csrf,
+        render=render,
+        require_capability=require_capability,
+        resolve_remembered_filters=resolve_remembered_filters,
+        to_text=_to_text,
     )
 
     register_admin_routes(

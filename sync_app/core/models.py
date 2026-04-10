@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Optional
 
@@ -44,6 +45,88 @@ def _normalize_mapping_direction_value(value: Any, default: str = "source_to_ad"
     return aliases.get(normalized, aliases.get(str(default or "").strip().lower(), "source_to_ad"))
 
 
+def _append_unique_int(target: list[int], raw_value: Any) -> None:
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return
+    if parsed not in target:
+        target.append(parsed)
+
+
+def _coerce_int_list(value: Any) -> list[int]:
+    normalized: list[int] = []
+    if value in (None, ""):
+        return normalized
+
+    if isinstance(value, dict):
+        candidate_keys = ("dept_id", "deptId", "department_id", "departmentId")
+        for key in candidate_keys:
+            if key in value:
+                for item in _coerce_int_list(value.get(key)):
+                    _append_unique_int(normalized, item)
+        if normalized:
+            return normalized
+
+        numeric_keys = []
+        for key in value.keys():
+            key_text = str(key).strip()
+            if key_text.lstrip("-").isdigit():
+                numeric_keys.append(key_text)
+        if numeric_keys:
+            for key in numeric_keys:
+                _append_unique_int(normalized, key)
+            return normalized
+
+        for nested_value in value.values():
+            for item in _coerce_int_list(nested_value):
+                _append_unique_int(normalized, item)
+        return normalized
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            for nested_item in _coerce_int_list(item):
+                _append_unique_int(normalized, nested_item)
+        return normalized
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return normalized
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                return _coerce_int_list(json.loads(text))
+            except json.JSONDecodeError:
+                pass
+        for token in re.findall(r"-?\d+", text):
+            _append_unique_int(normalized, token)
+        return normalized
+
+    _append_unique_int(normalized, value)
+    return normalized
+
+
+def _extract_department_ids(payload: Dict[str, Any]) -> list[int]:
+    department_ids: list[int] = []
+    candidate_keys = (
+        "department",
+        "departments",
+        "dept_id_list",
+        "deptIdList",
+        "dept_ids",
+        "deptIds",
+        "dept_id",
+        "deptId",
+        "department_id",
+        "departmentId",
+        "dept_order_list",
+    )
+    for key in candidate_keys:
+        for department_id in _coerce_int_list(payload.get(key)):
+            _append_unique_int(department_ids, department_id)
+    return department_ids
+
+
 @dataclass(slots=True)
 class SourceConnectorConfig:
     corpid: str
@@ -57,6 +140,7 @@ class SourceConnectorConfig:
         return data
 
 
+SourceConfig = SourceConnectorConfig
 WeComConfig = SourceConnectorConfig
 
 
@@ -91,9 +175,9 @@ class AccountConfig:
         return data
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, init=False)
 class AppConfig:
-    wecom: SourceConnectorConfig
+    source_connector: SourceConnectorConfig
     ldap: LDAPConfig
     domain: str
     source_provider: str = "wecom"
@@ -102,6 +186,33 @@ class AppConfig:
     exclude_accounts: list[str] = field(default_factory=list)
     webhook_url: str = ""
     config_path: str = "config.ini"
+
+    def __init__(
+        self,
+        source_connector: SourceConnectorConfig | None = None,
+        *,
+        wecom: SourceConnectorConfig | None = None,
+        ldap: LDAPConfig,
+        domain: str,
+        source_provider: str = "wecom",
+        account: AccountConfig | None = None,
+        exclude_departments: list[str] | None = None,
+        exclude_accounts: list[str] | None = None,
+        webhook_url: str = "",
+        config_path: str = "config.ini",
+    ) -> None:
+        resolved_source_connector = source_connector or wecom
+        if resolved_source_connector is None:
+            raise TypeError("source_connector is required")
+        self.source_connector = resolved_source_connector
+        self.ldap = ldap
+        self.domain = str(domain or "")
+        self.source_provider = str(source_provider or "wecom").strip() or "wecom"
+        self.account = account if account is not None else AccountConfig()
+        self.exclude_departments = list(exclude_departments or [])
+        self.exclude_accounts = list(exclude_accounts or [])
+        self.webhook_url = str(webhook_url or "")
+        self.config_path = str(config_path or "config.ini") or "config.ini"
 
     def to_dict(self, *, include_secrets: bool = True) -> Dict[str, Any]:
         source_connector = self.source_connector.to_dict(include_secrets=include_secrets)
@@ -128,8 +239,12 @@ class AppConfig:
         return json.dumps(self.to_dict(include_secrets=include_secrets), ensure_ascii=False, sort_keys=True)
 
     @property
-    def source_connector(self) -> SourceConnectorConfig:
-        return self.wecom
+    def wecom(self) -> SourceConnectorConfig:
+        return self.source_connector
+
+    @wecom.setter
+    def wecom(self, value: SourceConnectorConfig) -> None:
+        self.source_connector = value
 
 
 @dataclass(slots=True)
@@ -142,12 +257,33 @@ class DepartmentNode:
     users: list["SourceDirectoryUser"] = field(default_factory=list)
 
     @classmethod
-    def from_wecom_payload(cls, payload: Dict[str, Any]) -> "DepartmentNode":
-        return cls(
-            department_id=int(payload.get("id") or 0),
-            name=str(payload.get("name") or ""),
-            parent_id=int(payload.get("parentid") or 0),
+    def from_source_payload(cls, payload: Dict[str, Any]) -> "DepartmentNode":
+        payload_copy = dict(payload)
+        department_id = (
+            payload_copy.get("id")
+            or payload_copy.get("dept_id")
+            or payload_copy.get("deptId")
+            or payload_copy.get("department_id")
+            or payload_copy.get("departmentId")
+            or 0
         )
+        parent_id = (
+            payload_copy.get("parentid")
+            or payload_copy.get("parent_id")
+            or payload_copy.get("parentId")
+            or payload_copy.get("parent_department_id")
+            or payload_copy.get("parentDepartmentId")
+            or 0
+        )
+        return cls(
+            department_id=int(department_id or 0),
+            name=str(payload_copy.get("name") or payload_copy.get("dept_name") or payload_copy.get("displayName") or ""),
+            parent_id=int(parent_id or 0),
+        )
+
+    @classmethod
+    def from_wecom_payload(cls, payload: Dict[str, Any]) -> "DepartmentNode":
+        return cls.from_source_payload(payload)
 
     def set_hierarchy(self, path: list[str], path_ids: list[int]) -> None:
         self.path = list(path)
@@ -176,7 +312,7 @@ class SourceDirectoryUser:
             userid=str(payload_copy.get("userid") or ""),
             name=str(payload_copy.get("name") or ""),
             email=str(payload_copy.get("email") or ""),
-            departments=[int(value) for value in payload_copy.get("department", []) if value is not None],
+            departments=_coerce_int_list(payload_copy.get("department", [])),
             raw_payload=payload_copy,
         )
 
@@ -186,8 +322,9 @@ class SourceDirectoryUser:
         if payload.get("email"):
             self.email = str(payload["email"])
         departments = payload.get("department")
-        if isinstance(departments, list) and departments:
-            self.departments = [int(value) for value in departments if value is not None]
+        normalized_departments = _coerce_int_list(departments)
+        if normalized_departments:
+            self.departments = normalized_departments
         self.raw_payload.update(payload)
 
     def to_state_payload(self) -> Dict[str, Any]:
@@ -231,9 +368,35 @@ class SourceDirectoryUser:
 
     @classmethod
     def from_source_payload(cls, payload: Dict[str, Any]) -> "SourceDirectoryUser":
-        return cls.from_wecom_payload(payload)
+        payload_copy = dict(payload)
+        userid = (
+            payload_copy.get("userid")
+            or payload_copy.get("userId")
+            or payload_copy.get("staffid")
+            or payload_copy.get("staffId")
+            or payload_copy.get("unionid")
+            or payload_copy.get("unionId")
+            or payload_copy.get("emplId")
+            or ""
+        )
+        email = (
+            payload_copy.get("email")
+            or payload_copy.get("org_email")
+            or payload_copy.get("orgEmail")
+            or payload_copy.get("work_email")
+            or payload_copy.get("workEmail")
+            or ""
+        )
+        return cls(
+            userid=str(userid or ""),
+            name=str(payload_copy.get("name") or payload_copy.get("nick") or payload_copy.get("displayName") or ""),
+            email=str(email or ""),
+            departments=_extract_department_ids(payload_copy),
+            raw_payload=payload_copy,
+        )
 
 
+SourceUser = SourceDirectoryUser
 WeComUser = SourceDirectoryUser
 
 

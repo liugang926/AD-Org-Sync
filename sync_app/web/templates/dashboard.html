@@ -61,7 +61,7 @@
           {% for item in preflight_summary.checks %}
           <div class="check-item">
             <div class="check-item__header">
-              <h3 class="check-item__title">{{ t(item.label) }}</h3>
+              <h3 class="check-item__title">{{ t(item.label, **(item.label_params or {})) }}</h3>
               {{ ui.badge(t(item.status|capitalize), "success" if item.status == "success" else ("warning" if item.status == "warning" else "error")) }}
             </div>
             <p class="check-item__detail">{{ t(item.detail, **(item.detail_params or {})) }}</p>
@@ -105,8 +105,11 @@
         </div>
         {% endif %}
         <div class="actions">
+          {% if show_advanced_navigation %}
+          {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="secondary") }}
+          {% endif %}
           {% if can("organizations.manage") and show_advanced_navigation %}
-          {{ ui.button(t("Manage Organizations"), href="/organizations", variant="secondary") }}
+          {{ ui.button(t("Manage Organizations"), href="/organizations", variant="ghost") }}
           {% endif %}
           {% if can("config.read") %}
           {{ ui.button(t("Review Config"), href="/config", variant="ghost") }}

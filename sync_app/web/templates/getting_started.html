@@ -26,7 +26,7 @@
         <div class="step-index">{{ loop.index }}</div>
         <div class="step-body">
           <h2 class="step-title">{{ t(step.title) }}</h2>
-          <p class="step-description">{{ t(step.detail) }}</p>
+          <p class="step-description">{{ t(step.detail, **(step.detail_params or {})) }}</p>
           {% if step.status == "complete" %}
           {{ ui.badge(t("Complete"), "success") }}
           {% elif step.status == "current" %}
@@ -63,7 +63,7 @@
       {% for item in preflight_summary.checks %}
       <div class="check-item">
         <div class="check-item__header">
-          <h3 class="check-item__title">{{ t(item.label) }}</h3>
+          <h3 class="check-item__title">{{ t(item.label, **(item.label_params or {})) }}</h3>
           {{ ui.badge(t(item.status|capitalize), "success" if item.status == "success" else ("warning" if item.status == "warning" else "error")) }}
         </div>
         <p class="check-item__detail">{{ t(item.detail, **(item.detail_params or {})) }}</p>

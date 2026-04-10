@@ -11,7 +11,7 @@ def setup_logging():
 
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
-    log_filename = os.path.join(log_dir, f"ad_wecom_sync_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    log_filename = os.path.join(log_dir, f"ad_org_sync_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
@@ -29,7 +29,7 @@ def setup_logging():
     detailed_log.setLevel(logging.DEBUG)
     detailed_log.handlers.clear()
     detailed_handler = logging.FileHandler(
-        os.path.join(log_dir, f"ad_wecom_sync_detailed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"),
+        os.path.join(log_dir, f"ad_org_sync_detailed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"),
         encoding="utf-8",
     )
     detailed_handler.setFormatter(

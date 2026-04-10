@@ -155,6 +155,8 @@ class WebBrowserRegressionTests(unittest.TestCase):
     def test_config_page_renders_multi_provider_schema_controls(self):
         self._login()
         self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
+        self.assertIn("WeCom Connector Configuration", self.page.locator("body").inner_text())
+        self.assertIn("Shared Page, Provider-Specific Fields", self.page.locator("body").inner_text())
         option_text = self.page.locator("#source_provider option").all_inner_texts()
         self.assertTrue(any("WeCom" in item for item in option_text))
         self.assertTrue(any("DingTalk" in item for item in option_text))

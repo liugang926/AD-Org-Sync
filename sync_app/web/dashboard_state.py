@@ -49,6 +49,7 @@ def build_getting_started_data(
     *,
     current_org_name: str,
     preflight_snapshot: dict[str, Any],
+    source_provider_name: str,
     ui_mode: str,
 ) -> dict[str, Any]:
     check_index = {
@@ -67,7 +68,8 @@ def build_getting_started_data(
     steps = [
         {
             "title": "Configure organization settings",
-            "detail": "Complete the source connector and LDAP values for the current organization.",
+            "detail": "Complete the {provider} and LDAP values for the current organization.",
+            "detail_params": {"provider": source_provider_name},
             "href": "/config",
             "action_label": "Open Config",
             "capability": "config.read",
@@ -76,10 +78,11 @@ def build_getting_started_data(
         {
             "title": "Run live connectivity preflight",
             "detail": (
-                "Verify both the source connector and LDAP from this server before the first synchronization run."
+                "Verify both {provider} and LDAP from this server before the first synchronization run."
                 if not live_ready
-                else "Live source connector and LDAP connectivity checks both passed."
+                else "Live {provider} and LDAP connectivity checks both passed."
             ),
+            "detail_params": {"provider": source_provider_name},
             "href": "/dashboard#preflight",
             "action_label": "Run Preflight",
             "capability": "dashboard.read",

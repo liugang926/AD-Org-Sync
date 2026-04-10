@@ -9,6 +9,9 @@ from sync_app.core.models import SourceDirectoryUser
 from sync_app.core.sync_policies import extract_manager_userids
 from sync_app.storage.local_db import DatabaseManager, ObjectStateRepository, SettingsRepository
 
+CANONICAL_SOURCE_STATE_TYPE = "source"
+LEGACY_SOURCE_STATE_TYPES = ("wecom",)
+
 
 class SyncStateManager:
     """SQLite-backed sync state manager."""
@@ -34,7 +37,7 @@ class SyncStateManager:
             return
         if not os.path.exists(self.state_file):
             return
-        if self.state_repo.count_by_type("wecom", "user") > 0:
+        if self._count_user_states() > 0:
             return
 
         try:
@@ -47,7 +50,7 @@ class SyncStateManager:
         synced_users = state.get("synced_users", {})
         for userid, user_state in synced_users.items():
             self.state_repo.upsert_state(
-                source_type="wecom",
+                source_type=CANONICAL_SOURCE_STATE_TYPE,
                 object_type="user",
                 source_id=userid,
                 source_hash=user_state.get("hash", ""),
@@ -64,6 +67,28 @@ class SyncStateManager:
             str(bool(state.get("last_sync_success", False))).lower(),
             value_type="bool",
         )
+
+    def _count_user_states(self) -> int:
+        source_count = self.state_repo.count_by_type(CANONICAL_SOURCE_STATE_TYPE, "user")
+        if source_count > 0:
+            return source_count
+        return sum(self.state_repo.count_by_type(source_type, "user") for source_type in LEGACY_SOURCE_STATE_TYPES)
+
+    def get_user_state_record(self, userid: str):
+        current_state = self.state_repo.get_state(CANONICAL_SOURCE_STATE_TYPE, "user", userid)
+        if current_state:
+            return current_state
+        for source_type in LEGACY_SOURCE_STATE_TYPES:
+            current_state = self.state_repo.get_state(source_type, "user", userid)
+            if current_state:
+                return current_state
+        return None
+
+    def _delete_missing_user_states(self, current_userids: set[str]) -> int:
+        removed_count = self.state_repo.delete_missing(CANONICAL_SOURCE_STATE_TYPE, "user", current_userids)
+        for source_type in LEGACY_SOURCE_STATE_TYPES:
+            removed_count += self.state_repo.delete_missing(source_type, "user", current_userids)
+        return removed_count
 
     def get_last_sync_time(self) -> Optional[str]:
         return self.settings_repo.get_value("last_sync_time", org_id=self.org_id) or self.settings_repo.get_value(
@@ -84,7 +109,7 @@ class SyncStateManager:
 
     def is_user_changed(self, userid: str, user_data: dict) -> bool:
         current_hash = self.get_user_hash(user_data)
-        current_state = self.state_repo.get_state("wecom", "user", userid)
+        current_state = self.get_user_state_record(userid)
         if not current_state:
             return True
         return current_state["source_hash"] != current_hash
@@ -106,7 +131,7 @@ class SyncStateManager:
             )
         )
         self.state_repo.upsert_state(
-            source_type="wecom",
+            source_type=CANONICAL_SOURCE_STATE_TYPE,
             object_type="user",
             source_id=userid,
             source_hash=self.get_user_hash(user_data),
@@ -123,9 +148,9 @@ class SyncStateManager:
         )
 
     def get_synced_user_count(self) -> int:
-        return self.state_repo.count_by_type("wecom", "user")
+        return self._count_user_states()
 
     def cleanup_old_users(self, current_userids: set) -> None:
-        removed_count = self.state_repo.delete_missing("wecom", "user", current_userids)
+        removed_count = self._delete_missing_user_states(set(current_userids))
         if removed_count:
             self.logger.info(f"removed {removed_count} stale synced user records")

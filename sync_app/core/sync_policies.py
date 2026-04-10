@@ -216,7 +216,7 @@ def build_identity_candidates(user: SourceDirectoryUser, *, username_template: s
     return candidates
 
 
-def build_wecom_to_ad_mapping_payload(
+def build_source_to_ad_mapping_payload(
     user: SourceDirectoryUser,
     *,
     connector_id: str,
@@ -254,9 +254,28 @@ def build_wecom_to_ad_mapping_payload(
     return mapped
 
 
-def build_ad_to_wecom_mapping_payload(
+def build_wecom_to_ad_mapping_payload(
+    user: SourceDirectoryUser,
+    *,
+    connector_id: str,
+    ad_username: str,
+    email: str,
+    target_department: DepartmentNode | None,
+    rules: Iterable[Any],
+) -> dict[str, dict[str, str]]:
+    return build_source_to_ad_mapping_payload(
+        user,
+        connector_id=connector_id,
+        ad_username=ad_username,
+        email=email,
+        target_department=target_department,
+        rules=rules,
+    )
+
+
+def build_ad_to_source_mapping_payload(
     ad_attributes: dict[str, Any],
-    wecom_payload: dict[str, Any],
+    source_payload: dict[str, Any],
     *,
     connector_id: str,
     rules: Iterable[Any],
@@ -269,13 +288,13 @@ def build_ad_to_wecom_mapping_payload(
         )
         for key, value in (ad_attributes or {}).items()
     }
-    normalized_wecom = {
+    normalized_source = {
         _normalize_placeholder_key(key): (
             ",".join(str(item).strip() for item in value if str(item).strip())
             if isinstance(value, (list, tuple))
             else str(value or "").strip()
         )
-        for key, value in (wecom_payload or {}).items()
+        for key, value in (source_payload or {}).items()
     }
     update_payload: dict[str, Any] = {}
     for rule in rules:
@@ -290,7 +309,7 @@ def build_ad_to_wecom_mapping_payload(
         source_value = render_template(template, normalized_ad_attrs) if template else normalized_ad_attrs.get(source_field, "")
         if source_value == "":
             continue
-        current_value = normalized_wecom.get(target_field, "")
+        current_value = normalized_source.get(target_field, "")
         sync_mode = normalize_sync_mode(getattr(rule, "sync_mode", "replace"))
         if sync_mode == "preserve" and current_value:
             continue
@@ -300,6 +319,21 @@ def build_ad_to_wecom_mapping_payload(
             continue
         update_payload[target_field] = source_value
     return update_payload
+
+
+def build_ad_to_wecom_mapping_payload(
+    ad_attributes: dict[str, Any],
+    wecom_payload: dict[str, Any],
+    *,
+    connector_id: str,
+    rules: Iterable[Any],
+) -> dict[str, Any]:
+    return build_ad_to_source_mapping_payload(
+        ad_attributes,
+        wecom_payload,
+        connector_id=connector_id,
+        rules=rules,
+    )
 
 
 def extract_manager_userids(user: SourceDirectoryUser) -> list[str]:

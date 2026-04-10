@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from sync_app.clients.wecom import WeComAPI
 from sync_app.core.models import AppConfig, DepartmentNode, SourceConnectorConfig, SourceDirectoryUser
+from sync_app.providers.source.dingtalk import DingTalkSourceProvider
 from sync_app.providers.source.base import (
     SourceDirectoryProvider,
     get_source_provider_schema,
@@ -34,7 +35,7 @@ class WeComSourceProvider(SourceDirectoryProvider):
             self._api = self._api_factory(corpid, corpsecret, agentid)
 
     def list_departments(self) -> list[DepartmentNode]:
-        return [DepartmentNode.from_wecom_payload(item) for item in self._api.get_department_list()]
+        return [DepartmentNode.from_source_payload(item) for item in self._api.get_department_list()]
 
     def list_department_users(self, department_id: int) -> list[SourceDirectoryUser]:
         return [
@@ -82,23 +83,30 @@ def build_source_provider(
     if resolved_provider is None and app_config is not None:
         resolved_provider = getattr(app_config, "source_provider", None)
     normalized_provider = normalize_source_provider(resolved_provider)
-    provider_schema = get_source_provider_schema(normalized_provider)
-    if normalized_provider != "wecom":
-        if not provider_schema.implemented:
-            raise ValueError(
-                provider_schema.implementation_status
-                or f"source provider '{provider_schema.display_name}' is not implemented in this build"
-            )
-        raise ValueError(f"unsupported source provider: {normalized_provider}")
-
     config = source_connector_config or wecom_config or (app_config.source_connector if app_config else None)
     if config is None:
         raise ValueError("source_connector_config, wecom_config, or app_config is required to build a source provider")
 
-    return WeComSourceProvider(
-        config.corpid,
-        config.corpsecret,
-        config.agentid,
-        logger=logger,
-        api_factory=api_factory,
-    )
+    provider_schema = get_source_provider_schema(normalized_provider)
+    if not provider_schema.implemented:
+        raise ValueError(
+            provider_schema.implementation_status
+            or f"source provider '{provider_schema.display_name}' is not implemented in this build"
+        )
+    if normalized_provider == "wecom":
+        return WeComSourceProvider(
+            config.corpid,
+            config.corpsecret,
+            config.agentid,
+            logger=logger,
+            api_factory=api_factory,
+        )
+    if normalized_provider == "dingtalk":
+        return DingTalkSourceProvider(
+            config.corpid,
+            config.corpsecret,
+            config.agentid,
+            logger=logger,
+            api_factory=api_factory,
+        )
+    raise ValueError(f"unsupported source provider: {normalized_provider}")

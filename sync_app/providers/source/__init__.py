@@ -8,10 +8,12 @@ from sync_app.providers.source.base import (
     list_source_provider_schemas,
     normalize_source_provider,
 )
+from sync_app.providers.source.dingtalk import DingTalkSourceProvider
 from sync_app.providers.source.wecom import WeComSourceProvider, build_source_provider
 
 __all__ = [
     "DEFAULT_SOURCE_PROVIDER",
+    "DingTalkSourceProvider",
     "SourceDirectoryProvider",
     "WeComSourceProvider",
     "build_source_provider",

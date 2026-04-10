@@ -5,24 +5,36 @@
 {% block content %}
 <div class="login-hero">
   <div class="login-mark">
-    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    <i data-lucide="shield-check" style="width: 36px; height: 36px;"></i>
   </div>
-  <h2 class="hero-title">{{ t("Welcome Back") }}</h2>
-  <p class="section-subtitle">{{ t("Sign in to manage AD Org Sync") }}</p>
+  <h1 class="hero-title">{{ t("Welcome Back") }}</h1>
+  <p class="section-subtitle">{{ t("Sign in to manage your AD Org Sync operations.") }}</p>
 </div>
 
-{% call ui.card() %}
+<div class="card" style="max-width: 400px; margin: 0 auto;">
   <form method="post" action="/login">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    {{ forms.input("username", t("Username"), required=True, placeholder=t("Enter your username")) }}
-    {{ forms.input("password", t("Password"), type="password", required=True, placeholder=t("Enter your password")) }}
-    <div class="actions">
-      {{ ui.button(t("Sign In"), type="submit", block=True) }}
+    
+    <div style="margin-bottom: 24px;">
+      {{ forms.input("username", t("Username"), required=True, placeholder=t("Enter your username"), icon="user") }}
     </div>
+    
+    <div style="margin-bottom: 32px;">
+      {{ forms.input("password", t("Password"), type="password", required=True, placeholder=t("Enter your password"), icon="lock") }}
+    </div>
+
+    {{ ui.button(t("Sign In"), type="submit", block=True, icon="log-in") }}
   </form>
-{% endcall %}
+</div>
 
 <div class="login-footer">
-  <small>&copy; 2026 AD Org Sync &middot; {{ t("Version") }} {{ app_version }}</small>
+  <div style="margin-bottom: 24px;">
+    <div class="language-switcher">
+      {% for code, label in language_options.items() %}
+      <a href="{{ language_urls.get(code, '/login') }}" class="{% if ui_language == code %}active{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  <p>&copy; 2026 AD Org Sync &middot; {{ t("Version") }} {{ app_version }}</p>
 </div>
 {% endblock %}
