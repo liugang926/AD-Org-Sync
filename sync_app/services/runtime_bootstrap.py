@@ -89,6 +89,9 @@ class RuntimePolicySettings:
     group_recursive_enabled: bool
     managed_relation_cleanup_enabled: bool
     user_ou_placement_strategy: str
+    source_root_unit_ids: list[int]
+    default_directory_root_ou_path: str
+    default_disabled_users_ou_path: str
     offboarding_grace_days: int
     offboarding_notify_managers: bool
     disable_breaker_enabled: bool
@@ -111,6 +114,36 @@ class SyncRuntimeBootstrap:
     config: AppConfig
     policy_settings: RuntimePolicySettings
     config_hash: str
+
+
+def _parse_root_unit_ids(raw_value: Any) -> list[int]:
+    values: list[int] = []
+    for item in str(raw_value or "").replace("\n", ",").split(","):
+        candidate = item.strip()
+        if candidate.isdigit():
+            values.append(int(candidate))
+    return values
+
+
+def _normalize_ou_path(raw_value: Any, *, default: str = "") -> str:
+    raw_text = str(raw_value or "").strip()
+    if not raw_text:
+        return default
+    dn_segments = [
+        part.split("=", 1)[1].strip()
+        for part in raw_text.split(",")
+        if "=" in part and part.strip().lower().startswith("ou=") and part.split("=", 1)[1].strip()
+    ]
+    if dn_segments:
+        segments = list(reversed(dn_segments))
+    else:
+        segments = [
+            segment.strip()
+            for segment in raw_text.replace("\\", "/").split("/")
+            if segment.strip()
+        ]
+    normalized = "/".join(segments)
+    return normalized or default
 
 
 def _build_policy_settings(
@@ -184,6 +217,14 @@ def _build_policy_settings(
             get_org_setting_value("user_ou_placement_strategy", "source_primary_department")
             or "source_primary_department"
         ),
+        source_root_unit_ids=_parse_root_unit_ids(get_org_setting_value("source_root_unit_ids", "")),
+        default_directory_root_ou_path=_normalize_ou_path(
+            get_org_setting_value("directory_root_ou_path", ""),
+        ),
+        default_disabled_users_ou_path=_normalize_ou_path(
+            get_org_setting_value("disabled_users_ou_path", "Disabled Users"),
+            default="Disabled Users",
+        ),
         offboarding_grace_days=offboarding_grace_days,
         offboarding_notify_managers=offboarding_notify_managers,
         disable_breaker_enabled=get_org_setting_bool("disable_circuit_breaker_enabled", False),
@@ -234,6 +275,9 @@ def _build_config_hash(
             "group_recursive_enabled": policy_settings.group_recursive_enabled,
             "managed_relation_cleanup_enabled": policy_settings.managed_relation_cleanup_enabled,
             "user_ou_placement_strategy": policy_settings.user_ou_placement_strategy,
+            "source_root_unit_ids": policy_settings.source_root_unit_ids,
+            "directory_root_ou_path": policy_settings.default_directory_root_ou_path,
+            "disabled_users_ou_path": policy_settings.default_disabled_users_ou_path,
             "offboarding_grace_days": policy_settings.offboarding_grace_days,
             "disable_circuit_breaker_percent": policy_settings.disable_breaker_percent,
             "disable_circuit_breaker_min_count": policy_settings.disable_breaker_min_count,

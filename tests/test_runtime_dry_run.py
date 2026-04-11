@@ -67,11 +67,14 @@ class FakeADSyncLDAPS:
     def __init__(self, *args, **kwargs):
         type(self).last_init_kwargs = dict(kwargs)
         self.base_dn = "DC=example,DC=com"
+        self.user_root_ou_path = str(kwargs.get("user_root_ou_path", "") or "").strip()
 
     def get_ou_dn(self, path):
-        if not path:
+        effective_path = [segment for segment in self.user_root_ou_path.replace("\\", "/").split("/") if segment]
+        effective_path.extend(path or [])
+        if not effective_path:
             return self.base_dn
-        return ",".join([f"OU={segment}" for segment in reversed(path)] + [self.base_dn])
+        return ",".join([f"OU={segment}" for segment in reversed(effective_path)] + [self.base_dn])
 
     def ou_exists(self, _ou_dn: str) -> bool:
         return False
@@ -606,6 +609,176 @@ class RunSyncDryRunTests(unittest.TestCase):
         binding = UserIdentityBindingRepository(manager).get_binding_record_by_source_user_id("alice")
         self.assertIsNotNone(binding)
         self.assertEqual(binding.ad_username, "alice")
+
+    def test_run_sync_job_applies_basic_scope_and_directory_root_ou_settings(self):
+        config = AppConfig(
+            wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),
+            ldap=LDAPConfig(
+                server="ldap.example.com",
+                domain="example.com",
+                username="EXAMPLE\\administrator",
+                password="password",
+                use_ssl=True,
+                port=636,
+            ),
+            domain="example.com",
+            account=AccountConfig(
+                default_password="VeryStrong123!456",
+                force_change_password=True,
+                password_complexity="strong",
+            ),
+            config_path="ignored.ini",
+        )
+
+        FakeWeComProgrammableAPI.reset()
+        FakeWeComProgrammableAPI.department_list = [
+            {"id": 1, "name": "HQ", "parentid": 0},
+            {"id": 2, "name": "China", "parentid": 1},
+            {"id": 3, "name": "East", "parentid": 2},
+        ]
+        FakeWeComProgrammableAPI.department_users = {
+            3: [{"userid": "alice", "name": "Alice"}],
+        }
+        FakeWeComProgrammableAPI.user_details = {
+            "alice": {
+                "userid": "alice",
+                "name": "Alice",
+                "email": "alice@example.com",
+                "department": [3],
+            }
+        }
+
+        test_dir = os.path.join(os.getcwd(), "test_artifacts")
+        os.makedirs(test_dir, exist_ok=True)
+        db_path = os.path.join(test_dir, "runtime_scope_root_test.db")
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+
+        manager = DatabaseManager(db_path=db_path)
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        OrganizationRepository(manager).ensure_default(config_path="ignored.ini")
+        settings_repo = SettingsRepository(manager)
+        settings_repo.set_value("source_root_unit_ids", "2", "string", org_id="default")
+        settings_repo.set_value("directory_root_ou_path", "Managed Users", "string", org_id="default")
+        settings_repo.set_value("disabled_users_ou_path", "Managed Users/Disabled Users", "string", org_id="default")
+
+        FakeADSyncLDAPS.last_init_kwargs = None
+
+        with patch.object(runtime, "load_sync_config", return_value=config), \
+            patch.object(runtime, "validate_config", return_value=(True, [])), \
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "run_config_security_self_check", return_value=[]), \
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI), \
+            patch.object(runtime, "ADSyncLDAPS", FakeADSyncLDAPS), \
+            patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")), \
+            patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"), \
+            patch.object(runtime, "_generate_skip_detail_report", return_value="skip-details.csv"):
+            result = runtime.run_sync_job(
+                execution_mode="dry_run",
+                trigger_type="unit_test",
+                db_path=db_path,
+                config_path="ignored.ini",
+            )
+
+        self.assertEqual(result["error_count"], 0)
+        self.assertIsNotNone(FakeADSyncLDAPS.last_init_kwargs)
+        self.assertEqual(FakeADSyncLDAPS.last_init_kwargs["user_root_ou_path"], "Managed Users")
+        self.assertEqual(FakeADSyncLDAPS.last_init_kwargs["disabled_users_ou_name"], "Managed Users/Disabled Users")
+
+        manager = DatabaseManager(db_path=db_path)
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        planned_operations = PlannedOperationRepository(manager).list_operations_for_job(result["job_id"])
+        create_user_ops = [item for item in planned_operations if item["operation_type"] == "create_user"]
+        self.assertEqual(len(create_user_ops), 1)
+        self.assertIn("OU=East,OU=China,OU=Managed Users,DC=example,DC=com", create_user_ops[0]["target_dn"])
+        self.assertNotIn("OU=HQ", create_user_ops[0]["target_dn"])
+
+    def test_run_sync_job_accepts_directory_root_ou_dn_input(self):
+        config = AppConfig(
+            wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),
+            ldap=LDAPConfig(
+                server="ldap.example.com",
+                domain="example.com",
+                username="EXAMPLE\\administrator",
+                password="password",
+                use_ssl=True,
+                port=636,
+            ),
+            domain="example.com",
+            account=AccountConfig(
+                default_password="VeryStrong123!456",
+                force_change_password=True,
+                password_complexity="strong",
+            ),
+            config_path="ignored.ini",
+        )
+
+        FakeWeComProgrammableAPI.reset()
+        FakeWeComProgrammableAPI.department_list = [
+            {"id": 10, "name": "Root", "parentid": 0},
+            {"id": 2, "name": "China", "parentid": 10},
+            {"id": 20, "name": "East", "parentid": 2},
+        ]
+        FakeWeComProgrammableAPI.department_users = {
+            20: [
+                {
+                    "userid": "alice",
+                    "name": "Alice",
+                    "email": "alice@example.com",
+                    "department": [20],
+                }
+            ]
+        }
+        FakeWeComProgrammableAPI.user_detail = {
+            "alice": {"userid": "alice", "name": "Alice", "email": "alice@example.com", "department": [20]}
+        }
+
+        test_dir = os.path.join(os.getcwd(), "test_artifacts")
+        os.makedirs(test_dir, exist_ok=True)
+        db_path = os.path.join(test_dir, "runtime_scope_root_dn_test.db")
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+
+        manager = DatabaseManager(db_path=db_path)
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        OrganizationRepository(manager).ensure_default(config_path="ignored.ini")
+        settings_repo = SettingsRepository(manager)
+        settings_repo.set_value("source_root_unit_ids", "2", "string", org_id="default")
+        settings_repo.set_value(
+            "directory_root_ou_path",
+            "OU=China,OU=Managed Users,DC=example,DC=com",
+            "string",
+            org_id="default",
+        )
+
+        FakeADSyncLDAPS.last_init_kwargs = None
+
+        with patch.object(runtime, "load_sync_config", return_value=config), \
+            patch.object(runtime, "validate_config", return_value=(True, [])), \
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "run_config_security_self_check", return_value=[]), \
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI), \
+            patch.object(runtime, "ADSyncLDAPS", FakeADSyncLDAPS), \
+            patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")), \
+            patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"), \
+            patch.object(runtime, "_generate_skip_detail_report", return_value="skip-details.csv"):
+            result = runtime.run_sync_job(
+                execution_mode="dry_run",
+                trigger_type="unit_test",
+                db_path=db_path,
+                config_path="ignored.ini",
+            )
+
+        self.assertEqual(result["error_count"], 0)
+        self.assertEqual(FakeADSyncLDAPS.last_init_kwargs["user_root_ou_path"], "Managed Users/China")
 
     def test_run_sync_job_skips_protected_default_account_create(self):
         config = AppConfig(

@@ -4,7 +4,7 @@ import secrets
 from typing import Any, Callable, Optional
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 
 def register_config_routes(
@@ -14,6 +14,8 @@ def register_config_routes(
     build_config_change_preview: Callable[..., dict[str, Any]],
     build_config_editable_override: Callable[..., dict[str, Any]],
     build_config_page_context: Callable[..., dict[str, Any]],
+    build_source_unit_catalog: Callable[..., dict[str, Any]],
+    build_target_ou_catalog: Callable[..., dict[str, Any]],
     build_config_submission: Callable[..., dict[str, Any]],
     config_preview_session_key: str,
     flash: Callable[..., None],
@@ -33,6 +35,70 @@ def register_config_routes(
             request,
             "config.html",
             **build_config_page_context(request),
+        )
+
+    @app.post("/config/source-units/catalog")
+    def config_source_unit_catalog(
+        request: Request,
+        csrf_token: str = Form(""),
+        source_provider: str = Form("wecom"),
+        corpid: str = Form(""),
+        agentid: str = Form(""),
+        corpsecret: str = Form(""),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
+        csrf_error = reject_invalid_csrf(request, csrf_token, "/config")
+        if csrf_error:
+            return JSONResponse(
+                {"ok": False, "error": "The configuration session expired. Refresh the page and try again."},
+                status_code=400,
+            )
+        return JSONResponse(
+            build_source_unit_catalog(
+                request,
+                source_provider=source_provider,
+                corpid=corpid,
+                agentid=agentid,
+                corpsecret=corpsecret,
+            )
+        )
+
+    @app.post("/config/target-ou/catalog")
+    def config_target_ou_catalog(
+        request: Request,
+        csrf_token: str = Form(""),
+        ldap_server: str = Form(""),
+        ldap_domain: str = Form(""),
+        ldap_username: str = Form(""),
+        ldap_password: str = Form(""),
+        ldap_port: int = Form(636),
+        ldap_use_ssl: Optional[str] = Form(None),
+        ldap_validate_cert: Optional[str] = Form(None),
+        ldap_ca_cert_path: str = Form(""),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
+        csrf_error = reject_invalid_csrf(request, csrf_token, "/config")
+        if csrf_error:
+            return JSONResponse(
+                {"ok": False, "error": "The configuration session expired. Refresh the page and try again."},
+                status_code=400,
+            )
+        return JSONResponse(
+            build_target_ou_catalog(
+                request,
+                ldap_server=ldap_server,
+                ldap_domain=ldap_domain,
+                ldap_username=ldap_username,
+                ldap_password=ldap_password,
+                ldap_port=ldap_port,
+                ldap_use_ssl=ldap_use_ssl,
+                ldap_validate_cert=ldap_validate_cert,
+                ldap_ca_cert_path=ldap_ca_cert_path,
+            )
         )
 
     @app.post("/config/preview")
@@ -72,6 +138,10 @@ def register_config_routes(
         brand_mark_text: str = Form("AD"),
         brand_attribution: str = Form("微信公众号：大刘讲IT"),
         user_ou_placement_strategy: str = Form("source_primary_department"),
+        source_root_unit_ids: str = Form(""),
+        directory_root_ou_path: str = Form(""),
+        disabled_users_ou_path: str = Form("Disabled Users"),
+        custom_group_ou_path: str = Form("Managed Groups"),
         soft_excluded_groups: str = Form(""),
     ):
         user = require_capability(request, "config.write")
@@ -116,6 +186,10 @@ def register_config_routes(
             brand_mark_text=brand_mark_text,
             brand_attribution=brand_attribution,
             user_ou_placement_strategy=user_ou_placement_strategy,
+            source_root_unit_ids=source_root_unit_ids,
+            directory_root_ou_path=directory_root_ou_path,
+            disabled_users_ou_path=disabled_users_ou_path,
+            custom_group_ou_path=custom_group_ou_path,
             soft_excluded_groups=soft_excluded_groups,
         )
         preview = build_config_change_preview(request, submission)
@@ -218,6 +292,10 @@ def register_config_routes(
         brand_mark_text: str = Form("AD"),
         brand_attribution: str = Form("微信公众号：大刘讲IT"),
         user_ou_placement_strategy: str = Form("source_primary_department"),
+        source_root_unit_ids: str = Form(""),
+        directory_root_ou_path: str = Form(""),
+        disabled_users_ou_path: str = Form("Disabled Users"),
+        custom_group_ou_path: str = Form("Managed Groups"),
         soft_excluded_groups: str = Form(""),
     ):
         user = require_capability(request, "config.write")
@@ -262,6 +340,10 @@ def register_config_routes(
             brand_mark_text=brand_mark_text,
             brand_attribution=brand_attribution,
             user_ou_placement_strategy=user_ou_placement_strategy,
+            source_root_unit_ids=source_root_unit_ids,
+            directory_root_ou_path=directory_root_ou_path,
+            disabled_users_ou_path=disabled_users_ou_path,
+            custom_group_ou_path=custom_group_ou_path,
             soft_excluded_groups=soft_excluded_groups,
         )
         apply_config_submission(request, user=user, submission=submission)

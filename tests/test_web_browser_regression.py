@@ -190,6 +190,24 @@ class WebBrowserRegressionTests(unittest.TestCase):
             self.page.locator("#group-corpid").inner_text(),
         )
         self.assertIn("DingTalk Bot Webhook", self.page.locator("#group-webhook_url label").inner_text())
+        self.assertTrue(self.page.get_by_text("OU Filter And Root Mapping").first.is_visible())
+        browse_source_button = self.page.get_by_role("button", name="Browse Source Unit Tree")
+        select_target_button = self.page.get_by_role("button", name="Select Target Root OU")
+        self.assertTrue(browse_source_button.is_visible())
+        self.assertTrue(select_target_button.is_visible())
+        browse_source_button.click()
+        self.assertTrue(
+            self.page.locator("#group-source_root_unit_ids [data-config-source-browser]").is_visible()
+        )
+        select_target_button.click()
+        self.assertTrue(
+            self.page.locator("#group-directory_root_ou_path [data-config-target-browser]").is_visible()
+        )
+        self.assertFalse(
+            self.page.locator("#group-disabled_users_ou_path [data-config-target-browser]").is_visible()
+        )
+        self.assertTrue(self.page.get_by_role("button", name="Select Disabled Users OU").is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="Select Custom Group OU").is_visible())
         self._capture("config-page.png")
 
     def test_jobs_empty_state_actions_remain_visually_consistent(self):

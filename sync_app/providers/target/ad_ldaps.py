@@ -23,6 +23,9 @@ class ADLDAPSTargetProvider(TargetDirectoryProvider):
     def get_ou_dn(self, ou_path: list[str]) -> str:
         return self.client.get_ou_dn(ou_path)
 
+    def list_organizational_units(self) -> list[dict[str, Any]]:
+        return self.client.list_organizational_units()
+
     def ou_exists(self, ou_dn: str) -> bool:
         return bool(self.client.ou_exists(ou_dn))
 

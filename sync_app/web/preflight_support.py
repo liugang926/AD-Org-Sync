@@ -1,0 +1,360 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+from fastapi import FastAPI, Request
+
+from sync_app.core.config import (
+    load_sync_config,
+    run_config_security_self_check,
+    test_ldap_connection,
+    test_source_connection,
+    validate_config,
+)
+from sync_app.core.models import AppConfig, OrganizationRecord
+from sync_app.providers.source import get_source_provider_schema
+from sync_app.web.dashboard_state import (
+    build_getting_started_data as build_getting_started_view_state,
+    count_check_statuses,
+    merge_saved_preflight_snapshot as merge_saved_preflight_snapshot_data,
+    summarize_check_status,
+)
+from sync_app.web.request_support import RequestSupport
+from sync_app.web.runtime import resolve_web_runtime_settings, web_runtime_requires_restart
+
+
+class DashboardSupport:
+    def __init__(
+        self,
+        *,
+        app: FastAPI,
+        config_path: str,
+        request_support: RequestSupport,
+        test_source_connection: Any = test_source_connection,
+        test_ldap_connection: Any = test_ldap_connection,
+    ) -> None:
+        self.app = app
+        self.config_path = config_path
+        self.request_support = request_support
+        self.test_source_connection = test_source_connection
+        self.test_ldap_connection = test_ldap_connection
+
+    def load_config_summary(
+        self,
+        organization: Optional[OrganizationRecord] = None,
+        *,
+        config_path_override: Optional[str] = None,
+    ) -> tuple[Optional[AppConfig], list[str], list[str]]:
+        try:
+            if organization is not None:
+                config = self.app.state.org_config_repo.get_app_config(
+                    organization.org_id,
+                    config_path=config_path_override or organization.config_path or self.config_path,
+                )
+            else:
+                config = load_sync_config(config_path_override or self.config_path)
+        except Exception as exc:
+            return None, [f"Failed to load configuration: {exc}"], []
+        is_valid, errors = validate_config(config)
+        warnings = run_config_security_self_check(config)
+        return config, ([] if is_valid else errors), warnings
+
+    def build_preflight_snapshot(self, request: Request, *, include_live: bool = False) -> dict[str, Any]:
+        current_org = self.request_support.get_current_org(request)
+        config, validation_errors, security_warnings = self.load_config_summary(current_org)
+        recent_jobs = request.app.state.job_repo.list_recent_job_records(limit=100, org_id=current_org.org_id)
+        connector_count = request.app.state.connector_repo.count_connectors(org_id=current_org.org_id)
+        open_conflicts_total = request.app.state.conflict_repo.list_conflict_records_page(
+            limit=1,
+            offset=0,
+            status="open",
+            org_id=current_org.org_id,
+        )[1]
+        dry_run_completed = any(
+            str(job.execution_mode).lower() == "dry_run" and str(job.status).lower() == "success"
+            for job in recent_jobs
+        )
+        apply_completed = any(
+            str(job.execution_mode).lower() == "apply" and str(job.status).lower() == "success"
+            for job in recent_jobs
+        )
+        checks: list[dict[str, Any]] = []
+        source_provider_name = self.request_support.source_provider_label(config.source_provider if config else "wecom")
+
+        if config and not validation_errors:
+            checks.append(
+                {
+                    "key": "config",
+                    "label": "Organization configuration",
+                    "status": "success",
+                    "detail": "Required {provider} and LDAP settings are complete.",
+                    "detail_params": {"provider": source_provider_name},
+                    "action_url": "/config",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "key": "config",
+                    "label": "Organization configuration",
+                    "status": "error",
+                    "detail": validation_errors[0] if validation_errors else "Organization configuration is incomplete.",
+                    "action_url": "/config",
+                }
+            )
+
+        connector_detail = (
+            "Organization has {count} dedicated connector(s)."
+            if connector_count
+            else "No dedicated connectors are configured. The organization will use its primary directory settings."
+        )
+        checks.append(
+            {
+                "key": "connectors",
+                "label": "Connector routing",
+                "status": "success",
+                "detail": connector_detail,
+                "detail_params": {"count": connector_count} if connector_count else {},
+                "action_url": "/advanced-sync",
+            }
+        )
+
+        breaker_enabled = request.app.state.settings_repo.get_bool(
+            "disable_circuit_breaker_enabled",
+            False,
+            org_id=current_org.org_id,
+        )
+        checks.append(
+            {
+                "key": "circuit_breaker",
+                "label": "Safety breaker",
+                "status": "success" if breaker_enabled else "warning",
+                "detail": (
+                    "Disable-user circuit breaker is enabled."
+                    if breaker_enabled
+                    else "Disable-user circuit breaker is still off. Enable it before unattended production runs."
+                ),
+                "action_url": "/advanced-sync",
+            }
+        )
+
+        checks.append(
+            {
+                "key": "dry_run",
+                "label": "First dry run",
+                "status": "success" if dry_run_completed else "warning",
+                "detail": (
+                    "At least one successful dry run has been recorded."
+                    if dry_run_completed
+                    else "No successful dry run has been recorded yet."
+                ),
+                "action_url": "/jobs",
+            }
+        )
+        checks.append(
+            {
+                "key": "conflicts",
+                "label": "Open conflict queue",
+                "status": "success" if open_conflicts_total == 0 else "warning",
+                "detail": (
+                    "No unresolved identity conflicts are waiting."
+                    if open_conflicts_total == 0
+                    else "There are {count} unresolved conflict(s) that still need review."
+                ),
+                "detail_params": {"count": open_conflicts_total} if open_conflicts_total else {},
+                "action_url": "/conflicts",
+            }
+        )
+        checks.append(
+            {
+                "key": "apply",
+                "label": "First apply",
+                "status": "success" if apply_completed else "warning",
+                "detail": (
+                    "At least one successful apply run has been recorded."
+                    if apply_completed
+                    else "No successful apply run has been recorded yet."
+                ),
+                "action_url": "/jobs",
+            }
+        )
+
+        for warning in security_warnings[:2]:
+            checks.append(
+                {
+                    "key": f"security_{len(checks)}",
+                    "label": "Security recommendation",
+                    "status": "warning",
+                    "detail": warning,
+                    "action_url": "/config",
+                }
+            )
+
+        if include_live:
+            if (
+                config
+                and not validation_errors
+                and config.source_connector.corpid
+                and config.source_connector.corpsecret
+            ):
+                source_ok, source_message = self.test_source_connection(
+                    config.source_connector.corpid,
+                    config.source_connector.corpsecret,
+                    config.source_connector.agentid,
+                    source_provider=config.source_provider,
+                )
+                checks.append(
+                    {
+                        "key": "live_source",
+                        "label": "Live {provider} connection",
+                        "label_params": {"provider": source_provider_name},
+                        "status": "success" if source_ok else "error",
+                        "detail": source_message,
+                        "action_url": "/config",
+                    }
+                )
+            else:
+                if config and not get_source_provider_schema(config.source_provider).implemented:
+                    live_source_detail = "Skipped because {provider} is not implemented in this build."
+                    live_source_detail_params = {"provider": source_provider_name}
+                else:
+                    live_source_detail = "Skipped because {provider} credentials are incomplete or still invalid."
+                    live_source_detail_params = {"provider": source_provider_name}
+                checks.append(
+                    {
+                        "key": "live_source",
+                        "label": "Live {provider} connection",
+                        "label_params": {"provider": source_provider_name},
+                        "status": "warning",
+                        "detail": live_source_detail,
+                        "detail_params": live_source_detail_params,
+                        "action_url": "/config",
+                    }
+                )
+            if config and not validation_errors and config.ldap.server and config.ldap.domain and config.ldap.username and config.ldap.password:
+                ldap_ok, ldap_message = self.test_ldap_connection(
+                    config.ldap.server,
+                    config.ldap.domain,
+                    config.ldap.username,
+                    config.ldap.password,
+                    use_ssl=config.ldap.use_ssl,
+                    port=config.ldap.port,
+                    validate_cert=config.ldap.validate_cert,
+                    ca_cert_path=config.ldap.ca_cert_path,
+                )
+                checks.append(
+                    {
+                        "key": "live_ldap",
+                        "label": "Live LDAP connection",
+                        "status": "success" if ldap_ok else "error",
+                        "detail": ldap_message,
+                        "action_url": "/config",
+                    }
+                )
+            else:
+                checks.append(
+                    {
+                        "key": "live_ldap",
+                        "label": "Live LDAP connection",
+                        "status": "warning",
+                        "detail": "Skipped because LDAP credentials are incomplete or still invalid.",
+                        "action_url": "/config",
+                    }
+                )
+
+        overall_status = summarize_check_status(checks)
+        if str(checks[0].get("status")) == "error":
+            next_action_url = "/config"
+            next_action_label = "Open Organization Config"
+        elif include_live and any(
+            str(item.get("key") or "") in {"live_source", "live_wecom", "live_ldap"}
+            and str(item.get("status") or "") == "error"
+            for item in checks
+        ):
+            next_action_url = "/config"
+            next_action_label = "Fix Connectivity"
+        elif not dry_run_completed:
+            next_action_url = "/jobs"
+            next_action_label = "Run First Dry Run"
+        elif open_conflicts_total > 0:
+            next_action_url = "/conflicts"
+            next_action_label = "Review Conflict Queue"
+        elif not apply_completed:
+            next_action_url = "/jobs"
+            next_action_label = "Run First Apply"
+        else:
+            next_action_url = "/dashboard"
+            next_action_label = "Environment Ready"
+        return {
+            "org_id": current_org.org_id,
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "checks": checks,
+            "overall_status": overall_status,
+            "status_counts": count_check_statuses(checks),
+            "has_live_checks": include_live,
+            "next_action_url": next_action_url,
+            "next_action_label": next_action_label,
+            "dry_run_completed": dry_run_completed,
+            "apply_completed": apply_completed,
+            "open_conflict_count": open_conflicts_total,
+        }
+
+    def build_dashboard_data(self, request: Request) -> dict[str, Any]:
+        current_org = self.request_support.get_current_org(request)
+        config, validation_errors, security_warnings = self.load_config_summary(current_org)
+        persisted_web_runtime_settings = resolve_web_runtime_settings(request.app.state.settings_repo)
+        web_runtime_settings = dict(request.app.state.web_runtime_settings)
+        web_runtime_warnings = list(web_runtime_settings.get("warnings", []))
+        if web_runtime_requires_restart(
+            request.app.state.startup_persisted_web_runtime_settings,
+            persisted_web_runtime_settings,
+        ):
+            web_runtime_warnings.append(
+                "Web deployment settings changed in storage. Restart the web process to apply proxy and cookie updates."
+            )
+        recent_jobs = request.app.state.job_repo.list_recent_job_records(limit=10, org_id=current_org.org_id)
+        active_job = request.app.state.job_repo.get_active_job_record(org_id=current_org.org_id)
+        db_info = request.app.state.db_manager.runtime_info()
+        enabled_rules = request.app.state.exclusion_repo.list_enabled_rule_records(org_id=current_org.org_id)
+        bindings = request.app.state.user_binding_repo.list_enabled_binding_records(org_id=current_org.org_id)
+        overrides = request.app.state.department_override_repo.list_override_records(org_id=current_org.org_id)
+        exception_rules = request.app.state.exception_rule_repo.list_enabled_rule_records(org_id=current_org.org_id)
+        preflight_snapshot = merge_saved_preflight_snapshot_data(
+            request.session.get("_preflight_snapshot"),
+            self.build_preflight_snapshot(request, include_live=False),
+        )
+        open_conflicts_count = int(preflight_snapshot.get("open_conflict_count") or 0)
+        return {
+            "active_job": active_job,
+            "recent_jobs": recent_jobs,
+            "current_org": current_org,
+            "current_org_connector_count": request.app.state.connector_repo.count_connectors(org_id=current_org.org_id),
+            "current_org_job_count": request.app.state.job_repo.count_jobs(org_id=current_org.org_id),
+            "enabled_organization_count": len(request.app.state.organization_repo.list_organization_records(enabled_only=True)),
+            "config_public": config.to_public_dict() if config else None,
+            "config_validation_errors": validation_errors,
+            "config_security_warnings": security_warnings,
+            "db_info": db_info,
+            "enabled_rule_count": len(enabled_rules),
+            "exception_rule_count": len(exception_rules),
+            "open_conflicts_count": open_conflicts_count,
+            "user_count": request.app.state.user_repo.count_users(),
+            "binding_count": len(bindings),
+            "override_count": len(overrides),
+            "preflight_summary": preflight_snapshot,
+            "getting_started": build_getting_started_view_state(
+                current_org_name=current_org.name,
+                preflight_snapshot=preflight_snapshot,
+                source_provider_name=self.request_support.source_provider_label(config.source_provider if config else "wecom"),
+                ui_mode=self.request_support.get_ui_mode(request),
+            ),
+            "placement_strategy": request.app.state.settings_repo.get_value(
+                "user_ou_placement_strategy",
+                "source_primary_department",
+                org_id=current_org.org_id,
+            ),
+            "web_runtime": web_runtime_settings,
+            "web_runtime_warnings": web_runtime_warnings,
+            "sync_runner_error": request.app.state.sync_runner.last_error,
+        }

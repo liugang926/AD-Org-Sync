@@ -1,3 +1,16 @@
+from sync_app.storage.repositories.admin import WebAdminUserRepository
+from sync_app.storage.repositories.conflicts import (
+    SyncConflictRepository,
+    SyncExceptionRuleRepository,
+    SyncPlanReviewRepository,
+)
+from sync_app.storage.repositories.exclusions import GroupExclusionRuleRepository
+from sync_app.storage.repositories.jobs import (
+    PlannedOperationRepository,
+    SyncEventRepository,
+    SyncJobRepository,
+    SyncOperationLogRepository,
+)
 from sync_app.storage.repositories.organizations import OrganizationConfigRepository, OrganizationRepository
 from sync_app.storage.repositories.mappings import (
     AttributeMappingRuleRepository,
@@ -9,9 +22,19 @@ from sync_app.storage.repositories.groups import (
     ManagedGroupBindingRepository,
 )
 from sync_app.storage.repositories.lifecycle import OffboardingQueueRepository, UserLifecycleQueueRepository
+from sync_app.storage.repositories.state import ObjectStateRepository
 from sync_app.storage.repositories.system import SettingsRepository, SyncReplayRequestRepository, WebAuditLogRepository
 
 __all__ = [
+    "WebAdminUserRepository",
+    "SyncConflictRepository",
+    "SyncExceptionRuleRepository",
+    "SyncPlanReviewRepository",
+    "GroupExclusionRuleRepository",
+    "PlannedOperationRepository",
+    "SyncEventRepository",
+    "SyncJobRepository",
+    "SyncOperationLogRepository",
     "OrganizationConfigRepository",
     "OrganizationRepository",
     "UserIdentityBindingRepository",
@@ -21,6 +44,7 @@ __all__ = [
     "CustomManagedGroupBindingRepository",
     "OffboardingQueueRepository",
     "UserLifecycleQueueRepository",
+    "ObjectStateRepository",
     "SettingsRepository",
     "SyncReplayRequestRepository",
     "WebAuditLogRepository",

@@ -25,6 +25,10 @@ class TargetDirectoryProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_organizational_units(self) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    @abstractmethod
     def ou_exists(self, ou_dn: str) -> bool:
         raise NotImplementedError
 

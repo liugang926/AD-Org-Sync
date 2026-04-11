@@ -3,6 +3,7 @@ import json
 import logging
 import ssl
 import time
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -77,6 +78,7 @@ class ADSyncLDAPS:
         managed_group_type: str = "security",
         managed_group_mail_domain: str = "",
         custom_group_ou_path: str = "Managed Groups",
+        user_root_ou_path: str = "",
     ):
         """
         初始化LDAPS连接
@@ -105,10 +107,16 @@ class ADSyncLDAPS:
         self.password_complexity = (password_complexity or "strong").strip().lower()
         self.validate_cert = validate_cert
         self.ca_cert_path = ca_cert_path.strip()
-        self.disabled_users_ou_name = str(disabled_users_ou_name or "Disabled Users").strip() or "Disabled Users"
+        self.user_root_ou_path = self._normalize_ou_path_segments(user_root_ou_path)
+        self.disabled_users_ou_path = self._normalize_ou_path_segments(disabled_users_ou_name or "Disabled Users")
+        if not self.disabled_users_ou_path:
+            self.disabled_users_ou_path = ["Disabled Users"]
+        self.disabled_users_ou_name = self.disabled_users_ou_path[-1]
         self.managed_group_type = normalize_group_type(managed_group_type)
         self.managed_group_mail_domain = str(managed_group_mail_domain or "").strip()
-        self.custom_group_ou_path = str(custom_group_ou_path or "Managed Groups").strip() or "Managed Groups"
+        self.custom_group_ou_path = "/".join(
+            self._normalize_ou_path_segments(custom_group_ou_path or "Managed Groups")
+        ) or "Managed Groups"
         self.logger = logging.getLogger(__name__)
         if self.use_ssl and not self.validate_cert:
             self.logger.warning("LDAPS certificate validation is disabled")
@@ -116,38 +124,51 @@ class ADSyncLDAPS:
         # 设置重试参数
         self.max_retries = 3
         self.retry_delay = 2
-
-    def _is_protected_account(self, username: str) -> bool:
-        return is_protected_ad_account_name(username, self.exclude_accounts)
-        
-        # 构建基础DN
-        self.base_dn = ','.join([f"DC={part}" for part in domain.split('.')])
-        
-        # 确定端口
-        if port is None:
-            self.port = 636 if use_ssl else 389
-        else:
-            self.port = port
-        
-        # 配置TLS
+        self.base_dn = ','.join([f"DC={part}" for part in domain.split('.') if part])
+        self.port = 636 if port is None and use_ssl else 389 if port is None else port
         if use_ssl:
             tls_config = build_tls_config(validate_cert=self.validate_cert, ca_cert_path=self.ca_cert_path)
             self.server = Server(
-                server, 
-                port=self.port, 
-                use_ssl=True, 
+                server,
+                port=self.port,
+                use_ssl=True,
                 tls=tls_config,
                 get_info=ALL
             )
         else:
             self.server = Server(server, port=self.port, get_info=ALL)
-        
-        # 建立连接
         self.connection = None
         self._connect()
-
-        # 确保Disabled Users OU存在
+        self.ensure_user_root_ou_path()
         self.ensure_disabled_users_ou()
+
+    def _normalize_ou_path_segments(self, raw_value: Any) -> List[str]:
+        if isinstance(raw_value, (list, tuple)):
+            raw_segments = raw_value
+        else:
+            raw_text = str(raw_value or "").strip()
+            dn_segments = [
+                part.split("=", 1)[1].strip()
+                for part in raw_text.split(",")
+                if "=" in part and part.strip().lower().startswith("ou=") and part.split("=", 1)[1].strip()
+            ]
+            if dn_segments:
+                raw_segments = list(reversed(dn_segments))
+            else:
+                raw_segments = raw_text.replace("\\", "/").split("/")
+        return [str(segment).strip() for segment in raw_segments if str(segment).strip()]
+
+    def _build_ou_dn(self, ou_path: List[str]) -> str:
+        normalized_path = self._normalize_ou_path_segments(ou_path)
+        if not normalized_path:
+            return self.base_dn
+        return ','.join([f"OU={ou}" for ou in reversed(normalized_path)] + [self.base_dn])
+
+    def _user_scoped_ou_path(self, ou_path: List[str]) -> List[str]:
+        return [*self.user_root_ou_path, *self._normalize_ou_path_segments(ou_path)]
+
+    def _is_protected_account(self, username: str) -> bool:
+        return is_protected_ad_account_name(username, self.exclude_accounts)
     
     def _connect(self):
         """建立LDAP连接"""
@@ -237,7 +258,7 @@ class ADSyncLDAPS:
         
     def get_ou_dn(self, ou_path: List[str]) -> str:
         """获取OU的Distinguished Name"""
-        return ','.join([f"OU={ou}" for ou in reversed(ou_path)]) + f',{self.base_dn}'
+        return self._build_ou_dn(self._user_scoped_ou_path(ou_path))
     
     def ou_exists(self, ou_dn: str) -> bool:
         """检查OU是否存在"""
@@ -251,6 +272,52 @@ class ADSyncLDAPS:
         except LDAPException:
             return False
     
+    def list_organizational_units(self) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = [
+            {
+                "name": self.domain or "Domain Root",
+                "dn": self.base_dn,
+                "path": [],
+                "guid": "",
+            }
+        ]
+        try:
+            self.connection.search(
+                self.base_dn,
+                "(objectClass=organizationalUnit)",
+                attributes=["ou", "distinguishedName", "objectGUID"],
+            )
+            for entry in self.connection.entries:
+                dn = str(getattr(entry, "entry_dn", "") or "")
+                if not dn:
+                    continue
+                path = self._normalize_ou_path_segments(dn)
+                if not path:
+                    continue
+                guid_value = ""
+                raw_guid = getattr(entry, "objectGUID", None)
+                guid_bytes = getattr(raw_guid, "value", None)
+                if isinstance(guid_bytes, (bytes, bytearray)) and len(guid_bytes) == 16:
+                    guid_value = str(uuid.UUID(bytes_le=bytes(guid_bytes)))
+                items.append(
+                    {
+                        "name": str(getattr(getattr(entry, "ou", None), "value", "") or path[-1]),
+                        "dn": dn,
+                        "path": path,
+                        "guid": guid_value,
+                    }
+                )
+        except LDAPException as exc:
+            self.logger.error("failed to enumerate organizational units: %s", exc)
+            raise
+        items.sort(
+            key=lambda item: (
+                len(item.get("path") or []),
+                [segment.lower() for segment in item.get("path") or []],
+            )
+        )
+        return items
+
     def ensure_ou(self, ou_name: str, parent_dn: str) -> Tuple[bool, str, bool]:
         """确保OU存在，返回(成功, ou_dn, 是否新建)"""
         try:
@@ -475,12 +542,21 @@ class ADSyncLDAPS:
     def ensure_ou_path(self, ou_path: List[str]) -> Tuple[bool, str]:
         current_parent_dn = self.base_dn
         current_dn = self.base_dn
-        for ou_name in ou_path:
+        for ou_name in self._normalize_ou_path_segments(ou_path):
             success, current_dn, _ = self.ensure_ou(ou_name, current_parent_dn)
             if not success:
                 return False, current_dn
             current_parent_dn = current_dn
         return True, current_dn
+
+    def ensure_user_root_ou_path(self) -> bool:
+        if not self.user_root_ou_path:
+            return True
+        success, _ = self.ensure_ou_path(self.user_root_ou_path)
+        return success
+
+    def get_disabled_users_ou_dn(self) -> str:
+        return self._build_ou_dn(self.disabled_users_ou_path)
 
     def inspect_custom_group(
         self,
@@ -1422,7 +1498,7 @@ class ADSyncLDAPS:
                 self.logger.error(f"failed to disable AD user {username}: {self.connection.result}")
                 return False
 
-            disabled_ou = f"OU={self.disabled_users_ou_name},{self.base_dn}"
+            disabled_ou = self.get_disabled_users_ou_dn()
             cn = user_dn.split(',', 1)[0].split('=', 1)[1]
             try:
                 self.connection.modify_dn(user_dn, f"CN={cn}", new_superior=disabled_ou)
@@ -1466,15 +1542,11 @@ class ADSyncLDAPS:
 
     def ensure_disabled_users_ou(self) -> bool:
         try:
-            disabled_ou = f"OU={self.disabled_users_ou_name},{self.base_dn}"
+            disabled_ou = self.get_disabled_users_ou_dn()
             if self.ou_exists(disabled_ou):
                 return True
-            ou_attributes = {
-                'objectClass': ['top', 'organizationalUnit'],
-                'ou': self.disabled_users_ou_name,
-                'description': 'Stores disabled managed user accounts',
-            }
-            if self.connection.add(disabled_ou, attributes=ou_attributes):
+            success, _ = self.ensure_ou_path(self.disabled_users_ou_path)
+            if success:
                 return True
             self.logger.error(f"failed to create disabled users OU {self.disabled_users_ou_name}: {self.connection.result}")
             return False

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from starlette.requests import Request
 
+from sync_app.core.models import DepartmentNode
 from sync_app.services.config_store import save_editable_config
 from sync_app.web.app import resolve_web_runtime_settings
 from sync_app.web import create_app
@@ -204,6 +205,26 @@ class WebAuthorizationTests(unittest.TestCase):
             "user_ou_placement_strategy": self.app.state.settings_repo.get_value(
                 "user_ou_placement_strategy",
                 "source_primary_department",
+                org_id=current_org.org_id,
+            ),
+            "source_root_unit_ids": self.app.state.settings_repo.get_value(
+                "source_root_unit_ids",
+                "",
+                org_id=current_org.org_id,
+            ),
+            "directory_root_ou_path": self.app.state.settings_repo.get_value(
+                "directory_root_ou_path",
+                "",
+                org_id=current_org.org_id,
+            ),
+            "disabled_users_ou_path": self.app.state.settings_repo.get_value(
+                "disabled_users_ou_path",
+                "Disabled Users",
+                org_id=current_org.org_id,
+            ),
+            "custom_group_ou_path": self.app.state.settings_repo.get_value(
+                "custom_group_ou_path",
+                "Managed Groups",
                 org_id=current_org.org_id,
             ),
             "soft_excluded_groups": "\n".join(
@@ -1349,6 +1370,89 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn("Optional Notifications", text)
         self.assertIn("does not block preflight, dry run, or apply", text)
 
+    def test_config_page_includes_sync_scope_and_ou_mapping_controls(self):
+        self._login("superadmin")
+
+        response = self._route("/config", "GET")(self._request("/config"))
+        self.assertEqual(response.status_code, 200)
+        text = self._text(response)
+        self.assertIn("OU Filter And Root Mapping", text)
+        self.assertIn('name="source_root_unit_ids"', text)
+        self.assertIn('name="directory_root_ou_path"', text)
+        self.assertIn('name="disabled_users_ou_path"', text)
+        self.assertIn('name="custom_group_ou_path"', text)
+
+    def test_config_source_unit_catalog_returns_department_tree(self):
+        self._login("superadmin")
+        config_page = self._route("/config", "GET")(self._request("/config"))
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(config_page))
+        self.assertIsNotNone(csrf_match)
+
+        class FakeSourceProvider:
+            def list_departments(self):
+                return [
+                    DepartmentNode(department_id=1, name="HQ", parent_id=0),
+                    DepartmentNode(department_id=8, name="China", parent_id=1),
+                ]
+
+            def close(self):
+                return None
+
+        with patch("sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()):
+            response = self._route("/config/source-units/catalog", "POST")(
+                self._request("/config/source-units/catalog", "POST"),
+                csrf_token=csrf_match.group(1),
+                source_provider="wecom",
+                corpid="corp-001",
+                agentid="10001",
+                corpsecret="secret-001",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(self._text(response))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["provider"], "WeCom")
+        self.assertEqual(payload["items"][1]["department_id"], "8")
+        self.assertEqual(payload["items"][1]["path_display"], "HQ / China")
+
+    def test_config_target_ou_catalog_returns_ou_tree(self):
+        self._login("superadmin")
+        config_page = self._route("/config", "GET")(self._request("/config"))
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(config_page))
+        self.assertIsNotNone(csrf_match)
+
+        class FakeTargetProvider:
+            def list_organizational_units(self):
+                return [
+                    {"name": "example.local", "dn": "DC=example,DC=local", "path": [], "guid": ""},
+                    {
+                        "name": "Managed Users",
+                        "dn": "OU=Managed Users,DC=example,DC=local",
+                        "path": ["Managed Users"],
+                        "guid": "12345678-1234-5678-1234-567812345678",
+                    },
+                ]
+
+        with patch("sync_app.web.app.build_target_provider", return_value=FakeTargetProvider()):
+            response = self._route("/config/target-ou/catalog", "POST")(
+                self._request("/config/target-ou/catalog", "POST"),
+                csrf_token=csrf_match.group(1),
+                ldap_server="dc01.example.local",
+                ldap_domain="example.local",
+                ldap_username="administrator",
+                ldap_password="Password123!",
+                ldap_port=636,
+                ldap_use_ssl="true",
+                ldap_validate_cert="false",
+                ldap_ca_cert_path="",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(self._text(response))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["items"][1]["path_value"], "Managed Users")
+        self.assertEqual(payload["items"][1]["guid"], "12345678-1234-5678-1234-567812345678")
+
     def test_dashboard_does_not_block_when_webhook_is_not_configured(self):
         current_org = self.app.state.organization_repo.get_default_organization_record()
         self.assertIsNotNone(current_org)
@@ -1534,6 +1638,90 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(
             self.app.state.org_config_repo.get_app_config("default", config_path=str(self.config_path)).ldap.server,
             "dc02.example.local",
+        )
+
+    def test_config_preview_formats_special_field_types_consistently(self):
+        self._login("superadmin")
+
+        response = self._route("/config", "GET")(self._request("/config"))
+        self.assertEqual(response.status_code, 200)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(response))
+        self.assertIsNotNone(match)
+
+        preview_response = self._route("/config/preview", "POST")(
+            self._request("/config/preview", "POST"),
+            csrf_token=match.group(1),
+            **self._build_config_form_payload(
+                password_complexity="medium",
+                group_display_separator=" ",
+                schedule_execution_mode="dry_run",
+                source_root_unit_ids="2, 8",
+                directory_root_ou_path="Managed Users/China",
+                soft_excluded_groups="",
+            ),
+        )
+        self.assertEqual(preview_response.status_code, 200)
+        preview_text = self._text(preview_response)
+
+        self.assertRegex(
+            preview_text,
+            re.compile(r"Password Complexity.*?Strong.*?Medium", re.DOTALL),
+        )
+        self.assertRegex(
+            preview_text,
+            re.compile(r"Group Separator.*?-.*?Space", re.DOTALL),
+        )
+        self.assertRegex(
+            preview_text,
+            re.compile(r"Scheduled Mode.*?Apply.*?Dry Run", re.DOTALL),
+        )
+        self.assertRegex(
+            preview_text,
+            re.compile(r"Source Root Unit IDs Filter.*?All departments.*?2,\s*8", re.DOTALL),
+        )
+        self.assertRegex(
+            preview_text,
+            re.compile(r"Target AD Root OU Path / DN.*?Domain root.*?Managed Users/China", re.DOTALL),
+        )
+        self.assertRegex(
+            preview_text,
+            re.compile(r"Soft Excluded Groups.*?Domain Users.*?None", re.DOTALL),
+        )
+
+    def test_config_page_persists_sync_scope_and_ou_mapping_settings(self):
+        self._login("superadmin")
+
+        response = self._route("/config", "GET")(self._request("/config"))
+        self.assertEqual(response.status_code, 200)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(response))
+        self.assertIsNotNone(match)
+
+        submit_response = self._route("/config", "POST")(
+            self._request("/config", "POST"),
+            csrf_token=match.group(1),
+            **self._build_config_form_payload(
+                source_root_unit_ids="2, 8",
+                directory_root_ou_path="Managed Users/China",
+                disabled_users_ou_path="Managed Users/Disabled Users",
+                custom_group_ou_path="Managed Groups/Regional",
+            ),
+        )
+        self.assertEqual(submit_response.status_code, 303)
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("source_root_unit_ids", "", org_id="default"),
+            "2, 8",
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("directory_root_ou_path", "", org_id="default"),
+            "Managed Users/China",
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("disabled_users_ou_path", "", org_id="default"),
+            "Managed Users/Disabled Users",
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("custom_group_ou_path", "", org_id="default"),
+            "Managed Groups/Regional",
         )
 
     def test_config_preview_redirects_when_nothing_changed(self):

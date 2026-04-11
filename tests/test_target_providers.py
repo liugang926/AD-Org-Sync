@@ -10,6 +10,9 @@ class FakeADSyncClient:
     def get_ou_dn(self, ou_path):
         return "/".join(ou_path)
 
+    def list_organizational_units(self):
+        return [{"name": "Managed Users", "dn": "OU=Managed Users,DC=example,DC=com", "path": ["Managed Users"]}]
+
     def get_users_batch(self, usernames):
         return {name: {"username": name} for name in usernames}
 
@@ -53,6 +56,7 @@ class TargetProviderTests(unittest.TestCase):
         provider = ADLDAPSTargetProvider(FakeADSyncClient(server="ldap"))
 
         self.assertEqual(provider.get_ou_dn(["HQ", "IT"]), "HQ/IT")
+        self.assertEqual(provider.list_organizational_units()[0]["name"], "Managed Users")
         self.assertEqual(provider.get_all_enabled_users(), ["alice"])
         self.assertTrue(provider.disable_user("alice"))
 

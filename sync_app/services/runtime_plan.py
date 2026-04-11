@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from sync_app.core.models import SyncJobSummary
+from sync_app.services.runtime_context import SyncContext
 
 
 def compute_plan_fingerprint(items: list[dict[str, Any]]) -> str:
@@ -245,3 +246,74 @@ def complete_dry_run(
     sync_stats['disabled_users'] = list(disabled_users)
     mark_job('COMPLETED', ended=True, summary=summary)
     return sync_stats.to_dict()
+
+
+def complete_plan_phase(ctx: SyncContext) -> dict[str, Any] | None:
+    ctx.plan.plan_fingerprint = compute_plan_fingerprint(ctx.plan.plan_fingerprint_items)
+    ctx.plan.approved_review, early_response, ctx.plan.review_required_for_high_risk = handle_plan_review_gate(
+        execution_mode=ctx.execution_mode,
+        settings_repo=ctx.repositories.settings_repo,
+        review_repo=ctx.repositories.review_repo,
+        sync_stats=ctx.sync_stats,
+        organization=ctx.organization,
+        config_hash=ctx.config_hash,
+        plan_fingerprint=ctx.plan.plan_fingerprint,
+        job_id=ctx.job_id,
+        planned_count=ctx.planned_count,
+        high_risk_operation_count=ctx.high_risk_operation_count,
+        disable_action_count=len(ctx.actions.disable_actions),
+        disable_breaker_triggered=ctx.plan.disable_breaker_triggered,
+        disable_breaker_requires_approval=ctx.policy_settings.disable_breaker_requires_approval,
+        disable_breaker_threshold=ctx.plan.disable_breaker_threshold,
+        disable_breaker_percent=ctx.policy_settings.disable_breaker_percent,
+        managed_user_baseline=ctx.plan.managed_user_baseline,
+        source_provider_name=ctx.environment.source_provider_name,
+        bot=ctx.environment.bot,
+        mark_job=ctx.hooks.mark_job,
+        record_event=ctx.hooks.record_event,
+        record_operation=ctx.hooks.record_operation,
+    )
+    if early_response is not None:
+        return early_response
+
+    ctx.hooks.mark_job('READY')
+    ctx.hooks.record_event(
+        'INFO',
+        'plan_ready',
+        'sync plan generated',
+        stage_name='plan',
+        payload={
+            'department_actions': len(ctx.actions.department_actions),
+            'user_actions': len(ctx.actions.user_actions),
+            'membership_actions': len(ctx.actions.membership_actions),
+            'group_hierarchy_actions': len(ctx.actions.group_hierarchy_actions),
+            'group_cleanup_actions': len(ctx.actions.group_cleanup_actions),
+            'disable_actions': len(ctx.actions.disable_actions),
+            'conflict_count': ctx.sync_stats['conflict_count'],
+            'high_risk_operation_count': ctx.high_risk_operation_count,
+            'plan_fingerprint': ctx.plan.plan_fingerprint,
+        },
+    )
+
+    if ctx.execution_mode == 'dry_run':
+        return complete_dry_run(
+            sync_stats=ctx.sync_stats,
+            organization=ctx.organization,
+            execution_mode=ctx.execution_mode,
+            planned_count=ctx.planned_count,
+            conflict_count=ctx.sync_stats['conflict_count'],
+            high_risk_operation_count=ctx.high_risk_operation_count,
+            plan_fingerprint=ctx.plan.plan_fingerprint,
+            review_required_for_high_risk=ctx.plan.review_required_for_high_risk,
+            department_action_count=len(ctx.actions.department_actions),
+            user_action_count=len(ctx.actions.user_actions),
+            membership_action_count=len(ctx.actions.membership_actions),
+            group_hierarchy_action_count=len(ctx.actions.group_hierarchy_actions),
+            group_cleanup_action_count=len(ctx.actions.group_cleanup_actions),
+            disable_action_count=len(ctx.actions.disable_actions),
+            disabled_users=[f"{action.connector_id}:{action.username}" for action in ctx.actions.disable_actions],
+            field_ownership_policy=dict(ctx.sync_stats['field_ownership_policy']),
+            generate_skip_detail_report=ctx.hooks.generate_skip_detail_report,
+            mark_job=ctx.hooks.mark_job,
+        )
+    return None
