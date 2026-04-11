@@ -4,6 +4,7 @@ from sync_app.storage.repositories.conflicts import (
     SyncExceptionRuleRepository,
     SyncPlanReviewRepository,
 )
+from sync_app.storage.repositories.connectors import SyncConnectorRepository
 from sync_app.storage.repositories.exclusions import GroupExclusionRuleRepository
 from sync_app.storage.repositories.jobs import (
     PlannedOperationRepository,
@@ -30,6 +31,7 @@ __all__ = [
     "SyncConflictRepository",
     "SyncExceptionRuleRepository",
     "SyncPlanReviewRepository",
+    "SyncConnectorRepository",
     "GroupExclusionRuleRepository",
     "PlannedOperationRepository",
     "SyncEventRepository",

@@ -88,6 +88,22 @@ class SyncRuntimeHooks:
     is_cancelled: Callable[[], bool]
 
 
+@dataclass(frozen=True)
+class SyncExecutionServices:
+    is_department_excluded: Callable[[Optional[Any]], bool]
+    get_connector_id_for_department: Callable[[Optional[Any]], str]
+    get_connector_spec: Callable[[str], dict[str, Any]]
+    get_ad_sync: Callable[[str], Any]
+    is_protected_ad_account: Callable[[str, str], bool]
+    is_department_blocked_for_placement: Callable[[Optional[Any]], bool]
+    record_group_policy_skip: Callable[..., None]
+    record_skip_detail: Callable[..., None]
+    record_protected_account_skip: Callable[..., None]
+    record_exception_skip: Callable[..., None]
+    get_department_group_target: Callable[[Any], Any]
+    get_effective_parent_department_id: Callable[[Any], Optional[int]]
+
+
 @dataclass
 class SyncContext:
     start_time: float

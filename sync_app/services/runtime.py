@@ -12,24 +12,12 @@ from sync_app.core.config import (
     test_source_connection,
     validate_config,
 )
-from sync_app.core.directory_protection import is_protected_ad_account_name
-from sync_app.core.exception_rules import (
-    get_exception_rule_match_type,
-    normalize_exception_match_value,
-)
-from sync_app.core.sync_policies import (
-    normalize_mapping_direction,
-    render_template,
-)
 from sync_app.core.models import (
     DepartmentNode,
-    GroupPolicyEvaluation,
-    ManagedGroupTarget,
     SyncRunStats,
-    UserDepartmentBundle,
 )
 from sync_app.providers.source import build_source_provider, get_source_provider_display_name
-from sync_app.providers.target import TargetDirectoryProvider, build_target_provider
+from sync_app.providers.target import build_target_provider
 from sync_app.services.ad_sync import (
     ADSyncLDAPS,
     build_custom_group_sam,
@@ -40,49 +28,26 @@ from sync_app.services.reports import (
     _generate_sync_validation_report,
 )
 from sync_app.services.runtime_bootstrap import bootstrap_sync_runtime
-from sync_app.services.runtime_apply_phase import (
-    apply_custom_group_actions,
-    apply_department_actions,
-    apply_disable_actions,
-    apply_final_state_updates,
-    apply_group_cleanup_actions,
-    apply_group_hierarchy_actions,
-    apply_group_membership_actions,
-    apply_user_actions,
-)
 from sync_app.services.runtime_context import SyncContext, SyncRuntimeHooks
 from sync_app.services.runtime_finalize import (
     finalize_failed_sync,
     finalize_interrupted_sync,
     finalize_successful_sync,
 )
-from sync_app.services.runtime_group_phase import (
-    get_department_group_target as resolve_department_group_target,
-    get_effective_parent_department_id as resolve_effective_parent_department_id,
-    plan_directory_and_custom_groups,
-    plan_group_relationship_cleanup,
-)
+from sync_app.services.runtime_orchestrator import run_apply_phase, run_planning_phase
 from sync_app.services.runtime_connectors import (
     build_department_connector_map,
     build_department_scope_root_map,
-    is_department_in_connector_scope,
     load_connector_specs,
-    sanitize_source_writeback_payload,
-    select_mapping_rules,
     trim_department_paths_to_scope,
 )
 from sync_app.services.runtime_identity import build_identity_candidates, resolve_target_department
-from sync_app.services.runtime_plan import complete_plan_phase, compute_plan_fingerprint
-from sync_app.services.runtime_source_phase import (
-    collect_source_user_departments,
-    resolve_identity_bindings_phase,
+from sync_app.services.runtime_plan import compute_plan_fingerprint
+from sync_app.services.runtime_services import (
+    build_execution_services,
+    evaluate_group_policy as evaluate_group_policy_rule_set,
+    has_exception_rule as has_exception_rule_match,
 )
-from sync_app.services.runtime_user_phase import (
-    evaluate_disable_circuit_breaker,
-    plan_disable_actions,
-    plan_user_actions,
-)
-from sync_app.storage.local_db import SyncConnectorRepository
 
 
 FIELD_OWNERSHIP_POLICY = {
@@ -118,8 +83,7 @@ _resolve_target_department = resolve_target_department
 _load_connector_specs = load_connector_specs
 _build_department_connector_map = build_department_connector_map
 _build_department_scope_root_map = build_department_scope_root_map
-_select_mapping_rules = select_mapping_rules
-_sanitize_source_writeback_payload = sanitize_source_writeback_payload
+build_custom_group_sam = build_custom_group_sam
 
 
 def _run_automatic_replay_stage(ctx: SyncContext) -> None:
@@ -588,41 +552,20 @@ def run_sync_job(
         group_sam: Optional[str] = None,
         group_dn: Optional[str] = None,
         display_name: Optional[str] = None,
-    ) -> GroupPolicyEvaluation:
-        matched_rules: List[Dict[str, Any]] = []
-        for rule in enabled_group_rules:
-            match_type = (rule.get('match_type') or '').strip().lower()
-            match_value = (rule.get('match_value') or '').strip()
-            is_match = False
-
-            if match_type == 'samaccountname' and group_sam:
-                is_match = group_sam.lower() == match_value.lower()
-            elif match_type == 'dn' and group_dn:
-                is_match = group_dn.lower() == match_value.lower()
-            elif match_type == 'display_name' and display_name:
-                is_match = display_name.lower() == match_value.lower()
-
-            if is_match:
-                matched_rules.append(rule.to_dict())
-
-        is_hard_protected = any(
-            rule.get('rule_type') == 'protect' and rule.get('protection_level') == 'hard'
-            for rule in matched_rules
-        )
-        is_excluded = is_hard_protected or any(rule.get('rule_type') == 'exclude' for rule in matched_rules)
-        return GroupPolicyEvaluation(
-            is_hard_protected=is_hard_protected,
-            is_excluded=is_excluded,
-            matched_rules=matched_rules,
+    ):
+        return evaluate_group_policy_rule_set(
+            enabled_group_rules=enabled_group_rules,
+            group_sam=group_sam,
+            group_dn=group_dn,
+            display_name=display_name,
         )
 
     def has_exception_rule(rule_type: str, match_value: Optional[str]) -> bool:
-        normalized_rule_type = str(rule_type or '').strip().lower()
-        normalized_match_type = get_exception_rule_match_type(normalized_rule_type)
-        normalized_match_value = normalize_exception_match_value(normalized_match_type, match_value)
-        if not normalized_rule_type or not normalized_match_type or not normalized_match_value:
-            return False
-        return normalized_match_value in exception_match_values_by_rule_type.get(normalized_rule_type, set())
+        return has_exception_rule_match(
+            exception_match_values_by_rule_type=exception_match_values_by_rule_type,
+            rule_type=rule_type,
+            match_value=match_value,
+        )
 
     ctx.hooks = SyncRuntimeHooks(
         record_event=record_event,
@@ -656,383 +599,33 @@ def run_sync_job(
             'user_ou_placement_strategy': user_ou_placement_strategy,
         },
     )
-    department_actions = ctx.actions.department_actions
-    custom_group_actions = ctx.actions.custom_group_actions
-    user_actions = ctx.actions.user_actions
-    membership_actions = ctx.actions.membership_actions
-    group_hierarchy_actions = ctx.actions.group_hierarchy_actions
-    group_cleanup_actions = ctx.actions.group_cleanup_actions
-    disable_actions = ctx.actions.disable_actions
-
     try:
         mark_job('PLANNING')
         _run_automatic_replay_stage(ctx)
         _prepare_sync_environment(ctx)
-        bot = ctx.environment.bot
-        source_provider = ctx.environment.source_provider
-        source_provider_name = ctx.environment.source_provider_name
-        connector_specs = ctx.environment.connector_specs
-        ad_sync_clients = ctx.environment.ad_sync_clients
-        protected_ad_accounts_by_connector = ctx.environment.protected_ad_accounts_by_connector
-        default_ad_sync = ad_sync_clients['default']
-        dept_tree = ctx.environment.dept_tree
-        department_connector_map = ctx.environment.department_connector_map
-        connector_specs_by_id = ctx.environment.connector_specs_by_id
-        department_scope_root_map = ctx.environment.department_scope_root_map
-        excluded_department_names = ctx.environment.excluded_department_names
-        department_group_targets = ctx.environment.department_group_targets
-        policy_skip_markers = ctx.environment.policy_skip_markers
-        placement_blocked_department_ids = ctx.environment.placement_blocked_department_ids
-
-        def is_department_excluded(dept_info: Optional[DepartmentNode]) -> bool:
-            return (
-                not dept_info
-                or dept_info.name in excluded_department_names
-                or not is_department_in_connector_scope(
-                    dept_info,
-                    connector_specs_by_id=connector_specs_by_id,
-                    department_connector_map=department_connector_map,
-                    department_scope_root_map=department_scope_root_map,
-                )
-            )
-
-        def get_connector_id_for_department(dept_info: Optional[DepartmentNode]) -> str:
-            if not dept_info:
-                return 'default'
-            return department_connector_map.get(dept_info.department_id, 'default')
-
-        def get_connector_spec(connector_id: str) -> dict[str, Any]:
-            return connector_specs_by_id.get(connector_id, connector_specs_by_id['default'])
-
-        def get_ad_sync(connector_id: str) -> TargetDirectoryProvider:
-            return ad_sync_clients.get(connector_id, default_ad_sync)
-
-        def is_protected_ad_account(username: str, connector_id: str) -> bool:
-            return is_protected_ad_account_name(
-                username,
-                protected_ad_accounts_by_connector.get(connector_id, set()),
-            )
-
-        def is_department_blocked_for_placement(dept_info: Optional[DepartmentNode]) -> bool:
-            return is_department_excluded(dept_info) or (
-                bool(dept_info) and dept_info.department_id in placement_blocked_department_ids
-            )
-
-        def record_group_policy_skip(stage_name: str, action_type: str, group_target: ManagedGroupTarget, reason: str):
-            marker = (
-                stage_name,
-                action_type,
-                group_target.group_sam,
-                group_target.group_dn,
-            )
-            if marker in policy_skip_markers:
-                return
-
-            policy_skip_markers.add(marker)
-            matched_rules = group_target.policy.matched_rule_labels()
-            record_skip_detail(
-                stage_name=stage_name,
-                action_type=action_type,
-                group_sam=group_target.group_sam,
-                group_dn=group_target.group_dn,
-                reason=reason,
-                matched_rules=matched_rules,
-            )
-            record_event(
-                'WARNING' if group_target.policy.is_hard_protected else 'INFO',
-                f'{action_type}_skipped',
-                reason,
-                stage_name=stage_name,
-                payload={
-                    'group_sam': group_target.group_sam,
-                    'group_dn': group_target.group_dn,
-                    'display_name': group_target.display_name,
-                    'matched_rules': matched_rules,
-                },
-            )
-
-        def record_skip_detail(
-            *,
-            stage_name: str,
-            action_type: str,
-            group_sam: Optional[str],
-            group_dn: Optional[str],
-            reason: str,
-            matched_rules: Optional[List[str]] = None,
-        ):
-            skipped_summary = sync_stats['skipped_operations']
-            skipped_summary['total'] += 1
-            skipped_summary['by_action'][action_type] = skipped_summary['by_action'].get(action_type, 0) + 1
-
-            detail = {
-                'stage': stage_name,
-                'action_type': action_type,
-                'group_sam': group_sam,
-                'group_dn': group_dn,
-                'reason': reason,
-                'matched_rules': matched_rules or [],
-            }
-            if len(skipped_summary['samples']) < 20:
-                skipped_summary['samples'].append(detail)
-            if len(skipped_summary['details']) < 1000:
-                skipped_summary['details'].append(detail)
-            record_operation(
-                stage_name=stage_name,
-                object_type='group',
-                operation_type=action_type,
-                status='skipped',
-                message=reason,
-                source_id=group_sam,
-                target_dn=group_dn,
-                risk_level='normal',
-                reason_code='policy_skip',
-                details=detail,
-            )
-
-        def record_protected_account_skip(
-            *,
-            stage_name: str,
-            object_type: str,
-            operation_type: str,
-            connector_id: str,
-            ad_username: str,
-            source_id: Optional[str] = None,
-            target_id: Optional[str] = None,
-            risk_level: str = 'normal',
-            details: Optional[Dict[str, Any]] = None,
-        ) -> None:
-            message = f"skip {operation_type} for protected AD account {ad_username}"
-            payload = {
-                'connector_id': connector_id,
-                'ad_username': ad_username,
-                'protected_accounts': sorted(protected_ad_accounts_by_connector.get(connector_id, set())),
-            }
-            if details:
-                payload.update(details)
-            record_event(
-                'WARNING',
-                'protected_ad_account_skip',
-                message,
-                stage_name=stage_name,
-                payload=payload,
-            )
-            record_operation(
-                stage_name=stage_name,
-                object_type=object_type,
-                operation_type=operation_type,
-                status='skipped',
-                message=message,
-                source_id=source_id,
-                target_id=target_id or ad_username,
-                risk_level=risk_level,
-                rule_source='system_protected_account',
-                reason_code='protected_ad_account',
-                details=payload,
-            )
-
-        def record_exception_skip(
-            *,
-            stage_name: str,
-            object_type: str,
-            operation_type: str,
-            exception_rule_type: str,
-            match_value: str,
-            reason: str,
-            source_id: Optional[str] = None,
-            department_id: Optional[str] = None,
-            target_id: Optional[str] = None,
-            target_dn: Optional[str] = None,
-            risk_level: str = 'normal',
-            details: Optional[Dict[str, Any]] = None,
-        ) -> None:
-            skipped_summary = sync_stats['skipped_operations']
-            skipped_summary['total'] += 1
-            skipped_summary['by_action'][operation_type] = skipped_summary['by_action'].get(operation_type, 0) + 1
-
-            detail = {
-                'stage': stage_name,
-                'action_type': operation_type,
-                'object_type': object_type,
-                'source_id': source_id,
-                'department_id': department_id,
-                'target_id': target_id,
-                'target_dn': target_dn,
-                'reason': reason,
-                'exception_rule_type': exception_rule_type,
-                'match_value': match_value,
-            }
-            if details:
-                detail.update(details)
-            if len(skipped_summary['samples']) < 20:
-                skipped_summary['samples'].append(detail)
-            if len(skipped_summary['details']) < 1000:
-                skipped_summary['details'].append(detail)
-            exception_rule_repo.consume_rule(
-                rule_type=exception_rule_type,
-                match_value=match_value,
-            )
-
-            record_operation(
-                stage_name=stage_name,
-                object_type=object_type,
-                operation_type=operation_type,
-                status='skipped',
-                message=reason,
-                source_id=source_id,
-                department_id=department_id,
-                target_id=target_id,
-                target_dn=target_dn,
-                risk_level=risk_level,
-                rule_source=exception_rule_type,
-                reason_code='exception_rule',
-                details=detail,
-            )
-            record_event(
-                'INFO',
-                'exception_rule_skip',
-                reason,
-                stage_name=stage_name,
-                payload=detail,
-            )
-
-        def get_department_group_target(dept_info: DepartmentNode) -> ManagedGroupTarget:
-            return resolve_department_group_target(
-                ctx,
-                dept_info,
-                get_connector_id_for_department=get_connector_id_for_department,
-                get_ad_sync=get_ad_sync,
-                display_separator=display_separator,
-            )
-
-        def get_effective_parent_department_id(dept_info: DepartmentNode) -> Optional[int]:
-            return resolve_effective_parent_department_id(
-                ctx,
-                dept_info,
-                is_department_excluded=is_department_excluded,
-            )
-
-        collect_source_user_departments(ctx)
-        resolve_identity_bindings_phase(
+        services = build_execution_services(
             ctx,
-            get_connector_id_for_department=get_connector_id_for_department,
-            get_connector_spec=get_connector_spec,
-            get_ad_sync=get_ad_sync,
-            is_protected_ad_account=is_protected_ad_account,
-            record_exception_skip=record_exception_skip,
-            record_protected_account_skip=record_protected_account_skip,
-        )
-        existing_users_map_by_connector = ctx.identity.existing_users_map_by_connector
-
-        department_actions.clear()
-        custom_group_actions.clear()
-        user_actions.clear()
-        membership_actions.clear()
-        group_hierarchy_actions.clear()
-        group_cleanup_actions.clear()
-        disable_actions.clear()
-        planned_memberships = plan_directory_and_custom_groups(
-            ctx,
-            is_department_excluded=is_department_excluded,
-            get_connector_id_for_department=get_connector_id_for_department,
-            get_ad_sync=get_ad_sync,
-            record_group_policy_skip=record_group_policy_skip,
+            enabled_group_rules=enabled_group_rules,
+            exception_match_values_by_rule_type=exception_match_values_by_rule_type,
             display_separator=display_separator,
         )
-        plan_user_actions(
+        early_response, planned_hierarchy_pairs = run_planning_phase(
             ctx,
-            planned_memberships=planned_memberships,
-            is_department_excluded=is_department_excluded,
-            is_department_blocked_for_placement=is_department_blocked_for_placement,
-            get_connector_id_for_department=get_connector_id_for_department,
-            get_connector_spec=get_connector_spec,
-            get_ad_sync=get_ad_sync,
-            get_department_group_target=get_department_group_target,
-            is_protected_ad_account=is_protected_ad_account,
-            record_exception_skip=record_exception_skip,
-            record_protected_account_skip=record_protected_account_skip,
-            record_group_policy_skip=record_group_policy_skip,
+            services=services,
             field_ownership_policy=FIELD_OWNERSHIP_POLICY,
-        )
-
-        planned_hierarchy_pairs = plan_group_relationship_cleanup(
-            ctx,
-            is_department_excluded=is_department_excluded,
-            get_connector_id_for_department=get_connector_id_for_department,
-            get_ad_sync=get_ad_sync,
-            record_group_policy_skip=record_group_policy_skip,
-            record_skip_detail=record_skip_detail,
-            record_exception_skip=record_exception_skip,
             display_separator=display_separator,
         )
-        plan_disable_actions(
-            ctx,
-            is_protected_ad_account=is_protected_ad_account,
-            record_exception_skip=record_exception_skip,
-            record_protected_account_skip=record_protected_account_skip,
-        )
-        evaluate_disable_circuit_breaker(ctx)
-        early_response = complete_plan_phase(ctx)
         if early_response is not None:
             return early_response
 
         mark_job('RUNNING')
-        if bot:
-            bot.send_message(
-                f"## {source_provider_name}-AD sync started (LDAPS)\n\n"
-                f"> Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"> Domain: {config.domain}\n"
-                f"> LDAP server: {config.ldap.server}\n"
-                f"> SSL: {'yes' if config.ldap.use_ssl else 'no'}"
-            )
-
-        apply_department_actions(
+        run_apply_phase(
             ctx,
-            get_ad_sync=get_ad_sync,
-            display_separator=display_separator,
-            record_group_policy_skip=record_group_policy_skip,
-        )
-
-        successful_hierarchy_pairs = apply_group_hierarchy_actions(
-            ctx,
-            get_ad_sync=get_ad_sync,
-            record_group_policy_skip=record_group_policy_skip,
-        )
-
-        apply_user_actions(
-            ctx,
-            get_ad_sync=get_ad_sync,
+            services=services,
             field_ownership_policy=FIELD_OWNERSHIP_POLICY,
-        )
-
-        apply_custom_group_actions(
-            ctx,
-            get_ad_sync=get_ad_sync,
-        )
-
-        apply_group_membership_actions(
-            ctx,
-            get_ad_sync=get_ad_sync,
-            record_exception_skip=record_exception_skip,
-            record_group_policy_skip=record_group_policy_skip,
-        )
-
-        apply_group_cleanup_actions(
-            ctx,
-            get_ad_sync=get_ad_sync,
+            display_separator=display_separator,
             planned_hierarchy_pairs=planned_hierarchy_pairs,
-            successful_hierarchy_pairs=successful_hierarchy_pairs,
-            record_exception_skip=record_exception_skip,
-            record_group_policy_skip=record_group_policy_skip,
-            record_skip_detail=record_skip_detail,
         )
-
-        apply_disable_actions(
-            ctx,
-            get_ad_sync=get_ad_sync,
-            record_exception_skip=record_exception_skip,
-        )
-
-        apply_final_state_updates(ctx)
         return finalize_successful_sync(ctx)
 
     except InterruptedError as interrupted_error:
