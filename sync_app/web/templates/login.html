@@ -16,14 +16,14 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     
     <div style="margin-bottom: 24px;">
-      {{ forms.input("username", t("Username"), required=True, placeholder=t("Enter your username"), icon="user") }}
+      {{ forms.input("username", t("Username"), required=True, placeholder=t("Enter your username")) }}
     </div>
     
     <div style="margin-bottom: 32px;">
-      {{ forms.input("password", t("Password"), type="password", required=True, placeholder=t("Enter your password"), icon="lock") }}
+      {{ forms.input("password", t("Password"), type="password", required=True, placeholder=t("Enter your password")) }}
     </div>
 
-    {{ ui.button(t("Sign In"), type="submit", block=True, icon="log-in") }}
+    {{ ui.button(t("Sign In"), type="submit", block=True) }}
   </form>
 </div>
 

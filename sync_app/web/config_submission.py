@@ -77,6 +77,11 @@ def build_current_config_state(support: Any, request: Request, current_org: Orga
             "",
             org_id=current_org.org_id,
         ),
+        "source_root_unit_display_text": request.app.state.settings_repo.get_value(
+            "source_root_unit_display_text",
+            "",
+            org_id=current_org.org_id,
+        ),
         "directory_root_ou_path": request.app.state.settings_repo.get_value(
             "directory_root_ou_path",
             "",
@@ -146,6 +151,7 @@ def build_config_submission(
     brand_attribution: str = "",
     user_ou_placement_strategy: str = "source_primary_department",
     source_root_unit_ids: str = "",
+    source_root_unit_display_text: str = "",
     directory_root_ou_path: str = "",
     disabled_users_ou_path: str = "Disabled Users",
     custom_group_ou_path: str = "Managed Groups",
@@ -200,6 +206,7 @@ def build_config_submission(
         brand_attribution=brand_attribution,
         user_ou_placement_strategy=user_ou_placement_strategy,
         source_root_unit_ids=source_root_unit_ids,
+        source_root_unit_display_text=source_root_unit_display_text,
         directory_root_ou_path=directory_root_ou_path,
         disabled_users_ou_path=disabled_users_ou_path,
         custom_group_ou_path=custom_group_ou_path,

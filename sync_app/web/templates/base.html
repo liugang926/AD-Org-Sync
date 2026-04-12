@@ -1,4 +1,6 @@
 {% import "components/ui.html" as ui %}
+{% set is_lightweight_shell = lightweight_shell|default(False) %}
+{% set load_tom_select_assets = (not is_lightweight_shell) and page == 'advanced-sync' %}
 <!DOCTYPE html>
 <html lang="{{ ui_language if ui_language == 'zh-CN' else 'en' }}">
 <head>
@@ -7,12 +9,9 @@
   <title>{% if title %}{{ title }} | {% endif %}{{ brand_display_name }}</title>
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="stylesheet" href="/static/app.css">
-  <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.default.min.css" rel="stylesheet">
+  {% if load_tom_select_assets %}
+  <link href="/static/vendor/tom-select.default.min.css" rel="stylesheet">
+  {% endif %}
 </head>
 <body class="{% if not current_user %}login-page{% endif %}" data-confirm-message="{{ t('Are you sure you want to perform this action?') }}">
   {% if current_user %}
@@ -147,14 +146,12 @@
     </div>
   </main>
 
+  {% if not is_lightweight_shell %}
+  <script src="/static/vendor/lucide.min.js" defer></script>
+  {% if load_tom_select_assets %}
+  <script src="/static/vendor/tom-select.complete.min.js" defer></script>
+  {% endif %}
   <script src="/static/app.js" defer></script>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      if (window.lucide) {
-        window.lucide.createIcons();
-      }
-    });
-  </script>
-  <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+  {% endif %}
 </body>
 </html>

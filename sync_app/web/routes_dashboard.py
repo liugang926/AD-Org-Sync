@@ -47,10 +47,17 @@ def register_dashboard_routes(
         if isinstance(user, RedirectResponse):
             return user
         current_org = get_current_org(request)
-        current_config, _, _ = load_config_summary(current_org)
+        current_config, validation_errors, security_warnings = load_config_summary(current_org)
         preflight_snapshot = merge_saved_preflight_snapshot_data(
             request.session.get("_preflight_snapshot"),
-            build_preflight_snapshot(request, include_live=False),
+            build_preflight_snapshot(
+                request,
+                include_live=False,
+                current_org=current_org,
+                config=current_config,
+                validation_errors=validation_errors,
+                security_warnings=security_warnings,
+            ),
         )
         return render(
             request,

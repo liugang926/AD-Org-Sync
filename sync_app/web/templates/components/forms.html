@@ -14,12 +14,12 @@
            class="{{ input_class }}" placeholder="{{ placeholder }}" {% if required %}required{% endif %}
            {% if disabled %}disabled{% endif %} {% if autocomplete %}autocomplete="{{ autocomplete }}"{% endif %}
            {% if min_value != '' %}min="{{ min_value }}"{% endif %} {% if max_value != '' %}max="{{ max_value }}"{% endif %}
-           {% if step != '' %}step="{{ step }}"{% endif %} 
+           {% if step != '' %}step="{{ step }}"{% endif %}
            style="{% if icon %}padding-left: 44px;{% endif %}"
            {{ attrs|safe }}>
   </div>
   {% if help_text %}
-  <div style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">{{ help_text }}</div>
+  <div class="form-help">{{ help_text }}</div>
   {% endif %}
 </div>
 {% endmacro %}
@@ -36,7 +36,7 @@
       <i data-lucide="{{ icon }}" style="width: 18px; height: 18px;"></i>
     </div>
     {% endif %}
-    <select id="{{ field_id }}" name="{{ name }}" {% if required %}required{% endif %} {% if disabled %}disabled{% endif %} 
+    <select id="{{ field_id }}" name="{{ name }}" {% if required %}required{% endif %} {% if disabled %}disabled{% endif %}
             style="{% if icon %}padding-left: 44px;{% endif %}"
             {{ attrs|safe }}>
       {% for val, label in options %}
@@ -45,7 +45,7 @@
     </select>
   </div>
   {% if help_text %}
-  <div style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">{{ help_text }}</div>
+  <div class="form-help">{{ help_text }}</div>
   {% endif %}
 </div>
 {% endmacro %}
@@ -58,7 +58,7 @@
   {% endif %}
   <textarea id="{{ field_id }}" name="{{ name }}" placeholder="{{ placeholder }}" rows="{{ rows }}" {% if disabled %}disabled{% endif %} {{ attrs|safe }}>{{ value }}</textarea>
   {% if help_text %}
-  <div style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">{{ help_text }}</div>
+  <div class="form-help">{{ help_text }}</div>
   {% endif %}
 </div>
 {% endmacro %}
@@ -71,7 +71,7 @@
     {{ label }}
   </label>
   {% if help_text %}
-  <div style="margin-top: 8px; font-size: 12px; color: var(--text-muted); padding-left: 28px;">{{ help_text }}</div>
+  <div class="form-help form-help--indented">{{ help_text }}</div>
   {% endif %}
 </div>
 {% endmacro %}
@@ -101,7 +101,7 @@
     {% endif %}
   </div>
   {% if help_text %}
-  <div style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">{{ help_text }}</div>
+  <div class="form-help">{{ help_text }}</div>
   {% endif %}
 </div>
 {% endmacro %}

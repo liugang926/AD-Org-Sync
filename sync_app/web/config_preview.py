@@ -129,6 +129,7 @@ def build_config_editable_override(support: Any, request: Request, submission: d
             "brand_attribution": submission["settings_values"]["brand_attribution"],
             "user_ou_placement_strategy": submission["settings_values"]["user_ou_placement_strategy"],
             "source_root_unit_ids": submission["settings_values"]["source_root_unit_ids"],
+            "source_root_unit_display_text": submission["settings_values"]["source_root_unit_display_text"],
             "directory_root_ou_path": submission["settings_values"]["directory_root_ou_path"],
             "disabled_users_ou_path": submission["settings_values"]["disabled_users_ou_path"],
             "custom_group_ou_path": submission["settings_values"]["custom_group_ou_path"],
@@ -172,6 +173,10 @@ def build_config_page_context(
     editable.setdefault(
         "source_root_unit_ids",
         request.app.state.settings_repo.get_value("source_root_unit_ids", "", org_id=current_org.org_id),
+    )
+    editable.setdefault(
+        "source_root_unit_display_text",
+        request.app.state.settings_repo.get_value("source_root_unit_display_text", "", org_id=current_org.org_id),
     )
     editable.setdefault(
         "directory_root_ou_path",

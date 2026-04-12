@@ -39,6 +39,7 @@ def apply_config_submission(
     request.app.state.settings_repo.set_value("brand_attribution", str(submission["settings_values"]["brand_attribution"]), "string")
     request.app.state.settings_repo.set_value("user_ou_placement_strategy", str(submission["settings_values"]["user_ou_placement_strategy"]), "string", org_id=current_org.org_id)
     request.app.state.settings_repo.set_value("source_root_unit_ids", str(submission["settings_values"]["source_root_unit_ids"]), "string", org_id=current_org.org_id)
+    request.app.state.settings_repo.set_value("source_root_unit_display_text", str(submission["settings_values"]["source_root_unit_display_text"]), "string", org_id=current_org.org_id)
     request.app.state.settings_repo.set_value("directory_root_ou_path", str(submission["settings_values"]["directory_root_ou_path"]), "string", org_id=current_org.org_id)
     request.app.state.settings_repo.set_value("disabled_users_ou_path", str(submission["settings_values"]["disabled_users_ou_path"]), "string", org_id=current_org.org_id)
     request.app.state.settings_repo.set_value("custom_group_ou_path", str(submission["settings_values"]["custom_group_ou_path"]), "string", org_id=current_org.org_id)
@@ -77,6 +78,7 @@ def apply_config_submission(
             "force_change_password": bool(submission["org_values"]["force_change_password"]),
             "password_complexity": submission["org_values"]["password_complexity"],
             "source_root_unit_ids": submission["settings_values"]["source_root_unit_ids"],
+            "source_root_unit_display_text": submission["settings_values"]["source_root_unit_display_text"],
             "directory_root_ou_path": submission["settings_values"]["directory_root_ou_path"],
             "disabled_users_ou_path": submission["settings_values"]["disabled_users_ou_path"],
             "custom_group_ou_path": submission["settings_values"]["custom_group_ou_path"],

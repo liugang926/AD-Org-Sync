@@ -10,15 +10,19 @@ def build_source_provider_field_models(editable: dict[str, Any], fields: tuple[A
     for field in fields:
         configured = bool(editable.get(f"{field.name}_configured")) if field.secret else bool(editable.get(field.name))
         placeholder = field.placeholder
+        help_text = field.help_text
         if field.secret:
-            placeholder = "Leave blank to keep current" if configured else (field.placeholder or "Enter value")
+            placeholder = "********" if configured else (field.placeholder or "Enter value")
+            if configured:
+                configured_hint = "Leave blank to keep current"
+                help_text = f"{field.help_text} {configured_hint}".strip() if field.help_text else configured_hint
         field_models.append(
             {
                 "name": field.name,
                 "label": field.label,
                 "value": "" if field.secret else editable.get(field.name, ""),
                 "type": field.input_type,
-                "help_text": field.help_text,
+                "help_text": help_text,
                 "placeholder": placeholder,
                 "required": field.required,
                 "configured": configured,

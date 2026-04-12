@@ -69,11 +69,16 @@ document.addEventListener("DOMContentLoaded", () => {
         label.innerHTML = `${escapeHtml(fieldMeta.label || "")}${requiredMarkup}`;
       }
 
-      const isConfiguredSecret = input.dataset.providerSecretConfigured === "true";
+      const configuredProvider = (input.dataset.providerSecretConfiguredProvider || "").trim().toLowerCase();
+      const activeProvider = String(sourceProviderSelect?.value || "").trim().toLowerCase();
+      const isConfiguredSecret =
+        input.dataset.providerSecretConfigured === "true" &&
+        configuredProvider &&
+        configuredProvider === activeProvider;
       if (!(fieldMeta.secret && isConfiguredSecret)) {
         input.setAttribute("placeholder", fieldMeta.placeholder || "");
       }
-      if (fieldMeta.required) {
+      if (fieldMeta.required && !(fieldMeta.secret && isConfiguredSecret)) {
         input.setAttribute("required", "required");
       } else {
         input.removeAttribute("required");
@@ -125,22 +130,26 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // --- 1.6. Config Catalog Browsers ---
-  const configForm = document.querySelector('form[action="/config/preview"]');
+  const configForm =
+    document.querySelector("form[data-config-form]") ||
+    document.querySelector('form[action="/config"]') ||
+    document.querySelector('form[action="/config/preview"]');
   if (configForm) {
     const sourceCatalogUrl = configForm.dataset.sourceCatalogUrl || "";
     const targetCatalogUrl = configForm.dataset.targetOuCatalogUrl || "";
     const labels = {
       loading: configForm.dataset.labelLoading || "Loading...",
-      loadSource: configForm.dataset.labelLoadSource || "Load Source Unit Tree",
       closePicker: configForm.dataset.labelClosePicker || "Close Picker",
-      loadTarget: configForm.dataset.labelLoadTarget || "Load AD OU Tree",
-      selectOu: configForm.dataset.labelSelectOu || "Select This OU",
       sourceId: configForm.dataset.labelSourceId || "Source ID",
       adDn: configForm.dataset.labelAdDn || "AD DN",
       adGuid: configForm.dataset.labelAdGuid || "AD Object GUID",
       domainRoot: configForm.dataset.labelDomainRoot || "Domain Root",
       sourceSelected: configForm.dataset.labelSourceSelected || "Selected __COUNT__ source units",
       targetSelected: configForm.dataset.labelTargetSelected || "OU selected",
+      results: configForm.dataset.labelResults || "__COUNT__ results",
+      noResults: configForm.dataset.labelNoResults || "No matching results",
+      rowSelected: configForm.dataset.labelRowSelected || "Selected",
+      rowSelect: configForm.dataset.labelRowSelect || "Click to select",
       sourceHint: configForm.dataset.messageSourceHint || "",
       targetHint: configForm.dataset.messageTargetHint || "",
       sourceLoaded: configForm.dataset.messageSourceLoaded || "",
@@ -162,6 +171,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const sourcePickerField = configForm.querySelector("#group-source_root_unit_ids");
     const sourceRootInput = document.getElementById("source_root_unit_ids");
+    const sourceRootDisplayInput = document.getElementById("source_root_unit_display_text");
+    const replaceCountLabel = (template, count) => String(template || "").replace("__COUNT__", String(count));
+    const normalizeSearchValue = (value) => String(value || "").trim().toLowerCase();
 
     const setStatus = (target, message, isError = false) => {
       if (!target) {
@@ -181,11 +193,35 @@ document.addEventListener("DOMContentLoaded", () => {
       metaNode.hidden = !normalized;
     };
 
+    const updatePickerToggleLabel = (fieldRoot, isOpen) => {
+      if (!fieldRoot) {
+        return;
+      }
+      fieldRoot.querySelectorAll("[data-open-label]").forEach((button) => {
+        const span = button.querySelector("span");
+        const openLabel = button.dataset.openLabel || span?.dataset.defaultLabel || span?.textContent || "";
+        if (span && !span.dataset.defaultLabel) {
+          span.dataset.defaultLabel = openLabel;
+        }
+        if (span) {
+          span.textContent = isOpen ? (button.dataset.closeLabel || labels.closePicker) : openLabel;
+        }
+        button.setAttribute("aria-expanded", String(Boolean(isOpen)));
+      });
+    };
+
     const setPickerOpenState = (fieldRoot, isOpen) => {
       if (!fieldRoot) {
         return;
       }
       fieldRoot.classList.toggle("is-open", Boolean(isOpen));
+      updatePickerToggleLabel(fieldRoot, Boolean(isOpen));
+    };
+
+    const setPickerClearState = (fieldName, hasValue) => {
+      document.querySelectorAll(`[data-picker-clear-field="${fieldName}"]`).forEach((button) => {
+        button.hidden = !hasValue;
+      });
     };
 
     const buildConfigFormData = (fieldNames) => {
@@ -215,9 +251,9 @@ document.addEventListener("DOMContentLoaded", () => {
       summaryNode.textContent = text;
       summaryNode.classList.toggle("is-placeholder", !value);
       summaryNode.setAttribute("title", titleText || text || placeholder);
-      setPickerMeta(fieldName, value ? document.querySelector(`[data-picker-meta-for="${fieldName}"]`)?.textContent || "" : "");
       const surface = document.querySelector(`[data-picker-surface-for="${fieldName}"]`);
       surface?.classList.toggle("is-selected", Boolean(value));
+      setPickerClearState(fieldName, Boolean(value));
     };
 
     const formatSourceSummary = (items) => {
@@ -228,6 +264,12 @@ document.addEventListener("DOMContentLoaded", () => {
         return items.map((item) => `${item.name} [${item.department_id}]`).join(", ");
       }
       return `${items.slice(0, 2).map((item) => `${item.name} [${item.department_id}]`).join(", ")} +${items.length - 2}`;
+    };
+
+    const setSourceDisplayText = (value = "") => {
+      if (sourceRootDisplayInput) {
+        sourceRootDisplayInput.value = String(value || "").trim();
+      }
     };
 
     const buildCatalogSignature = (fieldNames) =>
@@ -244,6 +286,70 @@ document.addEventListener("DOMContentLoaded", () => {
         })
         .join("|");
 
+    const setResultsSummary = (target, { visibleCount = 0, selectedCount = 0, totalCount = 0 } = {}) => {
+      if (!target) {
+        return;
+      }
+      if (!totalCount) {
+        target.textContent = "";
+        target.hidden = true;
+        return;
+      }
+      if (!visibleCount) {
+        target.textContent = labels.noResults;
+        target.hidden = false;
+        return;
+      }
+      const parts = [replaceCountLabel(labels.results, visibleCount)];
+      if (selectedCount) {
+        parts.push(replaceCountLabel(labels.sourceSelected, selectedCount));
+      }
+      target.textContent = parts.join(" · ");
+      target.hidden = false;
+    };
+
+    const applySourceFilter = () => {
+      if (!sourcePickerField) {
+        return;
+      }
+      const panel = sourcePickerField.querySelector("[data-config-source-browser]");
+      const query = normalizeSearchValue(panel?.querySelector("[data-config-source-filter]")?.value);
+      const rows = Array.from(sourcePickerField.querySelectorAll("[data-config-source-list] .config-tree-row"));
+      let visibleCount = 0;
+      rows.forEach((row) => {
+        const matches = !query || normalizeSearchValue(row.dataset.searchText).includes(query);
+        row.classList.toggle("is-filter-hidden", !matches);
+        if (matches) {
+          visibleCount += 1;
+        }
+      });
+      setResultsSummary(sourcePickerField.querySelector("[data-config-source-results]"), {
+        visibleCount,
+        selectedCount: sourcePickerField.querySelectorAll("[data-source-unit-checkbox]:checked").length,
+        totalCount: rows.length,
+      });
+    };
+
+    const applyTargetFilter = (panel) => {
+      if (!panel) {
+        return;
+      }
+      const query = normalizeSearchValue(panel.querySelector("[data-config-target-filter]")?.value);
+      const rows = Array.from(panel.querySelectorAll("[data-config-target-list] .config-tree-row"));
+      let visibleCount = 0;
+      rows.forEach((row) => {
+        const matches = !query || normalizeSearchValue(row.dataset.searchText).includes(query);
+        row.classList.toggle("is-filter-hidden", !matches);
+        if (matches) {
+          visibleCount += 1;
+        }
+      });
+      setResultsSummary(panel.querySelector("[data-config-target-results]"), {
+        visibleCount,
+        totalCount: rows.length,
+      });
+    };
+
     const invalidateSourceCatalog = () => {
       sourceCatalogState.key = "";
       sourceCatalogState.items = [];
@@ -252,6 +358,11 @@ document.addEventListener("DOMContentLoaded", () => {
         if (sourceList) {
           sourceList.innerHTML = `<div class="config-browser__empty">${escapeHtml(labels.sourceHint)}</div>`;
         }
+        const filterInput = sourcePickerField.querySelector("[data-config-source-filter]");
+        if (filterInput) {
+          filterInput.value = "";
+        }
+        setResultsSummary(sourcePickerField.querySelector("[data-config-source-results]"));
         setStatus(sourcePickerField.querySelector("[data-config-source-status]"), labels.sourceHint, false);
       }
     };
@@ -264,6 +375,11 @@ document.addEventListener("DOMContentLoaded", () => {
         if (targetList) {
           targetList.innerHTML = `<div class="config-browser__empty">${escapeHtml(labels.targetHint)}</div>`;
         }
+        const filterInput = panel.querySelector("[data-config-target-filter]");
+        if (filterInput) {
+          filterInput.value = "";
+        }
+        setResultsSummary(panel.querySelector("[data-config-target-results]"));
         setStatus(panel.querySelector("[data-config-target-status]"), labels.targetHint, false);
       });
     };
@@ -290,18 +406,36 @@ document.addEventListener("DOMContentLoaded", () => {
         .map((node) => node.value)
         .filter(Boolean);
       const selectedItems = sourceCatalogState.items.filter((item) => selectedIds.includes(String(item.department_id)));
+      const summaryText = formatSourceSummary(selectedItems);
       setPickerSummary(
         "source_root_unit_ids",
         selectedIds.join(", "),
-        formatSourceSummary(selectedItems),
+        summaryText,
         selectedItems.map((item) => item.path_display || item.name).join("\n"),
       );
+      setSourceDisplayText(summaryText);
       setPickerMeta(
         "source_root_unit_ids",
-        selectedItems.length ? labels.sourceSelected.replace("__COUNT__", String(selectedItems.length)) : "",
+        selectedItems.length ? replaceCountLabel(labels.sourceSelected, selectedItems.length) : "",
       );
       updateSourceSelectionStyles();
+      applySourceFilter();
       setStatus(sourcePickerField.querySelector("[data-config-source-status]"), labels.sourceLoaded, false);
+    };
+
+    const chooseTargetOu = (panel, row) => {
+      const fieldName = panel?.dataset.targetField || "";
+      if (!fieldName || !row) {
+        return;
+      }
+      const targetValue = row.dataset.targetOuValue || "";
+      const summaryText = row.dataset.targetOuSummary || targetValue;
+      const dnText = row.dataset.targetOuDn || "";
+      setPickerSummary(fieldName, targetValue, summaryText, dnText || summaryText);
+      setPickerMeta(fieldName, targetValue ? labels.targetSelected : "");
+      setStatus(panel.querySelector("[data-config-target-status]"), labels.targetLoaded, false);
+      panel.hidden = true;
+      setPickerOpenState(panel.closest(".picker-field"), false);
     };
 
     const renderSourceUnits = (fieldRoot, payload, signature = "") => {
@@ -320,15 +454,17 @@ document.addEventListener("DOMContentLoaded", () => {
       sourceCatalogState.items = items;
       if (!items.length) {
         sourceList.innerHTML = `<div class="config-browser__empty">${escapeHtml(labels.sourceHint)}</div>`;
-        setPickerMeta("source_root_unit_ids", selectedIds.size ? labels.sourceSelected.replace("__COUNT__", String(selectedIds.size)) : "");
+        setPickerMeta("source_root_unit_ids", selectedIds.size ? replaceCountLabel(labels.sourceSelected, selectedIds.size) : "");
+        setResultsSummary(fieldRoot.querySelector("[data-config-source-results]"));
         return;
       }
       sourceList.innerHTML = items
         .map((item) => {
           const pathDisplay = item.path_display || item.name || item.department_id;
           const isSelected = selectedIds.has(String(item.department_id));
+          const searchText = [item.name, item.department_id, pathDisplay].filter(Boolean).join(" ");
           return `
-            <label class="config-tree-row ${isSelected ? "is-selected" : ""}" style="--tree-level:${Number(item.level || 0)}">
+            <label class="config-tree-row ${isSelected ? "is-selected" : ""}" style="--tree-level:${Number(item.level || 0)}" data-search-text="${escapeHtml(searchText)}">
               <div class="config-tree-row__main">
                 <input type="checkbox" data-source-unit-checkbox value="${escapeHtml(item.department_id)}" ${
                   isSelected ? "checked" : ""
@@ -338,7 +474,9 @@ document.addEventListener("DOMContentLoaded", () => {
                   <div class="config-tree-row__detail">${escapeHtml(pathDisplay)}</div>
                 </div>
               </div>
-              <span class="badge badge-info">${escapeHtml(labels.sourceId)} ${escapeHtml(item.department_id)}</span>
+              <div class="config-tree-row__trailing">
+                <span class="badge badge-info">${escapeHtml(labels.sourceId)} ${escapeHtml(item.department_id)}</span>
+              </div>
             </label>
           `;
         })
@@ -361,6 +499,7 @@ document.addEventListener("DOMContentLoaded", () => {
       targetCatalogState.items = items;
       if (!items.length) {
         targetList.innerHTML = `<div class="config-browser__empty">${escapeHtml(labels.targetHint)}</div>`;
+        setResultsSummary(fieldRoot.querySelector("[data-config-target-results]"));
         return;
       }
       targetList.innerHTML = items
@@ -371,37 +510,46 @@ document.addEventListener("DOMContentLoaded", () => {
           const guidMarkup = item.guid
             ? `<div class="config-tree-row__meta">${escapeHtml(labels.adGuid)}: ${escapeHtml(item.guid)}</div>`
             : "";
+          const searchText = [item.name, pathDisplay, item.dn, item.guid].filter(Boolean).join(" ");
           return `
-            <div class="config-tree-row config-tree-row--target ${isSelected ? "is-selected" : ""}" style="--tree-level:${Number(item.level || 0)}">
+            <div
+              class="config-tree-row config-tree-row--target config-tree-row--interactive ${isSelected ? "is-selected" : ""}"
+              style="--tree-level:${Number(item.level || 0)}"
+              tabindex="0"
+              role="button"
+              data-target-ou-row
+              data-target-ou-value="${escapeHtml(value)}"
+              data-target-ou-summary="${escapeHtml(pathDisplay)}"
+              data-target-ou-dn="${escapeHtml(item.dn || "")}"
+              data-search-text="${escapeHtml(searchText)}"
+            >
               <div class="config-tree-row__copy">
                 <div class="config-tree-row__title">${escapeHtml(item.name || labels.domainRoot)}</div>
                 <div class="config-tree-row__detail">${escapeHtml(pathDisplay)}</div>
                 <div class="config-tree-row__meta">${escapeHtml(labels.adDn)}: ${escapeHtml(item.dn || "")}</div>
                 ${guidMarkup}
               </div>
-              <button
-                type="button"
-                class="button ${isSelected ? "secondary" : "ghost"} sm"
-                data-target-ou-value="${escapeHtml(value)}"
-                data-target-ou-summary="${escapeHtml(pathDisplay)}"
-                data-target-ou-dn="${escapeHtml(item.dn || "")}"
-              >${escapeHtml(labels.selectOu)}</button>
+              <div class="config-tree-row__trailing">
+                <span class="config-tree-row__status ${isSelected ? "is-selected" : ""}">${escapeHtml(
+                  isSelected ? labels.rowSelected : labels.rowSelect,
+                )}</span>
+              </div>
             </div>
           `;
         })
         .join("");
-      targetList.querySelectorAll("[data-target-ou-value]").forEach((button) => {
-        button.addEventListener("click", () => {
-          const targetValue = button.dataset.targetOuValue || "";
-          const summaryText = button.dataset.targetOuSummary || targetValue;
-          const dnText = button.dataset.targetOuDn || "";
-          setPickerSummary(fieldName, targetValue, summaryText, dnText || summaryText);
-          setPickerMeta(fieldName, targetValue ? labels.targetSelected : "");
-          setStatus(fieldRoot.querySelector("[data-config-target-status]"), labels.targetLoaded, false);
-          fieldRoot.hidden = true;
-          setPickerOpenState(fieldRoot.closest(".picker-field"), false);
+      targetList.querySelectorAll("[data-target-ou-row]").forEach((row) => {
+        row.addEventListener("click", () => {
+          chooseTargetOu(fieldRoot, row);
+        });
+        row.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            chooseTargetOu(fieldRoot, row);
+          }
         });
       });
+      applyTargetFilter(fieldRoot);
     };
 
     const postCatalogRequest = async (url, formData) => {
@@ -465,6 +613,25 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     };
 
+    const clearPickerValue = (fieldName) => {
+      setPickerSummary(fieldName, "", "", "");
+      setPickerMeta(fieldName, "");
+      if (fieldName === "source_root_unit_ids" && sourcePickerField) {
+        setSourceDisplayText("");
+        sourcePickerField.querySelectorAll("[data-source-unit-checkbox]").forEach((checkbox) => {
+          checkbox.checked = false;
+        });
+        syncSourceSelection();
+        return;
+      }
+      const targetPanel = Array.from(configForm.querySelectorAll("[data-config-target-browser]")).find(
+        (panel) => panel.dataset.targetField === fieldName,
+      );
+      if (targetPanel && targetCatalogState.items.length) {
+        renderTargetOus(targetPanel, { items: targetCatalogState.items }, targetCatalogState.key);
+      }
+    };
+
     const initializePickerMeta = () => {
       const selectedSourceIds = String(sourceRootInput?.value || "")
         .split(",")
@@ -472,11 +639,32 @@ document.addEventListener("DOMContentLoaded", () => {
         .filter(Boolean);
       setPickerMeta(
         "source_root_unit_ids",
-        selectedSourceIds.length ? labels.sourceSelected.replace("__COUNT__", String(selectedSourceIds.length)) : "",
+        selectedSourceIds.length ? replaceCountLabel(labels.sourceSelected, selectedSourceIds.length) : "",
       );
+      setPickerClearState("source_root_unit_ids", selectedSourceIds.length > 0);
       ["directory_root_ou_path", "disabled_users_ou_path", "custom_group_ou_path"].forEach((fieldName) => {
-        setPickerMeta(fieldName, document.getElementById(fieldName)?.value ? labels.targetSelected : "");
+        const hasValue = Boolean(document.getElementById(fieldName)?.value);
+        setPickerMeta(fieldName, hasValue ? labels.targetSelected : "");
+        setPickerClearState(fieldName, hasValue);
+        setPickerOpenState(document.getElementById(`group-${fieldName}`), false);
       });
+      setPickerOpenState(sourcePickerField, false);
+    };
+
+    const ensureSourceSummaryDisplay = async () => {
+      if (!sourcePickerField || !sourceRootInput || !sourceRootInput.value.trim()) {
+        return;
+      }
+      const currentSummary = String(sourceRootDisplayInput?.value || "").trim();
+      const rawIds = String(sourceRootInput.value || "").trim();
+      if (currentSummary && currentSummary !== rawIds) {
+        return;
+      }
+      try {
+        await loadSourceCatalog();
+      } catch (_error) {
+        // Keep the persisted ID-based summary if background resolution fails.
+      }
     };
 
     sourceCatalogFields.forEach((fieldName) => {
@@ -492,6 +680,8 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     });
 
+    sourcePickerField?.querySelector("[data-config-source-filter]")?.addEventListener("input", applySourceFilter);
+
     sourcePickerField?.querySelector("[data-config-open-source-browser]")?.addEventListener("click", async () => {
       const panel = sourcePickerField.querySelector("[data-config-source-browser]");
       if (!panel) {
@@ -506,6 +696,7 @@ document.addEventListener("DOMContentLoaded", () => {
       panel.hidden = false;
       setPickerOpenState(sourcePickerField, true);
       panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      panel.querySelector("[data-config-source-filter]")?.focus();
       const signature = buildCatalogSignature(sourceCatalogFields);
       if (sourceCatalogState.items.length && sourceCatalogState.key === signature) {
         renderSourceUnits(sourcePickerField, { items: sourceCatalogState.items }, signature);
@@ -538,6 +729,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!fieldRoot || !fieldName) {
         return;
       }
+      panel.querySelector("[data-config-target-filter]")?.addEventListener("input", () => applyTargetFilter(panel));
       fieldRoot.querySelector("[data-config-open-target-browser]")?.addEventListener("click", async () => {
         if (!panel.hidden) {
           panel.hidden = true;
@@ -548,6 +740,7 @@ document.addEventListener("DOMContentLoaded", () => {
         panel.hidden = false;
         setPickerOpenState(fieldRoot, true);
         panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        panel.querySelector("[data-config-target-filter]")?.focus();
         const signature = buildCatalogSignature(targetCatalogFields);
         if (targetCatalogState.items.length && targetCatalogState.key === signature) {
           renderTargetOus(panel, { items: targetCatalogState.items }, signature);
@@ -569,7 +762,18 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     });
 
+    configForm.querySelectorAll("[data-picker-clear]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const fieldName = button.dataset.pickerClearField || "";
+        if (!fieldName) {
+          return;
+        }
+        clearPickerValue(fieldName);
+      });
+    });
+
     initializePickerMeta();
+    void ensureSourceSummaryDisplay();
   }
 
   // --- 2. Confirmation & Loading States ---
@@ -591,7 +795,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // --- 3. Global Form Loading Feedback ---
   document.querySelectorAll("form").forEach(form => {
     form.addEventListener("submit", (e) => {
-      const submitBtn = form.querySelector('button[type="submit"]:not(.secondary):not(.ghost)');
+      const submitBtn = e.submitter instanceof HTMLElement
+        ? e.submitter
+        : form.querySelector('button[type="submit"]');
       if (submitBtn && !submitBtn.hasAttribute('data-confirm')) {
         // Slight delay to allow native validation
         setTimeout(() => {

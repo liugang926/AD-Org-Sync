@@ -25,7 +25,13 @@ def register_auth_routes(
     def setup_page(request: Request):
         if request.app.state.user_repo.has_any_user():
             return RedirectResponse(url="/login", status_code=303)
-        return render(request, "setup.html", title="Initial Administrator Setup")
+        return render(
+            request,
+            "setup.html",
+            title="Initial Administrator Setup",
+            page="setup",
+            lightweight_shell=True,
+        )
 
     @app.post("/setup")
     def setup_submit(
@@ -76,7 +82,13 @@ def register_auth_routes(
             return RedirectResponse(url="/setup", status_code=303)
         if get_current_user(request):
             return RedirectResponse(url="/dashboard", status_code=303)
-        return render(request, "login.html", title="Sign In")
+        return render(
+            request,
+            "login.html",
+            title="Sign In",
+            page="login",
+            lightweight_shell=True,
+        )
 
     @app.post("/login")
     def login_submit(

@@ -60,9 +60,16 @@ class DashboardSupport:
         warnings = run_config_security_self_check(config)
         return config, ([] if is_valid else errors), warnings
 
-    def build_preflight_snapshot(self, request: Request, *, include_live: bool = False) -> dict[str, Any]:
-        current_org = self.request_support.get_current_org(request)
-        config, validation_errors, security_warnings = self.load_config_summary(current_org)
+    def _build_preflight_snapshot_from_loaded_data(
+        self,
+        request: Request,
+        *,
+        current_org: OrganizationRecord,
+        config: Optional[AppConfig],
+        validation_errors: list[str],
+        security_warnings: list[str],
+        include_live: bool = False,
+    ) -> dict[str, Any]:
         recent_jobs = request.app.state.job_repo.list_recent_job_records(limit=100, org_id=current_org.org_id)
         connector_count = request.app.state.connector_repo.count_connectors(org_id=current_org.org_id)
         open_conflicts_total = request.app.state.conflict_repo.list_conflict_records_page(
@@ -300,6 +307,31 @@ class DashboardSupport:
             "open_conflict_count": open_conflicts_total,
         }
 
+    def build_preflight_snapshot(
+        self,
+        request: Request,
+        *,
+        include_live: bool = False,
+        current_org: Optional[OrganizationRecord] = None,
+        config: Optional[AppConfig] = None,
+        validation_errors: Optional[list[str]] = None,
+        security_warnings: Optional[list[str]] = None,
+    ) -> dict[str, Any]:
+        resolved_org = current_org or self.request_support.get_current_org(request)
+        resolved_config = config
+        resolved_validation_errors = list(validation_errors or [])
+        resolved_security_warnings = list(security_warnings or [])
+        if resolved_config is None and not validation_errors and not security_warnings:
+            resolved_config, resolved_validation_errors, resolved_security_warnings = self.load_config_summary(resolved_org)
+        return self._build_preflight_snapshot_from_loaded_data(
+            request,
+            current_org=resolved_org,
+            config=resolved_config,
+            validation_errors=resolved_validation_errors,
+            security_warnings=resolved_security_warnings,
+            include_live=include_live,
+        )
+
     def build_dashboard_data(self, request: Request) -> dict[str, Any]:
         current_org = self.request_support.get_current_org(request)
         config, validation_errors, security_warnings = self.load_config_summary(current_org)
@@ -322,7 +354,14 @@ class DashboardSupport:
         exception_rules = request.app.state.exception_rule_repo.list_enabled_rule_records(org_id=current_org.org_id)
         preflight_snapshot = merge_saved_preflight_snapshot_data(
             request.session.get("_preflight_snapshot"),
-            self.build_preflight_snapshot(request, include_live=False),
+            self.build_preflight_snapshot(
+                request,
+                include_live=False,
+                current_org=current_org,
+                config=config,
+                validation_errors=validation_errors,
+                security_warnings=security_warnings,
+            ),
         )
         open_conflicts_count = int(preflight_snapshot.get("open_conflict_count") or 0)
         return {

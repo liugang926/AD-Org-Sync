@@ -5,6 +5,7 @@ from pathlib import Path
 
 TEMPLATE_DIR = Path("sync_app/web/templates")
 STATIC_DIR = Path("sync_app/web/static")
+VENDOR_DIR = STATIC_DIR / "vendor"
 ALLOWED_RAW_BUTTON_FILES = {
     TEMPLATE_DIR / "base.html",
     TEMPLATE_DIR / "components" / "ui.html",
@@ -35,6 +36,19 @@ class WebTemplateConventionTests(unittest.TestCase):
         self.assertIn('/static/app.js', base_template)
         self.assertTrue((STATIC_DIR / "app.css").exists())
         self.assertTrue((STATIC_DIR / "app.js").exists())
+
+    def test_base_template_uses_local_vendor_assets(self):
+        base_template = (TEMPLATE_DIR / "base.html").read_text(encoding="utf-8")
+
+        self.assertIn('/static/vendor/lucide.min.js', base_template)
+        self.assertIn('/static/vendor/tom-select.complete.min.js', base_template)
+        self.assertIn('/static/vendor/tom-select.default.min.css', base_template)
+        self.assertNotIn("https://unpkg.com", base_template)
+        self.assertNotIn("https://cdn.jsdelivr.net", base_template)
+        self.assertNotIn("https://fonts.googleapis.com", base_template)
+        self.assertTrue((VENDOR_DIR / "lucide.min.js").exists())
+        self.assertTrue((VENDOR_DIR / "tom-select.complete.min.js").exists())
+        self.assertTrue((VENDOR_DIR / "tom-select.default.min.css").exists())
 
 
 if __name__ == "__main__":

@@ -258,6 +258,16 @@ class WebAuthorizationTests(unittest.TestCase):
         response = self._route("/jobs", "GET")(self._request("/jobs"))
         self.assertEqual(response.status_code, 200)
 
+    def test_login_page_uses_lightweight_shell_without_external_runtime_assets(self):
+        response = self._route("/login", "GET")(self._request("/login"))
+
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertNotIn("fonts.googleapis.com", body)
+        self.assertNotIn("unpkg.com/lucide", body)
+        self.assertNotIn("tom-select", body)
+        self.assertNotIn('/static/app.js', body)
+
     def test_auditor_sees_readonly_mappings_and_cannot_run_jobs(self):
         self._login("auditor1")
 
@@ -1353,6 +1363,13 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertNotIn("Password123!", text)
         self.assertNotIn("ChangeMe123!", text)
         self.assertIn("Leave blank to keep current", text)
+        self.assertIn('name="corpsecret" value=""', text)
+        self.assertIn('placeholder="********"', text)
+        corpsecret_match = re.search(r'<input[^>]*name="corpsecret"[^>]*>', text)
+        self.assertIsNotNone(corpsecret_match)
+        self.assertNotIn("required", corpsecret_match.group(0))
+        self.assertIn('data-provider-secret-configured="true"', corpsecret_match.group(0))
+        self.assertIn('data-provider-secret-configured-provider="wecom"', corpsecret_match.group(0))
         self.assertIn("Secure Cookie Policy", text)
 
         dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))
@@ -1377,6 +1394,8 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
         self.assertIn("OU Filter And Root Mapping", text)
+        self.assertIn("Save Configuration", text)
+        self.assertIn("Preview Changes", text)
         self.assertIn('name="source_root_unit_ids"', text)
         self.assertIn('name="directory_root_ou_path"', text)
         self.assertIn('name="disabled_users_ou_path"', text)
@@ -1434,6 +1453,74 @@ class WebAuthorizationTests(unittest.TestCase):
         payload = json.loads(self._text(response))
         self.assertFalse(payload["ok"])
         self.assertIn("AppSecret / Client Secret", payload["error"])
+
+    def test_config_submission_keeps_existing_corpsecret_when_other_values_change(self):
+        self._login("superadmin")
+        config_page = self._route("/config", "GET")(self._request("/config"))
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(config_page))
+        self.assertIsNotNone(csrf_match)
+
+        response = self._route("/config", "POST")(
+            self._request("/config", "POST"),
+            csrf_token=csrf_match.group(1),
+            source_provider="wecom",
+            corpid="corp-001",
+            agentid="10001",
+            corpsecret="",
+            webhook_url="",
+            ldap_server="dc01.example.local",
+            ldap_domain="example.local",
+            ldap_username="administrator",
+            ldap_password="",
+            ldap_port=636,
+            ldap_use_ssl="true",
+            ldap_validate_cert="false",
+            ldap_ca_cert_path="",
+            default_password="",
+            force_change_password="true",
+            password_complexity="strong",
+            schedule_time="03:00",
+            retry_interval=60,
+            max_retries=3,
+            group_display_separator="-",
+            group_recursive_enabled="true",
+            managed_relation_cleanup_enabled="false",
+            schedule_execution_mode="apply",
+            web_bind_host="127.0.0.1",
+            web_bind_port=8000,
+            web_public_base_url="",
+            web_session_cookie_secure_mode="auto",
+            web_trust_proxy_headers="false",
+            web_forwarded_allow_ips="127.0.0.1",
+            brand_display_name="AD Org Sync",
+            brand_mark_text="AD",
+            brand_attribution="微信公众号：大刘讲IT",
+            user_ou_placement_strategy="source_primary_department",
+            source_root_unit_ids="1,8",
+            source_root_unit_display_text="HQ [1], China [8]",
+            directory_root_ou_path="Managed Users/China",
+            disabled_users_ou_path="Disabled Users",
+            custom_group_ou_path="Managed Groups",
+            soft_excluded_groups="",
+        )
+        self.assertEqual(response.status_code, 303)
+
+        raw_config = self.app.state.org_config_repo.get_raw_config("default", config_path=str(self.config_path))
+        self.assertEqual(raw_config["corpsecret"], "secret-001")
+        self.assertEqual(raw_config["source_provider"], "wecom")
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("source_root_unit_ids", "", org_id="default"),
+            "1, 8",
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("source_root_unit_display_text", "", org_id="default"),
+            "HQ [1], China [8]",
+        )
+
+        refreshed_page = self._route("/config", "GET")(self._request("/config"))
+        self.assertEqual(refreshed_page.status_code, 200)
+        refreshed_text = self._text(refreshed_page)
+        self.assertIn("HQ [1], China [8]", refreshed_text)
 
     def test_config_target_ou_catalog_returns_ou_tree(self):
         self._login("superadmin")

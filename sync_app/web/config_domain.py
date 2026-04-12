@@ -59,6 +59,7 @@ def normalize_config_submission_values(
     brand_attribution: str = "",
     user_ou_placement_strategy: str = "source_primary_department",
     source_root_unit_ids: str = "",
+    source_root_unit_display_text: str = "",
     directory_root_ou_path: str = "",
     disabled_users_ou_path: str = "Disabled Users",
     custom_group_ou_path: str = "Managed Groups",
@@ -118,10 +119,22 @@ def normalize_config_submission_values(
         "brand_attribution": str(brand_attribution or "").strip() or default_brand_attribution,
         "user_ou_placement_strategy": user_ou_placement_strategy,
         "source_root_unit_ids": normalize_source_root_unit_ids_text(source_root_unit_ids),
+        "source_root_unit_display_text": str(source_root_unit_display_text or "").strip(),
         "directory_root_ou_path": normalize_ou_path_text(directory_root_ou_path),
         "disabled_users_ou_path": normalize_ou_path_text(disabled_users_ou_path, default="Disabled Users"),
         "custom_group_ou_path": normalize_ou_path_text(custom_group_ou_path, default="Managed Groups"),
     }
+    if normalized_settings["source_root_unit_ids"]:
+        if not normalized_settings["source_root_unit_display_text"]:
+            existing_ids = normalize_source_root_unit_ids_text(existing_values.get("source_root_unit_ids"))
+            if normalized_settings["source_root_unit_ids"] == existing_ids:
+                normalized_settings["source_root_unit_display_text"] = str(
+                    existing_values.get("source_root_unit_display_text") or ""
+                ).strip()
+        if not normalized_settings["source_root_unit_display_text"]:
+            normalized_settings["source_root_unit_display_text"] = normalized_settings["source_root_unit_ids"]
+    else:
+        normalized_settings["source_root_unit_display_text"] = ""
     return normalized_org_values, normalized_settings
 
 
