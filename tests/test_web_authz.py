@@ -1415,6 +1415,26 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(payload["items"][1]["department_id"], "8")
         self.assertEqual(payload["items"][1]["path_display"], "HQ / China")
 
+    def test_config_source_unit_catalog_requires_new_secret_when_source_provider_changes(self):
+        self._login("superadmin")
+        config_page = self._route("/config", "GET")(self._request("/config"))
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(config_page))
+        self.assertIsNotNone(csrf_match)
+
+        response = self._route("/config/source-units/catalog", "POST")(
+            self._request("/config/source-units/catalog", "POST"),
+            csrf_token=csrf_match.group(1),
+            source_provider="dingtalk",
+            corpid="ding-app-key",
+            agentid="50001",
+            corpsecret="",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(self._text(response))
+        self.assertFalse(payload["ok"])
+        self.assertIn("AppSecret / Client Secret", payload["error"])
+
     def test_config_target_ou_catalog_returns_ou_tree(self):
         self._login("superadmin")
         config_page = self._route("/config", "GET")(self._request("/config"))

@@ -175,6 +175,8 @@
   "AD Root OU Mapping": "AD \u6839 OU \u6620\u5c04",
   "AD DN": "AD DN",
   "AD Object GUID": "AD \u5bf9\u8c61 GUID",
+  "Selected {count} source units": "\u5df2\u9009\u62e9 {count} \u4e2a\u6e90\u5355\u5143",
+  "OU selected": "\u5df2\u9009\u62e9 OU",
   "Complete the required LDAP fields first: {fields}": "\u8bf7\u5148\u586b\u5199\u5fc5\u586b\u7684 LDAP \u5b57\u6bb5\uff1a{fields}",
   "Complete the required source connector fields first: {fields}": "\u8bf7\u5148\u586b\u5199\u5fc5\u586b\u7684\u6e90\u8fde\u63a5\u5668\u5b57\u6bb5\uff1a{fields}",
   "Custom Managed Groups": "\u81ea\u5b9a\u4e49\u53d7\u7ba1\u7ec4",

@@ -101,6 +101,8 @@
     data-label-ad-dn="{{ t('AD DN') }}"
     data-label-ad-guid="{{ t('AD Object GUID') }}"
     data-label-domain-root="{{ t('Domain Root') }}"
+    data-label-source-selected="{{ t('Selected {count} source units', count='__COUNT__') }}"
+    data-label-target-selected="{{ t('OU selected') }}"
     data-message-source-hint="{{ t('After filling the source connector fields, click to load the source department tree with names and IDs.') }}"
     data-message-target-hint="{{ t('After filling the LDAP fields and verifying connectivity, click to load the AD OU tree with DN values.') }}"
     data-message-source-loaded="{{ t('Select one or more source root units. The filter field updates immediately.') }}"
@@ -174,80 +176,88 @@
         </div>
         <div class="form-grid">
           {% call forms.picker("source_root_unit_ids", t("Source Root Unit IDs Filter"), editable.source_root_unit_ids, display_value=(editable.source_root_unit_ids or t("No source root units selected yet.")), placeholder=t("No source root units selected yet."), help_text=t("Choose source root unit IDs such as WeCom root department IDs or DingTalk root department IDs from the tree below. Leave empty to sync every department."), class_name="field-span-full") %}
-            <div class="actions flush-top">
-              {{ ui.button(t("Browse Source Unit Tree"), type="button", variant="secondary", attrs='data-config-open-source-browser') }}
-            </div>
-            <section class="picker-inline-panel" data-config-source-browser hidden>
-              <div class="picker-toolbar">
-                <div class="picker-toolbar__copy">
-                  <div class="picker-toolbar__title">{{ t("Source Unit Tree Preview") }}</div>
-                  <div class="picker-toolbar__description">{{ t("Choose source root unit IDs such as WeCom root department IDs or DingTalk root department IDs from the tree below. Leave empty to sync every department.") }}</div>
-                </div>
-                <div class="actions">
-                  {{ ui.button(t("Load Source Unit Tree"), type="button", variant="ghost", attrs='data-config-load-source-units') }}
-                  {{ ui.button(t("Close Picker"), type="button", variant="ghost", attrs='data-config-close-source-browser') }}
-                </div>
+            <div class="picker-inline-frame">
+              <div class="picker-inline-frame__controls">
+                {{ ui.button(t("Browse Source Unit Tree"), type="button", variant="secondary", size="sm", icon="search", attrs='data-config-open-source-browser') }}
+                {{ ui.button(t("Load Source Unit Tree"), type="button", variant="ghost", size="sm", icon="refresh-cw", attrs='data-config-load-source-units') }}
               </div>
-              <p class="config-browser__status muted" data-config-source-status>{{ t("After filling the source connector fields, click to load the source department tree with names and IDs.") }}</p>
-              <div class="config-browser__list" data-config-source-list></div>
-            </section>
+              <section class="picker-inline-panel" data-config-source-browser hidden>
+                <div class="picker-toolbar">
+                  <div class="picker-toolbar__copy">
+                    <div class="picker-toolbar__title">{{ t("Source Unit Tree Preview") }}</div>
+                    <div class="picker-toolbar__description">{{ t("Choose source root unit IDs such as WeCom root department IDs or DingTalk root department IDs from the tree below. Leave empty to sync every department.") }}</div>
+                  </div>
+                  <div class="actions">
+                    {{ ui.button(t("Close Picker"), type="button", variant="ghost", size="sm", icon="x", attrs='data-config-close-source-browser') }}
+                  </div>
+                </div>
+                <p class="config-browser__status muted" data-config-source-status>{{ t("After filling the source connector fields, click to load the source department tree with names and IDs.") }}</p>
+                <div class="config-browser__list" data-config-source-list></div>
+              </section>
+            </div>
           {% endcall %}
           {% call forms.picker("directory_root_ou_path", t("Target AD Root OU Path / DN"), editable.directory_root_ou_path, display_value=(editable.directory_root_ou_path or t("No target root OU selected yet.")), placeholder=t("No target root OU selected yet."), help_text=t("Choose the target AD root OU path or DN from the AD OU tree below. Example: Managed Users/China or OU=China,OU=Managed Users,DC=example,DC=com"), class_name="field-span-full") %}
-            <div class="actions flush-top">
-              {{ ui.button(t("Select Target Root OU"), type="button", variant="secondary", attrs='data-config-open-target-browser') }}
-            </div>
-            <section class="picker-inline-panel" data-config-target-browser data-target-field="directory_root_ou_path" hidden>
-              <div class="picker-toolbar">
-                <div class="picker-toolbar__copy">
-                  <div class="picker-toolbar__title">{{ t("Target AD Root OU Path / DN") }}</div>
-                  <div class="picker-toolbar__description">{{ t("Choose the target AD root OU path or DN from the AD OU tree below. Example: Managed Users/China or OU=China,OU=Managed Users,DC=example,DC=com") }}</div>
-                </div>
-                <div class="actions">
-                  {{ ui.button(t("Load AD OU Tree"), type="button", variant="ghost", attrs='data-config-load-target-ous') }}
-                  {{ ui.button(t("Close Picker"), type="button", variant="ghost", attrs='data-config-close-target-browser') }}
-                </div>
+            <div class="picker-inline-frame">
+              <div class="picker-inline-frame__controls">
+                {{ ui.button(t("Select Target Root OU"), type="button", variant="secondary", size="sm", icon="search", attrs='data-config-open-target-browser') }}
+                {{ ui.button(t("Load AD OU Tree"), type="button", variant="ghost", size="sm", icon="refresh-cw", attrs='data-config-load-target-ous') }}
               </div>
-              <p class="config-browser__status muted" data-config-target-status>{{ t("After filling the LDAP fields and verifying connectivity, click to load the AD OU tree with DN values.") }}</p>
-              <div class="config-browser__list" data-config-target-list></div>
-            </section>
+              <section class="picker-inline-panel" data-config-target-browser data-target-field="directory_root_ou_path" hidden>
+                <div class="picker-toolbar">
+                  <div class="picker-toolbar__copy">
+                    <div class="picker-toolbar__title">{{ t("Target AD Root OU Path / DN") }}</div>
+                    <div class="picker-toolbar__description">{{ t("Choose the target AD root OU path or DN from the AD OU tree below. Example: Managed Users/China or OU=China,OU=Managed Users,DC=example,DC=com") }}</div>
+                  </div>
+                  <div class="actions">
+                    {{ ui.button(t("Close Picker"), type="button", variant="ghost", size="sm", icon="x", attrs='data-config-close-target-browser') }}
+                  </div>
+                </div>
+                <p class="config-browser__status muted" data-config-target-status>{{ t("After filling the LDAP fields and verifying connectivity, click to load the AD OU tree with DN values.") }}</p>
+                <div class="config-browser__list" data-config-target-list></div>
+              </section>
+            </div>
           {% endcall %}
           {% call forms.picker("disabled_users_ou_path", t("Disabled Users OU Path / DN"), editable.disabled_users_ou_path, display_value=(editable.disabled_users_ou_path or t("No disabled users OU selected yet.")), placeholder=t("No disabled users OU selected yet."), help_text=t("Choose the target OU used for disabled users. Nested OU path or DN is supported.")) %}
-            <div class="actions flush-top">
-              {{ ui.button(t("Select Disabled Users OU"), type="button", variant="secondary", attrs='data-config-open-target-browser') }}
-            </div>
-            <section class="picker-inline-panel" data-config-target-browser data-target-field="disabled_users_ou_path" hidden>
-              <div class="picker-toolbar">
-                <div class="picker-toolbar__copy">
-                  <div class="picker-toolbar__title">{{ t("Disabled Users OU Path / DN") }}</div>
-                  <div class="picker-toolbar__description">{{ t("Choose the target OU used for disabled users. Nested OU path or DN is supported.") }}</div>
-                </div>
-                <div class="actions">
-                  {{ ui.button(t("Load AD OU Tree"), type="button", variant="ghost", attrs='data-config-load-target-ous') }}
-                  {{ ui.button(t("Close Picker"), type="button", variant="ghost", attrs='data-config-close-target-browser') }}
-                </div>
+            <div class="picker-inline-frame">
+              <div class="picker-inline-frame__controls">
+                {{ ui.button(t("Select Disabled Users OU"), type="button", variant="secondary", size="sm", icon="search", attrs='data-config-open-target-browser') }}
+                {{ ui.button(t("Load AD OU Tree"), type="button", variant="ghost", size="sm", icon="refresh-cw", attrs='data-config-load-target-ous') }}
               </div>
-              <p class="config-browser__status muted" data-config-target-status>{{ t("After filling the LDAP fields and verifying connectivity, click to load the AD OU tree with DN values.") }}</p>
-              <div class="config-browser__list" data-config-target-list></div>
-            </section>
+              <section class="picker-inline-panel" data-config-target-browser data-target-field="disabled_users_ou_path" hidden>
+                <div class="picker-toolbar">
+                  <div class="picker-toolbar__copy">
+                    <div class="picker-toolbar__title">{{ t("Disabled Users OU Path / DN") }}</div>
+                    <div class="picker-toolbar__description">{{ t("Choose the target OU used for disabled users. Nested OU path or DN is supported.") }}</div>
+                  </div>
+                  <div class="actions">
+                    {{ ui.button(t("Close Picker"), type="button", variant="ghost", size="sm", icon="x", attrs='data-config-close-target-browser') }}
+                  </div>
+                </div>
+                <p class="config-browser__status muted" data-config-target-status>{{ t("After filling the LDAP fields and verifying connectivity, click to load the AD OU tree with DN values.") }}</p>
+                <div class="config-browser__list" data-config-target-list></div>
+              </section>
+            </div>
           {% endcall %}
           {% call forms.picker("custom_group_ou_path", t("Custom Group OU Path / DN"), editable.custom_group_ou_path, display_value=(editable.custom_group_ou_path or t("No custom group OU selected yet.")), placeholder=t("No custom group OU selected yet."), help_text=t("Choose the target OU used for managed custom groups. Nested OU path or DN is supported.")) %}
-            <div class="actions flush-top">
-              {{ ui.button(t("Select Custom Group OU"), type="button", variant="secondary", attrs='data-config-open-target-browser') }}
-            </div>
-            <section class="picker-inline-panel" data-config-target-browser data-target-field="custom_group_ou_path" hidden>
-              <div class="picker-toolbar">
-                <div class="picker-toolbar__copy">
-                  <div class="picker-toolbar__title">{{ t("Custom Group OU Path / DN") }}</div>
-                  <div class="picker-toolbar__description">{{ t("Choose the target OU used for managed custom groups. Nested OU path or DN is supported.") }}</div>
-                </div>
-                <div class="actions">
-                  {{ ui.button(t("Load AD OU Tree"), type="button", variant="ghost", attrs='data-config-load-target-ous') }}
-                  {{ ui.button(t("Close Picker"), type="button", variant="ghost", attrs='data-config-close-target-browser') }}
-                </div>
+            <div class="picker-inline-frame">
+              <div class="picker-inline-frame__controls">
+                {{ ui.button(t("Select Custom Group OU"), type="button", variant="secondary", size="sm", icon="search", attrs='data-config-open-target-browser') }}
+                {{ ui.button(t("Load AD OU Tree"), type="button", variant="ghost", size="sm", icon="refresh-cw", attrs='data-config-load-target-ous') }}
               </div>
-              <p class="config-browser__status muted" data-config-target-status>{{ t("After filling the LDAP fields and verifying connectivity, click to load the AD OU tree with DN values.") }}</p>
-              <div class="config-browser__list" data-config-target-list></div>
-            </section>
+              <section class="picker-inline-panel" data-config-target-browser data-target-field="custom_group_ou_path" hidden>
+                <div class="picker-toolbar">
+                  <div class="picker-toolbar__copy">
+                    <div class="picker-toolbar__title">{{ t("Custom Group OU Path / DN") }}</div>
+                    <div class="picker-toolbar__description">{{ t("Choose the target OU used for managed custom groups. Nested OU path or DN is supported.") }}</div>
+                  </div>
+                  <div class="actions">
+                    {{ ui.button(t("Close Picker"), type="button", variant="ghost", size="sm", icon="x", attrs='data-config-close-target-browser') }}
+                  </div>
+                </div>
+                <p class="config-browser__status muted" data-config-target-status>{{ t("After filling the LDAP fields and verifying connectivity, click to load the AD OU tree with DN values.") }}</p>
+                <div class="config-browser__list" data-config-target-list></div>
+              </section>
+            </div>
           {% endcall %}
         </div>
       </section>

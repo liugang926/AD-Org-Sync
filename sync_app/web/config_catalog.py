@@ -34,8 +34,8 @@ def build_source_unit_catalog(
         return {
             "ok": False,
             "error": support.translate(
-                "Complete the required source connector fields first: {fields}",
                 support.request_support.get_ui_language(request),
+                "Complete the required source connector fields first: {fields}",
                 fields=", ".join(missing_fields),
             ),
         }
@@ -49,7 +49,8 @@ def build_source_unit_catalog(
         support.logger.warning("failed to load source unit catalog: %s", exc)
         return {
             "ok": False,
-            "error": str(exc) or support.translate("Unable to load source departments.", support.request_support.get_ui_language(request)),
+            "error": str(exc)
+            or support.translate(support.request_support.get_ui_language(request), "Unable to load source departments."),
         }
 
     dept_tree = {item.department_id: item for item in departments if item.department_id}
@@ -127,8 +128,8 @@ def build_target_ou_catalog(
         return {
             "ok": False,
             "error": support.translate(
-                "Complete the required LDAP fields first: {fields}",
                 support.request_support.get_ui_language(request),
+                "Complete the required LDAP fields first: {fields}",
                 fields=", ".join(missing_fields),
             ),
         }
@@ -153,7 +154,8 @@ def build_target_ou_catalog(
         support.logger.warning("failed to load target OU catalog: %s", exc)
         return {
             "ok": False,
-            "error": str(exc) or support.translate("Unable to load AD OU list.", support.request_support.get_ui_language(request)),
+            "error": str(exc)
+            or support.translate(support.request_support.get_ui_language(request), "Unable to load AD OU list."),
         }
 
     ui_language = support.request_support.get_ui_language(request)

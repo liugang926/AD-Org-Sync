@@ -1,3 +1,4 @@
+import json
 import socket
 import threading
 import time
@@ -209,6 +210,58 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(self.page.get_by_role("button", name="Select Disabled Users OU").is_visible())
         self.assertTrue(self.page.get_by_role("button", name="Select Custom Group OU").is_visible())
         self._capture("config-page.png")
+
+    def test_config_source_picker_loads_and_selects_inside_same_field_frame(self):
+        self._login()
+        self.page.route(
+            "**/config/source-units/catalog",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "ok": True,
+                        "provider": "WeCom",
+                        "items": [
+                            {
+                                "department_id": "1",
+                                "name": "HQ",
+                                "path_display": "HQ",
+                                "level": 0,
+                                "selected": False,
+                            },
+                            {
+                                "department_id": "8",
+                                "name": "China",
+                                "path_display": "HQ / China",
+                                "level": 1,
+                                "selected": False,
+                            },
+                        ],
+                    }
+                ),
+            ),
+        )
+        self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
+        source_group = self.page.locator("#group-source_root_unit_ids")
+        self.assertTrue(source_group.locator(".picker-field__surface").is_visible())
+        source_group.get_by_role("button", name="Browse Source Unit Tree").click()
+        source_group.locator("[data-config-source-browser]").wait_for(state="visible")
+        source_group.locator("[data-config-source-list] .config-tree-row").nth(1).wait_for()
+        self.assertTrue(source_group.locator(".picker-field__surface .picker-inline-panel").is_visible())
+        source_group.locator('[data-source-unit-checkbox][value="8"]').check()
+        self.assertEqual(source_group.locator('input[name="source_root_unit_ids"]').input_value(), "8")
+        self.assertIn(
+            "China [8]",
+            source_group.locator('[data-picker-summary-for="source_root_unit_ids"]').inner_text(),
+        )
+        self.assertRegex(
+            source_group.locator('[data-picker-meta-for="source_root_unit_ids"]').inner_text(),
+            r"1",
+        )
+        source_group.get_by_role("button", name="Close Picker").click()
+        source_group.get_by_role("button", name="Browse Source Unit Tree").click()
+        self.assertTrue(source_group.locator("[data-config-source-list] .config-tree-row").nth(1).is_visible())
 
     def test_jobs_empty_state_actions_remain_visually_consistent(self):
         self._login()

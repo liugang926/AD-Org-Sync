@@ -70,11 +70,16 @@ def normalize_config_submission_values(
     normalize_ou_path_text: Callable[..., str],
     clean_public_base_url: Callable[[str | None], str],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized_source_provider = normalize_source_provider(
+        source_provider if isinstance(source_provider, str) else None
+    )
+    existing_values = dict(existing_org_values or {})
+    if normalized_source_provider != normalize_source_provider(existing_values.get("source_provider")):
+        for provider_specific_field in ("corpid", "agentid", "corpsecret", "webhook_url"):
+            existing_values[provider_specific_field] = ""
     normalized_org_values = _normalize_org_config_values(
         {
-            "source_provider": normalize_source_provider(
-                source_provider if isinstance(source_provider, str) else None
-            ),
+            "source_provider": normalized_source_provider,
             "corpid": corpid,
             "agentid": agentid,
             "corpsecret": corpsecret,
@@ -94,7 +99,7 @@ def normalize_config_submission_values(
             "retry_interval": retry_interval,
             "max_retries": max_retries,
         },
-        existing=existing_org_values,
+        existing=existing_values,
         config_path=config_path,
     )
     normalized_settings = {

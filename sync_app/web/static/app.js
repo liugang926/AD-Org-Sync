@@ -139,13 +139,26 @@ document.addEventListener("DOMContentLoaded", () => {
       adDn: configForm.dataset.labelAdDn || "AD DN",
       adGuid: configForm.dataset.labelAdGuid || "AD Object GUID",
       domainRoot: configForm.dataset.labelDomainRoot || "Domain Root",
+      sourceSelected: configForm.dataset.labelSourceSelected || "Selected __COUNT__ source units",
+      targetSelected: configForm.dataset.labelTargetSelected || "OU selected",
       sourceHint: configForm.dataset.messageSourceHint || "",
       targetHint: configForm.dataset.messageTargetHint || "",
       sourceLoaded: configForm.dataset.messageSourceLoaded || "",
       targetLoaded: configForm.dataset.messageTargetLoaded || "",
     };
-    let sourceCatalogCache = [];
-    let targetCatalogCache = [];
+    const sourceCatalogState = { key: "", items: [] };
+    const targetCatalogState = { key: "", items: [] };
+    const sourceCatalogFields = ["source_provider", "corpid", "agentid", "corpsecret"];
+    const targetCatalogFields = [
+      "ldap_server",
+      "ldap_domain",
+      "ldap_username",
+      "ldap_password",
+      "ldap_port",
+      "ldap_use_ssl",
+      "ldap_validate_cert",
+      "ldap_ca_cert_path",
+    ];
 
     const sourcePickerField = configForm.querySelector("#group-source_root_unit_ids");
     const sourceRootInput = document.getElementById("source_root_unit_ids");
@@ -156,6 +169,23 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       target.textContent = message || "";
       target.classList.toggle("config-browser__status--error", Boolean(isError));
+    };
+
+    const setPickerMeta = (fieldName, text = "") => {
+      const metaNode = document.querySelector(`[data-picker-meta-for="${fieldName}"]`);
+      if (!metaNode) {
+        return;
+      }
+      const normalized = String(text || "").trim();
+      metaNode.textContent = normalized;
+      metaNode.hidden = !normalized;
+    };
+
+    const setPickerOpenState = (fieldRoot, isOpen) => {
+      if (!fieldRoot) {
+        return;
+      }
+      fieldRoot.classList.toggle("is-open", Boolean(isOpen));
     };
 
     const buildConfigFormData = (fieldNames) => {
@@ -185,6 +215,9 @@ document.addEventListener("DOMContentLoaded", () => {
       summaryNode.textContent = text;
       summaryNode.classList.toggle("is-placeholder", !value);
       summaryNode.setAttribute("title", titleText || text || placeholder);
+      setPickerMeta(fieldName, value ? document.querySelector(`[data-picker-meta-for="${fieldName}"]`)?.textContent || "" : "");
+      const surface = document.querySelector(`[data-picker-surface-for="${fieldName}"]`);
+      surface?.classList.toggle("is-selected", Boolean(value));
     };
 
     const formatSourceSummary = (items) => {
@@ -197,9 +230,55 @@ document.addEventListener("DOMContentLoaded", () => {
       return `${items.slice(0, 2).map((item) => `${item.name} [${item.department_id}]`).join(", ")} +${items.length - 2}`;
     };
 
+    const buildCatalogSignature = (fieldNames) =>
+      fieldNames
+        .map((fieldName) => {
+          const input = configForm.querySelector(`[name="${fieldName}"]`);
+          if (!input) {
+            return `${fieldName}=`;
+          }
+          if (input.type === "checkbox" || input.type === "radio") {
+            return `${fieldName}=${input.checked ? input.value : ""}`;
+          }
+          return `${fieldName}=${input.value || ""}`;
+        })
+        .join("|");
+
+    const invalidateSourceCatalog = () => {
+      sourceCatalogState.key = "";
+      sourceCatalogState.items = [];
+      if (sourcePickerField) {
+        const sourceList = sourcePickerField.querySelector("[data-config-source-list]");
+        if (sourceList) {
+          sourceList.innerHTML = `<div class="config-browser__empty">${escapeHtml(labels.sourceHint)}</div>`;
+        }
+        setStatus(sourcePickerField.querySelector("[data-config-source-status]"), labels.sourceHint, false);
+      }
+    };
+
+    const invalidateTargetCatalog = () => {
+      targetCatalogState.key = "";
+      targetCatalogState.items = [];
+      configForm.querySelectorAll("[data-config-target-browser]").forEach((panel) => {
+        const targetList = panel.querySelector("[data-config-target-list]");
+        if (targetList) {
+          targetList.innerHTML = `<div class="config-browser__empty">${escapeHtml(labels.targetHint)}</div>`;
+        }
+        setStatus(panel.querySelector("[data-config-target-status]"), labels.targetHint, false);
+      });
+    };
+
     const hideAllInlinePickers = () => {
       configForm.querySelectorAll("[data-config-source-browser], [data-config-target-browser]").forEach((panel) => {
         panel.hidden = true;
+        setPickerOpenState(panel.closest(".picker-field"), false);
+      });
+    };
+
+    const updateSourceSelectionStyles = () => {
+      sourcePickerField?.querySelectorAll(".config-tree-row").forEach((row) => {
+        const checkbox = row.querySelector("[data-source-unit-checkbox]");
+        row.classList.toggle("is-selected", Boolean(checkbox?.checked));
       });
     };
 
@@ -210,17 +289,22 @@ document.addEventListener("DOMContentLoaded", () => {
       const selectedIds = Array.from(sourcePickerField.querySelectorAll("[data-source-unit-checkbox]:checked"))
         .map((node) => node.value)
         .filter(Boolean);
-      const selectedItems = sourceCatalogCache.filter((item) => selectedIds.includes(String(item.department_id)));
+      const selectedItems = sourceCatalogState.items.filter((item) => selectedIds.includes(String(item.department_id)));
       setPickerSummary(
         "source_root_unit_ids",
         selectedIds.join(", "),
         formatSourceSummary(selectedItems),
         selectedItems.map((item) => item.path_display || item.name).join("\n"),
       );
+      setPickerMeta(
+        "source_root_unit_ids",
+        selectedItems.length ? labels.sourceSelected.replace("__COUNT__", String(selectedItems.length)) : "",
+      );
+      updateSourceSelectionStyles();
       setStatus(sourcePickerField.querySelector("[data-config-source-status]"), labels.sourceLoaded, false);
     };
 
-    const renderSourceUnits = (fieldRoot, payload) => {
+    const renderSourceUnits = (fieldRoot, payload, signature = "") => {
       const sourceList = fieldRoot?.querySelector("[data-config-source-list]");
       if (!sourceList) {
         return;
@@ -232,19 +316,22 @@ document.addEventListener("DOMContentLoaded", () => {
           .map((item) => item.trim())
           .filter(Boolean),
       );
-      sourceCatalogCache = items;
+      sourceCatalogState.key = signature;
+      sourceCatalogState.items = items;
       if (!items.length) {
         sourceList.innerHTML = `<div class="config-browser__empty">${escapeHtml(labels.sourceHint)}</div>`;
+        setPickerMeta("source_root_unit_ids", selectedIds.size ? labels.sourceSelected.replace("__COUNT__", String(selectedIds.size)) : "");
         return;
       }
       sourceList.innerHTML = items
         .map((item) => {
           const pathDisplay = item.path_display || item.name || item.department_id;
+          const isSelected = selectedIds.has(String(item.department_id));
           return `
-            <label class="config-tree-row" style="--tree-level:${Number(item.level || 0)}">
+            <label class="config-tree-row ${isSelected ? "is-selected" : ""}" style="--tree-level:${Number(item.level || 0)}">
               <div class="config-tree-row__main">
                 <input type="checkbox" data-source-unit-checkbox value="${escapeHtml(item.department_id)}" ${
-                  selectedIds.has(String(item.department_id)) ? "checked" : ""
+                  isSelected ? "checked" : ""
                 }>
                 <div class="config-tree-row__copy">
                   <div class="config-tree-row__title">${escapeHtml(item.name || item.department_id)}</div>
@@ -262,14 +349,16 @@ document.addEventListener("DOMContentLoaded", () => {
       syncSourceSelection();
     };
 
-    const renderTargetOus = (fieldRoot, payload) => {
+    const renderTargetOus = (fieldRoot, payload, signature = "") => {
       const targetList = fieldRoot?.querySelector("[data-config-target-list]");
       const fieldName = fieldRoot?.dataset.targetField || "";
       if (!targetList || !fieldName) {
         return;
       }
       const items = Array.isArray(payload.items) ? payload.items : [];
-      targetCatalogCache = items;
+      const currentValue = String(document.getElementById(fieldName)?.value || "").trim();
+      targetCatalogState.key = signature;
+      targetCatalogState.items = items;
       if (!items.length) {
         targetList.innerHTML = `<div class="config-browser__empty">${escapeHtml(labels.targetHint)}</div>`;
         return;
@@ -278,11 +367,12 @@ document.addEventListener("DOMContentLoaded", () => {
         .map((item) => {
           const value = item.path_value || "";
           const pathDisplay = item.path_display || labels.domainRoot;
+          const isSelected = Boolean(currentValue && currentValue === value);
           const guidMarkup = item.guid
             ? `<div class="config-tree-row__meta">${escapeHtml(labels.adGuid)}: ${escapeHtml(item.guid)}</div>`
             : "";
           return `
-            <div class="config-tree-row config-tree-row--target" style="--tree-level:${Number(item.level || 0)}">
+            <div class="config-tree-row config-tree-row--target ${isSelected ? "is-selected" : ""}" style="--tree-level:${Number(item.level || 0)}">
               <div class="config-tree-row__copy">
                 <div class="config-tree-row__title">${escapeHtml(item.name || labels.domainRoot)}</div>
                 <div class="config-tree-row__detail">${escapeHtml(pathDisplay)}</div>
@@ -291,7 +381,7 @@ document.addEventListener("DOMContentLoaded", () => {
               </div>
               <button
                 type="button"
-                class="button ghost sm"
+                class="button ${isSelected ? "secondary" : "ghost"} sm"
                 data-target-ou-value="${escapeHtml(value)}"
                 data-target-ou-summary="${escapeHtml(pathDisplay)}"
                 data-target-ou-dn="${escapeHtml(item.dn || "")}"
@@ -306,8 +396,10 @@ document.addEventListener("DOMContentLoaded", () => {
           const summaryText = button.dataset.targetOuSummary || targetValue;
           const dnText = button.dataset.targetOuDn || "";
           setPickerSummary(fieldName, targetValue, summaryText, dnText || summaryText);
+          setPickerMeta(fieldName, targetValue ? labels.targetSelected : "");
           setStatus(fieldRoot.querySelector("[data-config-target-status]"), labels.targetLoaded, false);
           fieldRoot.hidden = true;
+          setPickerOpenState(fieldRoot.closest(".picker-field"), false);
         });
       });
     };
@@ -325,67 +417,118 @@ document.addEventListener("DOMContentLoaded", () => {
       return payload;
     };
 
+    const loadSourceCatalog = async () => {
+      const status = sourcePickerField?.querySelector("[data-config-source-status]");
+      const loadButton = sourcePickerField?.querySelector("[data-config-load-source-units]");
+      if (!sourceCatalogUrl || !loadButton || !sourcePickerField) {
+        return;
+      }
+      const signature = buildCatalogSignature(sourceCatalogFields);
+      setStatus(status, labels.loading, false);
+      loadButton.disabled = true;
+      try {
+        const payload = await postCatalogRequest(
+          sourceCatalogUrl,
+          buildConfigFormData(["csrf_token", ...sourceCatalogFields]),
+        );
+        renderSourceUnits(sourcePickerField, payload, signature);
+        setStatus(status, labels.sourceLoaded, false);
+      } catch (error) {
+        renderSourceUnits(sourcePickerField, { items: [] }, "");
+        setStatus(status, error.message || labels.sourceHint, true);
+      } finally {
+        loadButton.disabled = false;
+      }
+    };
+
+    const loadTargetCatalog = async (panel) => {
+      const status = panel?.querySelector("[data-config-target-status]");
+      const loadButton = panel?.querySelector("[data-config-load-target-ous]");
+      if (!targetCatalogUrl || !loadButton || !panel) {
+        return;
+      }
+      const signature = buildCatalogSignature(targetCatalogFields);
+      setStatus(status, labels.loading, false);
+      loadButton.disabled = true;
+      try {
+        const payload = await postCatalogRequest(
+          targetCatalogUrl,
+          buildConfigFormData(["csrf_token", ...targetCatalogFields]),
+        );
+        renderTargetOus(panel, payload, signature);
+        setStatus(status, labels.targetLoaded, false);
+      } catch (error) {
+        renderTargetOus(panel, { items: [] }, "");
+        setStatus(status, error.message || labels.targetHint, true);
+      } finally {
+        loadButton.disabled = false;
+      }
+    };
+
+    const initializePickerMeta = () => {
+      const selectedSourceIds = String(sourceRootInput?.value || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      setPickerMeta(
+        "source_root_unit_ids",
+        selectedSourceIds.length ? labels.sourceSelected.replace("__COUNT__", String(selectedSourceIds.length)) : "",
+      );
+      ["directory_root_ou_path", "disabled_users_ou_path", "custom_group_ou_path"].forEach((fieldName) => {
+        setPickerMeta(fieldName, document.getElementById(fieldName)?.value ? labels.targetSelected : "");
+      });
+    };
+
+    sourceCatalogFields.forEach((fieldName) => {
+      configForm.querySelectorAll(`[name="${fieldName}"]`).forEach((input) => {
+        input.addEventListener("change", invalidateSourceCatalog);
+        input.addEventListener("input", invalidateSourceCatalog);
+      });
+    });
+    targetCatalogFields.forEach((fieldName) => {
+      configForm.querySelectorAll(`[name="${fieldName}"]`).forEach((input) => {
+        input.addEventListener("change", invalidateTargetCatalog);
+        input.addEventListener("input", invalidateTargetCatalog);
+      });
+    });
+
     sourcePickerField?.querySelector("[data-config-open-source-browser]")?.addEventListener("click", async () => {
       const panel = sourcePickerField.querySelector("[data-config-source-browser]");
-      const status = sourcePickerField.querySelector("[data-config-source-status]");
-      const loadButton = sourcePickerField.querySelector("[data-config-load-source-units]");
-      hideAllInlinePickers();
       if (!panel) {
         return;
       }
+      if (!panel.hidden) {
+        panel.hidden = true;
+        setPickerOpenState(sourcePickerField, false);
+        return;
+      }
+      hideAllInlinePickers();
       panel.hidden = false;
+      setPickerOpenState(sourcePickerField, true);
       panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      if (sourceCatalogCache.length) {
-        setStatus(status, labels.sourceLoaded, false);
+      const signature = buildCatalogSignature(sourceCatalogFields);
+      if (sourceCatalogState.items.length && sourceCatalogState.key === signature) {
+        renderSourceUnits(sourcePickerField, { items: sourceCatalogState.items }, signature);
+        setStatus(sourcePickerField.querySelector("[data-config-source-status]"), labels.sourceLoaded, false);
         return;
       }
-      if (!sourceCatalogUrl || !loadButton) {
-        return;
-      }
-      setStatus(status, labels.loading, false);
-      loadButton.disabled = true;
-      try {
-        const payload = await postCatalogRequest(
-          sourceCatalogUrl,
-          buildConfigFormData(["csrf_token", "source_provider", "corpid", "agentid", "corpsecret"]),
-        );
-        renderSourceUnits(sourcePickerField, payload);
-        setStatus(status, labels.sourceLoaded, false);
-      } catch (error) {
-        renderSourceUnits(sourcePickerField, { items: [] });
-        setStatus(status, error.message || labels.sourceHint, true);
-      } finally {
-        loadButton.disabled = false;
-      }
+      await loadSourceCatalog();
     });
 
     sourcePickerField?.querySelector("[data-config-load-source-units]")?.addEventListener("click", async () => {
-      const status = sourcePickerField.querySelector("[data-config-source-status]");
-      const loadButton = sourcePickerField.querySelector("[data-config-load-source-units]");
-      if (!sourceCatalogUrl || !loadButton) {
+      if (!sourcePickerField) {
         return;
       }
-      setStatus(status, labels.loading, false);
-      loadButton.disabled = true;
-      try {
-        const payload = await postCatalogRequest(
-          sourceCatalogUrl,
-          buildConfigFormData(["csrf_token", "source_provider", "corpid", "agentid", "corpsecret"]),
-        );
-        renderSourceUnits(sourcePickerField, payload);
-        setStatus(status, labels.sourceLoaded, false);
-      } catch (error) {
-        renderSourceUnits(sourcePickerField, { items: [] });
-        setStatus(status, error.message || labels.sourceHint, true);
-      } finally {
-        loadButton.disabled = false;
-      }
+      sourceCatalogState.key = "";
+      sourceCatalogState.items = [];
+      await loadSourceCatalog();
     });
 
     sourcePickerField?.querySelector("[data-config-close-source-browser]")?.addEventListener("click", () => {
       const panel = sourcePickerField.querySelector("[data-config-source-browser]");
       if (panel) {
         panel.hidden = true;
+        setPickerOpenState(sourcePickerField, false);
       }
     });
 
@@ -396,83 +539,37 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       fieldRoot.querySelector("[data-config-open-target-browser]")?.addEventListener("click", async () => {
-        const status = panel.querySelector("[data-config-target-status]");
+        if (!panel.hidden) {
+          panel.hidden = true;
+          setPickerOpenState(fieldRoot, false);
+          return;
+        }
         hideAllInlinePickers();
         panel.hidden = false;
+        setPickerOpenState(fieldRoot, true);
         panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
-        if (targetCatalogCache.length) {
-          renderTargetOus(panel, { items: targetCatalogCache });
-          setStatus(status, labels.targetLoaded, false);
+        const signature = buildCatalogSignature(targetCatalogFields);
+        if (targetCatalogState.items.length && targetCatalogState.key === signature) {
+          renderTargetOus(panel, { items: targetCatalogState.items }, signature);
+          setStatus(panel.querySelector("[data-config-target-status]"), labels.targetLoaded, false);
           return;
         }
-        const loadButton = panel.querySelector("[data-config-load-target-ous]");
-        if (!targetCatalogUrl || !loadButton) {
-          return;
-        }
-        setStatus(status, labels.loading, false);
-        loadButton.disabled = true;
-        try {
-          const payload = await postCatalogRequest(
-            targetCatalogUrl,
-            buildConfigFormData([
-              "csrf_token",
-              "ldap_server",
-              "ldap_domain",
-              "ldap_username",
-              "ldap_password",
-              "ldap_port",
-              "ldap_use_ssl",
-              "ldap_validate_cert",
-              "ldap_ca_cert_path",
-            ]),
-          );
-          renderTargetOus(panel, payload);
-          setStatus(status, labels.targetLoaded, false);
-        } catch (error) {
-          renderTargetOus(panel, { items: [] });
-          setStatus(status, error.message || labels.targetHint, true);
-        } finally {
-          loadButton.disabled = false;
-        }
+        await loadTargetCatalog(panel);
       });
 
       panel.querySelector("[data-config-load-target-ous]")?.addEventListener("click", async () => {
-        const status = panel.querySelector("[data-config-target-status]");
-        const loadButton = panel.querySelector("[data-config-load-target-ous]");
-        if (!targetCatalogUrl || !loadButton) {
-          return;
-        }
-        setStatus(status, labels.loading, false);
-        loadButton.disabled = true;
-        try {
-          const payload = await postCatalogRequest(
-            targetCatalogUrl,
-            buildConfigFormData([
-              "csrf_token",
-              "ldap_server",
-              "ldap_domain",
-              "ldap_username",
-              "ldap_password",
-              "ldap_port",
-              "ldap_use_ssl",
-              "ldap_validate_cert",
-              "ldap_ca_cert_path",
-            ]),
-          );
-          renderTargetOus(panel, payload);
-          setStatus(status, labels.targetLoaded, false);
-        } catch (error) {
-          renderTargetOus(panel, { items: [] });
-          setStatus(status, error.message || labels.targetHint, true);
-        } finally {
-          loadButton.disabled = false;
-        }
+        targetCatalogState.key = "";
+        targetCatalogState.items = [];
+        await loadTargetCatalog(panel);
       });
 
       panel.querySelector("[data-config-close-target-browser]")?.addEventListener("click", () => {
         panel.hidden = true;
+        setPickerOpenState(fieldRoot, false);
       });
     });
+
+    initializePickerMeta();
   }
 
   // --- 2. Confirmation & Loading States ---

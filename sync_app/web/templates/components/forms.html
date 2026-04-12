@@ -84,13 +84,16 @@
   {% if label %}
   <label for="{{ field_id }}">{{ label }}</label>
   {% endif %}
-  <div class="picker-field__surface">
-    <div
-      class="picker-field__summary {% if not display_value %}is-placeholder{% endif %}"
-      data-picker-summary-for="{{ field_id }}"
-      data-picker-placeholder="{{ placeholder }}"
-      title="{{ summary_value }}"
-    >{{ summary_value }}</div>
+  <div class="picker-field__surface" data-picker-surface-for="{{ field_id }}">
+    <div class="picker-field__summary-shell">
+      <div
+        class="picker-field__summary {% if not display_value %}is-placeholder{% endif %}"
+        data-picker-summary-for="{{ field_id }}"
+        data-picker-placeholder="{{ placeholder }}"
+        title="{{ summary_value }}"
+      >{{ summary_value }}</div>
+      <div class="picker-field__meta" data-picker-meta-for="{{ field_id }}" hidden></div>
+    </div>
     {% if caller is defined %}
     <div class="picker-field__drawer">
       {{ caller() }}
