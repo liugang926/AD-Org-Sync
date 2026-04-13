@@ -43,6 +43,12 @@
       </a>
       {% endif %}
 
+      {% if can("config.read") or (show_advanced_navigation and can("mappings.read")) %}
+      <div style="margin: 32px 16px 12px; font-size: 11px; font-weight: 800; color: rgba(255,255,255,0.25); text-transform: uppercase; letter-spacing: 0.1em;">
+        {{ t("Configuration") }}
+      </div>
+      {% endif %}
+
       {% if can("config.read") %}
       <a href="/config" class="{% if page == 'config' %}active{% endif %}">
         <i data-lucide="settings-2" style="width: 18px; height: 18px; margin-right: 12px;"></i>
@@ -51,16 +57,19 @@
       {% endif %}
 
       {% if show_advanced_navigation %}
+      {% if can("mappings.read") %}<a href="/mappings" class="{% if page == 'mappings' %}active{% endif %}"><i data-lucide="layers" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Identity Overrides") }}</span></a>{% endif %}
+      {% if can("config.read") %}<a href="/advanced-sync" class="{% if page == 'advanced-sync' %}active{% endif %}"><i data-lucide="waypoints" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Advanced Sync") }}</span></a>{% endif %}
+      {% if can("account.manage") or can("exceptions.read") or can("organizations.manage") or can("database.read") or can("audit.read") %}
       <div style="margin: 32px 16px 12px; font-size: 11px; font-weight: 800; color: rgba(255,255,255,0.25); text-transform: uppercase; letter-spacing: 0.1em;">
         {{ t("Management") }}
       </div>
-      
+
       {% if can("account.manage") %}<a href="/account" class="{% if page == 'account' %}active{% endif %}"><i data-lucide="user-cog" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Account") }}</span></a>{% endif %}
       {% if can("exceptions.read") %}<a href="/exceptions" class="{% if page == 'exceptions' %}active{% endif %}"><i data-lucide="ban" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Exceptions") }}</span></a>{% endif %}
       {% if can("organizations.manage") %}<a href="/organizations" class="{% if page == 'organizations' %}active{% endif %}"><i data-lucide="building-2" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Organizations") }}</span></a>{% endif %}
-      {% if can("mappings.read") %}<a href="/mappings" class="{% if page == 'mappings' %}active{% endif %}"><i data-lucide="layers" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Mappings") }}</span></a>{% endif %}
       {% if can("database.read") %}<a href="/database" class="{% if page == 'database' %}active{% endif %}"><i data-lucide="database" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Database") }}</span></a>{% endif %}
       {% if can("audit.read") %}<a href="/audit" class="{% if page == 'audit' %}active{% endif %}"><i data-lucide="scroll-text" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Audit") }}</span></a>{% endif %}
+      {% endif %}
       {% endif %}
     </nav>
     <div class="footer">

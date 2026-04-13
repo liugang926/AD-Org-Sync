@@ -227,6 +227,11 @@ def test_wecom_connection(corpid: str, corpsecret: str, agentid: str = None) -> 
     )
 
 
+# These are runtime diagnostics/helpers, not pytest test cases.
+test_source_connection.__test__ = False
+test_wecom_connection.__test__ = False
+
+
 def _to_upn(username: str, domain: str) -> str:
     if "\\" in username:
         parts = username.split("\\", 1)
@@ -292,3 +297,6 @@ def test_ldap_connection(
         message = f"LDAP connection failed: {exc}"
         logger.error(message)
         return False, message
+
+
+test_ldap_connection.__test__ = False

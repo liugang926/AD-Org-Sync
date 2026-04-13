@@ -26,7 +26,7 @@
         {{ ui.button(t("Reset"), href="/conflicts?clear_filters=1", variant="secondary") }}
         {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost") }}
         {% if show_advanced_navigation %}
-        {{ ui.button(t("Open Mappings"), href="/mappings", variant="ghost") }}
+        {{ ui.button(t("Open Identity Overrides"), href="/mappings", variant="ghost") }}
         {% endif %}
       </div>
     </form>
@@ -77,7 +77,7 @@
       <div class="actions flush-top">
         {{ ui.button(t("Open Job Detail"), href="/jobs/" ~ item.job_id, variant="ghost", size="small") }}
         {% if item.source_id and show_advanced_navigation %}
-        {{ ui.button(t("Search Mappings"), href="/mappings?q=" ~ item.source_id, variant="ghost", size="small") }}
+        {{ ui.button(t("Search Identity Overrides"), href="/mappings?q=" ~ item.source_id, variant="ghost", size="small") }}
         {% endif %}
       </div>
     </div>
@@ -215,7 +215,7 @@
     {% call ui.empty_state(t("No conflicts matched the current filter."), t("This usually means the latest synchronization run is healthy or the current search is too narrow."), "success") %}
       {{ ui.button(t("Open Job Center"), href="/jobs", variant="secondary") }}
       {% if show_advanced_navigation %}
-      {{ ui.button(t("Open Mappings"), href="/mappings", variant="ghost") }}
+      {{ ui.button(t("Open Identity Overrides"), href="/mappings", variant="ghost") }}
       {% endif %}
     {% endcall %}
   {% endcall %}

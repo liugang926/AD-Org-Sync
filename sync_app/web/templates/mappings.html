@@ -17,10 +17,14 @@
   data-mapping-department-empty-label="{{ t('Select a source user first') }}"
   data-mapping-type-to-search-label="{{ t('Type at least 2 characters to search') }}"
 >
-  {% call ui.page_header(t("Mappings"), t("Create manual bindings only when the default identity matching is not enough. Most teams should come here only after a conflict or a special OU placement case appears."), eyebrow=t("Identity"), badge_text=t("Organization Scope"), badge_level="info") %}
+  {% call ui.page_header(t("Identity Overrides"), t("Use this page for manual source-user to AD bindings and per-user department placement overrides after the base configuration is complete."), eyebrow=t("Configuration"), badge_text=t("Organization Scope"), badge_level="info") %}
+    {% if can("config.read") %}
+    {{ ui.button(t("Open Config"), href="/config", variant="secondary", icon="settings-2") }}
+    {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost", icon="waypoints") }}
+    {% endif %}
     <div class="surface-inline">
-      {{ ui.badge(t("Bindings"), "info") }}
-      <span class="muted">{{ t("Manual rules override automatic identity inference.") }}</span>
+      {{ ui.badge(t("Identity Overrides"), "info") }}
+      <span class="muted">{{ t("Manual identity rules override automatic matching and default department placement.") }}</span>
     </div>
   {% endcall %}
 
@@ -105,8 +109,8 @@
     </form>
   {% endcall %}
   {% else %}
-  {% call ui.panel(t("Identity Bindings")) %}
-    <p class="muted">{{ t("Current role can view mappings only.") }}</p>
+  {% call ui.panel(t("Identity Overrides")) %}
+    <p class="muted">{{ t("Current role can view identity overrides only.") }}</p>
   {% endcall %}
   {% endif %}
 
@@ -123,9 +127,12 @@
         {{ ui.button(t("Search"), type="submit") }}
         {{ ui.button(t("Reset"), href="/mappings?clear_filters=1", variant="secondary") }}
         {{ ui.button(t("Export CSV"), href="/mappings/export?q=" ~ (mapping_query or '') ~ "&status=" ~ (mapping_status or 'all'), variant="secondary") }}
+        {% if can("config.read") %}
+        {{ ui.button(t("Open Config"), href="/config", variant="ghost") }}
+        {% endif %}
         {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
         {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost") }}
-        {% if show_advanced_navigation %}
+        {% if can("config.read") %}
         {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost") }}
         {% endif %}
       </div>

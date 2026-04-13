@@ -69,7 +69,7 @@ def register_mapping_routes(
             request,
             "mappings.html",
             page="mappings",
-            title="Mappings",
+            title="Identity Overrides",
             bindings=bindings,
             overrides=overrides,
             mapping_query=query,

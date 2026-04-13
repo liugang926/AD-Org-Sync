@@ -275,7 +275,7 @@ class WebAuthorizationTests(unittest.TestCase):
             mock_wecom.return_value.get_department_list.return_value = []
             response = self._route("/mappings", "GET")(self._request("/mappings"))
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Current role can view mappings only.", self._text(response))
+        self.assertIn("Current role can view identity overrides only.", self._text(response))
 
         response = self._route("/jobs/run", "POST")(
             self._request("/jobs/run", "POST"),
@@ -838,12 +838,14 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(asia_rules[0].direction, "source_to_ad")
         self.assertEqual(len(default_rules), 0)
 
-    def test_config_page_links_to_advanced_account_creation_rules(self):
+    def test_config_page_links_to_identity_overrides_and_advanced_account_creation_rules(self):
         self._login("superadmin")
 
         response = self._route("/config", "GET")(self._request("/config"))
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
+        self.assertIn("Need Manual Identity Binding Or Per-User Placement?", body)
+        self.assertIn('href="/mappings#mapping-create"', body)
         self.assertIn("Need Account Creation Rules Or Department Routing?", body)
         self.assertIn('href="/advanced-sync#account-creation-rules"', body)
         self.assertIn('href="/advanced-sync#department-ou-routing"', body)
@@ -2649,6 +2651,7 @@ class WebAuthorizationTests(unittest.TestCase):
         dashboard_text = self._text(dashboard)
         self.assertIn('action="/ui-mode"', dashboard_text)
         self.assertNotIn('href="/advanced-sync"', dashboard_text)
+        self.assertNotIn('href="/mappings"', dashboard_text)
         self.assertNotIn('href="/organizations"', dashboard_text)
         match = re.search(r'name="csrf_token" value="([^"]+)"', dashboard_text)
         self.assertIsNotNone(match)
@@ -2665,6 +2668,8 @@ class WebAuthorizationTests(unittest.TestCase):
         advanced_dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))
         advanced_text = self._text(advanced_dashboard)
         self.assertIn('href="/advanced-sync"', advanced_text)
+        self.assertIn('href="/mappings"', advanced_text)
+        self.assertIn("Identity Overrides", advanced_text)
         self.assertIn('href="/organizations"', advanced_text)
 
     def test_preflight_run_persists_live_results_on_dashboard(self):

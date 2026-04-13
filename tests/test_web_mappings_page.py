@@ -17,7 +17,7 @@ class WebMappingsPageTemplateTests(unittest.TestCase):
         )
         template = env.get_template("mappings.html")
         rendered = template.render(
-            title="Mappings",
+            title="Identity Overrides",
             page="mappings",
             current_user=SimpleNamespace(username="admin", role="super_admin"),
             app_version="test",
@@ -70,6 +70,7 @@ class WebMappingsPageTemplateTests(unittest.TestCase):
             department_name_map={"2001": "Technical Support"},
         )
 
+        self.assertIn("Identity Overrides", rendered)
         self.assertIn("Identity Binding List", rendered)
         self.assertIn("Source User ID", rendered)
         self.assertIn('id="binding_source_user_id"', rendered)

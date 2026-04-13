@@ -82,12 +82,31 @@
     </ul>
   {% endcall %}
 
-  {% call ui.helper_block(t("Need Account Creation Rules Or Department Routing?"), t("Open Advanced Sync when you need connector-level account naming, duplicate handling, source-branch routing, or explicit source-department to AD OU mapping."), "info", t("Advanced")) %}
-    <div class="actions">
-      {{ ui.button(t("Open Account Creation Rules"), href="/advanced-sync#account-creation-rules", variant="secondary", icon="settings-2") }}
-      {{ ui.button(t("Open Department Routing"), href="/advanced-sync#department-ou-routing", variant="ghost", icon="waypoints") }}
-    </div>
-  {% endcall %}
+  <div class="dense-two-col">
+    {% if can("mappings.read") %}
+    {% call ui.helper_block(t("Need Manual Identity Binding Or Per-User Placement?"), t("Use Identity Overrides when one source user must bind to a specific AD account or land in a different primary department than the default placement strategy."), "info", t("Recommended")) %}
+      <ul class="helper-list">
+        <li>{{ t("Manual source-user to AD bindings are configured on the Identity Overrides page, not inside the base connection form below.") }}</li>
+        <li>{{ t("Per-user primary department overrides also live there, so base placement strategy and exception handling stay separate.") }}</li>
+      </ul>
+      <div class="actions">
+        {{ ui.button(t("Open Identity Overrides"), href="/mappings#mapping-create", variant="secondary", icon="layers") }}
+        {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost", icon="shield-alert") }}
+      </div>
+    {% endcall %}
+    {% endif %}
+
+    {% call ui.helper_block(t("Need Account Creation Rules Or Department Routing?"), t("Open Advanced Sync when you need connector-level account naming, duplicate handling, source-branch routing, or explicit source-department to AD OU mapping."), "info", t("Advanced")) %}
+      <ul class="helper-list">
+        <li>{{ t("Connector-level new-user creation rules stay in Advanced Sync so they do not get mixed into the base organization connection form.") }}</li>
+        <li>{{ t("Attribute mapping, department-to-OU routing, and multi-connector policies are managed there as one advanced layer.") }}</li>
+      </ul>
+      <div class="actions">
+        {{ ui.button(t("Open Account Creation Rules"), href="/advanced-sync#account-creation-rules", variant="secondary", icon="settings-2") }}
+        {{ ui.button(t("Open Department Routing"), href="/advanced-sync#department-ou-routing", variant="ghost", icon="waypoints") }}
+      </div>
+    {% endcall %}
+  </div>
 
   {% if config_change_preview %}
   {% call ui.panel(t("Pending Changes"), t("Preview"), "warning", t("Review the differences below before saving. Confirm to apply them, or keep editing the form underneath."), class_name="card-flat") %}
