@@ -26,6 +26,22 @@
   {% endcall %}
 </div>
 
+<div class="dense-two-col">
+  {% call ui.helper_block(t("Account Creation Rules Live Here"), t("Username generation, duplicate handling, root-unit scope, and disabled-user OU placement are all configured in the connector rule editor below."), "info", t("Recommended")) %}
+    <ul class="helper-list">
+      <li>{{ t("Choose one naming strategy per connector, then define how duplicate usernames should be resolved.") }}</li>
+      <li>{{ t("Use Source Root Unit IDs to decide which source branches should create accounts through this connector.") }}</li>
+      <li>{{ t("Use connector-level disabled-user OU placement when one region or subsidiary needs a separate OU policy.") }}</li>
+    </ul>
+  {% endcall %}
+  {% call ui.helper_block(t("Department Routing Is Separate"), t("Department-to-OU mapping is managed in its own section so account naming rules and OU routing stay understandable."), "warning") %}
+    <ul class="helper-list">
+      <li>{{ t("Connector routing answers which AD connector owns a source branch.") }}</li>
+      <li>{{ t("Department-to-OU mapping answers where users and department groups land inside AD.") }}</li>
+    </ul>
+  {% endcall %}
+</div>
+
 <div class="compact-stats">
   {{ ui.compact_stat(t("Connectors"), connectors|length) }}
   {{ ui.compact_stat(t("Attribute Mappings"), attribute_mappings|length) }}
@@ -193,153 +209,188 @@
     </form>
   {% endcall %}
 
-  {% call ui.panel(t("Connector Definition"), t("Organization Scope"), "info", t("Add connectors only when this organization must route departments into different AD domains or policies.")) %}
-    {% call ui.detail_toggle(t("Add Or Update Connector"), t("Leave override fields blank to inherit from the organization"), open=False) %}
+  <div id="account-creation-rules"></div>
+  {% call ui.panel(t("Account Creation Rules And Connector Routing"), t("Organization Scope"), "info", t("Configure how this organization creates AD accounts: source scope, naming strategy, duplicate handling, connector routing, and connector-level disabled-user OU placement.")) %}
+    {% call ui.detail_toggle(t("Configure Account Creation Rule"), t("Create or update one connector rule. Leave override fields blank to inherit organization-level LDAP settings."), open=(connectors|length == 0)) %}
       <form method="post" action="/advanced-sync/connectors">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div class="form-grid">
-        <div class="form-group">
-          <label for="connector_id">{{ t("Connector ID") }}</label>
-          <input id="connector_id" type="text" name="connector_id" placeholder="asia">
-        </div>
-        <div class="form-group">
-          <label for="connector_name">{{ t("Name") }}</label>
-          <input id="connector_name" type="text" name="name" placeholder="Asia Domain">
-        </div>
-        <div class="form-group">
-          <label for="connector_config_path">{{ t("Legacy Import Path") }}</label>
-          <input id="connector_config_path" type="text" name="config_path" placeholder="config.asia.ini">
-        </div>
-        <div class="form-group">
-          <label for="connector_ldap_server">{{ t("LDAP Server Override") }}</label>
-          <input id="connector_ldap_server" type="text" name="ldap_server" placeholder="dc01.asia.example.local">
-        </div>
-        <div class="form-group">
-          <label for="connector_ldap_domain">{{ t("LDAP Domain Override") }}</label>
-          <input id="connector_ldap_domain" type="text" name="ldap_domain" placeholder="asia.example.local">
-        </div>
-        <div class="form-group">
-          <label for="connector_ldap_username">{{ t("LDAP Username Override") }}</label>
-          <input id="connector_ldap_username" type="text" name="ldap_username" placeholder="ASIA\\administrator">
-        </div>
-        <div class="form-group">
-          <label for="connector_ldap_password">{{ t("LDAP Password Override") }}</label>
-          <input id="connector_ldap_password" type="password" name="ldap_password" placeholder="{{ t('Leave blank to inherit or keep current') }}">
-        </div>
-        <div class="form-group">
-          <label for="connector_ldap_use_ssl">{{ t("Use SSL Override") }}</label>
-          <select id="connector_ldap_use_ssl" name="ldap_use_ssl">
-            <option value="">{{ t("Inherit Organization Setting") }}</option>
-            <option value="true">{{ t("Enabled") }}</option>
-            <option value="false">{{ t("Disabled") }}</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label for="connector_ldap_port">{{ t("LDAP Port Override") }}</label>
-          <input id="connector_ldap_port" type="number" name="ldap_port" placeholder="636">
-        </div>
-        <div class="form-group">
-          <label for="connector_ldap_validate_cert">{{ t("Certificate Validation Override") }}</label>
-          <select id="connector_ldap_validate_cert" name="ldap_validate_cert">
-            <option value="">{{ t("Inherit Organization Setting") }}</option>
-            <option value="true">{{ t("Enabled") }}</option>
-            <option value="false">{{ t("Disabled") }}</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label for="connector_ldap_ca_cert_path">{{ t("CA Certificate Path Override") }}</label>
-          <input id="connector_ldap_ca_cert_path" type="text" name="ldap_ca_cert_path" placeholder="C:\\certs\\asia-ca.pem">
-        </div>
-        <div class="form-group">
-          <label for="connector_default_password">{{ t("Default Password Override") }}</label>
-          <input id="connector_default_password" type="password" name="default_password" placeholder="{{ t('Leave blank to inherit or keep current') }}">
-        </div>
-        <div class="form-group">
-          <label for="connector_force_change_password">{{ t("Force Password Change Override") }}</label>
-          <select id="connector_force_change_password" name="force_change_password">
-            <option value="">{{ t("Inherit Organization Setting") }}</option>
-            <option value="true">{{ t("Enabled") }}</option>
-            <option value="false">{{ t("Disabled") }}</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label for="connector_password_complexity">{{ t("Password Complexity Override") }}</label>
-          <select id="connector_password_complexity" name="password_complexity">
-            <option value="">{{ t("Inherit Organization Setting") }}</option>
-            <option value="strong">{{ t("Strong") }}</option>
-            <option value="medium">{{ t("Medium") }}</option>
-            <option value="basic">{{ t("Basic") }}</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label for="root_department_ids">{{ t("Source Root Unit IDs") }}</label>
-          <input id="root_department_ids" type="text" name="root_department_ids" placeholder="2, 8">
-        </div>
-        <div class="form-group">
-          <label for="username_template">{{ t("Username Template") }}</label>
-          <input id="username_template" type="text" name="username_template" placeholder="{pinyin_initials}{employee_id}">
-          <div class="muted">{{ t("Used only when Custom Template is selected. Example: {family_name_pinyin}{given_initials}{employee_id}") }}</div>
-        </div>
-        <div class="form-group">
-          <label for="username_strategy">{{ t("Username Strategy") }}</label>
-          <select id="username_strategy" name="username_strategy">
-            {% for value, label in username_strategy_options %}
-            <option value="{{ value }}">{{ t(label) }}</option>
-            {% endfor %}
-          </select>
-          <div class="muted">{{ t("Choose a standard enterprise naming pattern before falling back to a custom template.") }}</div>
-        </div>
-        <div class="form-group">
-          <label for="username_collision_policy">{{ t("Same-Name Collision Policy") }}</label>
-          <select id="username_collision_policy" name="username_collision_policy">
-            {% for value, label in username_collision_policy_options %}
-            <option value="{{ value }}">{{ t(label) }}</option>
-            {% endfor %}
-          </select>
-          <div class="muted">{{ t("The policy applies only when the generated base account collides with another in-scope source user, an existing AD account, or a protected account.") }}</div>
-        </div>
-        <div class="form-group">
-          <label for="username_collision_template">{{ t("Collision Template") }}</label>
-          <input id="username_collision_template" type="text" name="username_collision_template" placeholder="{base}{counter2}">
-          <div class="muted">{{ t("Use only with Custom Collision Template. Available tokens: {base}, {counter}, {counter2}, {counter3}, {employee_id}, {userid}.") }}</div>
-        </div>
-        <div class="form-group">
-          <label for="disabled_users_ou">{{ t("Disabled Users OU") }}</label>
-          <input id="disabled_users_ou" type="text" name="disabled_users_ou" value="Disabled Users">
-        </div>
-        <div class="form-group">
-          <label for="connector_group_type">{{ t("Managed Group Type") }}</label>
-          <select id="connector_group_type" name="group_type">
-            {% for value, label in group_type_options %}
-            <option value="{{ value }}">{{ t(label) }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="form-group">
-          <label for="group_mail_domain">{{ t("Group Mail Domain") }}</label>
-          <input id="group_mail_domain" type="text" name="group_mail_domain" placeholder="groups.example.com">
-        </div>
-        <div class="form-group">
-          <label for="connector_custom_group_ou_path">{{ t("Custom Group OU Path") }}</label>
-          <input id="connector_custom_group_ou_path" type="text" name="custom_group_ou_path" placeholder="Managed Groups/Regional">
-        </div>
-        <div class="form-group">
-          <label for="managed_tag_ids">{{ t("Managed Tag IDs") }}</label>
-          <input id="managed_tag_ids" type="text" name="managed_tag_ids" placeholder="1001, 1002">
-        </div>
-        <div class="form-group">
-          <label for="managed_external_chat_ids">{{ t("Managed External Chat IDs") }}</label>
-          <input id="managed_external_chat_ids" type="text" name="managed_external_chat_ids" placeholder="chat_01, chat_02">
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="inline-checkbox">
-          <input type="checkbox" name="is_enabled" value="1" checked>
-          {{ t("Enabled") }}
-        </label>
+        <div class="page-stack tight">
+          <section class="subcard stack-tight">
+            <div class="section-header">
+              <div class="section-header__copy">
+                <h3 class="section-header__title">{{ t("Rule Identity And Source Scope") }}</h3>
+                <p class="section-header__description">{{ t("Define which source branches this rule owns before you tune naming or LDAP overrides.") }}</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="connector_id">{{ t("Connector ID") }}</label>
+                <input id="connector_id" type="text" name="connector_id" placeholder="asia">
+              </div>
+              <div class="form-group">
+                <label for="connector_name">{{ t("Name") }}</label>
+                <input id="connector_name" type="text" name="name" placeholder="Asia Domain">
+              </div>
+              <div class="form-group">
+                <label for="root_department_ids">{{ t("Source Root Unit IDs") }}</label>
+                <input id="root_department_ids" type="text" name="root_department_ids" placeholder="2, 8">
+                <div class="muted">{{ t("These source roots decide which users and departments create accounts through this connector.") }}</div>
+              </div>
+              <div class="form-group">
+                <label for="disabled_users_ou">{{ t("Disabled Users OU") }}</label>
+                <input id="disabled_users_ou" type="text" name="disabled_users_ou" value="Disabled Users">
+                <div class="muted">{{ t("Use connector-level disabled-user placement when one region needs a separate OU.") }}</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="subcard stack-tight">
+            <div class="section-header">
+              <div class="section-header__copy">
+                <h3 class="section-header__title">{{ t("Account Creation And Duplicate Handling") }}</h3>
+                <p class="section-header__description">{{ t("Choose how AD usernames are created, then decide how duplicates should be resolved when the generated base account collides.") }}</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="username_strategy">{{ t("Username Strategy") }}</label>
+                <select id="username_strategy" name="username_strategy">
+                  {% for value, label in username_strategy_options %}
+                  <option value="{{ value }}">{{ t(label) }}</option>
+                  {% endfor %}
+                </select>
+                <div class="muted">{{ t("Choose a standard enterprise naming pattern before falling back to a custom template.") }}</div>
+              </div>
+              <div class="form-group">
+                <label for="username_template">{{ t("Username Template") }}</label>
+                <input id="username_template" type="text" name="username_template" placeholder="{pinyin_initials}{employee_id}">
+                <div class="muted">{{ t("Used only when Custom Template is selected. Example: {family_name_pinyin}{given_initials}{employee_id}") }}</div>
+              </div>
+              <div class="form-group">
+                <label for="username_collision_policy">{{ t("Same-Name Collision Policy") }}</label>
+                <select id="username_collision_policy" name="username_collision_policy">
+                  {% for value, label in username_collision_policy_options %}
+                  <option value="{{ value }}">{{ t(label) }}</option>
+                  {% endfor %}
+                </select>
+                <div class="muted">{{ t("The policy applies only when the generated base account collides with another in-scope source user, an existing AD account, or a protected account.") }}</div>
+              </div>
+              <div class="form-group">
+                <label for="username_collision_template">{{ t("Collision Template") }}</label>
+                <input id="username_collision_template" type="text" name="username_collision_template" placeholder="{base}{counter2}">
+                <div class="muted">{{ t("Use only with Custom Collision Template. Available tokens: {base}, {counter}, {counter2}, {counter3}, {employee_id}, {userid}.") }}</div>
+              </div>
+            </div>
+          </section>
+
+          {% call ui.detail_toggle(t("Directory Override Details"), t("Open this only when the connector should override the organization-level LDAP connection or password policy."), open=False) %}
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="connector_config_path">{{ t("Legacy Import Path") }}</label>
+                <input id="connector_config_path" type="text" name="config_path" placeholder="config.asia.ini">
+              </div>
+              <div class="form-group">
+                <label for="connector_ldap_server">{{ t("LDAP Server Override") }}</label>
+                <input id="connector_ldap_server" type="text" name="ldap_server" placeholder="dc01.asia.example.local">
+              </div>
+              <div class="form-group">
+                <label for="connector_ldap_domain">{{ t("LDAP Domain Override") }}</label>
+                <input id="connector_ldap_domain" type="text" name="ldap_domain" placeholder="asia.example.local">
+              </div>
+              <div class="form-group">
+                <label for="connector_ldap_username">{{ t("LDAP Username Override") }}</label>
+                <input id="connector_ldap_username" type="text" name="ldap_username" placeholder="ASIA\\administrator">
+              </div>
+              <div class="form-group">
+                <label for="connector_ldap_password">{{ t("LDAP Password Override") }}</label>
+                <input id="connector_ldap_password" type="password" name="ldap_password" placeholder="{{ t('Leave blank to inherit or keep current') }}">
+              </div>
+              <div class="form-group">
+                <label for="connector_ldap_use_ssl">{{ t("Use SSL Override") }}</label>
+                <select id="connector_ldap_use_ssl" name="ldap_use_ssl">
+                  <option value="">{{ t("Inherit Organization Setting") }}</option>
+                  <option value="true">{{ t("Enabled") }}</option>
+                  <option value="false">{{ t("Disabled") }}</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="connector_ldap_port">{{ t("LDAP Port Override") }}</label>
+                <input id="connector_ldap_port" type="number" name="ldap_port" placeholder="636">
+              </div>
+              <div class="form-group">
+                <label for="connector_ldap_validate_cert">{{ t("Certificate Validation Override") }}</label>
+                <select id="connector_ldap_validate_cert" name="ldap_validate_cert">
+                  <option value="">{{ t("Inherit Organization Setting") }}</option>
+                  <option value="true">{{ t("Enabled") }}</option>
+                  <option value="false">{{ t("Disabled") }}</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="connector_ldap_ca_cert_path">{{ t("CA Certificate Path Override") }}</label>
+                <input id="connector_ldap_ca_cert_path" type="text" name="ldap_ca_cert_path" placeholder="C:\\certs\\asia-ca.pem">
+              </div>
+              <div class="form-group">
+                <label for="connector_default_password">{{ t("Default Password Override") }}</label>
+                <input id="connector_default_password" type="password" name="default_password" placeholder="{{ t('Leave blank to inherit or keep current') }}">
+              </div>
+              <div class="form-group">
+                <label for="connector_force_change_password">{{ t("Force Password Change Override") }}</label>
+                <select id="connector_force_change_password" name="force_change_password">
+                  <option value="">{{ t("Inherit Organization Setting") }}</option>
+                  <option value="true">{{ t("Enabled") }}</option>
+                  <option value="false">{{ t("Disabled") }}</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="connector_password_complexity">{{ t("Password Complexity Override") }}</label>
+                <select id="connector_password_complexity" name="password_complexity">
+                  <option value="">{{ t("Inherit Organization Setting") }}</option>
+                  <option value="strong">{{ t("Strong") }}</option>
+                  <option value="medium">{{ t("Medium") }}</option>
+                  <option value="basic">{{ t("Basic") }}</option>
+                </select>
+              </div>
+            </div>
+          {% endcall %}
+
+          {% call ui.detail_toggle(t("Group And Collaboration Overrides"), t("Use these only when this connector should create managed groups differently from the organization default."), open=False) %}
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="connector_group_type">{{ t("Managed Group Type") }}</label>
+                <select id="connector_group_type" name="group_type">
+                  {% for value, label in group_type_options %}
+                  <option value="{{ value }}">{{ t(label) }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="group_mail_domain">{{ t("Group Mail Domain") }}</label>
+                <input id="group_mail_domain" type="text" name="group_mail_domain" placeholder="groups.example.com">
+              </div>
+              <div class="form-group">
+                <label for="connector_custom_group_ou_path">{{ t("Custom Group OU Path") }}</label>
+                <input id="connector_custom_group_ou_path" type="text" name="custom_group_ou_path" placeholder="Managed Groups/Regional">
+              </div>
+              <div class="form-group">
+                <label for="managed_tag_ids">{{ t("Managed Tag IDs") }}</label>
+                <input id="managed_tag_ids" type="text" name="managed_tag_ids" placeholder="1001, 1002">
+              </div>
+              <div class="form-group">
+                <label for="managed_external_chat_ids">{{ t("Managed External Chat IDs") }}</label>
+                <input id="managed_external_chat_ids" type="text" name="managed_external_chat_ids" placeholder="chat_01, chat_02">
+              </div>
+            </div>
+          {% endcall %}
+
+          <div class="form-group">
+            <label class="inline-checkbox">
+              <input type="checkbox" name="is_enabled" value="1" checked>
+              {{ t("Enabled") }}
+            </label>
+          </div>
         </div>
         <div class="actions">
-          {{ ui.button(t("Save Connector"), type="submit") }}
+          {{ ui.button(t("Save Account Creation Rule"), type="submit") }}
         </div>
       </form>
     {% endcall %}
@@ -481,6 +532,7 @@
   {% endcall %}
 </div>
 
+<div id="department-ou-routing"></div>
 <div class="grid cols-2">
   {% call ui.panel(t("Department To AD OU Mapping"), t("Organization Scope"), "info", t("Use this when a source department subtree must land under a different AD OU root than the default connector path.")) %}
     {% call ui.detail_toggle(t("Add Department Routing"), t("Best for regional business units, subsidiaries, shared service centers, contractors, or merged organizations."), open=False) %}

@@ -1152,6 +1152,49 @@ form.inline { display: inline-flex; margin: 0; }
   accent-color: var(--primary);
 }
 
+.mapping-select-option {
+  display: grid;
+  gap: 4px;
+  padding-left: calc(var(--mapping-level, 0) * 14px);
+}
+
+.mapping-select-option__title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.mapping-select-option__detail,
+.mapping-select-option__meta,
+.mapping-select-item,
+.mapping-select-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.mapping-select-item {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mapping-select-empty {
+  padding: 10px 12px;
+}
+
+.ts-dropdown .option .mapping-select-option {
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.ts-wrapper.single .ts-control .mapping-select-item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .button.sm,
 button.sm {
   min-height: 36px;

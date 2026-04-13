@@ -229,6 +229,44 @@ class SourceDirectoryProvider(ABC):
     def get_user_detail(self, user_id: str) -> dict[str, Any]:
         raise NotImplementedError
 
+    def search_users(self, query: str, *, limit: int = 20) -> list[SourceDirectoryUser]:
+        normalized_query = str(query or "").strip().lower()
+        if not normalized_query:
+            return []
+        seen_users: dict[str, SourceDirectoryUser] = {}
+        departments = self.list_departments()
+        for department in departments:
+            try:
+                department_users = self.list_department_users(int(department.department_id))
+            except Exception:
+                continue
+            for user in department_users:
+                user_id = str(user.source_user_id or "").strip()
+                if not user_id:
+                    continue
+                existing = seen_users.get(user_id)
+                if existing is None:
+                    seen_users[user_id] = user
+                else:
+                    existing.merge_payload(user.raw_payload)
+                    merged_departments = {int(value) for value in existing.departments if str(value).strip()}
+                    merged_departments.update(int(value) for value in user.departments if str(value).strip())
+                    existing.departments = sorted(merged_departments)
+        matches: list[SourceDirectoryUser] = []
+        for user in seen_users.values():
+            haystack = " ".join(
+                [
+                    str(user.source_user_id or ""),
+                    str(user.userid or ""),
+                    str(user.name or ""),
+                    str(user.email or ""),
+                ]
+            ).lower()
+            if normalized_query in haystack:
+                matches.append(user)
+        matches.sort(key=lambda item: (str(item.name or "").lower(), str(item.source_user_id or "").lower()))
+        return matches[: max(int(limit or 20), 1)]
+
     def update_user(self, user_id: str, updates: dict[str, Any]) -> bool:
         raise NotImplementedError(f"{self.provider_id} does not support user updates")
 

@@ -3,7 +3,20 @@
 {% import "components/ui.html" as ui %}
 
 {% block content %}
-<div class="page-stack">
+<div
+  class="page-stack"
+  data-mappings-page
+  data-source-user-search-url="/api/metadata/source-users"
+  data-target-user-search-url="/api/metadata/ad-users"
+  data-source-user-departments-url="/api/metadata/source-user-departments"
+  data-mapping-loading-label="{{ t('Loading options...') }}"
+  data-mapping-no-results-label="{{ t('No matching records found') }}"
+  data-mapping-search-source-placeholder="{{ t('Search source user name or ID') }}"
+  data-mapping-search-target-placeholder="{{ t('Search AD username, display name, or mail') }}"
+  data-mapping-department-placeholder="{{ t('Select a primary department from this user') }}"
+  data-mapping-department-empty-label="{{ t('Select a source user first') }}"
+  data-mapping-type-to-search-label="{{ t('Type at least 2 characters to search') }}"
+>
   {% call ui.page_header(t("Mappings"), t("Create manual bindings only when the default identity matching is not enough. Most teams should come here only after a conflict or a special OU placement case appears."), eyebrow=t("Identity"), badge_text=t("Organization Scope"), badge_level="info") %}
     <div class="surface-inline">
       {{ ui.badge(t("Bindings"), "info") }}
@@ -13,13 +26,33 @@
 
   {% if can("mappings.write") %}
   <div class="grid cols-2" id="mapping-create">
-    {% call ui.panel(t("Identity Binding"), description=t("Create a fixed mapping between a source user ID and an AD `sAMAccountName`.")) %}
+    {% call ui.panel(t("Identity Binding"), description=t("Choose a real source user and a real AD account. The selector shows both display names and stable IDs so you do not need to type raw identifiers.")) %}
       <form method="post" action="/mappings/bind">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-grid">
-          {{ forms.input("source_user_id", t("Source User ID"), required=True) }}
-          {{ forms.input("ad_username", t("AD Username"), required=True) }}
-          {{ forms.input("notes", t("Notes"), class_name="field-span-full") }}
+          {{ forms.select(
+            "source_user_id",
+            t("Source User"),
+            [("", t("Search and choose a source user"))],
+            selected_value="",
+            help_text=t("Search by source display name or source user ID. The selected option will show both name and ID."),
+            required=True,
+            class_name="field-span-full",
+            id="binding_source_user_id",
+            attrs='data-mapping-source-user-select data-placeholder="' ~ t("Search and choose a source user") ~ '"'
+          ) }}
+          {{ forms.select(
+            "ad_username",
+            t("AD User"),
+            [("", t("Search and choose an AD user"))],
+            selected_value="",
+            help_text=t("Search by AD username, display name, or email. The selected option will show both account name and user details."),
+            required=True,
+            class_name="field-span-full",
+            id="binding_ad_username",
+            attrs='data-mapping-target-user-select data-placeholder="' ~ t("Search and choose an AD user") ~ '"'
+          ) }}
+          {{ forms.input("notes", t("Notes"), class_name="field-span-full", id="binding_notes") }}
         </div>
         <div class="actions">
           {{ ui.button(t("Save Binding"), type="submit") }}
@@ -27,12 +60,32 @@
       </form>
     {% endcall %}
 
-    {% call ui.panel(t("Primary Department Override"), description=t("Explicitly control which department should be used as the AD OU placement target for a multi-department user.")) %}
+    {% call ui.panel(t("Primary Department Override"), description=t("Choose the source user first, then select one of that user's actual departments as the AD OU placement target.")) %}
       <form method="post" action="/mappings/override">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-grid">
-          {{ forms.input("source_user_id", t("Source User ID"), required=True, id="override_source_user_id") }}
-          {{ forms.input("primary_department_id", t("Primary Department ID"), required=True) }}
+          {{ forms.select(
+            "source_user_id",
+            t("Source User"),
+            [("", t("Search and choose a source user"))],
+            selected_value="",
+            help_text=t("After you choose the source user, the primary department list below will load only that user's own departments."),
+            required=True,
+            class_name="field-span-full",
+            id="override_source_user_id",
+            attrs='data-mapping-source-user-select data-mapping-department-target="override_primary_department_id" data-placeholder="' ~ t("Search and choose a source user") ~ '"'
+          ) }}
+          {{ forms.select(
+            "primary_department_id",
+            t("Primary Department"),
+            [("", t("Select a source user first"))],
+            selected_value="",
+            help_text=t("The selector will show department name, path, and source department ID."),
+            required=True,
+            class_name="field-span-full",
+            id="override_primary_department_id",
+            attrs='data-mapping-source-department-select data-source-user-select="override_source_user_id" disabled'
+          ) }}
           {{ forms.input("notes", t("Notes"), class_name="field-span-full", id="override_notes") }}
         </div>
         <div class="actions">

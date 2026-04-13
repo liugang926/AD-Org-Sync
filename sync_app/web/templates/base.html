@@ -1,6 +1,6 @@
 {% import "components/ui.html" as ui %}
 {% set is_lightweight_shell = lightweight_shell|default(False) %}
-{% set load_tom_select_assets = (not is_lightweight_shell) and page == 'advanced-sync' %}
+{% set load_tom_select_assets = (not is_lightweight_shell) and page in ['advanced-sync', 'mappings'] %}
 <!DOCTYPE html>
 <html lang="{{ ui_language if ui_language == 'zh-CN' else 'en' }}">
 <head>

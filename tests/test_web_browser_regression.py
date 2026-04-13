@@ -198,6 +198,8 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(select_target_button.is_visible())
         self.assertTrue(self.page.get_by_role("button", name="Save Configuration").is_visible())
         self.assertTrue(self.page.get_by_role("button", name="Preview Changes").is_visible())
+        self.assertTrue(self.page.get_by_role("link", name="Open Account Creation Rules").is_visible())
+        self.assertTrue(self.page.get_by_role("link", name="Open Department Routing").is_visible())
         browse_source_button.click()
         self.page.locator("#group-source_root_unit_ids [data-config-source-browser]").wait_for(state="visible")
         self.assertTrue(self.page.locator("#group-source_root_unit_ids [data-config-source-browser]").is_visible())
@@ -210,6 +212,20 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(self.page.get_by_role("button", name="Select Disabled Users OU").is_visible())
         self.assertTrue(self.page.get_by_role("button", name="Select Custom Group OU").is_visible())
         self._capture("config-page.png")
+
+    def test_advanced_sync_page_surfaces_account_creation_rules_as_first_class_section(self):
+        self._login()
+        self.page.goto(f"{self.base_url}/advanced-sync", wait_until="networkidle")
+        self.assertEqual(self.page.locator("#account-creation-rules").count(), 1)
+        self.assertIn("Account Creation Rules And Connector Routing", self.page.locator("body").inner_text())
+        toggle = self.page.locator("summary").filter(has_text="Configure Account Creation Rule").first
+        self.assertTrue(toggle.is_visible())
+        if not self.page.locator("#username_collision_policy").is_visible():
+            toggle.click()
+        self.page.locator("#username_collision_policy").wait_for(state="visible")
+        self.assertTrue(self.page.locator("#username_collision_policy").is_visible())
+        self.assertTrue(self.page.locator("#root_department_ids").is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="Save Account Creation Rule").is_visible())
 
     def test_config_source_picker_loads_and_selects_inside_same_field_frame(self):
         self._login()
@@ -284,6 +300,20 @@ class WebBrowserRegressionTests(unittest.TestCase):
         for height in heights[1:]:
             self.assertLessEqual(abs(first_height - float(height)), 6.0)
         self._capture("jobs-page.png")
+
+    def test_mappings_page_uses_search_selectors_instead_of_manual_ids(self):
+        self._login()
+
+        self.page.goto(f"{self.base_url}/mappings", wait_until="networkidle")
+        self.assertTrue(self.page.locator("#group-binding_source_user_id .ts-wrapper").is_visible())
+        self.assertTrue(self.page.locator("#group-binding_ad_username .ts-wrapper").is_visible())
+        self.assertTrue(self.page.locator("#group-override_source_user_id .ts-wrapper").is_visible())
+        self.assertTrue(self.page.locator("#group-override_primary_department_id .ts-wrapper").is_visible())
+        self.assertEqual(self.page.locator('input[name="source_user_id"]').count(), 0)
+        self.assertIn("Search and choose a source user", self.page.locator("#group-binding_source_user_id").inner_text())
+        self.assertIn("Search and choose an AD user", self.page.locator("#group-binding_ad_username").inner_text())
+        self.assertIn("Select a source user first", self.page.locator("#group-override_primary_department_id").inner_text())
+        self._capture("mappings-page-selectors.png")
 
 
 if __name__ == "__main__":

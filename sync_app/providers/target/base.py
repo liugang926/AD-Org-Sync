@@ -45,6 +45,10 @@ class TargetDirectoryProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def search_users(self, query: str, *, limit: int = 20) -> list[Any]:
+        raise NotImplementedError
+
+    @abstractmethod
     def find_parent_groups_for_member(self, member_dn: str) -> list[Any]:
         raise NotImplementedError
 
@@ -140,3 +144,6 @@ class TargetDirectoryProvider(ABC):
     @abstractmethod
     def disable_user(self, username: str) -> bool:
         raise NotImplementedError
+
+    def close(self) -> None:
+        return None

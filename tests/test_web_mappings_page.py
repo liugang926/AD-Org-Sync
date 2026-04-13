@@ -72,7 +72,10 @@ class WebMappingsPageTemplateTests(unittest.TestCase):
 
         self.assertIn("Identity Binding List", rendered)
         self.assertIn("Source User ID", rendered)
-        self.assertIn('name="source_user_id"', rendered)
+        self.assertIn('id="binding_source_user_id"', rendered)
+        self.assertIn('data-mapping-source-user-select', rendered)
+        self.assertIn('data-mapping-target-user-select', rendered)
+        self.assertIn('data-mapping-source-department-select', rendered)
         self.assertIn("page 1 / 1", rendered)
         self.assertIn("Technical Support", rendered)
         self.assertIn("alice.ad", rendered)

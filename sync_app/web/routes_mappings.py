@@ -22,6 +22,8 @@ def register_mapping_routes(
     render: Callable[..., Any],
     require_capability: Callable[[Request, str], Any],
     resolve_remembered_filters: Callable[..., dict[str, Any]],
+    source_user_exists_in_source_provider: Callable[[Request, str], tuple[bool, str | None]],
+    source_user_has_department: Callable[[Request, str, str], tuple[bool, str | None]],
     stream_csv: Callable[..., Any],
     to_bool: Callable[[str | None, bool], bool],
     validate_binding_target: Callable[[Request, str, str], str | None],
@@ -162,6 +164,11 @@ def register_mapping_routes(
         ad_username = ad_username.strip()
         if not source_user_id or not ad_username:
             flash(request, "error", "Source user ID and AD username are required")
+            return RedirectResponse(url="/mappings", status_code=303)
+
+        source_exists, source_error = source_user_exists_in_source_provider(request, source_user_id)
+        if not source_exists:
+            flash(request, "error", source_error or "Source user validation failed")
             return RedirectResponse(url="/mappings", status_code=303)
 
         conflict_message = validate_binding_target(request, source_user_id, ad_username)
@@ -320,9 +327,23 @@ def register_mapping_routes(
             flash(request, "error", "Source user ID and primary department ID are required")
             return RedirectResponse(url="/mappings", status_code=303)
 
+        source_exists, source_error = source_user_exists_in_source_provider(request, source_user_id)
+        if not source_exists:
+            flash(request, "error", source_error or "Source user validation failed")
+            return RedirectResponse(url="/mappings", status_code=303)
+
         department_exists, department_error = department_exists_in_source_provider(request, primary_department_id)
         if not department_exists:
             flash(request, "error", department_error or "Primary department validation failed")
+            return RedirectResponse(url="/mappings", status_code=303)
+
+        department_belongs_to_user, override_error = source_user_has_department(
+            request,
+            source_user_id,
+            primary_department_id,
+        )
+        if not department_belongs_to_user:
+            flash(request, "error", override_error or "Selected department does not belong to the source user")
             return RedirectResponse(url="/mappings", status_code=303)
 
         current_org = get_current_org(request)

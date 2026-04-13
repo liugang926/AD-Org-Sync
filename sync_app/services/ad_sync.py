@@ -1186,6 +1186,54 @@ class ADSyncLDAPS:
         except Exception as e:
             self.logger.error(f"获取AD用户列表失败: {str(e)}")
             return []
+
+    def search_users(self, query: str, *, limit: int = 20) -> List[DirectoryUserRecord]:
+        """按账号、显示名、邮件或 UPN 搜索 AD 用户"""
+        normalized_query = str(query or "").strip()
+        if not normalized_query:
+            return []
+        try:
+            safe_query = escape_filter_chars(normalized_query)
+            search_filter = (
+                "(&"
+                "(objectCategory=person)"
+                "(objectClass=user)"
+                "(!(sAMAccountName=*$))"
+                "(|"
+                f"(sAMAccountName=*{safe_query}*)"
+                f"(displayName=*{safe_query}*)"
+                f"(mail=*{safe_query}*)"
+                f"(userPrincipalName=*{safe_query}*)"
+                "))"
+            )
+            self.connection.search(
+                self.base_dn,
+                search_filter,
+                attributes=[
+                    'sAMAccountName',
+                    'displayName',
+                    'mail',
+                    'userPrincipalName',
+                    'distinguishedName',
+                ],
+                size_limit=max(int(limit or 20), 1),
+            )
+            results: List[DirectoryUserRecord] = []
+            for entry in self.connection.entries:
+                payload = json.loads(entry.entry_to_json())
+                record = DirectoryUserRecord.from_ldap_json(payload)
+                if record.username:
+                    results.append(record)
+            results.sort(
+                key=lambda item: (
+                    str(item.display_name or item.username or '').lower(),
+                    str(item.username or '').lower(),
+                )
+            )
+            return results[: max(int(limit or 20), 1)]
+        except Exception as exc:
+            self.logger.error(f"搜索AD用户失败 {normalized_query}: {str(exc)}")
+            return []
     
     def is_user_active(self, username: str) -> bool:
         """检查用户是否处于启用状态"""

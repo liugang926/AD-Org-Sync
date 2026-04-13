@@ -584,6 +584,7 @@ def create_app(
         to_bool=_to_bool,
         validate_config_fn=validate_config,
         build_source_provider_fn=lambda *args, **kwargs: build_source_provider(*args, **kwargs),
+        build_target_provider_fn=lambda *args, **kwargs: build_target_provider(*args, **kwargs),
         get_source_provider_display_name_fn=lambda provider_id: get_source_provider_display_name(provider_id),
         is_protected_ad_account_name_fn=is_protected_ad_account_name,
         recommend_conflict_resolution_fn=recommend_conflict_resolution,
@@ -598,6 +599,25 @@ def create_app(
 
     def load_department_name_map(request: Request) -> dict[str, str]:
         return sync_support.load_department_name_map(request)
+
+    def search_source_users(request: Request, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        return sync_support.search_source_users(request, query, limit=limit)
+
+    def list_source_user_departments(request: Request, source_user_id: str) -> list[dict[str, Any]]:
+        return sync_support.list_source_user_departments(request, source_user_id)
+
+    def search_target_users(request: Request, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        return sync_support.search_target_users(request, query, limit=limit)
+
+    def source_user_exists_in_source_provider(request: Request, source_user_id: str) -> tuple[bool, Optional[str]]:
+        return sync_support.source_user_exists_in_source_provider(request, source_user_id)
+
+    def source_user_has_department(
+        request: Request,
+        source_user_id: str,
+        department_id: str,
+    ) -> tuple[bool, Optional[str]]:
+        return sync_support.source_user_has_department(request, source_user_id, department_id)
 
     def parse_bulk_exception_rules(raw_text: str) -> tuple[list[dict[str, Any]], list[str]]:
         return sync_support.parse_bulk_exception_rules(raw_text)
@@ -774,6 +794,9 @@ def create_app(
 
     register_metadata_routes(
         app,
+        list_source_user_departments=list_source_user_departments,
+        search_source_users=search_source_users,
+        search_target_users=search_target_users,
         require_capability=require_capability,
         org_config_repo=app.state.org_config_repo,
     )
@@ -825,6 +848,8 @@ def create_app(
         render=render,
         require_capability=require_capability,
         resolve_remembered_filters=resolve_remembered_filters,
+        source_user_exists_in_source_provider=source_user_exists_in_source_provider,
+        source_user_has_department=source_user_has_department,
         stream_csv=stream_csv,
         to_bool=_to_bool,
         validate_binding_target=validate_binding_target,

@@ -38,6 +38,9 @@ class ADLDAPSTargetProvider(TargetDirectoryProvider):
     def get_user_details(self, username: str) -> dict[str, Any]:
         return self.client.get_user_details(username)
 
+    def search_users(self, query: str, *, limit: int = 20):
+        return self.client.search_users(query, limit=limit)
+
     def find_parent_groups_for_member(self, member_dn: str):
         return self.client.find_parent_groups_for_member(member_dn)
 
@@ -166,6 +169,11 @@ class ADLDAPSTargetProvider(TargetDirectoryProvider):
 
     def disable_user(self, username: str) -> bool:
         return bool(self.client.disable_user(username))
+
+    def close(self) -> None:
+        close_fn = getattr(self.client, "close", None)
+        if callable(close_fn):
+            close_fn()
 
 
 def build_target_provider(

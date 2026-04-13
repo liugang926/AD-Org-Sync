@@ -611,6 +611,103 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIsNone(self.app.state.user_binding_repo.get_binding_record_by_source_user_id("alice"))
         self.assertIn("system-protected", self.session["_flash"]["message"])
 
+    def test_mappings_page_uses_search_selectors_for_source_and_target_objects(self):
+        self._login("superadmin")
+
+        response = self._route("/mappings", "GET")(self._request("/mappings"))
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn('data-mappings-page', body)
+        self.assertIn('data-mapping-source-user-select', body)
+        self.assertIn('data-mapping-target-user-select', body)
+        self.assertIn('data-mapping-source-department-select', body)
+        self.assertIn("Search and choose a source user", body)
+        self.assertIn("Search and choose an AD user", body)
+
+    def test_mappings_metadata_endpoints_return_source_target_options(self):
+        self._login("superadmin")
+
+        with patch(
+            "sync_app.web.sync_support.SyncSupport.search_source_users",
+            return_value=[{"id": "alice", "name": "Alice Zhang", "email": "alice@example.com", "departments": ["1001"]}],
+        ), patch(
+            "sync_app.web.sync_support.SyncSupport.search_target_users",
+            return_value=[{"id": "alice.ad", "name": "Alice Zhang", "mail": "alice.ad@example.com", "dn": "CN=Alice,DC=example,DC=local"}],
+        ), patch(
+            "sync_app.web.sync_support.SyncSupport.list_source_user_departments",
+            return_value=[{"id": "1001", "name": "Headquarters", "path_display": "HQ / Headquarters", "level": 1}],
+        ):
+            source_response = self._route("/api/metadata/source-users", "GET")(
+                self._request("/api/metadata/source-users", query={"q": "alice"})
+            )
+            target_response = self._route("/api/metadata/ad-users", "GET")(
+                self._request("/api/metadata/ad-users", query={"q": "alice"})
+            )
+            department_response = self._route("/api/metadata/source-user-departments", "GET")(
+                self._request("/api/metadata/source-user-departments", query={"user_id": "alice"})
+            )
+
+        self.assertEqual(source_response.status_code, 200)
+        self.assertEqual(target_response.status_code, 200)
+        self.assertEqual(department_response.status_code, 200)
+        self.assertEqual(json.loads(self._text(source_response))["options"][0]["id"], "alice")
+        self.assertEqual(json.loads(self._text(target_response))["options"][0]["id"], "alice.ad")
+        self.assertEqual(json.loads(self._text(department_response))["options"][0]["id"], "1001")
+
+    def test_super_admin_cannot_bind_nonexistent_source_user(self):
+        self._login("superadmin")
+
+        response = self._route("/mappings", "GET")(self._request("/mappings"))
+        self.assertEqual(response.status_code, 200)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(response))
+        self.assertIsNotNone(match)
+
+        with patch(
+            "sync_app.web.sync_support.SyncSupport.source_user_exists_in_source_provider",
+            return_value=(False, "Source user ghost does not exist in the configured source directory"),
+        ):
+            response = self._route("/mappings/bind", "POST")(
+                self._request("/mappings/bind", "POST"),
+                csrf_token=match.group(1),
+                source_user_id="ghost",
+                ad_username="alice.ad",
+                notes="invalid source",
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIsNone(self.app.state.user_binding_repo.get_binding_record_by_source_user_id("ghost"))
+        self.assertIn("does not exist", self.session["_flash"]["message"])
+
+    def test_super_admin_cannot_save_department_override_outside_selected_user_scope(self):
+        self._login("superadmin")
+
+        response = self._route("/mappings", "GET")(self._request("/mappings"))
+        self.assertEqual(response.status_code, 200)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(response))
+        self.assertIsNotNone(match)
+
+        with patch(
+            "sync_app.web.sync_support.SyncSupport.source_user_exists_in_source_provider",
+            return_value=(True, None),
+        ), patch(
+            "sync_app.web.sync_support.SyncSupport.department_exists_in_source_provider",
+            return_value=(True, None),
+        ), patch(
+            "sync_app.web.sync_support.SyncSupport.source_user_has_department",
+            return_value=(False, "Department 2001 is not one of source user alice's departments"),
+        ):
+            response = self._route("/mappings/override", "POST")(
+                self._request("/mappings/override", "POST"),
+                csrf_token=match.group(1),
+                source_user_id="alice",
+                primary_department_id="2001",
+                notes="invalid override",
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIsNone(self.app.state.department_override_repo.get_override_record_by_source_user_id("alice"))
+        self.assertIn("not one of", self.session["_flash"]["message"])
+
     def test_mappings_and_advanced_sync_pages_use_generic_source_wording(self):
         self._login("superadmin")
 
@@ -625,6 +722,9 @@ class WebAuthorizationTests(unittest.TestCase):
         advanced_response = self._route("/advanced-sync", "GET")(self._request("/advanced-sync"))
         self.assertEqual(advanced_response.status_code, 200)
         advanced_text = self._text(advanced_response)
+        self.assertIn("Account Creation Rules And Connector Routing", advanced_text)
+        self.assertIn("Configure Account Creation Rule", advanced_text)
+        self.assertIn("Account Creation And Duplicate Handling", advanced_text)
         self.assertIn("Enable source -&gt; AD attribute mapping", advanced_text)
         self.assertIn("Enable AD -&gt; source write-back", advanced_text)
         self.assertIn("Source Root Unit IDs", advanced_text)
@@ -737,6 +837,16 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(len(asia_rules), 1)
         self.assertEqual(asia_rules[0].direction, "source_to_ad")
         self.assertEqual(len(default_rules), 0)
+
+    def test_config_page_links_to_advanced_account_creation_rules(self):
+        self._login("superadmin")
+
+        response = self._route("/config", "GET")(self._request("/config"))
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("Need Account Creation Rules Or Department Routing?", body)
+        self.assertIn('href="/advanced-sync#account-creation-rules"', body)
+        self.assertIn('href="/advanced-sync#department-ou-routing"', body)
 
     def test_super_admin_can_resolve_conflict_with_manual_binding(self):
         self._login("superadmin")

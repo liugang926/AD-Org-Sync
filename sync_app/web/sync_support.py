@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
 
+from sync_app.core.models import SourceDirectoryUser
 from sync_app.web.request_support import RequestSupport
 
 
@@ -24,6 +25,7 @@ class SyncSupport:
         to_bool: Callable[[Optional[str], bool], bool],
         validate_config_fn: Callable[..., Any],
         build_source_provider_fn: Callable[..., Any],
+        build_target_provider_fn: Callable[..., Any],
         get_source_provider_display_name_fn: Callable[[str], str],
         is_protected_ad_account_name_fn: Callable[[str, list[str]], bool],
         recommend_conflict_resolution_fn: Callable[[Any], Optional[dict[str, Any]]],
@@ -36,10 +38,67 @@ class SyncSupport:
         self.to_bool = to_bool
         self.validate_config = validate_config_fn
         self.build_source_provider = build_source_provider_fn
+        self.build_target_provider = build_target_provider_fn
         self.get_source_provider_display_name = get_source_provider_display_name_fn
         self.is_protected_ad_account_name = is_protected_ad_account_name_fn
         self.recommend_conflict_resolution = recommend_conflict_resolution_fn
         self.recommendation_requires_confirmation = recommendation_requires_confirmation_fn
+
+    def _close_directory_resource(self, resource: Any) -> None:
+        close_fn = getattr(resource, "close", None)
+        if callable(close_fn):
+            close_fn()
+            return
+        client = getattr(resource, "client", None)
+        close_fn = getattr(client, "close", None)
+        if callable(close_fn):
+            close_fn()
+
+    def _get_org_app_config(self, request: Request) -> Any:
+        current_org = self.request_support.get_current_org(request)
+        return request.app.state.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=self.request_support.get_org_config_path(request),
+        )
+
+    def _get_source_provider(self, request: Request) -> tuple[Any, Any]:
+        current_org = self.request_support.get_current_org(request)
+        config = request.app.state.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=self.request_support.get_org_config_path(request),
+        )
+        provider = self.build_source_provider(
+            app_config=config,
+            logger=self.logger,
+        )
+        return config, provider
+
+    def _get_target_provider(self, request: Request) -> tuple[Any, Any]:
+        current_org = self.request_support.get_current_org(request)
+        config = request.app.state.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=self.request_support.get_org_config_path(request),
+        )
+        provider = self.build_target_provider(
+            server=config.ldap.server,
+            domain=config.ldap.domain,
+            username=config.ldap.username,
+            password=config.ldap.password,
+            use_ssl=config.ldap.use_ssl,
+            port=config.ldap.port,
+            validate_cert=config.ldap.validate_cert,
+            ca_cert_path=config.ldap.ca_cert_path,
+            default_password=config.default_password,
+            force_change_password=config.force_change_password,
+            password_complexity=config.password_complexity,
+            exclude_accounts=config.exclude_accounts,
+            disabled_users_ou_name=config.disabled_users_ou_name,
+            managed_group_type=config.managed_group_type,
+            managed_group_mail_domain=config.managed_group_mail_domain,
+            custom_group_ou_path=config.custom_group_ou_path,
+            user_root_ou_path=config.directory_root_ou_path,
+        )
+        return config, provider
 
     def validate_binding_target(self, request: Request, source_user_id: str, ad_username: str) -> Optional[str]:
         current_org = self.request_support.get_current_org(request)
@@ -58,7 +117,180 @@ class SyncSupport:
                 f"AD account {ad_username} is already bound to source user "
                 f"{existing_by_ad.source_user_id}. Resolve the existing binding first."
             )
+        source_exists, source_error = self.source_user_exists_in_source_provider(request, source_user_id)
+        if not source_exists:
+            return source_error or f"Source user {source_user_id} does not exist"
+        target_exists, target_error = self.target_user_exists_in_directory(request, ad_username)
+        if not target_exists:
+            return target_error or f"AD account {ad_username} does not exist"
         return None
+
+    def search_source_users(self, request: Request, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        normalized_query = str(query or "").strip()
+        if not normalized_query:
+            return []
+        try:
+            _config, source_provider = self._get_source_provider(request)
+            try:
+                users = source_provider.search_users(normalized_query, limit=limit)
+            finally:
+                self._close_directory_resource(source_provider)
+        except Exception as exc:
+            self.logger.warning("failed to search source users: %s", exc)
+            return []
+        results: list[dict[str, Any]] = []
+        for user in users:
+            user_id = str(user.source_user_id or "").strip()
+            if not user_id:
+                continue
+            results.append(
+                {
+                    "id": user_id,
+                    "name": str(user.name or user_id),
+                    "email": str(user.email or ""),
+                    "departments": [str(value) for value in user.departments if str(value).strip()],
+                }
+            )
+        return results[: max(int(limit or 20), 1)]
+
+    def list_source_user_departments(self, request: Request, source_user_id: str) -> list[dict[str, Any]]:
+        normalized_source_user_id = str(source_user_id or "").strip()
+        if not normalized_source_user_id:
+            return []
+        try:
+            _config, source_provider = self._get_source_provider(request)
+            try:
+                departments = source_provider.list_departments()
+                department_map = {int(item.department_id): item for item in departments if item.department_id}
+                for department_id in list(department_map):
+                    path_names: list[str] = []
+                    path_ids: list[int] = []
+                    current_id = department_id
+                    seen: set[int] = set()
+                    while current_id and current_id in department_map and current_id not in seen:
+                        seen.add(current_id)
+                        current_node = department_map[current_id]
+                        path_names.insert(0, current_node.name)
+                        path_ids.insert(0, current_node.department_id)
+                        current_id = current_node.parent_id
+                    department_map[department_id].set_hierarchy(path_names, path_ids)
+                detail_payload = source_provider.get_user_detail(normalized_source_user_id) or {}
+                if detail_payload:
+                    source_user = SourceDirectoryUser.from_source_payload(detail_payload)
+                else:
+                    source_user = next(
+                        (
+                            item
+                            for item in source_provider.search_users(normalized_source_user_id, limit=50)
+                            if str(item.source_user_id or "").strip() == normalized_source_user_id
+                        ),
+                        None,
+                    )
+                if not source_user:
+                    return []
+                results: list[dict[str, Any]] = []
+                for department_id in source_user.departments:
+                    node = department_map.get(int(department_id))
+                    if node is None:
+                        continue
+                    results.append(
+                        {
+                            "id": str(node.department_id),
+                            "name": str(node.name or node.department_id),
+                            "path_display": " / ".join(node.path or [node.name]),
+                            "level": max(len(node.path) - 1, 0),
+                        }
+                    )
+                return results
+            finally:
+                self._close_directory_resource(source_provider)
+        except Exception as exc:
+            self.logger.warning("failed to load source user departments: %s", exc)
+            return []
+
+    def search_target_users(self, request: Request, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        normalized_query = str(query or "").strip()
+        if not normalized_query:
+            return []
+        try:
+            _config, target_provider = self._get_target_provider(request)
+            try:
+                users = target_provider.search_users(normalized_query, limit=limit)
+            finally:
+                self._close_directory_resource(target_provider)
+        except Exception as exc:
+            self.logger.warning("failed to search AD users: %s", exc)
+            return []
+        results: list[dict[str, Any]] = []
+        for user in users:
+            username = str(getattr(user, "username", "") or "").strip()
+            if not username:
+                continue
+            results.append(
+                {
+                    "id": username,
+                    "name": str(getattr(user, "display_name", "") or username),
+                    "mail": str(getattr(user, "email", "") or ""),
+                    "dn": str(getattr(user, "dn", "") or ""),
+                    "upn": str(getattr(user, "user_principal_name", "") or ""),
+                }
+            )
+        return results[: max(int(limit or 20), 1)]
+
+    def source_user_exists_in_source_provider(self, request: Request, source_user_id: str) -> tuple[bool, Optional[str]]:
+        normalized_source_user_id = str(source_user_id or "").strip()
+        if not normalized_source_user_id:
+            return False, "Source user ID is required"
+        try:
+            _config, source_provider = self._get_source_provider(request)
+            try:
+                detail_payload = source_provider.get_user_detail(normalized_source_user_id) or {}
+                if detail_payload:
+                    return True, None
+                results = source_provider.search_users(normalized_source_user_id, limit=100)
+            finally:
+                self._close_directory_resource(source_provider)
+            if any(str(item.source_user_id or "").strip() == normalized_source_user_id for item in results):
+                return True, None
+        except Exception as exc:
+            self.logger.warning("failed to validate source user existence: %s", exc)
+            return True, None
+        return False, f"Source user {normalized_source_user_id} does not exist in the configured source directory"
+
+    def source_user_has_department(
+        self,
+        request: Request,
+        source_user_id: str,
+        department_id: str,
+    ) -> tuple[bool, Optional[str]]:
+        normalized_source_user_id = str(source_user_id or "").strip()
+        normalized_department_id = str(department_id or "").strip()
+        if not normalized_source_user_id or not normalized_department_id:
+            return False, "Source user ID and primary department ID are required"
+        departments = self.list_source_user_departments(request, normalized_source_user_id)
+        if any(str(item.get("id") or "").strip() == normalized_department_id for item in departments):
+            return True, None
+        return (
+            False,
+            f"Department {normalized_department_id} is not one of source user {normalized_source_user_id}'s departments",
+        )
+
+    def target_user_exists_in_directory(self, request: Request, ad_username: str) -> tuple[bool, Optional[str]]:
+        normalized_ad_username = str(ad_username or "").strip()
+        if not normalized_ad_username:
+            return False, "AD username is required"
+        try:
+            _config, target_provider = self._get_target_provider(request)
+            try:
+                records = target_provider.get_users_batch([normalized_ad_username])
+            finally:
+                self._close_directory_resource(target_provider)
+            if normalized_ad_username in dict(records or {}):
+                return True, None
+        except Exception as exc:
+            self.logger.warning("failed to validate AD user existence: %s", exc)
+            return True, None
+        return False, f"AD account {normalized_ad_username} does not exist in the configured directory"
 
     def department_exists_in_source_provider(self, request: Request, department_id: str) -> tuple[bool, Optional[str]]:
         try:
