@@ -1260,11 +1260,16 @@ class ADSyncLDAPS:
             self.connection.search(
                 self.base_dn,
                 search_filter,
-                attributes=['displayName', 'mail', 'whenCreated', 'whenChanged', 'lastLogon', 'description']
+                attributes=['displayName', 'mail', 'whenCreated', 'whenChanged', 'lastLogon', 'description', 'distinguishedName', 'objectGUID']
             )
             
             if self.connection.entries:
                 entry = self.connection.entries[0]
+                guid_value = ""
+                raw_guid = getattr(entry, 'objectGUID', None)
+                guid_bytes = getattr(raw_guid, 'value', None)
+                if isinstance(guid_bytes, (bytes, bytearray)) and len(guid_bytes) == 16:
+                    guid_value = str(uuid.UUID(bytes_le=bytes(guid_bytes)))
                 return {
                     'SamAccountName': username,
                     'DisplayName': entry.displayName.value if hasattr(entry, 'displayName') else '',
@@ -1272,7 +1277,9 @@ class ADSyncLDAPS:
                     'Created': str(entry.whenCreated.value) if hasattr(entry, 'whenCreated') else '',
                     'Modified': str(entry.whenChanged.value) if hasattr(entry, 'whenChanged') else '',
                     'LastLogonDate': str(entry.lastLogon.value) if hasattr(entry, 'lastLogon') else '',
-                    'Description': entry.description.value if hasattr(entry, 'description') else ''
+                    'Description': entry.description.value if hasattr(entry, 'description') else '',
+                    'DistinguishedName': str(getattr(entry, 'entry_dn', '') or ''),
+                    'ObjectGUID': guid_value,
                 }
             return {}
         except Exception as e:
@@ -1523,6 +1530,8 @@ class ADSyncLDAPS:
                 'whenCreated',
                 'whenChanged',
                 'lastLogon',
+                'distinguishedName',
+                'objectGUID',
             ],
         )
         if not attributes:
@@ -1538,6 +1547,8 @@ class ADSyncLDAPS:
             'Created': str(attributes.get('whenCreated') or ''),
             'Modified': str(attributes.get('whenChanged') or ''),
             'LastLogonDate': str(attributes.get('lastLogon') or ''),
+            'DistinguishedName': str(attributes.get('distinguishedName') or ''),
+            'ObjectGUID': str(attributes.get('objectGUID') or ''),
         }
 
     def ensure_disabled_users_ou(self) -> bool:

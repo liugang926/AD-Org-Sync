@@ -15,6 +15,7 @@ from sync_app.storage.local_db import (
     AttributeMappingRuleRepository,
     CustomManagedGroupBindingRepository,
     DatabaseManager,
+    DepartmentOuMappingRepository,
     GroupExclusionRuleRepository,
     ManagedGroupBindingRepository,
     ObjectStateRepository,
@@ -45,6 +46,7 @@ class RuntimeRepositories:
     exclusion_repo: GroupExclusionRuleRepository
     connector_repo: SyncConnectorRepository
     mapping_rule_repo: AttributeMappingRuleRepository
+    department_ou_mapping_repo: DepartmentOuMappingRepository
     job_repo: SyncJobRepository
     event_repo: SyncEventRepository
     plan_repo: PlannedOperationRepository
@@ -69,6 +71,7 @@ class RuntimePolicySettings:
     enabled_exception_rules: list[Any]
     exception_match_values_by_rule_type: dict[str, set[str]]
     enabled_mapping_rules: list[Any]
+    enabled_department_ou_mappings: list[Any]
     connector_routing_enabled: bool
     attribute_mapping_enabled: bool
     write_back_enabled: bool
@@ -152,6 +155,7 @@ def _build_policy_settings(
     exclusion_repo: GroupExclusionRuleRepository,
     exception_rule_repo: SyncExceptionRuleRepository,
     mapping_rule_repo: AttributeMappingRuleRepository,
+    department_ou_mapping_repo: DepartmentOuMappingRepository,
     organization: OrganizationRecord,
 ) -> RuntimePolicySettings:
     def get_org_setting_value(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -169,6 +173,10 @@ def _build_policy_settings(
     enabled_group_rules = exclusion_repo.list_enabled_rule_records()
     enabled_exception_rules = exception_rule_repo.list_enabled_rule_records()
     enabled_mapping_rules = mapping_rule_repo.list_rule_records(enabled_only=True, org_id=organization.org_id)
+    enabled_department_ou_mappings = department_ou_mapping_repo.list_mapping_records(
+        enabled_only=True,
+        org_id=organization.org_id,
+    )
 
     offboarding_lifecycle_enabled = get_org_setting_bool("offboarding_lifecycle_enabled", False)
     offboarding_grace_days = max(get_org_setting_int("offboarding_grace_days", 0), 0)
@@ -192,6 +200,7 @@ def _build_policy_settings(
         enabled_exception_rules=enabled_exception_rules,
         exception_match_values_by_rule_type=exception_match_values_by_rule_type,
         enabled_mapping_rules=enabled_mapping_rules,
+        enabled_department_ou_mappings=enabled_department_ou_mappings,
         connector_routing_enabled=get_org_setting_bool("advanced_connector_routing_enabled", False),
         attribute_mapping_enabled=get_org_setting_bool("attribute_mapping_enabled", False),
         write_back_enabled=get_org_setting_bool("write_back_enabled", False),
@@ -243,6 +252,7 @@ def _build_config_hash(
     config: AppConfig,
     connector_repo: SyncConnectorRepository,
     enabled_mapping_rules: list[Any],
+    enabled_department_ou_mappings: list[Any],
     organization: OrganizationRecord,
     policy_settings: RuntimePolicySettings,
 ) -> str:
@@ -254,6 +264,7 @@ def _build_config_hash(
             for record in connector_repo.list_connector_records(enabled_only=True, org_id=organization.org_id)
         ],
         "attribute_mappings": [record.to_dict() for record in enabled_mapping_rules],
+        "department_ou_mappings": [record.to_dict() for record in enabled_department_ou_mappings],
         "settings": {
             "advanced_connector_routing_enabled": policy_settings.connector_routing_enabled,
             "attribute_mapping_enabled": policy_settings.attribute_mapping_enabled,
@@ -305,6 +316,7 @@ def bootstrap_sync_runtime(
     organization_config_repo = OrganizationConfigRepository(db_manager)
     connector_repo = SyncConnectorRepository(db_manager)
     mapping_rule_repo = AttributeMappingRuleRepository(db_manager)
+    department_ou_mapping_repo = DepartmentOuMappingRepository(db_manager)
     job_repo = SyncJobRepository(db_manager)
     event_repo = SyncEventRepository(db_manager)
     plan_repo = PlannedOperationRepository(db_manager)
@@ -340,6 +352,7 @@ def bootstrap_sync_runtime(
         exclusion_repo=exclusion_repo,
         exception_rule_repo=exception_rule_repo,
         mapping_rule_repo=mapping_rule_repo,
+        department_ou_mapping_repo=department_ou_mapping_repo,
         organization=organization,
     )
 
@@ -356,6 +369,7 @@ def bootstrap_sync_runtime(
         exclusion_repo=exclusion_repo,
         connector_repo=connector_repo,
         mapping_rule_repo=mapping_rule_repo,
+        department_ou_mapping_repo=department_ou_mapping_repo,
         job_repo=job_repo,
         event_repo=event_repo,
         plan_repo=plan_repo,
@@ -377,6 +391,7 @@ def bootstrap_sync_runtime(
         config=config,
         connector_repo=connector_repo,
         enabled_mapping_rules=policy_settings.enabled_mapping_rules,
+        enabled_department_ou_mappings=policy_settings.enabled_department_ou_mappings,
         organization=organization,
         policy_settings=policy_settings,
     )

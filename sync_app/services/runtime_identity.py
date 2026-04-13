@@ -6,8 +6,21 @@ from sync_app.core.models import DepartmentNode, SourceDirectoryUser, UserDepart
 from sync_app.core.sync_policies import build_identity_candidates as build_identity_candidates_from_policy
 
 
-def build_identity_candidates(user: SourceDirectoryUser, *, username_template: str = "") -> list[dict[str, str]]:
-    return build_identity_candidates_from_policy(user, username_template=username_template)
+def build_identity_candidates(
+    user: SourceDirectoryUser,
+    *,
+    username_template: str = "",
+    username_strategy: str = "custom_template",
+    username_collision_policy: str = "append_employee_id",
+    username_collision_template: str = "",
+) -> list[dict[str, str]]:
+    return build_identity_candidates_from_policy(
+        user,
+        username_template=username_template,
+        username_strategy=username_strategy,
+        username_collision_policy=username_collision_policy,
+        username_collision_template=username_collision_template,
+    )
 
 
 def resolve_target_department(

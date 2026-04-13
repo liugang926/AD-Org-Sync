@@ -278,6 +278,30 @@
         <div class="form-group">
           <label for="username_template">{{ t("Username Template") }}</label>
           <input id="username_template" type="text" name="username_template" placeholder="{pinyin_initials}{employee_id}">
+          <div class="muted">{{ t("Used only when Custom Template is selected. Example: {family_name_pinyin}{given_initials}{employee_id}") }}</div>
+        </div>
+        <div class="form-group">
+          <label for="username_strategy">{{ t("Username Strategy") }}</label>
+          <select id="username_strategy" name="username_strategy">
+            {% for value, label in username_strategy_options %}
+            <option value="{{ value }}">{{ t(label) }}</option>
+            {% endfor %}
+          </select>
+          <div class="muted">{{ t("Choose a standard enterprise naming pattern before falling back to a custom template.") }}</div>
+        </div>
+        <div class="form-group">
+          <label for="username_collision_policy">{{ t("Same-Name Collision Policy") }}</label>
+          <select id="username_collision_policy" name="username_collision_policy">
+            {% for value, label in username_collision_policy_options %}
+            <option value="{{ value }}">{{ t(label) }}</option>
+            {% endfor %}
+          </select>
+          <div class="muted">{{ t("The policy applies only when the generated base account collides with another in-scope source user, an existing AD account, or a protected account.") }}</div>
+        </div>
+        <div class="form-group">
+          <label for="username_collision_template">{{ t("Collision Template") }}</label>
+          <input id="username_collision_template" type="text" name="username_collision_template" placeholder="{base}{counter2}">
+          <div class="muted">{{ t("Use only with Custom Collision Template. Available tokens: {base}, {counter}, {counter2}, {counter3}, {employee_id}, {userid}.") }}</div>
         </div>
         <div class="form-group">
           <label for="disabled_users_ou">{{ t("Disabled Users OU") }}</label>
@@ -397,6 +421,7 @@
           <th>{{ t("Status") }}</th>
           <th>{{ t("Settings Source") }}</th>
           <th>{{ t("Roots") }}</th>
+          <th>{{ t("Username Strategy") }}</th>
           <th>{{ t("Template") }}</th>
           <th>{{ t("Actions") }}</th>
         </tr>
@@ -420,6 +445,13 @@
             {% endif %}
           </td>
           <td>{{ connector.root_department_ids|join(", ") if connector.root_department_ids else "-" }}</td>
+          <td>
+            <strong>{{ t(connector.username_strategy.replace("_", " ").title()) }}</strong>
+            <div class="muted text-sm">{{ t(connector.username_collision_policy.replace("_", " ").title()) }}</div>
+            {% if connector.username_collision_template %}
+            <div class="muted text-sm"><code>{{ connector.username_collision_template }}</code></div>
+            {% endif %}
+          </td>
           <td><code>{{ connector.username_template or "-" }}</code></td>
           <td>
             {% if connector.connector_id != "default" and can("config.write") %}
@@ -440,12 +472,77 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="6" class="muted">{{ t("No connectors configured.") }}</td>
+          <td colspan="7" class="muted">{{ t("No connectors configured.") }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
     {% endcall %}
+  {% endcall %}
+</div>
+
+<div class="grid cols-2">
+  {% call ui.panel(t("Department To AD OU Mapping"), t("Organization Scope"), "info", t("Use this when a source department subtree must land under a different AD OU root than the default connector path.")) %}
+    {% call ui.detail_toggle(t("Add Department Routing"), t("Best for regional business units, subsidiaries, shared service centers, contractors, or merged organizations."), open=False) %}
+      <form method="post" action="/advanced-sync/department-ou-mappings">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="dept_mapping_connector_id">{{ t("Connector Scope") }}</label>
+            <select id="dept_mapping_connector_id" name="connector_id">
+              <option value="">{{ t("Global") }}</option>
+              {% for connector in connectors %}
+              {% if connector.connector_id != "default" %}
+              <option value="{{ connector.connector_id }}">{{ connector.connector_id }} - {{ connector.name }}</option>
+              {% endif %}
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="dept_mapping_source_department_id">{{ t("Source Department ID") }}</label>
+            <input id="dept_mapping_source_department_id" type="text" name="source_department_id" placeholder="20018">
+          </div>
+          <div class="form-group">
+            <label for="dept_mapping_source_department_name">{{ t("Source Department Name") }}</label>
+            <input id="dept_mapping_source_department_name" type="text" name="source_department_name" placeholder="Greater China">
+          </div>
+          <div class="form-group">
+            <label for="dept_mapping_target_ou_path">{{ t("Target AD OU Path / DN") }}</label>
+            <input id="dept_mapping_target_ou_path" type="text" name="target_ou_path" placeholder="Managed Users/China">
+          </div>
+          <div class="form-group">
+            <label for="dept_mapping_apply_mode">{{ t("Apply Mode") }}</label>
+            <select id="dept_mapping_apply_mode" name="apply_mode">
+              {% for value, label in department_ou_apply_mode_options %}
+              <option value="{{ value }}">{{ t(label) }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="dept_mapping_notes">{{ t("Notes") }}</label>
+          <textarea id="dept_mapping_notes" name="notes" placeholder="{{ t('Example: Route the Greater China subtree under the regional managed OU instead of the connector default root.') }}"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="inline-checkbox">
+            <input type="checkbox" name="is_enabled" value="1" checked>
+            {{ t("Enabled") }}
+          </label>
+        </div>
+        <div class="actions">
+          {{ ui.button(t("Save Department Routing"), type="submit") }}
+        </div>
+      </form>
+    {% endcall %}
+  {% endcall %}
+
+  {% call ui.panel(t("Common Enterprise Naming And Routing Patterns"), t("Reference"), "info") %}
+    <ul class="helper-list">
+      <li>{{ t("Chinese employee usernames: surname pinyin + given initials, then append employee ID when the same pinyin appears more than once.") }}</li>
+      <li>{{ t("Regional subsidiaries: map each source root department subtree into a dedicated AD OU root while keeping a shared connector for the same domain.") }}</li>
+      <li>{{ t("Contractors and interns: keep their source subtree routed to a dedicated OU branch and use a stricter naming suffix for temporary identities.") }}</li>
+      <li>{{ t("Merged organizations: preserve historic employee IDs as account suffixes to avoid reusing old usernames during first sync.") }}</li>
+    </ul>
   {% endcall %}
 </div>
 
@@ -492,6 +589,55 @@
       {% else %}
       <tr>
         <td colspan="8" class="muted">{{ t("No attribute mapping rules configured.") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endcall %}
+{% endcall %}
+
+{% call ui.panel(t("Department Routing Rules"), t("Organization Scope"), "info") %}
+  {% call ui.table_shell() %}
+  <table>
+    <thead>
+      <tr>
+        <th>{{ t("Connector") }}</th>
+        <th>{{ t("Source Department") }}</th>
+        <th>{{ t("Target OU") }}</th>
+        <th>{{ t("Apply Mode") }}</th>
+        <th>{{ t("Status") }}</th>
+        <th>{{ t("Actions") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for record in department_ou_mappings %}
+      <tr>
+        <td>{{ record.connector_id or t("Global") }}</td>
+        <td>
+          <strong>{{ record.source_department_name or t("Department") }}</strong>
+          <div class="muted text-sm">{{ record.source_department_id }}</div>
+        </td>
+        <td><code>{{ record.target_ou_path }}</code></td>
+        <td>{{ t(record.apply_mode.replace("_", " ").title()) }}</td>
+        <td>
+          <span class="badge {% if record.is_enabled %}badge-success{% else %}badge-warning{% endif %}">
+            {{ t("Enabled") if record.is_enabled else t("Disabled") }}
+          </span>
+        </td>
+        <td>
+          {% if can("config.write") %}
+          <form method="post" action="/advanced-sync/department-ou-mappings/{{ record.id }}/delete" data-confirm="{{ t('Are you sure you want to perform this action?') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            {{ ui.button(t("Delete"), type="submit", variant="danger") }}
+          </form>
+          {% else %}
+          <span class="muted">{{ t("Read only") }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="6" class="muted">{{ t("No department routing rules configured.") }}</td>
       </tr>
       {% endfor %}
     </tbody>

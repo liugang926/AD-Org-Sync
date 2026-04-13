@@ -166,6 +166,9 @@ class SyncConnectorRepository(BaseRepository):
         force_change_password: Any = None,
         password_complexity: str = "",
         root_department_ids: Iterable[int] = (),
+        username_strategy: str = "custom_template",
+        username_collision_policy: str = "append_employee_id",
+        username_collision_template: str = "",
         username_template: str = "",
         disabled_users_ou: str = "",
         group_type: str = "security",
@@ -224,10 +227,10 @@ class SyncConnectorRepository(BaseRepository):
                   connector_id, org_id, name, config_path,
                   ldap_server, ldap_domain, ldap_username, ldap_password, ldap_use_ssl, ldap_port,
                   ldap_validate_cert, ldap_ca_cert_path, default_password, force_change_password,
-                  password_complexity, root_department_ids_json, username_template,
+                  password_complexity, root_department_ids_json, username_strategy, username_collision_policy, username_collision_template, username_template,
                   disabled_users_ou, group_type, group_mail_domain, custom_group_ou_path,
                   managed_tag_ids_json, managed_external_chat_ids_json, is_enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(connector_id) DO UPDATE SET
                   org_id = excluded.org_id,
                   name = excluded.name,
@@ -244,6 +247,9 @@ class SyncConnectorRepository(BaseRepository):
                   force_change_password = excluded.force_change_password,
                   password_complexity = excluded.password_complexity,
                   root_department_ids_json = excluded.root_department_ids_json,
+                  username_strategy = excluded.username_strategy,
+                  username_collision_policy = excluded.username_collision_policy,
+                  username_collision_template = excluded.username_collision_template,
                   username_template = excluded.username_template,
                   disabled_users_ou = excluded.disabled_users_ou,
                   group_type = excluded.group_type,
@@ -287,6 +293,9 @@ class SyncConnectorRepository(BaseRepository):
                             ]
                         }
                     ),
+                    str(username_strategy or "custom_template").strip() or "custom_template",
+                    str(username_collision_policy or "append_employee_id").strip() or "append_employee_id",
+                    str(username_collision_template or "").strip(),
                     str(username_template or "").strip(),
                     str(disabled_users_ou or "").strip(),
                     str(group_type or "security").strip() or "security",

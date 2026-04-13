@@ -61,6 +61,7 @@ def run_planning_phase(
         is_department_excluded=services.is_department_excluded,
         get_connector_id_for_department=services.get_connector_id_for_department,
         get_ad_sync=services.get_ad_sync,
+        get_effective_ou_path=services.get_effective_ou_path,
         record_group_policy_skip=services.record_group_policy_skip,
         display_separator=display_separator,
     )
@@ -72,6 +73,7 @@ def run_planning_phase(
         get_connector_id_for_department=services.get_connector_id_for_department,
         get_connector_spec=services.get_connector_spec,
         get_ad_sync=services.get_ad_sync,
+        get_effective_ou_path=services.get_effective_ou_path,
         get_department_group_target=services.get_department_group_target,
         is_protected_ad_account=services.is_protected_ad_account,
         record_exception_skip=services.record_exception_skip,
@@ -84,6 +86,7 @@ def run_planning_phase(
         is_department_excluded=services.is_department_excluded,
         get_connector_id_for_department=services.get_connector_id_for_department,
         get_ad_sync=services.get_ad_sync,
+        get_effective_ou_path=services.get_effective_ou_path,
         record_group_policy_skip=services.record_group_policy_skip,
         record_skip_detail=services.record_skip_detail,
         record_exception_skip=services.record_exception_skip,

@@ -20,6 +20,43 @@ ATTRIBUTE_MAPPING_DIRECTION_ALIASES = {
 }
 ATTRIBUTE_SYNC_MODES = ("replace", "fill_if_empty", "preserve")
 MANAGED_GROUP_TYPES = ("security", "distribution", "mail_enabled_security")
+USERNAME_STRATEGIES = (
+    "userid",
+    "email_localpart",
+    "employee_id",
+    "pinyin_initials_employee_id",
+    "pinyin_full_employee_id",
+    "family_name_pinyin_given_initials",
+    "family_name_pinyin_given_name_pinyin",
+    "custom_template",
+)
+USERNAME_COLLISION_POLICIES = (
+    "append_employee_id",
+    "append_userid",
+    "append_numeric_counter",
+    "append_2digit_counter",
+    "append_3digit_counter",
+    "append_hash",
+    "custom_template",
+)
+AD_USERNAME_MAX_LENGTH = 20
+
+COMPOUND_CHINESE_SURNAMES = (
+    "欧阳",
+    "司马",
+    "上官",
+    "诸葛",
+    "司徒",
+    "夏侯",
+    "皇甫",
+    "尉迟",
+    "公孙",
+    "长孙",
+    "慕容",
+    "令狐",
+    "宇文",
+    "轩辕",
+)
 
 EMPLOYEE_ID_FIELD_CANDIDATES = (
     "employee_id",
@@ -30,7 +67,6 @@ EMPLOYEE_ID_FIELD_CANDIDATES = (
     "staffno",
     "workcode",
     "work_code",
-    "userid",
 )
 
 PHONE_FIELD_CANDIDATES = (
@@ -95,13 +131,119 @@ def _compute_pinyin_initials(value: str) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
+    ascii_tokens = [segment.lower() for segment in re.findall(r"[A-Za-z0-9]+", text) if segment]
+    if ascii_tokens and re.fullmatch(r"[A-Za-z0-9\s._-]+", text):
+        return "".join(segment[:1] for segment in ascii_tokens if segment)
     if lazy_pinyin is not None:
         try:
             return "".join(item[:1] for item in lazy_pinyin(text) if item).lower()
         except Exception:
             pass
-    ascii_initials = [segment[:1].lower() for segment in re.findall(r"[A-Za-z0-9]+", text) if segment]
-    return "".join(ascii_initials)
+    return "".join(segment[:1] for segment in ascii_tokens if segment)
+
+
+def _romanize_text(value: str) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    ascii_tokens = [segment.lower() for segment in re.findall(r"[A-Za-z0-9]+", text) if segment]
+    if ascii_tokens and re.fullmatch(r"[A-Za-z0-9\s._-]+", text):
+        return ascii_tokens
+    if lazy_pinyin is not None:
+        try:
+            return [segment.lower() for segment in lazy_pinyin(text) if segment]
+        except Exception:
+            pass
+    return ascii_tokens
+
+
+def _split_person_name(value: str) -> tuple[str, str]:
+    text = str(value or "").strip()
+    if not text:
+        return "", ""
+    ascii_tokens = [segment for segment in re.split(r"[\s._-]+", text) if segment]
+    if ascii_tokens and all(re.fullmatch(r"[A-Za-z0-9]+", token) for token in ascii_tokens):
+        if len(ascii_tokens) == 1:
+            return ascii_tokens[0], ""
+        return ascii_tokens[-1], "".join(ascii_tokens[:-1])
+    for surname in COMPOUND_CHINESE_SURNAMES:
+        if text.startswith(surname) and len(text) > len(surname):
+            return surname, text[len(surname) :]
+    if len(text) == 1:
+        return text, ""
+    return text[:1], text[1:]
+
+
+def _normalize_username_candidate(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9._-]+", "", str(value or "").strip())
+    if not normalized:
+        return ""
+    return normalized[:AD_USERNAME_MAX_LENGTH]
+
+
+def _with_username_suffix(base: str, suffix: str) -> str:
+    normalized_base = _normalize_username_candidate(base)
+    normalized_suffix = _normalize_username_candidate(suffix)
+    if not normalized_suffix:
+        return normalized_base
+    if normalized_base and (
+        normalized_base == normalized_suffix
+        or normalized_base.endswith(normalized_suffix)
+    ):
+        return normalized_base[:AD_USERNAME_MAX_LENGTH]
+    if not normalized_base:
+        return normalized_suffix
+    base_budget = max(AD_USERNAME_MAX_LENGTH - len(normalized_suffix), 0)
+    return f"{normalized_base[:base_budget]}{normalized_suffix}"[:AD_USERNAME_MAX_LENGTH]
+
+
+def normalize_username_strategy(value: str | None, *, default: str = "custom_template") -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate in USERNAME_STRATEGIES:
+        return candidate
+    return default
+
+
+def normalize_username_collision_policy(value: str | None, *, default: str = "append_employee_id") -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate in USERNAME_COLLISION_POLICIES:
+        return candidate
+    return default
+
+
+def render_username_collision_template(
+    template: str,
+    *,
+    base_username: str,
+    employee_id: str,
+    userid: str,
+    counter: int,
+) -> str:
+    template_context = {
+        "base": str(base_username or "").strip(),
+        "employee_id": str(employee_id or "").strip(),
+        "userid": str(userid or "").strip(),
+        "counter": str(counter),
+        "counter2": f"{counter:02d}",
+        "counter3": f"{counter:03d}",
+    }
+    return render_template(template, template_context)
+
+
+def resolve_username_template(username_strategy: str | None, username_template: str | None = "") -> str:
+    strategy = normalize_username_strategy(username_strategy)
+    custom_template = str(username_template or "").strip()
+    strategy_templates = {
+        "userid": "{userid}",
+        "email_localpart": "{email_localpart}",
+        "employee_id": "{employee_id}",
+        "pinyin_initials_employee_id": "{pinyin_initials}{employee_id}",
+        "pinyin_full_employee_id": "{pinyin_full}{employee_id}",
+        "family_name_pinyin_given_initials": "{family_name_pinyin}{given_initials}",
+        "family_name_pinyin_given_name_pinyin": "{family_name_pinyin}{given_name_pinyin}",
+        "custom_template": custom_template,
+    }
+    return strategy_templates.get(strategy, custom_template).strip()
 
 
 def build_template_context(
@@ -126,6 +268,17 @@ def build_template_context(
         "mobile": _first_payload_value(payload, PHONE_FIELD_CANDIDATES),
         "pinyin_initials": _compute_pinyin_initials(user.name),
     }
+    family_name, given_name = _split_person_name(user.name)
+    family_name_pinyin = "".join(_romanize_text(family_name))
+    given_name_pinyin = "".join(_romanize_text(given_name))
+    context["pinyin_full"] = "".join(_romanize_text(user.name))
+    context["family_name"] = family_name
+    context["given_name"] = given_name
+    context["family_name_pinyin"] = family_name_pinyin
+    context["given_name_pinyin"] = given_name_pinyin
+    context["family_initial"] = family_name_pinyin[:1]
+    context["given_initials"] = "".join(segment[:1] for segment in _romanize_text(given_name) if segment)
+    context["name_ascii"] = "".join(_romanize_text(user.name))
     if "@" in context["email"]:
         context["email_localpart"] = context["email"].split("@", 1)[0].strip()
     if target_department:
@@ -164,14 +317,28 @@ def render_template(template: str, context: dict[str, Any]) -> str:
     rendered = re.sub(r"\{([^{}]+)\}", replace, raw_template)
     return rendered.strip()
 
+def build_managed_username_candidates(
+    user: SourceDirectoryUser,
+    *,
+    username_strategy: str = "custom_template",
+    username_template: str = "",
+    username_collision_policy: str = "append_employee_id",
+    username_collision_template: str = "",
+) -> list[dict[str, str]]:
+    template_context = build_template_context(user)
+    strategy = normalize_username_strategy(username_strategy)
+    collision_policy = normalize_username_collision_policy(username_collision_policy)
+    resolved_template = resolve_username_template(strategy, username_template)
+    employee_id = template_context.get("employee_id", "")
+    userid = template_context.get("userid", "")
+    email_localpart = template_context.get("email_localpart", "")
+    base_candidate = _normalize_username_candidate(render_template(resolved_template, template_context))
 
-def build_identity_candidates(user: SourceDirectoryUser, *, username_template: str = "") -> list[dict[str, str]]:
     candidates: list[dict[str, str]] = []
     seen = set()
-    template_context = build_template_context(user)
 
     def add_candidate(rule_name: str, username: str, explanation: str) -> None:
-        normalized = re.sub(r"[^A-Za-z0-9._-]+", "", str(username or "").strip())
+        normalized = _normalize_username_candidate(username)
         if not normalized:
             return
         lowered = normalized.lower()
@@ -183,18 +350,149 @@ def build_identity_candidates(user: SourceDirectoryUser, *, username_template: s
                 "rule": rule_name,
                 "username": normalized,
                 "explanation": explanation,
+                "managed": True,
+                "allow_existing_match": False,
             }
         )
 
-    generated_username = render_template(username_template, template_context)
-    if generated_username:
+    if base_candidate:
         add_candidate(
-            "template_generated_username",
-            generated_username,
-            "Configured username template produced a managed AD username candidate",
+            "managed_username_primary",
+            base_candidate,
+            "Primary managed username candidate generated from the selected naming strategy",
         )
 
-    add_candidate("existing_ad_userid", user.userid, "Source user ID maps directly to an existing AD username")
+    if collision_policy == "append_employee_id" and employee_id:
+        add_candidate(
+            "managed_username_employee_id_suffix",
+            _with_username_suffix(base_candidate or userid or email_localpart, employee_id),
+            "Fallback candidate appends employee ID to separate users with the same base name",
+        )
+    if collision_policy == "append_userid" and userid:
+        add_candidate(
+            "managed_username_userid_suffix",
+            _with_username_suffix(base_candidate or email_localpart, userid),
+            "Fallback candidate appends source user ID to avoid same-name collisions",
+        )
+
+    if collision_policy == "append_numeric_counter":
+        for number in range(2, 6):
+            add_candidate(
+                f"managed_username_numeric_suffix_{number}",
+                _with_username_suffix(base_candidate or userid or email_localpart, str(number)),
+                "Fallback candidate appends a short numeric suffix",
+            )
+    if collision_policy == "append_2digit_counter":
+        for number in range(1, 21):
+            add_candidate(
+                f"managed_username_2digit_suffix_{number:02d}",
+                _with_username_suffix(base_candidate or userid or email_localpart, f"{number:02d}"),
+                "Fallback candidate appends a stable two-digit sequence suffix",
+            )
+    if collision_policy == "append_3digit_counter":
+        for number in range(1, 51):
+            add_candidate(
+                f"managed_username_3digit_suffix_{number:03d}",
+                _with_username_suffix(base_candidate or userid or email_localpart, f"{number:03d}"),
+                "Fallback candidate appends a stable three-digit sequence suffix",
+            )
+    if collision_policy == "append_hash":
+        hash_suffix = f"{abs(hash(f'{userid}:{employee_id}:{user.name}')) % 10000:04d}"
+        add_candidate(
+            "managed_username_hash_suffix",
+            _with_username_suffix(base_candidate or userid or email_localpart, hash_suffix),
+            "Fallback candidate appends a deterministic short hash suffix",
+        )
+    if collision_policy == "custom_template":
+        normalized_template = str(username_collision_template or "").strip()
+        if normalized_template:
+            for number in range(1, 51):
+                add_candidate(
+                    f"managed_username_custom_suffix_{number}",
+                    render_username_collision_template(
+                        normalized_template,
+                        base_username=base_candidate or userid or email_localpart,
+                        employee_id=employee_id,
+                        userid=userid,
+                        counter=number,
+                    ),
+                    "Fallback candidate uses the custom collision template for enterprise naming rules",
+                )
+    if employee_id:
+        add_candidate(
+            "managed_username_employee_id",
+            employee_id,
+            "Fallback candidate uses employee ID directly for organizations that require unique staff numbers",
+        )
+    if userid:
+        add_candidate(
+            "managed_username_userid",
+            userid,
+            "Fallback candidate uses the source user ID directly",
+        )
+    if email_localpart:
+        add_candidate(
+            "managed_username_email_localpart",
+            email_localpart,
+            "Fallback candidate uses the source email local part",
+        )
+    return candidates
+
+
+def build_identity_candidates(
+    user: SourceDirectoryUser,
+    *,
+    username_template: str = "",
+    username_strategy: str = "custom_template",
+    username_collision_policy: str = "append_employee_id",
+    username_collision_template: str = "",
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, bool]] = set()
+    template_context = build_template_context(user)
+
+    def add_candidate(
+        rule_name: str,
+        username: str,
+        explanation: str,
+        *,
+        allow_existing_match: bool,
+        managed: bool,
+    ) -> None:
+        normalized = _normalize_username_candidate(username)
+        if not normalized:
+            return
+        lowered = normalized.lower()
+        candidate_key = (lowered, managed)
+        if candidate_key in seen:
+            return
+        seen.add(candidate_key)
+        candidates.append(
+            {
+                "rule": rule_name,
+                "username": normalized,
+                "explanation": explanation,
+                "allow_existing_match": allow_existing_match,
+                "managed": managed,
+            }
+        )
+
+    add_candidate(
+        "existing_ad_userid",
+        user.userid,
+        "Source user ID maps directly to an existing AD username",
+        allow_existing_match=True,
+        managed=False,
+    )
+    employee_id = template_context.get("employee_id", "")
+    if employee_id:
+        add_candidate(
+            "existing_ad_employee_id",
+            employee_id,
+            "Employee ID maps directly to an existing AD username",
+            allow_existing_match=True,
+            managed=False,
+        )
     email = (user.email or user.raw_payload.get("email") or "").strip()
     if "@" in email:
         localpart = email.split("@", 1)[0].strip()
@@ -202,17 +500,33 @@ def build_identity_candidates(user: SourceDirectoryUser, *, username_template: s
             "existing_ad_email_localpart",
             localpart,
             "Source email local part maps to an existing AD username",
+            allow_existing_match=True,
+            managed=False,
         )
 
-    add_candidate(
-        "derived_default_userid",
-        generated_username or user.userid,
-        (
-            "No existing AD user matched, use the configured username template"
-            if generated_username
-            else "No existing AD user matched, default to userid for managed account naming"
-        ),
-    )
+    for managed_candidate in build_managed_username_candidates(
+        user,
+        username_strategy=username_strategy,
+        username_template=username_template,
+        username_collision_policy=username_collision_policy,
+        username_collision_template=username_collision_template,
+    ):
+        add_candidate(
+            str(managed_candidate["rule"]),
+            str(managed_candidate["username"]),
+            str(managed_candidate["explanation"]),
+            allow_existing_match=False,
+            managed=True,
+        )
+
+    if not any(candidate.get("managed") for candidate in candidates):
+        add_candidate(
+            "managed_username_fallback_userid",
+            user.userid,
+            "Fallback to source user ID because no managed naming candidate could be generated",
+            allow_existing_match=False,
+            managed=True,
+        )
     return candidates
 
 

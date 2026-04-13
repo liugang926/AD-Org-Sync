@@ -21,6 +21,7 @@ def get_department_group_target(
     *,
     get_connector_id_for_department: Callable[[Optional[DepartmentNode]], str],
     get_ad_sync: Callable[[str], Any],
+    get_effective_ou_path: Callable[[DepartmentNode, str], list[str]],
     display_separator: str,
 ) -> ManagedGroupTarget:
     dept_id = dept_info.department_id
@@ -30,7 +31,8 @@ def get_department_group_target(
 
     connector_id = get_connector_id_for_department(dept_info)
     connector_ad_sync = get_ad_sync(connector_id)
-    ou_dn = connector_ad_sync.get_ou_dn(dept_info.path)
+    effective_ou_path = get_effective_ou_path(dept_info, connector_id)
+    ou_dn = connector_ad_sync.get_ou_dn(effective_ou_path)
     binding = ctx.repositories.binding_repo.get_binding_record_by_department_id(str(dept_id))
     if binding and binding.status != "active":
         binding = None
@@ -192,6 +194,7 @@ def plan_directory_and_custom_groups(
     is_department_excluded: Callable[[Optional[DepartmentNode]], bool],
     get_connector_id_for_department: Callable[[Optional[DepartmentNode]], str],
     get_ad_sync: Callable[[str], Any],
+    get_effective_ou_path: Callable[[DepartmentNode, str], list[str]],
     record_group_policy_skip: Callable[[str, str, ManagedGroupTarget, str], None],
     display_separator: str,
 ) -> set[tuple[str, str, str]]:
@@ -218,8 +221,8 @@ def plan_directory_and_custom_groups(
             if not ancestor:
                 continue
 
-            current_path = dept_info.path[: idx + 1]
             connector_id = get_connector_id_for_department(ancestor)
+            current_path = get_effective_ou_path(ancestor, connector_id)
             connector_ad_sync = get_ad_sync(connector_id)
             parent_dn = connector_ad_sync.get_ou_dn([]) if idx == 0 else connector_ad_sync.get_ou_dn(current_path[:-1])
             ou_dn = connector_ad_sync.get_ou_dn(current_path)
@@ -229,6 +232,7 @@ def plan_directory_and_custom_groups(
                 ancestor,
                 get_connector_id_for_department=get_connector_id_for_department,
                 get_ad_sync=get_ad_sync,
+                get_effective_ou_path=get_effective_ou_path,
                 display_separator=display_separator,
             )
             should_manage_group = not group_target.policy.is_excluded
@@ -252,7 +256,7 @@ def plan_directory_and_custom_groups(
                         ou_name=ancestor.name,
                         parent_dn=parent_dn,
                         ou_dn=ou_dn,
-                        full_path=list(current_path),
+                        full_path=list(ancestor.path),
                         group_target=group_target,
                         should_manage_group=should_manage_group,
                     )
@@ -408,6 +412,7 @@ def plan_group_relationship_cleanup(
     is_department_excluded: Callable[[Optional[DepartmentNode]], bool],
     get_connector_id_for_department: Callable[[Optional[DepartmentNode]], str],
     get_ad_sync: Callable[[str], Any],
+    get_effective_ou_path: Callable[[DepartmentNode, str], list[str]],
     record_group_policy_skip: Callable[[str, str, ManagedGroupTarget, str], None],
     record_skip_detail: Callable[..., None],
     record_exception_skip: Callable[..., None],
@@ -438,6 +443,7 @@ def plan_group_relationship_cleanup(
             dept_info,
             get_connector_id_for_department=get_connector_id_for_department,
             get_ad_sync=get_ad_sync,
+            get_effective_ou_path=get_effective_ou_path,
             display_separator=display_separator,
         )
         parent_target = get_department_group_target(
@@ -445,6 +451,7 @@ def plan_group_relationship_cleanup(
             dept_tree[parent_department_id],
             get_connector_id_for_department=get_connector_id_for_department,
             get_ad_sync=get_ad_sync,
+            get_effective_ou_path=get_effective_ou_path,
             display_separator=display_separator,
         )
         if child_target.policy.is_excluded:
@@ -547,6 +554,7 @@ def plan_group_relationship_cleanup(
             dept_info,
             get_connector_id_for_department=get_connector_id_for_department,
             get_ad_sync=get_ad_sync,
+            get_effective_ou_path=get_effective_ou_path,
             display_separator=display_separator,
         )
         if child_target.policy.is_excluded:

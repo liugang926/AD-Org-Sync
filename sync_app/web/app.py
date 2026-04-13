@@ -33,6 +33,7 @@ from sync_app.storage.local_db import (
     AttributeMappingRuleRepository,
     CustomManagedGroupBindingRepository,
     DatabaseManager,
+    DepartmentOuMappingRepository,
     GroupExclusionRuleRepository,
     OffboardingQueueRepository,
     OrganizationConfigRepository,
@@ -219,6 +220,7 @@ def create_app(
     exclusion_repo = GroupExclusionRuleRepository(db_manager)
     connector_repo = SyncConnectorRepository(db_manager)
     attribute_mapping_repo = AttributeMappingRuleRepository(db_manager)
+    department_ou_mapping_repo = DepartmentOuMappingRepository(db_manager)
     custom_group_binding_repo = CustomManagedGroupBindingRepository(db_manager)
     offboarding_repo = OffboardingQueueRepository(db_manager)
     lifecycle_repo = UserLifecycleQueueRepository(db_manager)
@@ -276,6 +278,7 @@ def create_app(
     app.state.exclusion_repo = exclusion_repo
     app.state.connector_repo = connector_repo
     app.state.attribute_mapping_repo = attribute_mapping_repo
+    app.state.department_ou_mapping_repo = department_ou_mapping_repo
     app.state.custom_group_binding_repo = custom_group_binding_repo
     app.state.offboarding_repo = offboarding_repo
     app.state.lifecycle_repo = lifecycle_repo

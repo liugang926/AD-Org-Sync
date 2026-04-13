@@ -15,6 +15,7 @@ from sync_app.storage.repositories.jobs import (
 from sync_app.storage.repositories.organizations import OrganizationConfigRepository, OrganizationRepository
 from sync_app.storage.repositories.mappings import (
     AttributeMappingRuleRepository,
+    DepartmentOuMappingRepository,
     UserDepartmentOverrideRepository,
     UserIdentityBindingRepository,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "UserIdentityBindingRepository",
     "UserDepartmentOverrideRepository",
     "AttributeMappingRuleRepository",
+    "DepartmentOuMappingRepository",
     "ManagedGroupBindingRepository",
     "CustomManagedGroupBindingRepository",
     "OffboardingQueueRepository",

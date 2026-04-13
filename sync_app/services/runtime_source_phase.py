@@ -7,6 +7,32 @@ from sync_app.services.runtime_context import SyncContext
 from sync_app.services.runtime_identity import build_identity_candidates
 
 
+def _select_available_managed_candidate(
+    candidates: list[dict[str, Any]],
+    *,
+    connector_existing_users: dict[str, Any],
+    reserved_usernames: set[str],
+    connector_id: str,
+    is_protected_ad_account: Callable[[str, str], bool],
+) -> Optional[dict[str, Any]]:
+    existing_usernames = {str(key).strip().lower() for key in connector_existing_users.keys()}
+    for candidate in candidates:
+        if not candidate.get("managed"):
+            continue
+        username = str(candidate.get("username") or "").strip()
+        if not username:
+            continue
+        lowered = username.lower()
+        if lowered in existing_usernames:
+            continue
+        if lowered in reserved_usernames:
+            continue
+        if is_protected_ad_account(username, connector_id):
+            continue
+        return candidate
+    return None
+
+
 def collect_source_user_departments(ctx: SyncContext) -> dict[str, UserDepartmentBundle]:
     user_departments = ctx.identity.user_departments
     user_departments.clear()
@@ -48,22 +74,26 @@ def resolve_identity_bindings_phase(
     user_departments = ctx.identity.user_departments
     active_user_bindings = ctx.identity.active_user_bindings
     binding_resolution_details = ctx.identity.binding_resolution_details
+    binding_records_by_source_user_id = ctx.identity.binding_records_by_source_user_id
     user_connector_id_by_userid = ctx.identity.user_connector_id_by_userid
     disabled_bound_userids = ctx.identity.disabled_bound_userids
     exception_skipped_userids = ctx.identity.exception_skipped_userids
     source_user_detail_cache = ctx.identity.source_user_detail_cache
     existing_users_map_by_connector = ctx.identity.existing_users_map_by_connector
+    reserved_managed_usernames_by_connector = ctx.identity.reserved_managed_usernames_by_connector
     current_source_ad_usernames_by_connector = ctx.working.current_source_ad_usernames_by_connector
     enabled_ad_users_by_connector = ctx.working.enabled_ad_users_by_connector
     enabled_ad_users = ctx.working.enabled_ad_users_flat
 
     active_user_bindings.clear()
+    binding_records_by_source_user_id.clear()
     binding_resolution_details.clear()
     user_connector_id_by_userid.clear()
     disabled_bound_userids.clear()
     exception_skipped_userids.clear()
     source_user_detail_cache.clear()
     existing_users_map_by_connector.clear()
+    reserved_managed_usernames_by_connector.clear()
     current_source_ad_usernames_by_connector.clear()
     enabled_ad_users_by_connector.clear()
     enabled_ad_users.clear()
@@ -85,8 +115,15 @@ def resolve_identity_bindings_phase(
             user.merge_payload(detail_payload)
         return detail_payload
 
+    preloaded_binding_records = ctx.repositories.user_binding_repo.list_binding_records(
+        org_id=ctx.organization.org_id,
+    )
+    for record in preloaded_binding_records:
+        binding_records_by_source_user_id[record.source_user_id] = record
+
     identity_candidates_by_userid: dict[str, list[dict[str, str]]] = {}
     identity_candidate_usernames_by_connector: dict[str, set[str]] = {}
+    managed_primary_username_counts_by_connector: dict[str, dict[str, int]] = {}
     for userid, bundle in user_departments.items():
         get_source_user_detail_cached(userid, bundle.user)
         connector_candidates = {
@@ -115,11 +152,25 @@ def resolve_identity_bindings_phase(
         connector_spec = get_connector_spec(connector_id)
         candidates = build_identity_candidates(
             bundle.user,
+            username_strategy=connector_spec.get('username_strategy') or 'custom_template',
+            username_collision_policy=connector_spec.get('username_collision_policy') or 'append_employee_id',
+            username_collision_template=connector_spec.get('username_collision_template') or '',
             username_template=connector_spec.get('username_template') or '',
         )
         identity_candidates_by_userid[userid] = candidates
         for candidate in candidates:
             identity_candidate_usernames_by_connector.setdefault(connector_id, set()).add(candidate['username'])
+        primary_managed_candidate = next(
+            (candidate for candidate in candidates if candidate.get("managed")),
+            None,
+        )
+        if primary_managed_candidate:
+            managed_primary_username_counts_by_connector.setdefault(connector_id, {})
+            primary_username = str(primary_managed_candidate.get("username") or "").strip().lower()
+            if primary_username:
+                managed_primary_username_counts_by_connector[connector_id][primary_username] = (
+                    managed_primary_username_counts_by_connector[connector_id].get(primary_username, 0) + 1
+                )
 
     for connector_id, usernames in identity_candidate_usernames_by_connector.items():
         existing_users_map_by_connector[connector_id] = get_ad_sync(connector_id).get_users_batch(sorted(usernames))
@@ -141,7 +192,7 @@ def resolve_identity_bindings_phase(
             continue
 
         connector_id = user_connector_id_by_userid.get(userid, 'default')
-        binding_record = ctx.repositories.user_binding_repo.get_binding_record_by_source_user_id(userid)
+        binding_record = binding_records_by_source_user_id.get(userid)
         if binding_record:
             binding_connector_id = binding_record.connector_id or connector_id
             if is_protected_ad_account(binding_record.ad_username, binding_connector_id):
@@ -235,6 +286,10 @@ def resolve_identity_bindings_phase(
                 binding_connector_id,
                 set(),
             ).add(binding_record.ad_username)
+            reserved_managed_usernames_by_connector.setdefault(
+                binding_connector_id,
+                set(),
+            ).add(str(binding_record.ad_username).strip().lower())
             ctx.hooks.record_operation(
                 stage_name='plan',
                 object_type='user_binding',
@@ -251,13 +306,16 @@ def resolve_identity_bindings_phase(
 
         candidates = identity_candidates_by_userid.get(userid) or build_identity_candidates(
             user_departments[userid].user,
+            username_strategy=get_connector_spec(connector_id).get('username_strategy') or 'custom_template',
+            username_collision_policy=get_connector_spec(connector_id).get('username_collision_policy') or 'append_employee_id',
+            username_collision_template=get_connector_spec(connector_id).get('username_collision_template') or '',
             username_template=get_connector_spec(connector_id).get('username_template') or '',
         )
         connector_existing_users = existing_users_map_by_connector.get(connector_id, {})
         existing_candidates = [
             candidate
             for candidate in candidates
-            if candidate['rule'] != 'derived_default_userid'
+            if candidate.get('allow_existing_match')
             and candidate['username'] in connector_existing_users
         ]
         protected_existing_candidates = [
@@ -335,24 +393,91 @@ def resolve_identity_bindings_phase(
                 'is_manual': False,
             }
         else:
-            default_candidate = next(
-                (candidate for candidate in candidates if candidate['rule'] == 'derived_default_userid'),
-                candidates[0]
-                if candidates
-                else {
-                    'rule': 'derived_default_userid',
-                    'username': userid,
-                    'explanation': 'Defaulting to userid because no existing AD user matched',
-                },
+            primary_managed_username = next(
+                (
+                    str(candidate.get("username") or "").strip().lower()
+                    for candidate in candidates
+                    if candidate.get("rule") == "managed_username_primary"
+                ),
+                "",
             )
+            managed_candidates = [
+                candidate
+                for candidate in candidates
+                if not (
+                    candidate.get("rule") == "managed_username_primary"
+                    and primary_managed_username
+                    and managed_primary_username_counts_by_connector.get(connector_id, {}).get(primary_managed_username, 0) > 1
+                )
+            ]
+            default_candidate = _select_available_managed_candidate(
+                managed_candidates,
+                connector_existing_users=connector_existing_users,
+                reserved_usernames=reserved_managed_usernames_by_connector.setdefault(connector_id, set()),
+                connector_id=connector_id,
+                is_protected_ad_account=is_protected_ad_account,
+            )
+            if default_candidate is None:
+                protected_managed_candidates = [
+                    candidate
+                    for candidate in managed_candidates
+                    if candidate.get("managed")
+                    and is_protected_ad_account(str(candidate.get("username") or ""), connector_id)
+                ]
+                if protected_managed_candidates:
+                    protected_candidate = protected_managed_candidates[0]
+                    record_protected_account_skip(
+                        stage_name='plan',
+                        object_type='user_binding',
+                        operation_type='resolve_identity_binding',
+                        connector_id=connector_id,
+                        ad_username=str(protected_candidate.get('username') or ''),
+                        source_id=userid,
+                        details={
+                            'userid': userid,
+                            'candidate_rule': protected_candidate.get('rule'),
+                        },
+                    )
+                    continue
+                conflict_message = (
+                    f"Source user {userid} does not have a unique managed AD username candidate under connector {connector_id}"
+                )
+                ctx.hooks.record_conflict(
+                    conflict_type='managed_username_collision',
+                    source_id=userid,
+                    target_key='managed_username',
+                    message=conflict_message,
+                    resolution_hint='Adjust the connector username strategy, collision policy, or add a manual identity binding',
+                    details={
+                        'userid': userid,
+                        'connector_id': connector_id,
+                        'candidates': managed_candidates,
+                    },
+                )
+                ctx.hooks.record_operation(
+                    stage_name='plan',
+                    object_type='user_binding',
+                    operation_type='resolve_identity_binding',
+                    status='conflict',
+                    message=conflict_message,
+                    source_id=userid,
+                    rule_source='managed_username_generation',
+                    reason_code='managed_username_collision',
+                    details={
+                        'connector_id': connector_id,
+                        'candidates': managed_candidates,
+                    },
+                )
+                continue
             resolution = {
-                'source': 'derived_default_userid',
+                'source': default_candidate['rule'],
                 'ad_username': default_candidate['username'],
                 'connector_id': connector_id,
                 'rule_hits': [default_candidate['rule']],
                 'explanation': default_candidate['explanation'],
-                'binding_record_source': 'derived_default',
+                'binding_record_source': 'managed_generated',
                 'is_manual': False,
+                'managed_username_base': primary_managed_username,
             }
 
         if is_protected_ad_account(resolution['ad_username'], connector_id):
@@ -370,6 +495,9 @@ def resolve_identity_bindings_phase(
             )
             continue
         pending_auto_bindings[userid] = resolution
+        reserved_managed_usernames_by_connector.setdefault(connector_id, set()).add(
+            str(resolution['ad_username']).strip().lower()
+        )
 
     username_to_userids: dict[str, list[str]] = {}
     for userid, resolution in {**binding_resolution_details, **pending_auto_bindings}.items():
@@ -428,6 +556,8 @@ def resolve_identity_bindings_phase(
             userid,
             resolved_username,
             connector_id=resolved_connector_id,
+            source_display_name=user_departments[userid].user.name,
+            managed_username_base=str(resolution.get('managed_username_base') or ''),
             source=resolution['binding_record_source'],
             notes=resolution['explanation'],
             preserve_manual=True,

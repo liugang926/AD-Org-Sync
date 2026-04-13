@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 from sync_app.core.models import (
     AttributeMappingRuleRecord,
+    DepartmentOuMappingRecord,
     UserDepartmentOverrideRecord,
     UserIdentityBindingRecord,
 )
@@ -222,6 +223,10 @@ class UserIdentityBindingRepository(BaseRepository):
         *,
         org_id: Optional[str] = None,
         connector_id: str = "default",
+        source_display_name: str = "",
+        target_object_guid: str = "",
+        target_object_dn: str = "",
+        managed_username_base: str = "",
         source: str = "derived_default",
         notes: str = "",
         is_enabled: bool = True,
@@ -243,11 +248,17 @@ class UserIdentityBindingRepository(BaseRepository):
             conn.execute(
                 """
                 INSERT INTO user_identity_bindings (
-                  org_id, source_user_id, connector_id, ad_username, source, notes, is_enabled, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  org_id, source_user_id, source_display_name, connector_id, ad_username,
+                  target_object_guid, target_object_dn, managed_username_base,
+                  source, notes, is_enabled, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(org_id, source_user_id) DO UPDATE SET
+                  source_display_name = excluded.source_display_name,
                   connector_id = excluded.connector_id,
                   ad_username = excluded.ad_username,
+                  target_object_guid = excluded.target_object_guid,
+                  target_object_dn = excluded.target_object_dn,
+                  managed_username_base = excluded.managed_username_base,
                   source = excluded.source,
                   notes = excluded.notes,
                   is_enabled = excluded.is_enabled,
@@ -256,8 +267,12 @@ class UserIdentityBindingRepository(BaseRepository):
                 (
                     normalized_org_id,
                     source_user_id,
+                    str(source_display_name or "").strip(),
                     connector_id,
                     ad_username,
+                    str(target_object_guid or "").strip(),
+                    str(target_object_dn or "").strip(),
+                    str(managed_username_base or "").strip(),
                     source,
                     notes,
                     1 if is_enabled else 0,
@@ -271,6 +286,10 @@ class UserIdentityBindingRepository(BaseRepository):
         ad_username: str,
         *,
         connector_id: str = "default",
+        source_display_name: str = "",
+        target_object_guid: str = "",
+        target_object_dn: str = "",
+        managed_username_base: str = "",
         source: str = "derived_default",
         notes: str = "",
         is_enabled: bool = True,
@@ -281,12 +300,66 @@ class UserIdentityBindingRepository(BaseRepository):
             source_user_id=source_user_id,
             ad_username=ad_username,
             connector_id=connector_id,
+            source_display_name=source_display_name,
+            target_object_guid=target_object_guid,
+            target_object_dn=target_object_dn,
+            managed_username_base=managed_username_base,
             source=source,
             notes=notes,
             is_enabled=is_enabled,
             preserve_manual=preserve_manual,
             org_id=org_id,
         )
+
+    def update_binding_anchor(
+        self,
+        source_user_id: str,
+        *,
+        org_id: Optional[str] = None,
+        source_display_name: str | None = None,
+        target_object_guid: str | None = None,
+        target_object_dn: str | None = None,
+        managed_username_base: str | None = None,
+    ) -> None:
+        normalized_org_id = self._resolve_org_id(org_id)
+        assignments: list[str] = []
+        params: list[Any] = []
+        if source_display_name is not None:
+            assignments.append("source_display_name = ?")
+            params.append(str(source_display_name or "").strip())
+        if target_object_guid is not None:
+            assignments.append("target_object_guid = ?")
+            params.append(str(target_object_guid or "").strip())
+        if target_object_dn is not None:
+            assignments.append("target_object_dn = ?")
+            params.append(str(target_object_dn or "").strip())
+        if managed_username_base is not None:
+            assignments.append("managed_username_base = ?")
+            params.append(str(managed_username_base or "").strip())
+        if not assignments:
+            return
+        assignments.append("updated_at = ?")
+        params.append(utcnow_iso())
+        with self.db.transaction() as conn:
+            if normalized_org_id:
+                conn.execute(
+                    f"""
+                    UPDATE user_identity_bindings
+                    SET {", ".join(assignments)}
+                    WHERE org_id = ?
+                      AND source_user_id = ?
+                    """,
+                    (*params, normalized_org_id, str(source_user_id or "").strip()),
+                )
+            else:
+                conn.execute(
+                    f"""
+                    UPDATE user_identity_bindings
+                    SET {", ".join(assignments)}
+                    WHERE source_user_id = ?
+                    """,
+                    (*params, str(source_user_id or "").strip()),
+                )
 
     def set_enabled(self, source_user_id: str, enabled: bool, *, org_id: Optional[str] = None) -> None:
         normalized_org_id = self._resolve_org_id(org_id)
@@ -710,5 +783,166 @@ class AttributeMappingRuleRepository(BaseRepository):
         with self.db.transaction() as conn:
             conn.execute(
                 "DELETE FROM attribute_mapping_rules WHERE org_id = ?",
+                (self._resolve_org_id(org_id, default="default"),),
+            )
+
+
+class DepartmentOuMappingRepository(BaseRepository):
+    def get_mapping_record(
+        self,
+        source_department_id: str,
+        *,
+        connector_id: str = "",
+        org_id: Optional[str] = None,
+    ) -> Optional[DepartmentOuMappingRecord]:
+        normalized_department_id = str(source_department_id or "").strip()
+        normalized_connector_id = str(connector_id or "").strip()
+        normalized_org_id = self._resolve_org_id(org_id)
+        if not normalized_department_id:
+            return None
+        if normalized_org_id:
+            row = self._fetchone(
+                """
+                SELECT *
+                FROM department_ou_mappings
+                WHERE org_id = ?
+                  AND connector_id = ?
+                  AND source_department_id = ?
+                LIMIT 1
+                """,
+                (normalized_org_id, normalized_connector_id, normalized_department_id),
+            )
+        else:
+            row = self._fetchone(
+                """
+                SELECT *
+                FROM department_ou_mappings
+                WHERE connector_id = ?
+                  AND source_department_id = ?
+                ORDER BY org_id ASC, id ASC
+                LIMIT 1
+                """,
+                (normalized_connector_id, normalized_department_id),
+            )
+        if not row:
+            return None
+        return DepartmentOuMappingRecord.from_row(row)
+
+    def list_mapping_records(
+        self,
+        *,
+        connector_id: Optional[str] = None,
+        enabled_only: bool = False,
+        org_id: Optional[str] = None,
+    ) -> list[DepartmentOuMappingRecord]:
+        clauses = ["1 = 1"]
+        params: list[Any] = []
+        normalized_org_id = self._resolve_org_id(org_id)
+        if normalized_org_id:
+            clauses.append("org_id = ?")
+            params.append(normalized_org_id)
+        if connector_id is not None:
+            clauses.append("connector_id = ?")
+            params.append(str(connector_id or "").strip())
+        if enabled_only:
+            clauses.append("is_enabled = 1")
+        rows = self._fetchall(
+            f"""
+            SELECT *
+            FROM department_ou_mappings
+            WHERE {' AND '.join(clauses)}
+            ORDER BY connector_id ASC, source_department_name COLLATE NOCASE ASC, source_department_id ASC, id ASC
+            """,
+            tuple(params),
+        )
+        return [DepartmentOuMappingRecord.from_row(row) for row in rows]
+
+    def upsert_mapping(
+        self,
+        *,
+        source_department_id: str,
+        target_ou_path: str,
+        connector_id: str = "",
+        source_department_name: str = "",
+        apply_mode: str = "subtree",
+        notes: str = "",
+        is_enabled: bool = True,
+        org_id: Optional[str] = None,
+    ) -> None:
+        normalized_org_id = self._resolve_org_id(org_id) or "default"
+        normalized_department_id = str(source_department_id or "").strip()
+        normalized_connector_id = str(connector_id or "").strip()
+        normalized_target_ou_path = str(target_ou_path or "").strip()
+        normalized_apply_mode = str(apply_mode or "subtree").strip().lower() or "subtree"
+        if normalized_apply_mode not in {"subtree", "exact"}:
+            normalized_apply_mode = "subtree"
+        if not normalized_department_id or not normalized_target_ou_path:
+            raise ValueError("source_department_id and target_ou_path are required")
+
+        now = utcnow_iso()
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO department_ou_mappings (
+                  org_id, connector_id, source_department_id, source_department_name, target_ou_path,
+                  apply_mode, notes, is_enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(org_id, connector_id, source_department_id) DO UPDATE SET
+                  source_department_name = excluded.source_department_name,
+                  target_ou_path = excluded.target_ou_path,
+                  apply_mode = excluded.apply_mode,
+                  notes = excluded.notes,
+                  is_enabled = excluded.is_enabled,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    normalized_org_id,
+                    normalized_connector_id,
+                    normalized_department_id,
+                    str(source_department_name or "").strip(),
+                    normalized_target_ou_path,
+                    normalized_apply_mode,
+                    str(notes or "").strip(),
+                    1 if is_enabled else 0,
+                    now,
+                    now,
+                ),
+            )
+
+    def delete_mapping(
+        self,
+        source_department_id: str,
+        *,
+        connector_id: str = "",
+        org_id: Optional[str] = None,
+    ) -> None:
+        normalized_org_id = self._resolve_org_id(org_id)
+        normalized_department_id = str(source_department_id or "").strip()
+        normalized_connector_id = str(connector_id or "").strip()
+        with self.db.transaction() as conn:
+            if normalized_org_id:
+                conn.execute(
+                    """
+                    DELETE FROM department_ou_mappings
+                    WHERE org_id = ?
+                      AND connector_id = ?
+                      AND source_department_id = ?
+                    """,
+                    (normalized_org_id, normalized_connector_id, normalized_department_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    DELETE FROM department_ou_mappings
+                    WHERE connector_id = ?
+                      AND source_department_id = ?
+                    """,
+                    (normalized_connector_id, normalized_department_id),
+                )
+
+    def delete_mappings_for_org(self, org_id: str) -> None:
+        with self.db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM department_ou_mappings WHERE org_id = ?",
                 (self._resolve_org_id(org_id, default="default"),),
             )

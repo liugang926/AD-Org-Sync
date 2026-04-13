@@ -25,6 +25,7 @@ class SyncEnvironmentState:
     effective_parent_cache: dict[int, Optional[int]] = field(default_factory=dict)
     policy_skip_markers: set[tuple[Any, ...]] = field(default_factory=set)
     placement_blocked_department_ids: set[int] = field(default_factory=set)
+    department_ou_mappings_by_connector: dict[str, list[Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -63,12 +64,14 @@ class SyncWorkingState:
 class SyncIdentityState:
     user_departments: dict[str, Any] = field(default_factory=dict)
     active_user_bindings: dict[str, str] = field(default_factory=dict)
+    binding_records_by_source_user_id: dict[str, Any] = field(default_factory=dict)
     binding_resolution_details: dict[str, dict[str, Any]] = field(default_factory=dict)
     user_connector_id_by_userid: dict[str, str] = field(default_factory=dict)
     disabled_bound_userids: set[str] = field(default_factory=set)
     exception_skipped_userids: set[str] = field(default_factory=set)
     source_user_detail_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
     existing_users_map_by_connector: dict[str, dict[str, Any]] = field(default_factory=dict)
+    reserved_managed_usernames_by_connector: dict[str, set[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -102,6 +105,7 @@ class SyncExecutionServices:
     record_exception_skip: Callable[..., None]
     get_department_group_target: Callable[[Any], Any]
     get_effective_parent_department_id: Callable[[Any], Optional[int]]
+    get_effective_ou_path: Callable[[Any, str], list[str]]
 
 
 @dataclass

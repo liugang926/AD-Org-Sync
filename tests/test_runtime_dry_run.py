@@ -21,6 +21,7 @@ from sync_app.storage.local_db import (
     AttributeMappingRuleRepository,
     CustomManagedGroupBindingRepository,
     DatabaseManager,
+    DepartmentOuMappingRepository,
     ManagedGroupBindingRepository,
     OffboardingQueueRepository,
     OrganizationRepository,
@@ -1451,6 +1452,362 @@ class RunSyncDryRunTests(unittest.TestCase):
         binding = UserIdentityBindingRepository(manager).get_binding_record_by_ad_username("az1001", connector_id="asia")
         self.assertIsNotNone(binding)
         self.assertEqual(binding.source_user_id, "alice.wecom")
+
+    def test_run_sync_job_handles_same_pinyin_collisions_and_reuses_persisted_bindings(self):
+        default_config = AppConfig(
+            wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),
+            ldap=LDAPConfig(
+                server="ldap.default.example.com",
+                domain="example.com",
+                username="EXAMPLE\\administrator",
+                password="password",
+                use_ssl=True,
+                port=636,
+            ),
+            domain="example.com",
+            account=AccountConfig(default_password="VeryStrong123!456"),
+            config_path="default.ini",
+        )
+
+        test_dir = os.path.join(os.getcwd(), "test_artifacts")
+        os.makedirs(test_dir, exist_ok=True)
+        db_path = os.path.join(test_dir, "runtime_same_pinyin_binding_test.db")
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+
+        manager = DatabaseManager(db_path=db_path)
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        SettingsRepository(manager).set_value("advanced_connector_routing_enabled", "true", "bool")
+        SyncConnectorRepository(manager).upsert_connector(
+            connector_id="cn",
+            name="China Domain",
+            config_path="default.ini",
+            root_department_ids=[2],
+            username_strategy="family_name_pinyin_given_initials",
+            username_collision_policy="append_employee_id",
+        )
+
+        FakeWeComProgrammableAPI.reset()
+        FakeWeComProgrammableAPI.department_list = [
+            {"id": 2, "name": "China", "parentid": 0},
+        ]
+        FakeWeComProgrammableAPI.department_users = {
+            2: [
+                {"userid": "zhangsan.wecom", "name": "张三"},
+                {"userid": "zhangsen.wecom", "name": "张森"},
+            ],
+        }
+        FakeWeComProgrammableAPI.user_details = {
+            "zhangsan.wecom": {
+                "userid": "zhangsan.wecom",
+                "name": "张三",
+                "department": [2],
+                "employee_id": "2001",
+            },
+            "zhangsen.wecom": {
+                "userid": "zhangsen.wecom",
+                "name": "张森",
+                "department": [2],
+                "employee_id": "2002",
+            },
+        }
+        FakeADSyncPolicy.reset()
+
+        patches = [
+            patch.object(runtime, "load_sync_config", return_value=default_config),
+            patch.object(runtime, "validate_config", return_value=(True, [])),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
+            patch.object(runtime, "run_config_security_self_check", return_value=[]),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
+            patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
+            patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
+            patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
+            patch.object(runtime, "_generate_skip_detail_report", return_value="skip-details.csv"),
+            patch.object(runtime, "_generate_sync_operation_log", return_value="ops.csv"),
+            patch.object(runtime, "_generate_sync_validation_report", return_value="validation.txt"),
+        ]
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], patches[11]:
+            first_result = runtime.run_sync_job(
+                execution_mode="apply",
+                trigger_type="unit_test",
+                db_path=db_path,
+                config_path="default.ini",
+            )
+
+        self.assertEqual(first_result["error_count"], 0)
+        created_usernames = {
+            item["username"]
+            for item in FakeADSyncPolicy.created_users
+            if item["domain"] == "example.com"
+        }
+        self.assertEqual(created_usernames, {"zhangs2001", "zhangs2002"})
+
+        binding_repo = UserIdentityBindingRepository(manager)
+        first_binding = binding_repo.get_binding_record_by_source_user_id("zhangsan.wecom")
+        second_binding = binding_repo.get_binding_record_by_source_user_id("zhangsen.wecom")
+        self.assertEqual(first_binding.ad_username, "zhangs2001")
+        self.assertEqual(second_binding.ad_username, "zhangs2002")
+        self.assertEqual(first_binding.source, "managed_generated")
+        self.assertEqual(second_binding.source, "managed_generated")
+
+        FakeADSyncPolicy.created_users = []
+        FakeADSyncPolicy.updated_users = []
+        FakeADSyncPolicy.existing_users_by_domain = {
+                "example.com": {
+                "zhangs2001": DirectoryUserRecord(
+                    username="zhangs2001",
+                    dn="CN=zhangs2001,OU=China,DC=example,DC=com",
+                    display_name="张三",
+                    email="zhangs2001@example.com",
+                ),
+                "zhangs2002": DirectoryUserRecord(
+                    username="zhangs2002",
+                    dn="CN=zhangs2002,OU=China,DC=example,DC=com",
+                    display_name="张森",
+                    email="zhangs2002@example.com",
+                ),
+            }
+        }
+        FakeADSyncPolicy.enabled_users_by_domain = {"example.com": ["zhangs2001", "zhangs2002"]}
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], patches[11]:
+            second_result = runtime.run_sync_job(
+                execution_mode="apply",
+                trigger_type="unit_test_repeat",
+                db_path=db_path,
+                config_path="default.ini",
+            )
+
+        self.assertEqual(second_result["error_count"], 0)
+        self.assertEqual(FakeADSyncPolicy.created_users, [])
+        updated_usernames = {
+            item["username"]
+            for item in FakeADSyncPolicy.updated_users
+            if item["domain"] == "example.com"
+        }
+        self.assertEqual(updated_usernames, {"zhangs2001", "zhangs2002"})
+
+    def test_run_sync_job_applies_department_to_ou_mapping_for_subtree(self):
+        config = AppConfig(
+            wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),
+            ldap=LDAPConfig(
+                server="ldap.example.com",
+                domain="example.com",
+                username="EXAMPLE\\administrator",
+                password="password",
+                use_ssl=True,
+                port=636,
+            ),
+            domain="example.com",
+            account=AccountConfig(default_password="VeryStrong123!456"),
+            config_path="default.ini",
+        )
+
+        test_dir = os.path.join(os.getcwd(), "test_artifacts")
+        os.makedirs(test_dir, exist_ok=True)
+        db_path = os.path.join(test_dir, "runtime_department_ou_mapping_test.db")
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+
+        manager = DatabaseManager(db_path=db_path)
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        DepartmentOuMappingRepository(manager).upsert_mapping(
+            source_department_id="2",
+            source_department_name="China",
+            target_ou_path="Managed Users/China",
+            apply_mode="subtree",
+            org_id="default",
+        )
+
+        FakeWeComProgrammableAPI.reset()
+        FakeWeComProgrammableAPI.department_list = [
+            {"id": 1, "name": "HQ", "parentid": 0},
+            {"id": 2, "name": "China", "parentid": 1},
+            {"id": 3, "name": "Shanghai", "parentid": 2},
+        ]
+        FakeWeComProgrammableAPI.department_users = {
+            1: [],
+            2: [],
+            3: [{"userid": "alice", "name": "Alice"}],
+        }
+        FakeWeComProgrammableAPI.user_details = {
+            "alice": {
+                "userid": "alice",
+                "name": "Alice",
+                "department": [3],
+                "email": "alice@example.com",
+            }
+        }
+        FakeADSyncPolicy.reset()
+
+        patches = [
+            patch.object(runtime, "load_sync_config", return_value=config),
+            patch.object(runtime, "validate_config", return_value=(True, [])),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
+            patch.object(runtime, "run_config_security_self_check", return_value=[]),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
+            patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
+            patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
+            patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
+            patch.object(runtime, "_generate_skip_detail_report", return_value="skip-details.csv"),
+            patch.object(runtime, "_generate_sync_operation_log", return_value="ops.csv"),
+            patch.object(runtime, "_generate_sync_validation_report", return_value="validation.txt"),
+        ]
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], patches[11]:
+            result = runtime.run_sync_job(
+                execution_mode="apply",
+                trigger_type="unit_test",
+                db_path=db_path,
+                config_path="default.ini",
+            )
+
+        self.assertEqual(result["error_count"], 0)
+        self.assertTrue(FakeADSyncPolicy.created_users)
+        self.assertEqual(
+            FakeADSyncPolicy.created_users[0]["ou_dn"],
+            "OU=Shanghai,OU=China,OU=Managed Users,DC=example,DC=com",
+        )
+
+    def test_run_sync_job_applies_custom_collision_template_and_persists_binding_anchor(self):
+        config = AppConfig(
+            wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),
+            ldap=LDAPConfig(
+                server="ldap.example.com",
+                domain="example.com",
+                username="EXAMPLE\\administrator",
+                password="password",
+                use_ssl=True,
+                port=636,
+            ),
+            domain="example.com",
+            account=AccountConfig(default_password="VeryStrong123!456"),
+            config_path="default.ini",
+        )
+
+        test_dir = os.path.join(os.getcwd(), "test_artifacts")
+        os.makedirs(test_dir, exist_ok=True)
+        db_path = os.path.join(test_dir, "runtime_custom_collision_template_test.db")
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+
+        manager = DatabaseManager(db_path=db_path)
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        SettingsRepository(manager).set_value("advanced_connector_routing_enabled", "true", "bool")
+        SyncConnectorRepository(manager).upsert_connector(
+            connector_id="na",
+            name="North America",
+            config_path="default.ini",
+            root_department_ids=[2],
+            username_strategy="family_name_pinyin_given_initials",
+            username_collision_policy="custom_template",
+            username_collision_template="{base}{counter2}",
+        )
+
+        FakeWeComProgrammableAPI.reset()
+        FakeWeComProgrammableAPI.department_list = [
+            {"id": 2, "name": "North America", "parentid": 0},
+        ]
+        FakeWeComProgrammableAPI.department_users = {
+            2: [
+                {"userid": "alice.zhang", "name": "Alice Zhang"},
+                {"userid": "alan.zhang", "name": "Alan Zhang"},
+            ],
+        }
+        FakeWeComProgrammableAPI.user_details = {
+            "alice.zhang": {
+                "userid": "alice.zhang",
+                "name": "Alice Zhang",
+                "department": [2],
+                "email": "alice.zhang@example.com",
+            },
+            "alan.zhang": {
+                "userid": "alan.zhang",
+                "name": "Alan Zhang",
+                "department": [2],
+                "email": "alan.zhang@example.com",
+            },
+        }
+        FakeADSyncPolicy.reset()
+        FakeADSyncPolicy.user_details_by_username = {
+            "zhanga01": {
+                "SamAccountName": "zhanga01",
+                "DisplayName": "Alice Zhang",
+                "Mail": "zhanga01@example.com",
+                "DistinguishedName": "CN=Alice Zhang,OU=North America,DC=example,DC=com",
+                "ObjectGUID": "11111111-1111-1111-1111-111111111111",
+            },
+            "zhanga02": {
+                "SamAccountName": "zhanga02",
+                "DisplayName": "Alan Zhang",
+                "Mail": "zhanga02@example.com",
+                "DistinguishedName": "CN=Alan Zhang,OU=North America,DC=example,DC=com",
+                "ObjectGUID": "22222222-2222-2222-2222-222222222222",
+            },
+        }
+
+        patches = [
+            patch.object(runtime, "load_sync_config", return_value=config),
+            patch.object(runtime, "validate_config", return_value=(True, [])),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
+            patch.object(runtime, "run_config_security_self_check", return_value=[]),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
+            patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy),
+            patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
+            patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
+            patch.object(runtime, "_generate_skip_detail_report", return_value="skip-details.csv"),
+            patch.object(runtime, "_generate_sync_operation_log", return_value="ops.csv"),
+            patch.object(runtime, "_generate_sync_validation_report", return_value="validation.txt"),
+        ]
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], patches[11]:
+            result = runtime.run_sync_job(
+                execution_mode="apply",
+                trigger_type="unit_test",
+                db_path=db_path,
+                config_path="default.ini",
+            )
+
+        self.assertEqual(result["error_count"], 0)
+        created_usernames = {
+            item["username"]
+            for item in FakeADSyncPolicy.created_users
+            if item["domain"] == "example.com"
+        }
+        self.assertEqual(created_usernames, {"zhanga01", "zhanga02"})
+
+        binding_repo = UserIdentityBindingRepository(manager)
+        first_binding = binding_repo.get_binding_record_by_source_user_id("alice.zhang")
+        second_binding = binding_repo.get_binding_record_by_source_user_id("alan.zhang")
+        self.assertEqual(first_binding.managed_username_base, "zhanga")
+        self.assertEqual(second_binding.managed_username_base, "zhanga")
+        expected_anchor_by_username = {
+            "zhanga01": {
+                "guid": "11111111-1111-1111-1111-111111111111",
+                "dn_fragment": "CN=Alice Zhang",
+            },
+            "zhanga02": {
+                "guid": "22222222-2222-2222-2222-222222222222",
+                "dn_fragment": "CN=Alan Zhang",
+            },
+        }
+        for binding in (first_binding, second_binding):
+            expected_anchor = expected_anchor_by_username[binding.ad_username]
+            self.assertEqual(binding.target_object_guid, expected_anchor["guid"])
+            self.assertIn(expected_anchor["dn_fragment"], binding.target_object_dn)
 
     def test_run_sync_job_queues_offboarding_and_uses_last_synced_manager_state_for_notification(self):
         config = AppConfig(

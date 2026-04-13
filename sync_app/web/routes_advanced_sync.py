@@ -5,7 +5,14 @@ from typing import Any, Callable, Optional
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from sync_app.core.sync_policies import ATTRIBUTE_SYNC_MODES, MANAGED_GROUP_TYPES
+from sync_app.core.sync_policies import (
+    ATTRIBUTE_SYNC_MODES,
+    MANAGED_GROUP_TYPES,
+    USERNAME_COLLISION_POLICIES,
+    USERNAME_STRATEGIES,
+    normalize_username_collision_policy,
+    normalize_username_strategy,
+)
 
 
 def register_advanced_sync_routes(
@@ -44,6 +51,9 @@ def register_advanced_sync_routes(
                 for record in connectors
             },
             attribute_mappings=list_org_attribute_mapping_rules(request),
+            department_ou_mappings=request.app.state.department_ou_mapping_repo.list_mapping_records(
+                org_id=current_org.org_id
+            ),
             custom_group_bindings=request.app.state.custom_group_binding_repo.list_active_records(
                 org_id=current_org.org_id
             ),
@@ -133,6 +143,29 @@ def register_advanced_sync_routes(
             mapping_direction_labels=attribute_mapping_direction_labels,
             mapping_mode_options=[(value, value) for value in ATTRIBUTE_SYNC_MODES],
             group_type_options=[(value, value.replace("_", " ").title()) for value in MANAGED_GROUP_TYPES],
+            username_strategy_options=[
+                ("userid", "Source User ID"),
+                ("email_localpart", "Email Local Part"),
+                ("employee_id", "Employee ID"),
+                ("pinyin_initials_employee_id", "Pinyin Initials + Employee ID"),
+                ("pinyin_full_employee_id", "Full Pinyin + Employee ID"),
+                ("family_name_pinyin_given_initials", "Family Pinyin + Given Initials"),
+                ("family_name_pinyin_given_name_pinyin", "Family Pinyin + Given Pinyin"),
+                ("custom_template", "Custom Template"),
+            ],
+            username_collision_policy_options=[
+                ("append_employee_id", "Append Employee ID"),
+                ("append_userid", "Append Source User ID"),
+                ("append_numeric_counter", "Append Numeric Counter"),
+                ("append_2digit_counter", "Append 2-Digit Sequence"),
+                ("append_3digit_counter", "Append 3-Digit Sequence"),
+                ("append_hash", "Append Deterministic Hash"),
+                ("custom_template", "Custom Collision Template"),
+            ],
+            department_ou_apply_mode_options=[
+                ("subtree", "Map subtree"),
+                ("exact", "Map exact department only"),
+            ],
         )
 
     @app.post("/advanced-sync/policies")
@@ -249,6 +282,9 @@ def register_advanced_sync_routes(
         force_change_password: str = Form(""),
         password_complexity: str = Form(""),
         root_department_ids: str = Form(""),
+        username_strategy: str = Form("custom_template"),
+        username_collision_policy: str = Form("append_employee_id"),
+        username_collision_template: str = Form(""),
         username_template: str = Form(""),
         disabled_users_ou: str = Form("Disabled Users"),
         group_type: str = Form("security"),
@@ -283,6 +319,9 @@ def register_advanced_sync_routes(
                 force_change_password=force_change_password.strip(),
                 password_complexity=password_complexity.strip(),
                 root_department_ids=[int(item) for item in split_csv_values(root_department_ids)],
+                username_strategy=normalize_username_strategy(username_strategy),
+                username_collision_policy=normalize_username_collision_policy(username_collision_policy),
+                username_collision_template=username_collision_template.strip(),
                 username_template=username_template.strip(),
                 disabled_users_ou=disabled_users_ou.strip(),
                 group_type=group_type.strip(),
@@ -327,6 +366,86 @@ def register_advanced_sync_routes(
             },
         )
         flash_t(request, "success", "Connector {connector_id} saved", connector_id=connector_id.strip())
+        return RedirectResponse(url="/advanced-sync", status_code=303)
+
+    @app.post("/advanced-sync/department-ou-mappings")
+    def advanced_sync_department_ou_mapping_submit(
+        request: Request,
+        csrf_token: str = Form(""),
+        connector_id: str = Form(""),
+        source_department_id: str = Form(""),
+        source_department_name: str = Form(""),
+        target_ou_path: str = Form(""),
+        apply_mode: str = Form("subtree"),
+        notes: str = Form(""),
+        is_enabled: Optional[str] = Form(None),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        csrf_error = reject_invalid_csrf(request, csrf_token, "/advanced-sync")
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        normalized_connector_id = connector_id.strip()
+        if normalized_connector_id and not request.app.state.connector_repo.get_connector_record(
+            normalized_connector_id,
+            org_id=current_org.org_id,
+        ):
+            flash_t(
+                request,
+                "error",
+                "Connector {connector_id} was not found in the selected organization",
+                connector_id=normalized_connector_id,
+            )
+            return RedirectResponse(url="/advanced-sync", status_code=303)
+        try:
+            request.app.state.department_ou_mapping_repo.upsert_mapping(
+                org_id=current_org.org_id,
+                connector_id=normalized_connector_id,
+                source_department_id=source_department_id.strip(),
+                source_department_name=source_department_name.strip(),
+                target_ou_path=target_ou_path.strip(),
+                apply_mode=str(apply_mode or "subtree").strip().lower(),
+                notes=notes.strip(),
+                is_enabled=to_bool(is_enabled, True),
+            )
+        except Exception as exc:
+            flash_t(request, "error", "Failed to save department routing: {error}", error=str(exc))
+            return RedirectResponse(url="/advanced-sync", status_code=303)
+        flash_t(request, "success", "Department routing saved")
+        return RedirectResponse(url="/advanced-sync", status_code=303)
+
+    @app.post("/advanced-sync/department-ou-mappings/{mapping_id}/delete")
+    def advanced_sync_department_ou_mapping_delete(
+        request: Request,
+        mapping_id: int,
+        csrf_token: str = Form(""),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        csrf_error = reject_invalid_csrf(request, csrf_token, "/advanced-sync")
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        record = next(
+            (
+                item
+                for item in request.app.state.department_ou_mapping_repo.list_mapping_records(org_id=current_org.org_id)
+                if item.id == mapping_id
+            ),
+            None,
+        )
+        if not record:
+            flash_t(request, "error", "Department routing rule not found")
+            return RedirectResponse(url="/advanced-sync", status_code=303)
+        request.app.state.department_ou_mapping_repo.delete_mapping(
+            record.source_department_id,
+            connector_id=record.connector_id,
+            org_id=current_org.org_id,
+        )
+        flash_t(request, "success", "Department routing deleted")
         return RedirectResponse(url="/advanced-sync", status_code=303)
 
     @app.post("/advanced-sync/connectors/{connector_id}/toggle")

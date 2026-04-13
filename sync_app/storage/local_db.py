@@ -576,6 +576,7 @@ from sync_app.storage.repositories.exclusions import GroupExclusionRuleRepositor
 from sync_app.storage.repositories.system import SettingsRepository, SyncReplayRequestRepository, WebAuditLogRepository
 from sync_app.storage.repositories.mappings import (
     AttributeMappingRuleRepository,
+    DepartmentOuMappingRepository,
     UserDepartmentOverrideRepository,
     UserIdentityBindingRepository,
 )

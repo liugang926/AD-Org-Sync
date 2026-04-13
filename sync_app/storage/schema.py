@@ -1232,4 +1232,48 @@ MIGRATIONS = [
         ON user_lifecycle_queue (org_id, status, lifecycle_type, effective_at ASC, connector_id, id ASC);
         """,
     ),
+    (
+        20,
+        "add username strategy, collision template, binding anchors, and department ou mapping table",
+        """
+        ALTER TABLE sync_connectors ADD COLUMN username_strategy TEXT NOT NULL DEFAULT 'custom_template';
+        ALTER TABLE sync_connectors ADD COLUMN username_collision_policy TEXT NOT NULL DEFAULT 'append_employee_id';
+        ALTER TABLE sync_connectors ADD COLUMN username_collision_template TEXT NOT NULL DEFAULT '';
+
+        CREATE TABLE IF NOT EXISTS department_ou_mappings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL DEFAULT 'default',
+          connector_id TEXT NOT NULL DEFAULT '',
+          source_department_id TEXT NOT NULL,
+          source_department_name TEXT,
+          target_ou_path TEXT NOT NULL,
+          apply_mode TEXT NOT NULL DEFAULT 'subtree',
+          notes TEXT,
+          is_enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_department_ou_mappings_unique
+        ON department_ou_mappings (org_id, connector_id, source_department_id);
+
+        CREATE INDEX IF NOT EXISTS idx_department_ou_mappings_lookup
+        ON department_ou_mappings (org_id, connector_id, is_enabled, source_department_id);
+
+        ALTER TABLE user_identity_bindings ADD COLUMN source_display_name TEXT NOT NULL DEFAULT '';
+        ALTER TABLE user_identity_bindings ADD COLUMN target_object_guid TEXT NOT NULL DEFAULT '';
+        ALTER TABLE user_identity_bindings ADD COLUMN target_object_dn TEXT NOT NULL DEFAULT '';
+        ALTER TABLE user_identity_bindings ADD COLUMN managed_username_base TEXT NOT NULL DEFAULT '';
+
+        CREATE INDEX IF NOT EXISTS idx_user_identity_bindings_target_guid
+        ON user_identity_bindings (org_id, connector_id, target_object_guid);
+        """,
+    ),
+    (
+        21,
+        "reserved compatibility slot after migration 20 squash",
+        """
+        SELECT 1;
+        """,
+    ),
 ]

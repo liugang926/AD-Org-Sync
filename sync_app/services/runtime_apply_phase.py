@@ -96,6 +96,17 @@ def apply_user_actions(
             if not success:
                 raise Exception("LDAP operation returned failure")
 
+            ad_identity = connector_ad_sync.get_user_details(action.username) or {}
+            ctx.repositories.user_binding_repo.update_binding_anchor(
+                action.user.userid,
+                org_id=ctx.organization.org_id,
+                source_display_name=action.display_name,
+                target_object_guid=str(ad_identity.get("ObjectGUID") or "").strip(),
+                target_object_dn=str(ad_identity.get("DistinguishedName") or "").strip(),
+                managed_username_base=str(
+                    binding_resolution_details.get(action.user.userid, {}).get("managed_username_base") or ""
+                ).strip(),
+            )
             state_payload = action.user.to_state_payload()
             state_payload.update(
                 {

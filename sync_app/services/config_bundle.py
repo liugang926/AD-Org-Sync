@@ -7,6 +7,7 @@ from sync_app.storage.local_db import (
     DEFAULT_APP_SETTINGS,
     ORG_SCOPED_APP_SETTINGS,
     AttributeMappingRuleRepository,
+    DepartmentOuMappingRepository,
     DatabaseManager,
     GroupExclusionRuleRepository,
     OrganizationConfigRepository,
@@ -44,6 +45,7 @@ def export_organization_bundle(db_manager: DatabaseManager, org_id: str) -> Dict
     settings_repo = SettingsRepository(db_manager)
     connector_repo = SyncConnectorRepository(db_manager)
     mapping_repo = AttributeMappingRuleRepository(db_manager)
+    department_ou_mapping_repo = DepartmentOuMappingRepository(db_manager)
     exclusion_repo = GroupExclusionRuleRepository(db_manager)
 
     org_settings: Dict[str, Any] = {}
@@ -83,6 +85,9 @@ def export_organization_bundle(db_manager: DatabaseManager, org_id: str) -> Dict
             "force_change_password": record.force_change_password,
             "password_complexity": record.password_complexity,
             "root_department_ids": list(record.root_department_ids),
+            "username_strategy": record.username_strategy,
+            "username_collision_policy": record.username_collision_policy,
+            "username_collision_template": record.username_collision_template,
             "username_template": record.username_template,
             "disabled_users_ou": record.disabled_users_ou,
             "group_type": record.group_type,
@@ -107,6 +112,19 @@ def export_organization_bundle(db_manager: DatabaseManager, org_id: str) -> Dict
             "notes": record.notes,
         }
         for record in mapping_repo.list_rule_records(org_id=organization.org_id)
+    ]
+
+    department_ou_mappings = [
+        {
+            "connector_id": record.connector_id,
+            "source_department_id": record.source_department_id,
+            "source_department_name": record.source_department_name,
+            "target_ou_path": record.target_ou_path,
+            "apply_mode": record.apply_mode,
+            "is_enabled": record.is_enabled,
+            "notes": record.notes,
+        }
+        for record in department_ou_mapping_repo.list_mapping_records(org_id=organization.org_id)
     ]
 
     group_exclusion_rules = [
@@ -143,6 +161,7 @@ def export_organization_bundle(db_manager: DatabaseManager, org_id: str) -> Dict
         "org_settings": org_settings,
         "connectors": connectors,
         "attribute_mappings": attribute_mappings,
+        "department_ou_mappings": department_ou_mappings,
         "group_exclusion_rules": group_exclusion_rules,
     }
 
@@ -170,6 +189,7 @@ def import_organization_bundle(
     settings_repo = SettingsRepository(db_manager)
     connector_repo = SyncConnectorRepository(db_manager)
     mapping_repo = AttributeMappingRuleRepository(db_manager)
+    department_ou_mapping_repo = DepartmentOuMappingRepository(db_manager)
     exclusion_repo = GroupExclusionRuleRepository(db_manager)
 
     config_path = str(organization_data.get("config_path") or "").strip()
@@ -185,6 +205,7 @@ def import_organization_bundle(
         settings_repo.delete_org_scoped_values(effective_org_id)
         connector_repo.delete_connectors_for_org(effective_org_id)
         mapping_repo.delete_rules_for_org(effective_org_id)
+        department_ou_mapping_repo.delete_mappings_for_org(effective_org_id)
         exclusion_repo.delete_rules_for_org(effective_org_id)
 
     org_config_values = dict(bundle.get("organization_config") or {})
@@ -218,6 +239,9 @@ def import_organization_bundle(
             force_change_password=connector.get("force_change_password"),
             password_complexity=str(connector.get("password_complexity") or "").strip(),
             root_department_ids=list(connector.get("root_department_ids") or []),
+            username_strategy=str(connector.get("username_strategy") or "custom_template").strip(),
+            username_collision_policy=str(connector.get("username_collision_policy") or "append_employee_id").strip(),
+            username_collision_template=str(connector.get("username_collision_template") or "").strip(),
             username_template=str(connector.get("username_template") or "").strip(),
             disabled_users_ou=str(connector.get("disabled_users_ou") or "").strip(),
             group_type=str(connector.get("group_type") or "security").strip(),
@@ -244,6 +268,20 @@ def import_organization_bundle(
         )
         imported_mappings += 1
 
+    imported_department_ou_mappings = 0
+    for mapping in list(bundle.get("department_ou_mappings") or []):
+        department_ou_mapping_repo.upsert_mapping(
+            org_id=effective_org_id,
+            connector_id=str(mapping.get("connector_id") or "").strip(),
+            source_department_id=str(mapping.get("source_department_id") or "").strip(),
+            source_department_name=str(mapping.get("source_department_name") or "").strip(),
+            target_ou_path=str(mapping.get("target_ou_path") or "").strip(),
+            apply_mode=str(mapping.get("apply_mode") or "subtree").strip(),
+            is_enabled=bool(mapping.get("is_enabled", True)),
+            notes=str(mapping.get("notes") or "").strip(),
+        )
+        imported_department_ou_mappings += 1
+
     imported_group_rules = 0
     for rule in list(bundle.get("group_exclusion_rules") or []):
         exclusion_repo.upsert_rule(
@@ -265,5 +303,6 @@ def import_organization_bundle(
         "imported_settings": imported_settings,
         "imported_connectors": imported_connectors,
         "imported_mappings": imported_mappings,
+        "imported_department_ou_mappings": imported_department_ou_mappings,
         "imported_group_rules": imported_group_rules,
     }

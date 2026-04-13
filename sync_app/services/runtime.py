@@ -247,6 +247,13 @@ def _prepare_sync_environment(ctx: SyncContext) -> None:
         if rule.rule_type == 'skip_department_placement'
         and str(rule.match_value).strip().isdigit()
     }
+    department_ou_mappings_by_connector: Dict[str, list[Any]] = {}
+    for record in policy_settings.enabled_department_ou_mappings:
+        department_ou_mappings_by_connector.setdefault(
+            str(record.connector_id or "").strip(),
+            [],
+        ).append(record)
+    ctx.environment.department_ou_mappings_by_connector = department_ou_mappings_by_connector
 
 
 def _notify_sync_cancelled(ctx: SyncContext, interrupted_error: InterruptedError) -> None:

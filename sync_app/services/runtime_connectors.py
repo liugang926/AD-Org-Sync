@@ -39,6 +39,13 @@ def _normalize_ou_path(raw_value: Any, *, default: str = "") -> str:
     return normalized or default
 
 
+def _normalize_ou_segments(raw_value: Any) -> list[str]:
+    normalized = _normalize_ou_path(raw_value)
+    if not normalized:
+        return []
+    return [segment.strip() for segment in normalized.split("/") if segment.strip()]
+
+
 def load_connector_specs(
     config,
     connector_repo: SyncConnectorRepository,
@@ -58,6 +65,9 @@ def load_connector_specs(
             "name": "Default Connector",
             "config_path": config.config_path,
             "root_department_ids": _normalize_root_department_ids(default_root_department_ids),
+            "username_strategy": "custom_template",
+            "username_collision_policy": "append_employee_id",
+            "username_collision_template": "",
             "username_template": "",
             "disabled_users_ou": _normalize_ou_path(default_disabled_users_ou, default="Disabled Users"),
             "group_type": "security",
@@ -86,6 +96,9 @@ def load_connector_specs(
                 "name": record.name,
                 "config_path": record.config_path,
                 "root_department_ids": list(record.root_department_ids),
+                "username_strategy": record.username_strategy,
+                "username_collision_policy": record.username_collision_policy,
+                "username_collision_template": record.username_collision_template,
                 "username_template": record.username_template,
                 "disabled_users_ou": record.disabled_users_ou or "Disabled Users",
                 "group_type": normalize_group_type(record.group_type),
@@ -203,3 +216,50 @@ def sanitize_source_writeback_payload(payload: dict[str, Any]) -> dict[str, Any]
             continue
         sanitized[key] = value
     return sanitized
+
+
+def resolve_department_ou_path(
+    dept_info: Optional[DepartmentNode],
+    *,
+    connector_id: str,
+    mappings_by_connector: dict[str, list[Any]],
+) -> list[str]:
+    if not dept_info:
+        return []
+
+    default_path = list(dept_info.path or [])
+    if not default_path:
+        return []
+
+    connector_records = list(mappings_by_connector.get(connector_id, []))
+    global_records = list(mappings_by_connector.get("", []))
+    candidates = connector_records + global_records
+    if not candidates:
+        return default_path
+
+    mapping_by_dept_id: dict[str, list[Any]] = {}
+    for record in candidates:
+        mapping_by_dept_id.setdefault(str(record.source_department_id or "").strip(), []).append(record)
+
+    exact_record = None
+    current_id = str(dept_info.department_id)
+    for record in mapping_by_dept_id.get(current_id, []):
+        if str(getattr(record, "apply_mode", "subtree") or "subtree").strip().lower() == "exact":
+            exact_record = record
+            break
+    if exact_record:
+        return _normalize_ou_segments(exact_record.target_ou_path) or default_path
+
+    for index in range(len(dept_info.path_ids) - 1, -1, -1):
+        ancestor_id = str(dept_info.path_ids[index])
+        for record in mapping_by_dept_id.get(ancestor_id, []):
+            apply_mode = str(getattr(record, "apply_mode", "subtree") or "subtree").strip().lower()
+            if apply_mode != "subtree":
+                continue
+            mapped_base = _normalize_ou_segments(record.target_ou_path)
+            if not mapped_base:
+                continue
+            remainder = list(dept_info.path[index + 1 :])
+            return [*mapped_base, *remainder]
+
+    return default_path

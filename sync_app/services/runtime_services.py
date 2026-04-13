@@ -11,6 +11,7 @@ from sync_app.services.runtime_group_phase import (
     get_effective_parent_department_id as resolve_effective_parent_department_id,
 )
 from sync_app.services.runtime_connectors import is_department_in_connector_scope
+from sync_app.services.runtime_connectors import resolve_department_ou_path
 
 
 def build_execution_services(
@@ -31,6 +32,7 @@ def build_execution_services(
     excluded_department_names = ctx.environment.excluded_department_names
     placement_blocked_department_ids = ctx.environment.placement_blocked_department_ids
     policy_skip_markers = ctx.environment.policy_skip_markers
+    department_ou_mappings_by_connector = ctx.environment.department_ou_mappings_by_connector
     exception_rule_repo = ctx.repositories.exception_rule_repo
 
     def is_department_excluded(dept_info: Optional[DepartmentNode]) -> bool:
@@ -250,6 +252,7 @@ def build_execution_services(
             dept_info,
             get_connector_id_for_department=get_connector_id_for_department,
             get_ad_sync=get_ad_sync,
+            get_effective_ou_path=get_effective_ou_path,
             display_separator=display_separator,
         )
 
@@ -258,6 +261,13 @@ def build_execution_services(
             ctx,
             dept_info,
             is_department_excluded=is_department_excluded,
+        )
+
+    def get_effective_ou_path(dept_info: DepartmentNode, connector_id: str) -> list[str]:
+        return resolve_department_ou_path(
+            dept_info,
+            connector_id=connector_id,
+            mappings_by_connector=department_ou_mappings_by_connector,
         )
 
     return SyncExecutionServices(
@@ -273,6 +283,7 @@ def build_execution_services(
         record_exception_skip=record_exception_skip,
         get_department_group_target=get_department_group_target,
         get_effective_parent_department_id=get_effective_parent_department_id,
+        get_effective_ou_path=get_effective_ou_path,
     )
 
 

@@ -443,6 +443,8 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn("All advanced capabilities are opt-in.", body)
         self.assertIn("Pending Lifecycle Queue", body)
         self.assertIn("Pending Replay Requests", body)
+        self.assertIn("Department To AD OU Mapping", body)
+        self.assertIn("Same-Name Collision Policy", body)
         self.assertNotIn('name="advanced_connector_routing_enabled" value="1" checked', body)
         match = re.search(r'name="csrf_token" value="([^"]+)"', body)
         self.assertIsNotNone(match)
@@ -525,6 +527,9 @@ class WebAuthorizationTests(unittest.TestCase):
             force_change_password="true",
             password_complexity="medium",
             root_department_ids="2,3",
+            username_strategy="family_name_pinyin_given_initials",
+            username_collision_policy="custom_template",
+            username_collision_template="{base}{counter2}",
             username_template="{pinyin_initials}{employee_id}",
             disabled_users_ou="Disabled Users",
             group_type="mail_enabled_security",
@@ -538,6 +543,9 @@ class WebAuthorizationTests(unittest.TestCase):
         connector = self.app.state.connector_repo.get_connector_record("asia")
         self.assertIsNotNone(connector)
         self.assertEqual(connector.root_department_ids, [2, 3])
+        self.assertEqual(connector.username_strategy, "family_name_pinyin_given_initials")
+        self.assertEqual(connector.username_collision_policy, "custom_template")
+        self.assertEqual(connector.username_collision_template, "{base}{counter2}")
         self.assertEqual(connector.group_type, "mail_enabled_security")
         self.assertEqual(connector.managed_tag_ids, ["1001", "1002"])
         self.assertEqual(connector.ldap_server, "dc01.asia.example.local")
@@ -564,6 +572,25 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(rules[0].direction, "source_to_ad")
         self.assertEqual(rules[0].source_field, "position")
         self.assertEqual(rules[0].target_field, "title")
+
+        response = self._route("/advanced-sync/department-ou-mappings", "POST")(
+            self._request("/advanced-sync/department-ou-mappings", "POST"),
+            csrf_token=csrf_token,
+            connector_id="asia",
+            source_department_id="20018",
+            source_department_name="Greater China",
+            target_ou_path="Managed Users/China",
+            apply_mode="subtree",
+            notes="regional subtree routing",
+            is_enabled="1",
+        )
+        self.assertEqual(response.status_code, 303)
+        mapping_records = self.app.state.department_ou_mapping_repo.list_mapping_records(org_id="default")
+        self.assertEqual(len(mapping_records), 1)
+        self.assertEqual(mapping_records[0].connector_id, "asia")
+        self.assertEqual(mapping_records[0].source_department_id, "20018")
+        self.assertEqual(mapping_records[0].target_ou_path, "Managed Users/China")
+        self.assertEqual(mapping_records[0].apply_mode, "subtree")
 
     def test_super_admin_cannot_bind_system_protected_ad_account(self):
         self._login("superadmin")

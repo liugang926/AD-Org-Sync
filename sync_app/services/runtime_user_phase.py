@@ -59,6 +59,7 @@ def plan_user_actions(
     get_connector_id_for_department: Callable[[Optional[DepartmentNode]], str],
     get_connector_spec: Callable[[str], dict[str, Any]],
     get_ad_sync: Callable[[str], Any],
+    get_effective_ou_path: Callable[[DepartmentNode, str], list[str]],
     get_department_group_target: Callable[[DepartmentNode], ManagedGroupTarget],
     is_protected_ad_account: Callable[[str, str], bool],
     record_exception_skip: Callable[..., None],
@@ -349,7 +350,8 @@ def plan_user_actions(
         if not email:
             email = f"{username}@{connector_domain}"
 
-        ou_dn = connector_ad_sync.get_ou_dn(target_dept.path)
+        effective_ou_path = get_effective_ou_path(target_dept, connector_id)
+        ou_dn = connector_ad_sync.get_ou_dn(effective_ou_path)
         user.email = email
         user.departments = [dept.department_id for dept in departments_for_user]
         if connector_existing_users.get(username):
@@ -382,7 +384,7 @@ def plan_user_actions(
                 display_name=display_name,
                 email=email,
                 ou_dn=ou_dn,
-                ou_path=list(target_dept.path),
+                ou_path=list(effective_ou_path),
                 target_department_id=target_dept.department_id,
                 placement_reason=placement_reason,
                 user=user,
@@ -401,7 +403,7 @@ def plan_user_actions(
                 "ad_username": username,
                 "display_name": display_name,
                 "email": email,
-                "ou_path": target_dept.path,
+                "ou_path": effective_ou_path,
                 "placement_reason": placement_reason,
                 "binding_resolution": binding_resolution_details.get(userid, {}),
                 "field_ownership_policy": dict(field_ownership_policy),

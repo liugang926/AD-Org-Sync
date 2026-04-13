@@ -1001,8 +1001,12 @@ class UserIdentityBindingRecord(MappingLikeModel):
     id: Optional[int] = None
     org_id: str = "default"
     source_user_id: str = ""
+    source_display_name: str = ""
     connector_id: str = "default"
     ad_username: str = ""
+    target_object_guid: str = ""
+    target_object_dn: str = ""
+    managed_username_base: str = ""
     source: str = ""
     notes: str = ""
     is_enabled: bool = True
@@ -1019,8 +1023,12 @@ class UserIdentityBindingRecord(MappingLikeModel):
             id=int(row["id"]) if row["id"] is not None else None,
             org_id=str(row["org_id"] or "default") if "org_id" in row.keys() else "default",
             source_user_id=str(source_user_id or ""),
+            source_display_name=str(row["source_display_name"] or "") if "source_display_name" in row.keys() else "",
             connector_id=str(row["connector_id"] or "default"),
             ad_username=str(row["ad_username"] or ""),
+            target_object_guid=str(row["target_object_guid"] or "") if "target_object_guid" in row.keys() else "",
+            target_object_dn=str(row["target_object_dn"] or "") if "target_object_dn" in row.keys() else "",
+            managed_username_base=str(row["managed_username_base"] or "") if "managed_username_base" in row.keys() else "",
             source=str(row["source"] or ""),
             notes=str(row["notes"] or ""),
             is_enabled=bool(row["is_enabled"]),
@@ -1156,6 +1164,9 @@ class SyncConnectorRecord(MappingLikeModel):
     force_change_password: Optional[bool] = None
     password_complexity: str = ""
     root_department_ids: list[int] = field(default_factory=list)
+    username_strategy: str = "custom_template"
+    username_collision_policy: str = "append_employee_id"
+    username_collision_template: str = ""
     username_template: str = ""
     disabled_users_ou: str = ""
     group_type: str = "security"
@@ -1211,6 +1222,15 @@ class SyncConnectorRecord(MappingLikeModel):
             force_change_password=bool(row["force_change_password"]) if "force_change_password" in row.keys() and row["force_change_password"] is not None else None,
             password_complexity=str(row["password_complexity"] or "") if "password_complexity" in row.keys() else "",
             root_department_ids=[int(value) for value in root_department_ids if str(value).strip()],
+            username_strategy=str(row["username_strategy"] or "custom_template")
+            if "username_strategy" in row.keys()
+            else "custom_template",
+            username_collision_policy=str(row["username_collision_policy"] or "append_employee_id")
+            if "username_collision_policy" in row.keys()
+            else "append_employee_id",
+            username_collision_template=str(row["username_collision_template"] or "")
+            if "username_collision_template" in row.keys()
+            else "",
             username_template=str(row["username_template"] or ""),
             disabled_users_ou=str(row["disabled_users_ou"] or ""),
             group_type=str(row["group_type"] or "security"),
@@ -1220,6 +1240,37 @@ class SyncConnectorRecord(MappingLikeModel):
             managed_external_chat_ids=[
                 str(value) for value in managed_external_chat_ids if str(value).strip()
             ],
+            is_enabled=bool(row["is_enabled"]),
+            created_at=str(row["created_at"] or ""),
+            updated_at=str(row["updated_at"] or ""),
+        )
+
+
+@dataclass(slots=True)
+class DepartmentOuMappingRecord(MappingLikeModel):
+    id: Optional[int] = None
+    org_id: str = "default"
+    connector_id: str = ""
+    source_department_id: str = ""
+    source_department_name: str = ""
+    target_ou_path: str = ""
+    apply_mode: str = "subtree"
+    notes: str = ""
+    is_enabled: bool = True
+    created_at: str = ""
+    updated_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: Any) -> "DepartmentOuMappingRecord":
+        return cls(
+            id=int(row["id"]) if row["id"] is not None else None,
+            org_id=str(row["org_id"] or "default") if "org_id" in row.keys() else "default",
+            connector_id=str(row["connector_id"] or ""),
+            source_department_id=str(row["source_department_id"] or ""),
+            source_department_name=str(row["source_department_name"] or ""),
+            target_ou_path=str(row["target_ou_path"] or ""),
+            apply_mode=str(row["apply_mode"] or "subtree"),
+            notes=str(row["notes"] or ""),
             is_enabled=bool(row["is_enabled"]),
             created_at=str(row["created_at"] or ""),
             updated_at=str(row["updated_at"] or ""),
