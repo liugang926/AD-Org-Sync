@@ -390,6 +390,20 @@ class SyncJobRepository(BaseRepository):
 
 
 class SyncEventRepository(BaseRepository):
+    @staticmethod
+    def _row_to_event(row: Any) -> dict[str, Any]:
+        event = dict(row)
+        payload = event.get("payload_json")
+        if isinstance(payload, str) and payload:
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                payload = {"raw": payload}
+        elif payload is not None and not isinstance(payload, dict):
+            payload = {"raw": payload}
+        event["payload"] = payload
+        return event
+
     def add_event(
         self,
         job_id: str,
@@ -419,7 +433,7 @@ class SyncEventRepository(BaseRepository):
             )
 
     def list_events_for_job(self, job_id: str, limit: int = 100):
-        return self._fetchall(
+        rows = self._fetchall(
             """
             SELECT * FROM sync_events
             WHERE job_id = ?
@@ -428,6 +442,7 @@ class SyncEventRepository(BaseRepository):
             """,
             (job_id, int(limit)),
         )
+        return [self._row_to_event(row) for row in rows]
 
     def list_events_for_job_page(
         self,
@@ -454,7 +469,7 @@ class SyncEventRepository(BaseRepository):
             """,
             (job_id, int(limit), max(int(offset), 0)),
         )
-        return [dict(row) for row in rows], total
+        return [self._row_to_event(row) for row in rows], total
 
 
 class PlannedOperationRepository(BaseRepository):

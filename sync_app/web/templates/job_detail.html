@@ -56,6 +56,37 @@
     {% endcall %}
   </div>
 
+  {% if job.summary and (job.summary.get("error") or job.summary.get("error_traceback") or job.summary.get("log_file")) %}
+  {% call ui.panel(t("Failure Diagnostics")) %}
+    <div class="detail-grid">
+      {% if job.summary.get("error") %}
+      <div class="detail-item">
+        <div class="label">{{ t("Error") }}</div>
+        <div class="value">{{ job.summary.get("error") }}</div>
+      </div>
+      {% endif %}
+      {% if job.summary.get("error_type") %}
+      <div class="detail-item">
+        <div class="label">{{ t("Error Type") }}</div>
+        <div class="value cell-mono">{{ job.summary.get("error_type") }}</div>
+      </div>
+      {% endif %}
+      {% if job.summary.get("log_file") %}
+      <div class="detail-item">
+        <div class="label">{{ t("Log File") }}</div>
+        <div class="value cell-mono">{{ job.summary.get("log_file") }}</div>
+      </div>
+      {% endif %}
+    </div>
+    {% if job.summary.get("error_traceback") %}
+    <details>
+      <summary>{{ t("Show Traceback") }}</summary>
+      <pre>{{ job.summary.get("error_traceback") }}</pre>
+    </details>
+    {% endif %}
+  {% endcall %}
+  {% endif %}
+
   {% if review_record %}
   {% call ui.panel(t("Approval & Review")) %}
     <div class="grid cols-2">
@@ -144,7 +175,7 @@
     {% call ui.table_shell() %}
       <table class="table-sm">
         <thead>
-          <tr><th>{{ t("Stage") }}</th><th>{{ t("Object") }}</th><th>{{ t("Operation") }}</th><th>{{ t("Status") }}</th><th>{{ t("Target") }}</th><th>{{ t("Message") }}</th></tr>
+          <tr><th>{{ t("Stage") }}</th><th>{{ t("Object") }}</th><th>{{ t("Operation") }}</th><th>{{ t("Status") }}</th><th>{{ t("Target") }}</th><th>{{ t("Message") }}</th><th>{{ t("Details") }}</th></tr>
         </thead>
         <tbody>
           {% for item in operation_records %}
@@ -155,9 +186,19 @@
             <td>{{ ui.badge(t(item.status), 'success' if item.status == 'success' else 'error') }}</td>
             <td class="cell-truncate" title="{{ item.target_id or item.target_dn }}">{{ item.target_id or item.target_dn or "-" }}</td>
             <td>{{ item.message }}</td>
+            <td>
+              {% if item.details %}
+              <details>
+                <summary>{{ t("View") }}</summary>
+                <pre>{{ item.details | tojson(indent=2) }}</pre>
+              </details>
+              {% else %}
+              -
+              {% endif %}
+            </td>
           </tr>
           {% else %}
-          <tr><td class="table-empty" colspan="6">{{ t("No execution records.") }}</td></tr>
+          <tr><td class="table-empty" colspan="7">{{ t("No execution records.") }}</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -206,16 +247,27 @@
     {% call ui.panel(t("System Events")) %}
       {% call ui.table_shell() %}
         <table class="table-sm">
-          <thead><tr><th>{{ t("Time") }}</th><th>{{ t("Level") }}</th><th>{{ t("Message") }}</th></tr></thead>
+          <thead><tr><th>{{ t("Time") }}</th><th>{{ t("Level") }}</th><th>{{ t("Event") }}</th><th>{{ t("Message") }}</th><th>{{ t("Details") }}</th></tr></thead>
           <tbody>
             {% for item in events %}
             <tr>
               <td class="muted">{{ item.created_at.split(' ')[1] }}</td>
               <td>{{ ui.badge(t(item.level), 'error' if item.level == 'error' else ('warning' if item.level == 'warning' else 'info')) }}</td>
+              <td>{{ item.event_type or "-" }}</td>
               <td>{{ item.message }}</td>
+              <td>
+                {% if item.payload %}
+                <details>
+                  <summary>{{ t("View") }}</summary>
+                  <pre>{{ item.payload | tojson(indent=2) }}</pre>
+                </details>
+                {% else %}
+                -
+                {% endif %}
+              </td>
             </tr>
             {% else %}
-            <tr><td class="table-empty" colspan="3">{{ t("No events.") }}</td></tr>
+            <tr><td class="table-empty" colspan="5">{{ t("No events.") }}</td></tr>
             {% endfor %}
           </tbody>
         </table>

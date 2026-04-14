@@ -592,6 +592,57 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(mapping_records[0].target_ou_path, "Managed Users/China")
         self.assertEqual(mapping_records[0].apply_mode, "subtree")
 
+    def test_job_detail_shows_failure_diagnostics_and_structured_log_payloads(self):
+        self._login("superadmin")
+        job_id = "job-diagnostics-001"
+        self.app.state.job_repo.create_job(
+            job_id,
+            trigger_type="unit_test",
+            execution_mode="dry_run",
+            status="FAILED",
+        )
+        self.app.state.job_repo.update_job(
+            job_id,
+            error_count=1,
+            summary={
+                "error": "boom failure",
+                "error_type": "RuntimeError",
+                "error_traceback": "Traceback line 1\nTraceback line 2",
+                "log_file": "logs/test-runtime.log",
+            },
+        )
+        self.app.state.event_repo.add_event(
+            job_id,
+            "ERROR",
+            "sync_failed",
+            "sync failed: boom failure",
+            stage_name="finalize",
+            payload={"error": "boom failure", "log_file": "logs/test-runtime.log"},
+        )
+        self.app.state.operation_log_repo.add_record(
+            job_id=job_id,
+            stage_name="finalize",
+            object_type="job",
+            operation_type="sync_job",
+            status="error",
+            message="sync failed: boom failure",
+            target_id=job_id,
+            details={"error": "boom failure", "log_file": "logs/test-runtime.log"},
+        )
+
+        response = self._route("/jobs/{job_id}", "GET")(
+            self._request(f"/jobs/{job_id}"),
+            job_id=job_id,
+        )
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("Failure Diagnostics", body)
+        self.assertIn("RuntimeError", body)
+        self.assertIn("logs/test-runtime.log", body)
+        self.assertIn("Traceback line 1", body)
+        self.assertIn("sync_failed", body)
+        self.assertIn("sync failed: boom failure", body)
+
     def test_super_admin_cannot_bind_system_protected_ad_account(self):
         self._login("superadmin")
 

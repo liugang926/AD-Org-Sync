@@ -498,6 +498,8 @@ class SyncRunStats(MappingLikeModel):
     error_count: int = 0
     log_file: str = ""
     skip_detail_report: str = ""
+    operation_log_report: str = ""
+    validation_report: str = ""
     db_path: str = ""
     db_backup_dir: str = ""
     db_startup_snapshot_path: str = ""
@@ -535,6 +537,8 @@ class SyncRunStats(MappingLikeModel):
             error_count=int(value.get("error_count") or 0),
             log_file=str(value.get("log_file") or ""),
             skip_detail_report=str(value.get("skip_detail_report") or ""),
+            operation_log_report=str(value.get("operation_log_report") or ""),
+            validation_report=str(value.get("validation_report") or ""),
             db_path=str(value.get("db_path") or ""),
             db_backup_dir=str(value.get("db_backup_dir") or ""),
             db_startup_snapshot_path=str(value.get("db_startup_snapshot_path") or ""),

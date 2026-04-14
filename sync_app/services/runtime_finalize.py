@@ -1,12 +1,28 @@
 from __future__ import annotations
 
 import time
+import traceback
 from datetime import datetime
 from typing import Any
 
 from sync_app.core.common import format_time_duration
 from sync_app.core.models import SyncJobSummary
 from sync_app.services.runtime_context import SyncContext
+
+
+def _build_failure_details(ctx: SyncContext, sync_error: Exception) -> dict[str, Any]:
+    traceback_text = "".join(
+        traceback.format_exception(type(sync_error), sync_error, sync_error.__traceback__)
+    ).strip()
+    return {
+        "job_id": ctx.job_id,
+        "org_id": ctx.organization.org_id,
+        "mode": ctx.execution_mode,
+        "error": str(sync_error),
+        "error_type": type(sync_error).__name__,
+        "error_traceback": traceback_text,
+        "log_file": str(ctx.sync_stats.get("log_file") or ""),
+    }
 
 
 def finalize_successful_sync(ctx: SyncContext) -> dict[str, Any]:
@@ -33,7 +49,11 @@ def finalize_successful_sync(ctx: SyncContext) -> dict[str, Any]:
         )
 
     ctx.sync_stats['skip_detail_report'] = ctx.hooks.generate_skip_detail_report(ctx.sync_stats)
-    ctx.hooks.generate_sync_operation_log(ctx.sync_stats, ctx.start_time, ctx.config)
+    ctx.sync_stats['operation_log_report'] = ctx.hooks.generate_sync_operation_log(
+        ctx.sync_stats,
+        ctx.start_time,
+        ctx.config,
+    )
     current_source_ad_usernames = sorted(
         {
             f"{connector_id}:{username}"
@@ -50,7 +70,7 @@ def finalize_successful_sync(ctx: SyncContext) -> dict[str, Any]:
             and username not in ctx.working.current_source_ad_usernames_by_connector.get(connector_id, set())
         }
     )
-    ctx.hooks.generate_sync_validation_report(
+    ctx.sync_stats['validation_report'] = ctx.hooks.generate_sync_validation_report(
         ctx.sync_stats,
         current_source_ad_usernames,
         managed_missing_ad_usernames,
@@ -76,6 +96,10 @@ def finalize_successful_sync(ctx: SyncContext) -> dict[str, Any]:
         'automatic_replay_request_ids': [
             int(request.id) for request in ctx.plan.started_replay_requests if request.id is not None
         ],
+        'log_file': str(ctx.sync_stats.get('log_file') or ''),
+        'skip_detail_report': str(ctx.sync_stats.get('skip_detail_report') or ''),
+        'operation_log_report': str(ctx.sync_stats.get('operation_log_report') or ''),
+        'validation_report': str(ctx.sync_stats.get('validation_report') or ''),
     }
     try:
         summary['history_cleanup'] = ctx.hooks.run_history_cleanup()
@@ -121,6 +145,32 @@ def finalize_successful_sync(ctx: SyncContext) -> dict[str, Any]:
 
 def finalize_interrupted_sync(ctx: SyncContext, interrupted_error: InterruptedError) -> dict[str, Any]:
     ctx.sync_stats['error_count'] += 1
+    interruption_details = {
+        "job_id": ctx.job_id,
+        "org_id": ctx.organization.org_id,
+        "mode": ctx.execution_mode,
+        "error": str(interrupted_error),
+        "error_type": type(interrupted_error).__name__,
+        "log_file": str(ctx.sync_stats.get("log_file") or ""),
+    }
+    ctx.hooks.record_event(
+        'WARNING',
+        'sync_canceled',
+        f"sync canceled: {interrupted_error}",
+        stage_name='finalize',
+        payload=interruption_details,
+    )
+    ctx.hooks.record_operation(
+        stage_name='finalize',
+        object_type='job',
+        operation_type='sync_job',
+        status='canceled',
+        message=f"sync canceled: {interrupted_error}",
+        target_id=ctx.job_id,
+        risk_level='normal',
+        reason_code='sync_canceled',
+        details=interruption_details,
+    )
     for replay_request in ctx.plan.started_replay_requests:
         ctx.repositories.replay_request_repo.mark_finished(
             int(replay_request.id),
@@ -131,7 +181,7 @@ def finalize_interrupted_sync(ctx: SyncContext, interrupted_error: InterruptedEr
     ctx.hooks.mark_job(
         'CANCELED',
         ended=True,
-        summary={'mode': ctx.execution_mode, 'error': str(interrupted_error)},
+        summary=interruption_details,
     )
     ctx.sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(ctx.sync_stats).to_dict()
     return ctx.sync_stats.to_dict()
@@ -139,6 +189,25 @@ def finalize_interrupted_sync(ctx: SyncContext, interrupted_error: InterruptedEr
 
 def finalize_failed_sync(ctx: SyncContext, sync_error: Exception) -> None:
     ctx.sync_stats['error_count'] += 1
+    failure_details = _build_failure_details(ctx, sync_error)
+    ctx.hooks.record_event(
+        'ERROR',
+        'sync_failed',
+        f"sync failed: {sync_error}",
+        stage_name='finalize',
+        payload=failure_details,
+    )
+    ctx.hooks.record_operation(
+        stage_name='finalize',
+        object_type='job',
+        operation_type='sync_job',
+        status='error',
+        message=f"sync failed: {sync_error}",
+        target_id=ctx.job_id,
+        risk_level='high',
+        reason_code='sync_failed',
+        details=failure_details,
+    )
     for replay_request in ctx.plan.started_replay_requests:
         ctx.repositories.replay_request_repo.mark_finished(
             int(replay_request.id),
@@ -149,6 +218,6 @@ def finalize_failed_sync(ctx: SyncContext, sync_error: Exception) -> None:
     ctx.hooks.mark_job(
         'FAILED',
         ended=True,
-        summary={'mode': ctx.execution_mode, 'error': str(sync_error)},
+        summary=failure_details,
     )
     ctx.sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(ctx.sync_stats).to_dict()
