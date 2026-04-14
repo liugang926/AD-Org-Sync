@@ -1729,6 +1729,10 @@ class RunSyncDryRunTests(unittest.TestCase):
         self.assertEqual(job_record.error_count, 1)
         self.assertEqual(job_record.summary["error"], "boom failure")
         self.assertEqual(job_record.summary["error_type"], "RuntimeError")
+        self.assertEqual(job_record.summary["error_category"], "unknown")
+        self.assertEqual(job_record.summary["error_category_label"], "Unknown")
+        self.assertTrue(job_record.summary["diagnostic_summary"])
+        self.assertGreaterEqual(len(job_record.summary["diagnostic_actions"]), 1)
         self.assertEqual(job_record.summary["log_file"], "test-runtime.log")
         self.assertIn("RuntimeError: boom failure", job_record.summary["error_traceback"])
 
@@ -1737,12 +1741,14 @@ class RunSyncDryRunTests(unittest.TestCase):
         failed_event = next(item for item in events if item["event_type"] == "sync_failed")
         self.assertEqual(failed_event["level"], "ERROR")
         self.assertEqual(failed_event["payload"]["error"], "boom failure")
+        self.assertEqual(failed_event["payload"]["error_category"], "unknown")
         self.assertEqual(failed_event["payload"]["log_file"], "test-runtime.log")
 
         operation_logs = SyncOperationLogRepository(manager).list_records_for_job("job-failed-001", limit=20)
         failure_logs = [item for item in operation_logs if item.operation_type == "sync_job" and item.status == "error"]
         self.assertEqual(len(failure_logs), 1)
         self.assertEqual(failure_logs[0].details["error"], "boom failure")
+        self.assertEqual(failure_logs[0].details["error_category"], "unknown")
         self.assertEqual(failure_logs[0].details["log_file"], "test-runtime.log")
 
     def test_run_sync_job_applies_custom_collision_template_and_persists_binding_anchor(self):

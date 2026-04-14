@@ -761,6 +761,13 @@ class WebAuthorizationTests(unittest.TestCase):
             summary={
                 "error": "boom failure",
                 "error_type": "RuntimeError",
+                "error_category": "connectivity",
+                "error_category_label": "Connectivity",
+                "diagnostic_summary": "The failure looks like a network or endpoint reachability problem.",
+                "diagnostic_actions": [
+                    "Check DNS, firewall, and port reachability to the source system and LDAP endpoint.",
+                    "Confirm the configured server, port, and proxy settings from the organization config page.",
+                ],
                 "error_traceback": "Traceback line 1\nTraceback line 2",
                 "log_file": "logs/test-runtime.log",
             },
@@ -792,6 +799,9 @@ class WebAuthorizationTests(unittest.TestCase):
         body = self._text(response)
         self.assertIn("Failure Diagnostics", body)
         self.assertIn("RuntimeError", body)
+        self.assertIn("Connectivity", body)
+        self.assertIn("The failure looks like a network or endpoint reachability problem.", body)
+        self.assertIn("Check DNS, firewall, and port reachability to the source system and LDAP endpoint.", body)
         self.assertIn("logs/test-runtime.log", body)
         self.assertIn("Traceback line 1", body)
         self.assertIn("sync_failed", body)
