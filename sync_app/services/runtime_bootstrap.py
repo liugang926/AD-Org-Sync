@@ -305,6 +305,7 @@ def bootstrap_sync_runtime(
     config_path: str = "config.ini",
     db_path: str | None = None,
     org_id: str = "default",
+    active_job_guard_id: str | None = None,
     load_sync_config_fn=load_sync_config,
 ) -> SyncRuntimeBootstrap:
     logger = sync_logging.setup_logging()
@@ -343,8 +344,8 @@ def bootstrap_sync_runtime(
     exception_rule_repo = SyncExceptionRuleRepository(db_manager, default_org_id=organization.org_id)
     state_manager = SyncStateManager(db_manager=db_manager, org_id=organization.org_id)
 
-    active_job = job_repo.get_active_job_record()
-    if active_job:
+    active_job = job_repo.get_execution_job_record()
+    if active_job and str(active_job.job_id or "").strip() != str(active_job_guard_id or "").strip():
         raise RuntimeError(f"active sync job already exists: {active_job.job_id}")
 
     policy_settings = _build_policy_settings(

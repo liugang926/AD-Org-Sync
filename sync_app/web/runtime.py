@@ -5,8 +5,15 @@ import threading
 import time
 from typing import Any, Optional
 
-from sync_app.services.runtime import run_sync_job
-from sync_app.storage.local_db import SettingsRepository, WebAuditLogRepository
+from sync_app.services.sync_dispatch import (
+    claim_next_sync_job,
+    enqueue_sync_job,
+    run_claimed_sync_job,
+)
+from sync_app.storage.local_db import (
+    SettingsRepository,
+    WebAuditLogRepository,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -114,11 +121,34 @@ class WebSyncRunner:
         self.db_path = db_path
         self.audit_repo = audit_repo
         self._lock = threading.Lock()
-        self._thread: Optional[threading.Thread] = None
+        self._dispatcher_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._current_job_id = ""
+        self._current_actor_username = ""
+        self._worker_id = f"web-sync-dispatcher-{id(self)}"
         self.last_error = ""
 
+    def start(self) -> None:
+        with self._lock:
+            if self._dispatcher_thread and self._dispatcher_thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._dispatcher_thread = threading.Thread(
+                target=self._dispatch_loop,
+                daemon=True,
+                name="web-sync-dispatcher",
+            )
+            self._dispatcher_thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        thread = self._dispatcher_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=2.0)
+
     def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
+        with self._lock:
+            return bool(self._current_job_id)
 
     def launch(
         self,
@@ -128,45 +158,74 @@ class WebSyncRunner:
         org_id: str,
         config_path: str,
     ) -> tuple[bool, str]:
-        with self._lock:
-            if self.is_running():
-                return False, "A synchronization job is already running in the background"
-            self.last_error = ""
-            self._thread = threading.Thread(
-                target=self._run_job,
-                kwargs={
-                    "mode": mode,
-                    "actor_username": actor_username,
-                    "org_id": org_id,
-                    "config_path": config_path,
-                },
-                daemon=True,
-                name=f"web-sync-{org_id}-{mode}",
-            )
-            self._thread.start()
-        return True, "Synchronization job started"
+        enqueue_result = enqueue_sync_job(
+            db_path=self.db_path,
+            execution_mode=mode,
+            trigger_type="web",
+            org_id=org_id,
+            config_path=config_path,
+            requested_by=actor_username,
+        )
+        if not enqueue_result.accepted:
+            return False, enqueue_result.message
 
-    def _run_job(self, *, mode: str, actor_username: str, org_id: str, config_path: str) -> None:
-        try:
-            result = run_sync_job(
-                execution_mode=mode,
-                trigger_type="web",
-                db_path=self.db_path,
-                config_path=config_path,
-                org_id=org_id,
-            )
+        self.last_error = ""
+        self.start()
+        if enqueue_result.job:
             self.audit_repo.add_log(
                 org_id=org_id,
                 actor_username=actor_username,
-                action_type="job.run",
+                action_type="job.enqueue",
                 target_type="sync_job",
-                target_id=result.get("job_id"),
+                target_id=enqueue_result.job.job_id,
                 result="success",
-                message=f"Started {mode} synchronization job",
+                message=f"Queued {mode} synchronization job",
                 payload={
-                    "job_id": result.get("job_id"),
+                    "job_id": enqueue_result.job.job_id,
                     "mode": mode,
                     "org_id": org_id,
+                },
+            )
+        return True, enqueue_result.message
+
+    def _dispatch_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                claimed_job = claim_next_sync_job(
+                    db_path=self.db_path,
+                    worker_id=self._worker_id,
+                )
+                if not claimed_job:
+                    self._stop_event.wait(1.0)
+                    continue
+                self._run_claimed_job(claimed_job)
+            except Exception:
+                LOGGER.exception("web sync dispatcher loop failed")
+                self._stop_event.wait(2.0)
+
+    def _run_claimed_job(self, job_record) -> None:
+        actor_username = str(job_record.requested_by or "").strip() or "web"
+        with self._lock:
+            self._current_job_id = job_record.job_id
+            self._current_actor_username = actor_username
+        try:
+            result = run_claimed_sync_job(
+                db_path=self.db_path,
+                job_id=job_record.job_id,
+                worker_id=self._worker_id,
+            )
+            self.audit_repo.add_log(
+                org_id=job_record.org_id,
+                actor_username=actor_username,
+                action_type="job.run",
+                target_type="sync_job",
+                target_id=result.get("job_id") or job_record.job_id,
+                result="success",
+                message=f"Completed {job_record.execution_mode} synchronization job",
+                payload={
+                    "job_id": result.get("job_id") or job_record.job_id,
+                    "mode": job_record.execution_mode,
+                    "org_id": job_record.org_id,
                     "error_count": result.get("error_count"),
                 },
             )
@@ -174,15 +233,23 @@ class WebSyncRunner:
             self.last_error = str(exc)
             LOGGER.exception("web sync job failed")
             self.audit_repo.add_log(
-                org_id=org_id,
+                org_id=job_record.org_id,
                 actor_username=actor_username,
                 action_type="job.run",
                 target_type="sync_job",
-                target_id="",
+                target_id=job_record.job_id,
                 result="error",
-                message=f"Failed to start synchronization job: {exc}",
-                payload={"mode": mode, "org_id": org_id},
+                message=f"Failed to execute synchronization job: {exc}",
+                payload={
+                    "job_id": job_record.job_id,
+                    "mode": job_record.execution_mode,
+                    "org_id": job_record.org_id,
+                },
             )
+        finally:
+            with self._lock:
+                self._current_job_id = ""
+                self._current_actor_username = ""
 
 
 class LoginRateLimiter:

@@ -1,6 +1,8 @@
 {% import "components/ui.html" as ui %}
 {% set is_lightweight_shell = lightweight_shell|default(False) %}
 {% set load_tom_select_assets = (not is_lightweight_shell) and page in ['advanced-sync', 'mappings'] %}
+{% set load_config_page_script = (not is_lightweight_shell) and page == 'config' %}
+{% set load_mappings_page_script = (not is_lightweight_shell) and page == 'mappings' %}
 <!DOCTYPE html>
 <html lang="{{ ui_language if ui_language == 'zh-CN' else 'en' }}">
 <head>
@@ -15,60 +17,67 @@
 </head>
 <body class="{% if not current_user %}login-page{% endif %}" data-confirm-message="{{ t('Are you sure you want to perform this action?') }}">
   {% if current_user %}
-  <aside>
+  <div class="mobile-nav-backdrop" data-mobile-nav-close></div>
+  <aside id="app-sidebar" data-app-sidebar aria-label="{{ t('Primary navigation') }}">
+    <div class="sidebar-mobile-bar">
+      <span class="sidebar-mobile-bar__label">{{ t("Navigation") }}</span>
+      <button class="topbar-icon-button mobile-nav-close" type="button" data-mobile-nav-close aria-label="{{ t('Close navigation') }}">
+        <i data-lucide="x" class="icon icon-sm"></i>
+      </button>
+    </div>
     <div class="brand">
-      <div class="login-mark" style="width: 44px; height: 44px; margin: 0 0 20px; font-size: 20px; border-radius: 12px;">{{ brand_mark_text }}</div>
+      <div class="login-mark login-mark--sidebar">{{ brand_mark_text }}</div>
       <h1>{{ brand_display_name }}</h1>
       <div class="version">{{ t("Build {version}", version=app_version) }}</div>
     </div>
-    <nav>
+    <nav data-sidebar-nav>
       {% if can("dashboard.read") %}
       <a href="/dashboard" class="{% if page == 'dashboard' %}active{% endif %}">
-        <i data-lucide="layout-grid" style="width: 18px; height: 18px; margin-right: 12px;"></i>
+        <i data-lucide="layout-grid" class="icon icon-sm sidebar-nav__icon"></i>
         <span>{{ t("Dashboard") }}</span>
       </a>
       {% endif %}
       
       {% if can("jobs.read") %}
       <a href="/jobs" class="{% if page == 'jobs' %}active{% endif %}">
-        <i data-lucide="refresh-cw" style="width: 18px; height: 18px; margin-right: 12px;"></i>
+        <i data-lucide="refresh-cw" class="icon icon-sm sidebar-nav__icon"></i>
         <span>{{ t("Jobs") }}</span>
       </a>
       {% endif %}
 
       {% if can("conflicts.read") %}
       <a href="/conflicts" class="{% if page == 'conflicts' %}active{% endif %}">
-        <i data-lucide="shield-alert" style="width: 18px; height: 18px; margin-right: 12px;"></i>
+        <i data-lucide="shield-alert" class="icon icon-sm sidebar-nav__icon"></i>
         <span>{{ t("Conflicts") }}</span>
       </a>
       {% endif %}
 
       {% if can("config.read") or (show_advanced_navigation and can("mappings.read")) %}
-      <div style="margin: 32px 16px 12px; font-size: 11px; font-weight: 800; color: rgba(255,255,255,0.25); text-transform: uppercase; letter-spacing: 0.1em;">
+      <div class="sidebar-section-label">
         {{ t("Configuration") }}
       </div>
       {% endif %}
 
       {% if can("config.read") %}
       <a href="/config" class="{% if page == 'config' %}active{% endif %}">
-        <i data-lucide="settings-2" style="width: 18px; height: 18px; margin-right: 12px;"></i>
+        <i data-lucide="settings-2" class="icon icon-sm sidebar-nav__icon"></i>
         <span>{{ t("Config") }}</span>
       </a>
       {% endif %}
 
       {% if show_advanced_navigation %}
-      {% if can("mappings.read") %}<a href="/mappings" class="{% if page == 'mappings' %}active{% endif %}"><i data-lucide="layers" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Identity Overrides") }}</span></a>{% endif %}
-      {% if can("config.read") %}<a href="/advanced-sync" class="{% if page == 'advanced-sync' %}active{% endif %}"><i data-lucide="waypoints" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Advanced Sync") }}</span></a>{% endif %}
+      {% if can("mappings.read") %}<a href="/mappings" class="{% if page == 'mappings' %}active{% endif %}"><i data-lucide="layers" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Identity Overrides") }}</span></a>{% endif %}
+      {% if can("config.read") %}<a href="/advanced-sync" class="{% if page == 'advanced-sync' %}active{% endif %}"><i data-lucide="waypoints" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Advanced Sync") }}</span></a>{% endif %}
       {% if can("account.manage") or can("exceptions.read") or can("organizations.manage") or can("database.read") or can("audit.read") %}
-      <div style="margin: 32px 16px 12px; font-size: 11px; font-weight: 800; color: rgba(255,255,255,0.25); text-transform: uppercase; letter-spacing: 0.1em;">
+      <div class="sidebar-section-label">
         {{ t("Management") }}
       </div>
 
-      {% if can("account.manage") %}<a href="/account" class="{% if page == 'account' %}active{% endif %}"><i data-lucide="user-cog" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Account") }}</span></a>{% endif %}
-      {% if can("exceptions.read") %}<a href="/exceptions" class="{% if page == 'exceptions' %}active{% endif %}"><i data-lucide="ban" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Exceptions") }}</span></a>{% endif %}
-      {% if can("organizations.manage") %}<a href="/organizations" class="{% if page == 'organizations' %}active{% endif %}"><i data-lucide="building-2" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Organizations") }}</span></a>{% endif %}
-      {% if can("database.read") %}<a href="/database" class="{% if page == 'database' %}active{% endif %}"><i data-lucide="database" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Database") }}</span></a>{% endif %}
-      {% if can("audit.read") %}<a href="/audit" class="{% if page == 'audit' %}active{% endif %}"><i data-lucide="scroll-text" style="width: 18px; height: 18px; margin-right: 12px;"></i><span>{{ t("Audit") }}</span></a>{% endif %}
+      {% if can("account.manage") %}<a href="/account" class="{% if page == 'account' %}active{% endif %}"><i data-lucide="user-cog" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Account") }}</span></a>{% endif %}
+      {% if can("exceptions.read") %}<a href="/exceptions" class="{% if page == 'exceptions' %}active{% endif %}"><i data-lucide="ban" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Exceptions") }}</span></a>{% endif %}
+      {% if can("organizations.manage") %}<a href="/organizations" class="{% if page == 'organizations' %}active{% endif %}"><i data-lucide="building-2" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Organizations") }}</span></a>{% endif %}
+      {% if can("database.read") %}<a href="/database" class="{% if page == 'database' %}active{% endif %}"><i data-lucide="database" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Database") }}</span></a>{% endif %}
+      {% if can("audit.read") %}<a href="/audit" class="{% if page == 'audit' %}active{% endif %}"><i data-lucide="scroll-text" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Audit") }}</span></a>{% endif %}
       {% endif %}
       {% endif %}
     </nav>
@@ -82,6 +91,9 @@
     {% if current_user %}
     <header>
       <div class="header-leading">
+        <button class="topbar-icon-button mobile-nav-toggle" type="button" data-mobile-nav-toggle aria-controls="app-sidebar" aria-expanded="false" aria-label="{{ t('Open navigation') }}">
+          <i data-lucide="menu" class="icon icon-sm"></i>
+        </button>
         {% if current_org %}
         {% call ui.topbar_chip(current_org.name, icon="building", class_name="topbar-org-chip") %}
           {% if enabled_organizations and enabled_organizations|length > 1 %}
@@ -138,15 +150,15 @@
     <div class="{% if current_user %}content-wrapper{% else %}login-shell{% endif %}">
       {% if flash %}
       <div class="flash {{ flash.level }}" id="global-flash">
-        <div style="width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: var(--{{ flash.level }}-bg);">
-          <i data-lucide="{% if flash.level == 'success' %}check-circle-2{% elif flash.level == 'error' %}alert-circle{% else %}alert-triangle{% endif %}" style="width: 20px; height: 20px; color: var(--{{ flash.level }});"></i>
+        <div class="flash__icon-shell flash__icon-shell--{{ flash.level }}">
+          <i data-lucide="{% if flash.level == 'success' %}check-circle-2{% elif flash.level == 'error' %}alert-circle{% else %}alert-triangle{% endif %}" class="icon icon-md flash__icon flash__icon--{{ flash.level }}"></i>
         </div>
-        <div style="flex: 1;">
-          <div style="font-weight: 700; font-size: 14px; margin-bottom: 2px; color: var(--text);">{{ t(flash.level|capitalize) }}</div>
-          <div style="font-size: 13px; color: var(--text-muted);">{{ flash.message }}</div>
+        <div class="flash__body">
+          <div class="flash__title">{{ t(flash.level|capitalize) }}</div>
+          <div class="flash__message">{{ flash.message }}</div>
         </div>
-        <button class="ghost" type="button" data-dismiss-closest=".flash" style="padding: 0; min-height: auto; min-width: auto; border: 0; color: var(--text-muted);">
-          <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+        <button class="ghost flash__dismiss" type="button" data-dismiss-closest=".flash">
+          <i data-lucide="x" class="icon icon-sm"></i>
         </button>
       </div>
       {% endif %}
@@ -161,6 +173,12 @@
   <script src="/static/vendor/tom-select.complete.min.js" defer></script>
   {% endif %}
   <script src="/static/app.js" defer></script>
+  {% if load_config_page_script %}
+  <script src="/static/config-page.js" defer></script>
+  {% endif %}
+  {% if load_mappings_page_script %}
+  <script src="/static/mappings-page.js" defer></script>
+  {% endif %}
   {% endif %}
 </body>
 </html>

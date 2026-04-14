@@ -546,6 +546,7 @@ def _handle_sync(args: argparse.Namespace) -> int:
         db_path=args.db_path,
         config_path=resolved_config_path,
         org_id=organization.org_id,
+        requested_by=os.getenv("USERNAME") or os.getenv("USER") or "cli",
     )
     summary_model = SyncJobSummary.from_sync_stats(result)
     summary = summary_model.to_dict()

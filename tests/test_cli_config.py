@@ -169,6 +169,7 @@ class CliConfigCommandTests(unittest.TestCase):
             db_path=str(self.db_path),
             config_path=asia_config_path,
             org_id="asia",
+            requested_by=os.getenv("USERNAME") or os.getenv("USER") or "cli",
         )
 
     def test_config_export_prints_database_backed_organization_bundle(self):

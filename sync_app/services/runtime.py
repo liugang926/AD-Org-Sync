@@ -287,6 +287,9 @@ def run_sync_job(
     db_path: Optional[str] = None,
     config_path: str = 'config.ini',
     org_id: str = 'default',
+    job_id: Optional[str] = None,
+    active_job_guard_id: Optional[str] = None,
+    requested_by: str = '',
 ):
     start_time = time.time()
     execution_mode = (execution_mode or 'apply').strip().lower()
@@ -304,6 +307,7 @@ def run_sync_job(
         config_path=config_path,
         db_path=db_path,
         org_id=org_id,
+        active_job_guard_id=active_job_guard_id or job_id,
         load_sync_config_fn=load_sync_config,
     )
     logger = bootstrap.logger
@@ -349,7 +353,7 @@ def run_sync_job(
     sync_stats['org_id'] = organization.org_id
     sync_stats['organization_name'] = organization.name
     sync_stats['organization_config_path'] = config.config_path
-    job_id = generate_job_id()
+    job_id = str(job_id or generate_job_id()).strip() or generate_job_id()
     sync_stats['job_id'] = job_id
     ctx = SyncContext(
         start_time=start_time,
@@ -364,15 +368,31 @@ def run_sync_job(
         hooks=None,
     )
 
-    job_repo.create_job(
-        job_id=job_id,
-        org_id=organization.org_id,
-        trigger_type=trigger_type,
-        execution_mode=execution_mode,
-        status='CREATED',
-        app_version=APP_VERSION,
-        config_snapshot_hash=config_hash,
-    )
+    existing_job_record = job_repo.get_job_record(job_id)
+    if existing_job_record:
+        job_repo.update_job(
+            job_id,
+            status='CREATED',
+            trigger_type=trigger_type,
+            execution_mode=execution_mode,
+            app_version=APP_VERSION,
+            config_snapshot_hash=config_hash,
+            requested_by=requested_by or existing_job_record.requested_by,
+            requested_config_path=resolved_config_path,
+            clear_summary=True,
+        )
+    else:
+        job_repo.create_job(
+            job_id=job_id,
+            org_id=organization.org_id,
+            trigger_type=trigger_type,
+            execution_mode=execution_mode,
+            status='CREATED',
+            requested_by=requested_by,
+            requested_config_path=resolved_config_path,
+            app_version=APP_VERSION,
+            config_snapshot_hash=config_hash,
+        )
 
     def record_event(
         level: str,
@@ -512,6 +532,7 @@ def run_sync_job(
             error_count=sync_stats['error_count'],
             summary=summary,
             ended=ended,
+            clear_lease=ended,
         )
 
     def run_history_cleanup() -> dict[str, Any]:

@@ -1,9 +1,9 @@
 {% macro card(title='', icon='', class='') %}
 <section class="card {{ class }}">
   {% if title %}
-  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 24px;">
-    {% if icon %}<i data-lucide="{{ icon }}" style="width: 20px; height: 20px; color: var(--primary);"></i>{% endif %}
-    <h2 style="margin: 0; font-size: 18px; font-weight: 700;">{{ title }}</h2>
+  <div class="card__header">
+    {% if icon %}<i data-lucide="{{ icon }}" class="icon icon-md card__icon"></i>{% endif %}
+    <h2 class="card__title">{{ title }}</h2>
   </div>
   {% endif %}
   {{ caller() }}
@@ -12,15 +12,15 @@
 
 {% macro panel(title, scope_label='', scope_level='info', description='', class_name='') %}
 <section class="card {{ class_name }}">
-  <div style="margin-bottom: 24px;">
-    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;">
-      <h2 style="margin: 0; font-size: 18px; font-weight: 700;">{{ title }}</h2>
+  <div class="panel__intro">
+    <div class="panel__header">
+      <h2 class="panel__title">{{ title }}</h2>
       {% if scope_label %}
       {{ badge(scope_label, scope_level) }}
       {% endif %}
     </div>
     {% if description %}
-    <p style="margin: 8px 0 0; color: var(--text-muted); font-size: 14px;">{{ description }}</p>
+    <p class="panel__description">{{ description }}</p>
     {% endif %}
   </div>
   {{ caller() }}
@@ -28,25 +28,25 @@
 {% endmacro %}
 
 {% macro stat(label, value, icon='activity', level='info', detail='') %}
-<div class="card" style="padding: 24px;">
-  <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+<div class="card stat-card">
+  <div class="stat-card__layout">
     <div>
-      <div style="color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 12px;">{{ label }}</div>
-      <div style="font-size: 32px; font-weight: 800; color: var(--text); line-height: 1; letter-spacing: -0.04em;">{{ value }}</div>
-      {% if detail %}<div style="margin-top: 12px; font-size: 12px; color: var(--text-muted); font-weight: 500;">{{ detail }}</div>{% endif %}
+      <div class="stat-card__label">{{ label }}</div>
+      <div class="stat-card__value">{{ value }}</div>
+      {% if detail %}<div class="stat-card__detail">{{ detail }}</div>{% endif %}
     </div>
-    <div style="width: 48px; height: 48px; border-radius: 14px; display: flex; align-items: center; justify-content: center; background: var(--{{ level }}-bg); color: var(--{{ level }});">
-      <i data-lucide="{{ icon }}" style="width: 24px; height: 24px;"></i>
+    <div class="stat-card__icon-shell stat-card__icon-shell--{{ level }}">
+      <i data-lucide="{{ icon }}" class="icon icon-lg"></i>
     </div>
   </div>
 </div>
 {% endmacro %}
 
 {% macro compact_stat(label, value, detail='') %}
-<div class="card" style="padding: 20px;">
-  <div style="color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">{{ label }}</div>
-  <div style="font-size: 24px; font-weight: 800; color: var(--text); letter-spacing: -0.02em;">{{ value }}</div>
-  {% if detail %}<div style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">{{ detail }}</div>{% endif %}
+<div class="card compact-stat">
+  <div class="compact-stat__label">{{ label }}</div>
+  <div class="compact-stat__value">{{ value }}</div>
+  {% if detail %}<div class="compact-stat__detail">{{ detail }}</div>{% endif %}
 </div>
 {% endmacro %}
 
@@ -64,35 +64,35 @@
 
 {% if href %}
 <a href="{{ href }}" class="{{ class_attr }}" {% if confirm_text %}data-confirm="{{ confirm_text }}"{% endif %} {{ attrs|safe }}>
-  {% if icon %}<i data-lucide="{{ icon }}" style="width: 18px; height: 18px;"></i>{% endif %}
+  {% if icon %}<i data-lucide="{{ icon }}" class="icon icon-sm"></i>{% endif %}
   <span>{% if caller is defined %}{{ caller() }}{% else %}{{ text }}{% endif %}</span>
 </a>
 {% else %}
 <button type="{{ type }}" class="{{ class_attr }}" {% if name %}name="{{ name }}"{% endif %} {% if value %}value="{{ value }}"{% endif %}
   {% if disabled %}disabled{% endif %} {% if confirm_text %}data-confirm="{{ confirm_text }}"{% endif %} {{ attrs|safe }}>
-  {% if icon %}<i data-lucide="{{ icon }}" style="width: 18px; height: 18px;"></i>{% endif %}
+  {% if icon %}<i data-lucide="{{ icon }}" class="icon icon-sm"></i>{% endif %}
   <span>{% if caller is defined %}{{ caller() }}{% else %}{{ text }}{% endif %}</span>
 </button>
 {% endif %}
 {% endmacro %}
 
 {% macro page_header(title, summary='', eyebrow='', badge_text='', badge_level='info', icon='') %}
-<div style="margin-bottom: 48px;">
-  {% if eyebrow %}<div style="font-size: 11px; font-weight: 800; color: var(--primary); text-transform: uppercase; letter-spacing: 0.15em; margin-bottom: 12px;">{{ eyebrow }}</div>{% endif %}
-  <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 32px;">
-    <div style="flex: 1;">
-      <div style="display: flex; align-items: center; gap: 20px;">
-        {% if icon %}<div style="width: 56px; height: 56px; border-radius: 16px; background: var(--primary-soft); color: var(--primary); display: flex; align-items: center; justify-content: center;"><i data-lucide="{{ icon }}" style="width: 28px; height: 28px;"></i></div>{% endif %}
-        <h1 style="font-size: 36px; font-weight: 800; letter-spacing: -0.04em; margin: 0; color: var(--text);">{{ title }}</h1>
+<div class="page-header">
+  {% if eyebrow %}<div class="page-header__eyebrow">{{ eyebrow }}</div>{% endif %}
+  <div class="page-header__layout">
+    <div class="page-header__content">
+      <div class="page-header__heading">
+        {% if icon %}<div class="page-header__icon-shell"><i data-lucide="{{ icon }}" class="icon icon-xl"></i></div>{% endif %}
+        <h1 class="page-header__title">{{ title }}</h1>
       </div>
-      {% if summary %}<p style="margin: 20px 0 0; color: var(--text-muted); font-size: 16px; max-width: 800px; line-height: 1.6;">{{ summary }}</p>{% endif %}
+      {% if summary %}<p class="page-header__summary">{{ summary }}</p>{% endif %}
     </div>
-    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 16px;">
+    <div class="page-header__meta">
       {% if badge_text %}
       {{ badge(badge_text, badge_level) }}
       {% endif %}
       {% if caller is defined %}
-      <div style="display: flex; gap: 12px;">
+      <div class="page-header__actions">
         {{ caller() }}
       </div>
       {% endif %}
@@ -102,19 +102,19 @@
 {% endmacro %}
 
 {% macro table_shell(class_name='') %}
-<div class="card" style="padding: 0; overflow: hidden; {{ class_name }}">
+<div class="card table-shell {{ class_name }}">
   {{ caller() }}
 </div>
 {% endmacro %}
 
 {% macro helper_block(title, description='', level='info', badge_text='', class_name='') %}
 <div class="helper-block {{ class_name }}">
-  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-    <div style="font-weight: 700; font-size: 15px; color: var(--text);">{{ title }}</div>
+  <div class="helper-block__header">
+    <div class="helper-block__title">{{ title }}</div>
     {% if badge_text %}{{ badge(badge_text, level) }}{% endif %}
   </div>
   {% if description %}
-  <p style="margin: 0; color: var(--text-muted); font-size: 14px; line-height: 1.5;">{{ description }}</p>
+  <p class="helper-block__description">{{ description }}</p>
   {% endif %}
   {% if caller is defined %}
   {{ caller() }}
@@ -123,11 +123,11 @@
 {% endmacro %}
 
 {% macro empty_state(title, description='', level='info') %}
-<div class="card empty-state" style="padding: 28px; border: 1px dashed var(--border); background: var(--surface-muted);">
-  <div style="display: flex; flex-direction: column; gap: 10px; align-items: flex-start;">
+<div class="card empty-state">
+  <div class="empty-state__body">
     {{ badge(title, level) }}
     {% if description %}
-    <p style="margin: 0; color: var(--text-muted); line-height: 1.6;">{{ description }}</p>
+    <p class="empty-state__description">{{ description }}</p>
     {% endif %}
     {% if caller is defined %}
     <div class="actions">
@@ -139,27 +139,27 @@
 {% endmacro %}
 
 {% macro detail_toggle(title, description='', open=False) %}
-<details class="card" {% if open %}open{% endif %} style="padding: 0; overflow: hidden;">
-  <summary style="list-style: none; cursor: pointer; padding: 20px 24px; display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+<details class="card detail-toggle" {% if open %}open{% endif %}>
+  <summary class="detail-toggle__summary">
     <div>
-      <div style="font-size: 15px; font-weight: 700; color: var(--text);">{{ title }}</div>
+      <div class="detail-toggle__title">{{ title }}</div>
       {% if description %}
-      <div style="margin-top: 6px; color: var(--text-muted); font-size: 13px;">{{ description }}</div>
+      <div class="detail-toggle__description">{{ description }}</div>
       {% endif %}
     </div>
-    <span style="color: var(--text-muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;">Toggle</span>
+    <span class="detail-toggle__label">Toggle</span>
   </summary>
-  <div style="padding: 0 24px 24px;">
+  <div class="detail-toggle__body">
     {{ caller() }}
   </div>
 </details>
 {% endmacro %}
 
 {% macro pagination(summary='') %}
-<div class="card" style="padding: 18px 22px;">
-  <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px;">
+<div class="card pagination-shell">
+  <div class="pagination-shell__row">
     {% if summary %}
-    <div style="color: var(--text-muted); font-size: 13px;">{{ summary }}</div>
+    <div class="pagination-shell__summary">{{ summary }}</div>
     {% endif %}
     {% if caller is defined %}
     <div class="actions">
@@ -173,7 +173,7 @@
 {% macro topbar_chip(text, icon='building', class_name='') %}
 <div class="topbar-chip {{ class_name }}">
   <div class="topbar-chip__content">
-    {% if icon %}<i class="topbar-chip__icon" data-lucide="{{ icon }}" style="width: 16px; height: 16px;"></i>{% endif %}
+    {% if icon %}<i class="topbar-chip__icon icon icon-xs" data-lucide="{{ icon }}"></i>{% endif %}
     <span class="topbar-chip__label">{{ text }}</span>
   </div>
   {% if caller is defined %}
@@ -225,7 +225,7 @@
   <form action="{{ logout_action }}" method="post" class="topbar-account__action">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button class="topbar-icon-button header-signout" type="submit" aria-label="{{ logout_label }}">
-      <i data-lucide="log-out" style="width: 16px; height: 16px;"></i>
+      <i data-lucide="log-out" class="icon icon-xs"></i>
     </button>
   </form>
 </div>
