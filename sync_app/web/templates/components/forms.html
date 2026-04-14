@@ -1,21 +1,22 @@
 {% macro input(name, label, value='', type='text', placeholder='', help_text='', required=False, disabled=False, class_name='', id='', autocomplete='', input_class='', attrs='', min_value='', max_value='', step='', icon='') %}
 {% set field_id = id or name %}
+{% set resolved_input_class = input_class %}
+{% if icon %}{% set resolved_input_class = (resolved_input_class ~ ' field-control--with-icon')|trim %}{% endif %}
 <div class="form-group {{ class_name }}" id="group-{{ field_id }}">
   {% if label %}
-  <label for="{{ field_id }}">{{ label }}{% if required %}<span style="color: var(--danger); margin-left: 4px;">*</span>{% endif %}</label>
+  <label for="{{ field_id }}">{{ label }}{% if required %}<span class="label-required">*</span>{% endif %}</label>
   {% endif %}
-  <div style="position: relative;">
+  <div class="field-shell">
     {% if icon %}
-    <div style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;">
-      <i data-lucide="{{ icon }}" style="width: 18px; height: 18px;"></i>
+    <div class="field-icon">
+      <i data-lucide="{{ icon }}" class="icon icon-sm"></i>
     </div>
     {% endif %}
     <input type="{{ type }}" id="{{ field_id }}" name="{{ name }}" value="{{ value }}"
-           class="{{ input_class }}" placeholder="{{ placeholder }}" {% if required %}required{% endif %}
+           class="{{ resolved_input_class }}" placeholder="{{ placeholder }}" {% if required %}required{% endif %}
            {% if disabled %}disabled{% endif %} {% if autocomplete %}autocomplete="{{ autocomplete }}"{% endif %}
            {% if min_value != '' %}min="{{ min_value }}"{% endif %} {% if max_value != '' %}max="{{ max_value }}"{% endif %}
            {% if step != '' %}step="{{ step }}"{% endif %}
-           style="{% if icon %}padding-left: 44px;{% endif %}"
            {{ attrs|safe }}>
   </div>
   {% if help_text %}
@@ -28,16 +29,16 @@
 {% set field_id = id or name %}
 <div class="form-group {{ class_name }}" id="group-{{ field_id }}">
   {% if label %}
-  <label for="{{ field_id }}">{{ label }}{% if required %}<span style="color: var(--danger); margin-left: 4px;">*</span>{% endif %}</label>
+  <label for="{{ field_id }}">{{ label }}{% if required %}<span class="label-required">*</span>{% endif %}</label>
   {% endif %}
-  <div style="position: relative;">
+  <div class="field-shell">
     {% if icon %}
-    <div style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; z-index: 1;">
-      <i data-lucide="{{ icon }}" style="width: 18px; height: 18px;"></i>
+    <div class="field-icon field-icon--raised">
+      <i data-lucide="{{ icon }}" class="icon icon-sm"></i>
     </div>
     {% endif %}
     <select id="{{ field_id }}" name="{{ name }}" {% if required %}required{% endif %} {% if disabled %}disabled{% endif %}
-            style="{% if icon %}padding-left: 44px;{% endif %}"
+            {% if icon %}class="field-control--with-icon"{% endif %}
             {{ attrs|safe }}>
       {% for val, label in options %}
       <option value="{{ val }}" {% if val|string == selected_value|string %}selected{% endif %}>{{ label }}</option>
@@ -66,8 +67,8 @@
 {% macro checkbox(name, label, value='1', checked=False, help_text='', class_name='', id='') %}
 {% set field_id = id or name %}
 <div class="form-group {{ class_name }}" id="group-{{ field_id }}">
-  <label style="display: inline-flex; align-items: center; gap: 10px; cursor: pointer; font-weight: 600; font-size: 14px; color: var(--text);" for="{{ field_id }}">
-    <input id="{{ field_id }}" type="checkbox" name="{{ name }}" value="{{ value }}" {% if checked %}checked{% endif %} style="width: 18px; height: 18px; margin: 0;">
+  <label class="checkbox-field" for="{{ field_id }}">
+    <input id="{{ field_id }}" type="checkbox" name="{{ name }}" value="{{ value }}" {% if checked %}checked{% endif %} class="checkbox-field__input">
     {{ label }}
   </label>
   {% if help_text %}

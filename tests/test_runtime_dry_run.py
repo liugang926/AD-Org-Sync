@@ -29,6 +29,7 @@ from sync_app.storage.local_db import (
     SettingsRepository,
     SyncConnectorRepository,
     SyncConflictRepository,
+    SyncEventRepository,
     SyncExceptionRuleRepository,
     SyncJobRepository,
     SyncOperationLogRepository,
@@ -1678,6 +1679,72 @@ class RunSyncDryRunTests(unittest.TestCase):
             "OU=Shanghai,OU=China,OU=Managed Users,DC=example,DC=com",
         )
 
+    def test_run_sync_job_persists_failure_diagnostics_to_job_events_and_operation_logs(self):
+        config = AppConfig(
+            wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),
+            ldap=LDAPConfig(
+                server="ldap.example.com",
+                domain="example.com",
+                username="EXAMPLE\\administrator",
+                password="password",
+                use_ssl=True,
+                port=636,
+            ),
+            domain="example.com",
+            account=AccountConfig(default_password="VeryStrong123!456"),
+            config_path="default.ini",
+        )
+
+        test_dir = os.path.join(os.getcwd(), "test_artifacts")
+        os.makedirs(test_dir, exist_ok=True)
+        db_path = os.path.join(test_dir, "runtime_failure_logging_test.db")
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+
+        patches = [
+            patch.object(runtime, "generate_job_id", return_value="job-failed-001"),
+            patch.object(runtime, "load_sync_config", return_value=config),
+            patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")),
+            patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
+            patch.object(runtime, "_prepare_sync_environment", side_effect=RuntimeError("boom failure")),
+        ]
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            with self.assertRaisesRegex(RuntimeError, "boom failure"):
+                runtime.run_sync_job(
+                    execution_mode="dry_run",
+                    trigger_type="unit_test_failure",
+                    db_path=db_path,
+                    config_path="default.ini",
+                )
+
+        manager = DatabaseManager(db_path=db_path)
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        job_record = SyncJobRepository(manager).get_job_record("job-failed-001")
+        self.assertIsNotNone(job_record)
+        self.assertEqual(job_record.status, "FAILED")
+        self.assertEqual(job_record.error_count, 1)
+        self.assertEqual(job_record.summary["error"], "boom failure")
+        self.assertEqual(job_record.summary["error_type"], "RuntimeError")
+        self.assertEqual(job_record.summary["log_file"], "test-runtime.log")
+        self.assertIn("RuntimeError: boom failure", job_record.summary["error_traceback"])
+
+        events = SyncEventRepository(manager).list_events_for_job("job-failed-001", limit=20)
+        self.assertTrue(any(item["event_type"] == "sync_failed" for item in events))
+        failed_event = next(item for item in events if item["event_type"] == "sync_failed")
+        self.assertEqual(failed_event["level"], "ERROR")
+        self.assertEqual(failed_event["payload"]["error"], "boom failure")
+        self.assertEqual(failed_event["payload"]["log_file"], "test-runtime.log")
+
+        operation_logs = SyncOperationLogRepository(manager).list_records_for_job("job-failed-001", limit=20)
+        failure_logs = [item for item in operation_logs if item.operation_type == "sync_job" and item.status == "error"]
+        self.assertEqual(len(failure_logs), 1)
+        self.assertEqual(failure_logs[0].details["error"], "boom failure")
+        self.assertEqual(failure_logs[0].details["log_file"], "test-runtime.log")
+
     def test_run_sync_job_applies_custom_collision_template_and_persists_binding_anchor(self):
         config = AppConfig(
             wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),
@@ -2859,4 +2926,3 @@ class RunSyncDryRunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

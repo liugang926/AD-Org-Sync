@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from sync_app.core.models import SyncJobRecord, SyncOperationRecord
@@ -8,17 +9,29 @@ from sync_app.storage.local_db import BaseRepository, dumps_json, utcnow_iso
 
 
 class SyncJobRepository(BaseRepository):
-    ACTIVE_STATUSES = {"CREATED", "PLANNING", "READY", "RUNNING", "CANCELING"}
+    QUEUED_STATUSES = {"QUEUED"}
+    EXECUTION_STATUSES = {"LEASED", "CREATED", "PLANNING", "READY", "RUNNING", "CANCELING"}
+    ACTIVE_STATUSES = QUEUED_STATUSES | EXECUTION_STATUSES
 
-    def get_active_job(self, *, org_id: Optional[str] = None):
-        placeholders = ",".join(["?"] * len(self.ACTIVE_STATUSES))
-        params: list[Any] = list(self.ACTIVE_STATUSES)
+    @staticmethod
+    def _normalize_status_values(statuses: set[str]) -> tuple[str, list[Any]]:
+        normalized_statuses = sorted({str(status or "").strip().upper() for status in statuses if str(status or "").strip()})
+        placeholders = ",".join(["?"] * len(normalized_statuses))
+        return placeholders, list(normalized_statuses)
+
+    def _get_job_by_statuses(
+        self,
+        *,
+        statuses: set[str],
+        org_id: Optional[str] = None,
+    ):
+        placeholders, params = self._normalize_status_values(statuses)
         where_clauses = [f"status IN ({placeholders})"]
         normalized_org_id = str(org_id or "").strip()
         if normalized_org_id:
             where_clauses.append("org_id = ?")
             params.append(normalized_org_id)
-        row = self._fetchone(
+        return self._fetchone(
             f"""
             SELECT * FROM sync_jobs
             WHERE {' AND '.join(where_clauses)}
@@ -27,10 +40,21 @@ class SyncJobRepository(BaseRepository):
             """,
             tuple(params),
         )
-        return row
+
+    def get_active_job(self, *, org_id: Optional[str] = None):
+        return self._get_job_by_statuses(statuses=self.ACTIVE_STATUSES, org_id=org_id)
 
     def get_active_job_record(self, *, org_id: Optional[str] = None) -> Optional[SyncJobRecord]:
         row = self.get_active_job(org_id=org_id)
+        if not row:
+            return None
+        return SyncJobRecord.from_row(row)
+
+    def get_execution_job(self, *, org_id: Optional[str] = None):
+        return self._get_job_by_statuses(statuses=self.EXECUTION_STATUSES, org_id=org_id)
+
+    def get_execution_job_record(self, *, org_id: Optional[str] = None) -> Optional[SyncJobRecord]:
+        row = self.get_execution_job(org_id=org_id)
         if not row:
             return None
         return SyncJobRecord.from_row(row)
@@ -88,28 +112,37 @@ class SyncJobRepository(BaseRepository):
         execution_mode: str,
         status: str,
         org_id: str = "default",
+        requested_by: str = "",
+        requested_config_path: str = "",
         app_version: Optional[str] = None,
         plan_source_job_id: Optional[str] = None,
         config_snapshot_hash: Optional[str] = None,
+        lease_owner: str = "",
+        lease_expires_at: str = "",
+        started_at: Optional[str] = None,
     ):
         with self.db.transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO sync_jobs (
-                  job_id, org_id, trigger_type, execution_mode, status, plan_source_job_id,
-                  app_version, config_snapshot_hash, started_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  job_id, org_id, trigger_type, execution_mode, status, requested_by, requested_config_path,
+                  plan_source_job_id, app_version, config_snapshot_hash, lease_owner, lease_expires_at, started_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
                     str(org_id or "").strip() or "default",
-                    trigger_type,
-                    execution_mode,
-                    status,
+                    str(trigger_type or "").strip(),
+                    str(execution_mode or "").strip(),
+                    str(status or "").strip().upper(),
+                    str(requested_by or "").strip(),
+                    str(requested_config_path or "").strip(),
                     plan_source_job_id,
                     app_version,
                     config_snapshot_hash,
-                    utcnow_iso(),
+                    str(lease_owner or "").strip(),
+                    str(lease_expires_at or "").strip(),
+                    str(started_at or utcnow_iso()),
                 ),
             )
 
@@ -123,12 +156,23 @@ class SyncJobRepository(BaseRepository):
         error_count: Optional[int] = None,
         summary: Optional[Dict[str, Any]] = None,
         ended: bool = False,
+        trigger_type: Optional[str] = None,
+        execution_mode: Optional[str] = None,
+        app_version: Optional[str] = None,
+        config_snapshot_hash: Optional[str] = None,
+        requested_by: Optional[str] = None,
+        requested_config_path: Optional[str] = None,
+        lease_owner: Optional[str] = None,
+        lease_expires_at: Optional[str] = None,
+        clear_lease: bool = False,
+        started_at: Optional[str] = None,
+        clear_summary: bool = False,
     ):
         updates = []
         params: list[Any] = []
         if status is not None:
             updates.append("status = ?")
-            params.append(status)
+            params.append(str(status or "").strip().upper())
         if planned_operation_count is not None:
             updates.append("planned_operation_count = ?")
             params.append(planned_operation_count)
@@ -141,6 +185,38 @@ class SyncJobRepository(BaseRepository):
         if summary is not None:
             updates.append("summary_json = ?")
             params.append(dumps_json(summary))
+        elif clear_summary:
+            updates.append("summary_json = NULL")
+        if trigger_type is not None:
+            updates.append("trigger_type = ?")
+            params.append(str(trigger_type or "").strip())
+        if execution_mode is not None:
+            updates.append("execution_mode = ?")
+            params.append(str(execution_mode or "").strip())
+        if app_version is not None:
+            updates.append("app_version = ?")
+            params.append(str(app_version or "").strip())
+        if config_snapshot_hash is not None:
+            updates.append("config_snapshot_hash = ?")
+            params.append(str(config_snapshot_hash or "").strip())
+        if requested_by is not None:
+            updates.append("requested_by = ?")
+            params.append(str(requested_by or "").strip())
+        if requested_config_path is not None:
+            updates.append("requested_config_path = ?")
+            params.append(str(requested_config_path or "").strip())
+        if started_at is not None:
+            updates.append("started_at = ?")
+            params.append(str(started_at or "").strip())
+        if lease_owner is not None:
+            updates.append("lease_owner = ?")
+            params.append(str(lease_owner or "").strip())
+        if lease_expires_at is not None:
+            updates.append("lease_expires_at = ?")
+            params.append(str(lease_expires_at or "").strip())
+        if clear_lease:
+            updates.append("lease_owner = ''")
+            updates.append("lease_expires_at = ''")
         if ended:
             updates.append("ended_at = ?")
             params.append(utcnow_iso())
@@ -155,8 +231,179 @@ class SyncJobRepository(BaseRepository):
                 tuple(params),
             )
 
+    def claim_job(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+        lease_seconds: int = 300,
+    ) -> Optional[SyncJobRecord]:
+        normalized_job_id = str(job_id or "").strip()
+        normalized_worker_id = str(worker_id or "").strip()
+        if not normalized_job_id or not normalized_worker_id:
+            return None
+
+        lease_expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=max(int(lease_seconds or 0), 1))
+        ).isoformat(timespec="seconds")
+        placeholders, params = self._normalize_status_values(self.EXECUTION_STATUSES)
+        with self.db.transaction() as conn:
+            blocking_row = conn.execute(
+                f"""
+                SELECT job_id
+                FROM sync_jobs
+                WHERE status IN ({placeholders})
+                  AND job_id != ?
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (*params, normalized_job_id),
+            ).fetchone()
+            if blocking_row:
+                return None
+            updated = conn.execute(
+                """
+                UPDATE sync_jobs
+                SET status = 'LEASED',
+                    lease_owner = ?,
+                    lease_expires_at = ?
+                WHERE job_id = ?
+                  AND status = 'QUEUED'
+                """,
+                (normalized_worker_id, lease_expires_at, normalized_job_id),
+            ).rowcount
+            if not updated:
+                row = conn.execute(
+                    """
+                    SELECT *
+                    FROM sync_jobs
+                    WHERE job_id = ?
+                    LIMIT 1
+                    """,
+                    (normalized_job_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                if str(row["status"] or "").strip().upper() != "LEASED":
+                    return None
+                if str(row["lease_owner"] or "").strip() != normalized_worker_id:
+                    return None
+                return SyncJobRecord.from_row(row)
+
+            row = conn.execute(
+                """
+                SELECT *
+                FROM sync_jobs
+                WHERE job_id = ?
+                LIMIT 1
+                """,
+                (normalized_job_id,),
+            ).fetchone()
+        return SyncJobRecord.from_row(row) if row else None
+
+    def claim_next_queued_job(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int = 300,
+    ) -> Optional[SyncJobRecord]:
+        normalized_worker_id = str(worker_id or "").strip()
+        if not normalized_worker_id:
+            return None
+
+        self.fail_expired_execution_jobs()
+        if self.get_execution_job():
+            return None
+
+        rows = self._fetchall(
+            """
+            SELECT job_id
+            FROM sync_jobs
+            WHERE status = 'QUEUED'
+            ORDER BY started_at ASC, job_id ASC
+            LIMIT 20
+            """
+        )
+        for row in rows:
+            claimed = self.claim_job(
+                str(row["job_id"] or ""),
+                worker_id=normalized_worker_id,
+                lease_seconds=lease_seconds,
+            )
+            if claimed:
+                return claimed
+        return None
+
+    def renew_lease(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+        lease_seconds: int = 300,
+    ) -> bool:
+        normalized_job_id = str(job_id or "").strip()
+        normalized_worker_id = str(worker_id or "").strip()
+        if not normalized_job_id or not normalized_worker_id:
+            return False
+
+        lease_expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=max(int(lease_seconds or 0), 1))
+        ).isoformat(timespec="seconds")
+        placeholders, params = self._normalize_status_values(self.EXECUTION_STATUSES)
+        with self.db.transaction() as conn:
+            updated = conn.execute(
+                f"""
+                UPDATE sync_jobs
+                SET lease_expires_at = ?
+                WHERE job_id = ?
+                  AND lease_owner = ?
+                  AND status IN ({placeholders})
+                """,
+                (lease_expires_at, normalized_job_id, normalized_worker_id, *params),
+            ).rowcount
+        return bool(updated)
+
+    def fail_expired_execution_jobs(self) -> list[str]:
+        now = utcnow_iso()
+        placeholders, params = self._normalize_status_values(self.EXECUTION_STATUSES)
+        rows = self._fetchall(
+            f"""
+            SELECT job_id
+            FROM sync_jobs
+            WHERE status IN ({placeholders})
+              AND lease_expires_at != ''
+              AND lease_expires_at < ?
+            ORDER BY started_at ASC, job_id ASC
+            """,
+            (*params, now),
+        )
+        expired_job_ids = [str(row["job_id"] or "").strip() for row in rows if str(row["job_id"] or "").strip()]
+        for expired_job_id in expired_job_ids:
+            self.update_job(
+                expired_job_id,
+                status="FAILED",
+                ended=True,
+                summary={"error": "job lease expired before completion"},
+                clear_lease=True,
+            )
+        return expired_job_ids
+
 
 class SyncEventRepository(BaseRepository):
+    @staticmethod
+    def _row_to_event(row: Any) -> dict[str, Any]:
+        event = dict(row)
+        payload = event.get("payload_json")
+        if isinstance(payload, str) and payload:
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                payload = {"raw": payload}
+        elif payload is not None and not isinstance(payload, dict):
+            payload = {"raw": payload}
+        event["payload"] = payload
+        return event
+
     def add_event(
         self,
         job_id: str,
@@ -186,7 +433,7 @@ class SyncEventRepository(BaseRepository):
             )
 
     def list_events_for_job(self, job_id: str, limit: int = 100):
-        return self._fetchall(
+        rows = self._fetchall(
             """
             SELECT * FROM sync_events
             WHERE job_id = ?
@@ -195,6 +442,7 @@ class SyncEventRepository(BaseRepository):
             """,
             (job_id, int(limit)),
         )
+        return [self._row_to_event(row) for row in rows]
 
     def list_events_for_job_page(
         self,
@@ -221,7 +469,7 @@ class SyncEventRepository(BaseRepository):
             """,
             (job_id, int(limit), max(int(offset), 0)),
         )
-        return [dict(row) for row in rows], total
+        return [self._row_to_event(row) for row in rows], total
 
 
 class PlannedOperationRepository(BaseRepository):

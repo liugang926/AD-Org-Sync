@@ -1276,4 +1276,20 @@ MIGRATIONS = [
         SELECT 1;
         """,
     ),
+    (
+        22,
+        "add persisted dispatch metadata for queued and leased sync jobs",
+        """
+        ALTER TABLE sync_jobs ADD COLUMN requested_by TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_jobs ADD COLUMN requested_config_path TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_jobs ADD COLUMN lease_owner TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_jobs ADD COLUMN lease_expires_at TEXT NOT NULL DEFAULT '';
+
+        CREATE INDEX IF NOT EXISTS idx_sync_jobs_org_status_started_at
+        ON sync_jobs (org_id, status, started_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_sync_jobs_lease_expires_at
+        ON sync_jobs (lease_expires_at);
+        """,
+    ),
 ]

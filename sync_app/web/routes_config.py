@@ -6,6 +6,83 @@ from typing import Any, Callable, Optional
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+CONFIG_SUBMISSION_FIELD_NAMES = (
+    "source_provider",
+    "corpid",
+    "agentid",
+    "corpsecret",
+    "webhook_url",
+    "ldap_server",
+    "ldap_domain",
+    "ldap_username",
+    "ldap_password",
+    "ldap_port",
+    "ldap_use_ssl",
+    "ldap_validate_cert",
+    "ldap_ca_cert_path",
+    "default_password",
+    "force_change_password",
+    "password_complexity",
+    "schedule_time",
+    "retry_interval",
+    "max_retries",
+    "group_display_separator",
+    "group_recursive_enabled",
+    "managed_relation_cleanup_enabled",
+    "schedule_execution_mode",
+    "web_bind_host",
+    "web_bind_port",
+    "web_public_base_url",
+    "web_session_cookie_secure_mode",
+    "web_trust_proxy_headers",
+    "web_forwarded_allow_ips",
+    "brand_display_name",
+    "brand_mark_text",
+    "brand_attribution",
+    "user_ou_placement_strategy",
+    "source_root_unit_ids",
+    "source_root_unit_display_text",
+    "directory_root_ou_path",
+    "disabled_users_ou_path",
+    "custom_group_ou_path",
+    "soft_excluded_groups",
+)
+
+
+def _collect_config_submission_values(values: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field_name: values[field_name]
+        for field_name in CONFIG_SUBMISSION_FIELD_NAMES
+        if field_name in values
+    }
+
+
+def _build_config_submission_from_values(
+    request: Request,
+    *,
+    build_config_submission: Callable[..., dict[str, Any]],
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    return build_config_submission(
+        request,
+        **_collect_config_submission_values(values),
+    )
+
+
+def _config_saved_message(
+    request: Request,
+    *,
+    resolve_web_runtime_settings: Callable[..., dict[str, Any]],
+    web_runtime_requires_restart: Callable[..., bool],
+) -> str:
+    persisted_web_runtime_settings = resolve_web_runtime_settings(request.app.state.settings_repo)
+    if web_runtime_requires_restart(
+        request.app.state.web_runtime_settings,
+        persisted_web_runtime_settings,
+    ):
+        return "Configuration saved. Restart the web process to apply deployment security changes."
+    return "Configuration saved"
+
 
 def register_config_routes(
     app: FastAPI,
@@ -152,47 +229,10 @@ def register_config_routes(
         if csrf_error:
             return csrf_error
 
-        submission = build_config_submission(
+        submission = _build_config_submission_from_values(
             request,
-            source_provider=source_provider,
-            corpid=corpid,
-            agentid=agentid,
-            corpsecret=corpsecret,
-            webhook_url=webhook_url,
-            ldap_server=ldap_server,
-            ldap_domain=ldap_domain,
-            ldap_username=ldap_username,
-            ldap_password=ldap_password,
-            ldap_port=ldap_port,
-            ldap_use_ssl=ldap_use_ssl,
-            ldap_validate_cert=ldap_validate_cert,
-            ldap_ca_cert_path=ldap_ca_cert_path,
-            default_password=default_password,
-            force_change_password=force_change_password,
-            password_complexity=password_complexity,
-            schedule_time=schedule_time,
-            retry_interval=retry_interval,
-            max_retries=max_retries,
-            group_display_separator=group_display_separator,
-            group_recursive_enabled=group_recursive_enabled,
-            managed_relation_cleanup_enabled=managed_relation_cleanup_enabled,
-            schedule_execution_mode=schedule_execution_mode,
-            web_bind_host=web_bind_host,
-            web_bind_port=web_bind_port,
-            web_public_base_url=web_public_base_url,
-            web_session_cookie_secure_mode=web_session_cookie_secure_mode,
-            web_trust_proxy_headers=web_trust_proxy_headers,
-            web_forwarded_allow_ips=web_forwarded_allow_ips,
-            brand_display_name=brand_display_name,
-            brand_mark_text=brand_mark_text,
-            brand_attribution=brand_attribution,
-            user_ou_placement_strategy=user_ou_placement_strategy,
-            source_root_unit_ids=source_root_unit_ids,
-            source_root_unit_display_text=source_root_unit_display_text,
-            directory_root_ou_path=directory_root_ou_path,
-            disabled_users_ou_path=disabled_users_ou_path,
-            custom_group_ou_path=custom_group_ou_path,
-            soft_excluded_groups=soft_excluded_groups,
+            build_config_submission=build_config_submission,
+            values=locals(),
         )
         preview = build_config_change_preview(request, submission)
         if preview["changed_count"] == 0:
@@ -242,17 +282,13 @@ def register_config_routes(
         finally:
             request.session.pop(config_preview_session_key, None)
 
-        persisted_web_runtime_settings = resolve_web_runtime_settings(request.app.state.settings_repo)
         flash(
             request,
             "success",
-            (
-                "Configuration saved. Restart the web process to apply deployment security changes."
-                if web_runtime_requires_restart(
-                    request.app.state.web_runtime_settings,
-                    persisted_web_runtime_settings,
-                )
-                else "Configuration saved"
+            _config_saved_message(
+                request,
+                resolve_web_runtime_settings=resolve_web_runtime_settings,
+                web_runtime_requires_restart=web_runtime_requires_restart,
             ),
         )
         return RedirectResponse(url="/config", status_code=303)
@@ -308,61 +344,20 @@ def register_config_routes(
         if csrf_error:
             return csrf_error
 
-        submission = build_config_submission(
+        submission = _build_config_submission_from_values(
             request,
-            source_provider=source_provider,
-            corpid=corpid,
-            agentid=agentid,
-            corpsecret=corpsecret,
-            webhook_url=webhook_url,
-            ldap_server=ldap_server,
-            ldap_domain=ldap_domain,
-            ldap_username=ldap_username,
-            ldap_password=ldap_password,
-            ldap_port=ldap_port,
-            ldap_use_ssl=ldap_use_ssl,
-            ldap_validate_cert=ldap_validate_cert,
-            ldap_ca_cert_path=ldap_ca_cert_path,
-            default_password=default_password,
-            force_change_password=force_change_password,
-            password_complexity=password_complexity,
-            schedule_time=schedule_time,
-            retry_interval=retry_interval,
-            max_retries=max_retries,
-            group_display_separator=group_display_separator,
-            group_recursive_enabled=group_recursive_enabled,
-            managed_relation_cleanup_enabled=managed_relation_cleanup_enabled,
-            schedule_execution_mode=schedule_execution_mode,
-            web_bind_host=web_bind_host,
-            web_bind_port=web_bind_port,
-            web_public_base_url=web_public_base_url,
-            web_session_cookie_secure_mode=web_session_cookie_secure_mode,
-            web_trust_proxy_headers=web_trust_proxy_headers,
-            web_forwarded_allow_ips=web_forwarded_allow_ips,
-            brand_display_name=brand_display_name,
-            brand_mark_text=brand_mark_text,
-            brand_attribution=brand_attribution,
-            user_ou_placement_strategy=user_ou_placement_strategy,
-            source_root_unit_ids=source_root_unit_ids,
-            source_root_unit_display_text=source_root_unit_display_text,
-            directory_root_ou_path=directory_root_ou_path,
-            disabled_users_ou_path=disabled_users_ou_path,
-            custom_group_ou_path=custom_group_ou_path,
-            soft_excluded_groups=soft_excluded_groups,
+            build_config_submission=build_config_submission,
+            values=locals(),
         )
         apply_config_submission(request, user=user, submission=submission)
         request.session.pop(config_preview_session_key, None)
-        persisted_web_runtime_settings = resolve_web_runtime_settings(request.app.state.settings_repo)
         flash(
             request,
             "success",
-            (
-                "Configuration saved. Restart the web process to apply deployment security changes."
-                if web_runtime_requires_restart(
-                    request.app.state.web_runtime_settings,
-                    persisted_web_runtime_settings,
-                )
-                else "Configuration saved"
+            _config_saved_message(
+                request,
+                resolve_web_runtime_settings=resolve_web_runtime_settings,
+                web_runtime_requires_restart=web_runtime_requires_restart,
             ),
         )
         return RedirectResponse(url="/config", status_code=303)

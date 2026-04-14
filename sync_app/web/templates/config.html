@@ -26,7 +26,7 @@
       </div>
       <div class="picker-toolbar__actions">
         <label class="picker-browser-search">
-          <i class="picker-browser-search__icon" data-lucide="search" style="width: 16px; height: 16px;"></i>
+          <i class="picker-browser-search__icon icon icon-xs" data-lucide="search"></i>
           <input type="search" placeholder="{{ t('Search by OU name, DN, or GUID') }}" data-config-target-filter>
         </label>
         {{ ui.button("", type="button", variant="ghost", size="sm", icon="refresh-cw", class_name="picker-icon-action", attrs=refresh_attrs) }}
@@ -270,7 +270,7 @@
                   </div>
                   <div class="picker-toolbar__actions">
                     <label class="picker-browser-search">
-                      <i class="picker-browser-search__icon" data-lucide="search" style="width: 16px; height: 16px;"></i>
+                      <i class="picker-browser-search__icon icon icon-xs" data-lucide="search"></i>
                       <input type="search" placeholder="{{ t('Search by name, ID, or path') }}" data-config-source-filter>
                     </label>
                     {{ ui.button("", type="button", variant="ghost", size="sm", icon="refresh-cw", class_name="picker-icon-action", attrs=source_refresh_attrs) }}

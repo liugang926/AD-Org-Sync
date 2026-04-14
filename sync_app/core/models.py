@@ -498,6 +498,8 @@ class SyncRunStats(MappingLikeModel):
     error_count: int = 0
     log_file: str = ""
     skip_detail_report: str = ""
+    operation_log_report: str = ""
+    validation_report: str = ""
     db_path: str = ""
     db_backup_dir: str = ""
     db_startup_snapshot_path: str = ""
@@ -535,6 +537,8 @@ class SyncRunStats(MappingLikeModel):
             error_count=int(value.get("error_count") or 0),
             log_file=str(value.get("log_file") or ""),
             skip_detail_report=str(value.get("skip_detail_report") or ""),
+            operation_log_report=str(value.get("operation_log_report") or ""),
+            validation_report=str(value.get("validation_report") or ""),
             db_path=str(value.get("db_path") or ""),
             db_backup_dir=str(value.get("db_backup_dir") or ""),
             db_startup_snapshot_path=str(value.get("db_startup_snapshot_path") or ""),
@@ -732,9 +736,13 @@ class SyncJobRecord(MappingLikeModel):
     trigger_type: str = ""
     execution_mode: str = ""
     status: str = ""
+    requested_by: str = ""
+    requested_config_path: str = ""
     plan_source_job_id: str = ""
     app_version: str = ""
     config_snapshot_hash: str = ""
+    lease_owner: str = ""
+    lease_expires_at: str = ""
     planned_operation_count: int = 0
     executed_operation_count: int = 0
     error_count: int = 0
@@ -760,9 +768,13 @@ class SyncJobRecord(MappingLikeModel):
             trigger_type=str(row["trigger_type"] or ""),
             execution_mode=str(row["execution_mode"] or ""),
             status=str(row["status"] or ""),
+            requested_by=str(row["requested_by"] or ""),
+            requested_config_path=str(row["requested_config_path"] or ""),
             plan_source_job_id=str(row["plan_source_job_id"] or ""),
             app_version=str(row["app_version"] or ""),
             config_snapshot_hash=str(row["config_snapshot_hash"] or ""),
+            lease_owner=str(row["lease_owner"] or ""),
+            lease_expires_at=str(row["lease_expires_at"] or ""),
             planned_operation_count=int(row["planned_operation_count"] or 0),
             executed_operation_count=int(row["executed_operation_count"] or 0),
             error_count=int(row["error_count"] or 0),

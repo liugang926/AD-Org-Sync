@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import Any, Dict, Iterable, Optional
 
 from sync_app.core.models import ExclusionRuleRecord
@@ -9,7 +10,12 @@ from sync_app.storage.schema import DEFAULT_HARD_PROTECTED_GROUPS, DEFAULT_SOFT_
 
 class GroupExclusionRuleRepository(BaseRepository):
     def seed_defaults(self):
-        org_rows = self._fetchall("SELECT org_id FROM organizations ORDER BY org_id ASC")
+        try:
+            org_rows = self._fetchall("SELECT org_id FROM organizations ORDER BY org_id ASC")
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            org_rows = []
         org_ids = {str(row["org_id"] or "").strip().lower() or "default" for row in org_rows}
         org_ids.add("default")
         for org_id in sorted(org_ids):

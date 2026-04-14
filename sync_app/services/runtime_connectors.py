@@ -46,6 +46,69 @@ def _normalize_ou_segments(raw_value: Any) -> list[str]:
     return [segment.strip() for segment in normalized.split("/") if segment.strip()]
 
 
+def _load_connector_config(
+    connector_repo: SyncConnectorRepository,
+    *,
+    connector_id: str,
+    config: Any,
+    org_id: str,
+    config_path: str,
+    load_sync_config_fn,
+):
+    connector_config = connector_repo.get_connector_app_config(
+        connector_id,
+        base_config=config,
+        org_id=org_id,
+    )
+    if connector_config is None:
+        connector_config = load_sync_config_fn(config_path)
+    return connector_config
+
+
+def _build_connector_spec(
+    *,
+    connector_id: str,
+    org_id: str,
+    name: str,
+    config_path: str,
+    root_department_ids: Any,
+    username_strategy: str,
+    username_collision_policy: str,
+    username_collision_template: str,
+    username_template: str,
+    disabled_users_ou: str,
+    group_type: str,
+    group_mail_domain: str,
+    custom_group_ou_path: str,
+    user_root_ou_path: str,
+    managed_tag_ids: Any,
+    managed_external_chat_ids: Any,
+    config: Any,
+) -> dict[str, Any]:
+    return {
+        "connector_id": connector_id,
+        "org_id": org_id,
+        "name": name,
+        "config_path": config_path,
+        "root_department_ids": _normalize_root_department_ids(root_department_ids),
+        "username_strategy": str(username_strategy or "custom_template").strip() or "custom_template",
+        "username_collision_policy": str(username_collision_policy or "append_employee_id").strip()
+        or "append_employee_id",
+        "username_collision_template": str(username_collision_template or "").strip(),
+        "username_template": str(username_template or "").strip(),
+        "disabled_users_ou": _normalize_ou_path(disabled_users_ou, default="Disabled Users"),
+        "group_type": normalize_group_type(group_type),
+        "group_mail_domain": str(group_mail_domain or "").strip(),
+        "custom_group_ou_path": _normalize_ou_path(custom_group_ou_path, default="Managed Groups"),
+        "user_root_ou_path": _normalize_ou_path(user_root_ou_path),
+        "managed_tag_ids": [str(value).strip() for value in managed_tag_ids or [] if str(value).strip()],
+        "managed_external_chat_ids": [
+            str(value).strip() for value in managed_external_chat_ids or [] if str(value).strip()
+        ],
+        "config": config,
+    }
+
+
 def load_connector_specs(
     config,
     connector_repo: SyncConnectorRepository,
@@ -58,57 +121,85 @@ def load_connector_specs(
     default_user_root_ou_path: str = "",
     load_sync_config_fn=load_sync_config,
 ) -> list[dict[str, Any]]:
-    specs: list[dict[str, Any]] = [
-        {
-            "connector_id": "default",
-            "org_id": org_id,
-            "name": "Default Connector",
-            "config_path": config.config_path,
-            "root_department_ids": _normalize_root_department_ids(default_root_department_ids),
-            "username_strategy": "custom_template",
-            "username_collision_policy": "append_employee_id",
-            "username_collision_template": "",
-            "username_template": "",
-            "disabled_users_ou": _normalize_ou_path(default_disabled_users_ou, default="Disabled Users"),
-            "group_type": "security",
-            "group_mail_domain": "",
-            "custom_group_ou_path": _normalize_ou_path(default_custom_group_ou_path, default="Managed Groups"),
-            "user_root_ou_path": _normalize_ou_path(default_user_root_ou_path),
-            "managed_tag_ids": [],
-            "managed_external_chat_ids": [],
-            "config": config,
-        }
-    ]
+    default_spec = _build_connector_spec(
+        connector_id="default",
+        org_id=org_id,
+        name="Default Connector",
+        config_path=config.config_path,
+        root_department_ids=default_root_department_ids,
+        username_strategy="custom_template",
+        username_collision_policy="append_employee_id",
+        username_collision_template="",
+        username_template="",
+        disabled_users_ou=default_disabled_users_ou,
+        group_type="security",
+        group_mail_domain="",
+        custom_group_ou_path=default_custom_group_ou_path,
+        user_root_ou_path=default_user_root_ou_path,
+        managed_tag_ids=[],
+        managed_external_chat_ids=[],
+        config=config,
+    )
+    specs: list[dict[str, Any]] = [default_spec]
+    enabled_records = list(connector_repo.list_connector_records(enabled_only=True, org_id=org_id))
     if not connectors_enabled:
+        if len(enabled_records) == 1:
+            record = enabled_records[0]
+            specs[0] = _build_connector_spec(
+                connector_id="default",
+                org_id=org_id,
+                name=record.name or "Default Connector",
+                config_path=record.config_path or config.config_path,
+                root_department_ids=record.root_department_ids or default_root_department_ids,
+                username_strategy=record.username_strategy,
+                username_collision_policy=record.username_collision_policy,
+                username_collision_template=record.username_collision_template,
+                username_template=record.username_template,
+                disabled_users_ou=record.disabled_users_ou or default_disabled_users_ou,
+                group_type=record.group_type or "security",
+                group_mail_domain=record.group_mail_domain,
+                custom_group_ou_path=record.custom_group_ou_path or default_custom_group_ou_path,
+                user_root_ou_path=default_user_root_ou_path,
+                managed_tag_ids=record.managed_tag_ids,
+                managed_external_chat_ids=record.managed_external_chat_ids,
+                config=_load_connector_config(
+                    connector_repo,
+                    connector_id=record.connector_id,
+                    config=config,
+                    org_id=org_id,
+                    config_path=record.config_path,
+                    load_sync_config_fn=load_sync_config_fn,
+                ),
+            )
         return specs
-    for record in connector_repo.list_connector_records(enabled_only=True, org_id=org_id):
-        connector_config = connector_repo.get_connector_app_config(
-            record.connector_id,
-            base_config=config,
-            org_id=org_id,
-        )
-        if connector_config is None:
-            connector_config = load_sync_config_fn(record.config_path)
+    for record in enabled_records:
         specs.append(
-            {
-                "connector_id": record.connector_id,
-                "org_id": record.org_id,
-                "name": record.name,
-                "config_path": record.config_path,
-                "root_department_ids": list(record.root_department_ids),
-                "username_strategy": record.username_strategy,
-                "username_collision_policy": record.username_collision_policy,
-                "username_collision_template": record.username_collision_template,
-                "username_template": record.username_template,
-                "disabled_users_ou": record.disabled_users_ou or "Disabled Users",
-                "group_type": normalize_group_type(record.group_type),
-                "group_mail_domain": record.group_mail_domain,
-                "custom_group_ou_path": record.custom_group_ou_path,
-                "user_root_ou_path": "",
-                "managed_tag_ids": list(record.managed_tag_ids),
-                "managed_external_chat_ids": list(record.managed_external_chat_ids),
-                "config": connector_config,
-            }
+            _build_connector_spec(
+                connector_id=record.connector_id,
+                org_id=record.org_id,
+                name=record.name,
+                config_path=record.config_path,
+                root_department_ids=record.root_department_ids,
+                username_strategy=record.username_strategy,
+                username_collision_policy=record.username_collision_policy,
+                username_collision_template=record.username_collision_template,
+                username_template=record.username_template,
+                disabled_users_ou=record.disabled_users_ou or "Disabled Users",
+                group_type=record.group_type,
+                group_mail_domain=record.group_mail_domain,
+                custom_group_ou_path=record.custom_group_ou_path,
+                user_root_ou_path="",
+                managed_tag_ids=record.managed_tag_ids,
+                managed_external_chat_ids=record.managed_external_chat_ids,
+                config=_load_connector_config(
+                    connector_repo,
+                    connector_id=record.connector_id,
+                    config=config,
+                    org_id=org_id,
+                    config_path=record.config_path,
+                    load_sync_config_fn=load_sync_config_fn,
+                ),
+            )
         )
     return specs
 

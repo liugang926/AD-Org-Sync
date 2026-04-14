@@ -1,9 +1,6 @@
 import sys
 import os
 import time
-import logging
-import json
-import configparser
 import schedule
 from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
@@ -13,11 +10,16 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QHBoxLayout, QComboBox, QTableWidget, QTableWidgetItem,
                             QHeaderView, QAbstractItemView, QScrollArea,
                             QSizePolicy)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTime, QSettings, QTimer
+from PyQt5.QtCore import Qt, QTime, QTimer
 from PyQt5.QtGui import QIcon, QPalette, QColor, QFont
 import qtawesome as qta
 from sync_app.core.models import SyncRunStats
-from sync_app.storage.local_db import DatabaseManager, GroupExclusionRuleRepository, SettingsRepository
+from sync_app.ui.desktop_services import (
+    DesktopConfigService,
+    DesktopConfigValues,
+    DesktopLocalStrategyService,
+    DesktopLocalStrategyValues,
+)
 
 APP_TITLE = "AD Org Sync"
 
@@ -42,30 +44,9 @@ LOGS_DIR = os.path.join(APP_PATH, "logs")
 if not os.path.exists(LOGS_DIR):
     os.makedirs(LOGS_DIR)
 
-
-def _get_config_value(
-    parser: configparser.ConfigParser,
-    sections: tuple[str, ...],
-    option: str,
-    *,
-    fallback: str = "",
-) -> str:
-    for section in sections:
-        if parser.has_option(section, option):
-            return parser.get(section, option, fallback=fallback)
-    return fallback
-
-
-def _ensure_config_sections(parser: configparser.ConfigParser, sections: tuple[str, ...]) -> None:
-    for section in sections:
-        if not parser.has_section(section):
-            parser.add_section(section)
-
 # 导入主程序模块
 try:
-    from sync_app.core.logging_utils import setup_logging
-    from sync_app.services.ad_sync import ADSyncLDAPS
-    from sync_app.services.entry import main as sync_main
+    from sync_app.ui.runtime_threads import ScheduleThread, SyncThread
 except ImportError as e:
     print(f"导入模块错误: {str(e)}")
     QMessageBox.critical(None, "导入错误", f"无法导入必要模块: {str(e)}\n请确保所有依赖已正确安装。")
@@ -101,153 +82,6 @@ class BlurWindow(QWidget):
             self.move(event.globalPos() - self.dragPos)
             event.accept()
 
-class SyncThread(QThread):
-    """执行同步任务的线程"""
-    update_signal = pyqtSignal(str)
-    finished_signal = pyqtSignal(bool, str, dict)  # 添加统计数据参数
-    progress_signal = pyqtSignal(int)
-    stats_signal = pyqtSignal(dict)  # 添加实时统计信号
-    
-    def __init__(self, execution_mode='apply', trigger_type='manual'):
-        super().__init__()
-        self.logger = logging.getLogger(__name__)
-        self.is_cancelled = False
-        self.execution_mode = execution_mode
-        self.trigger_type = trigger_type
-        
-        # 确保logs目录存在
-        if not os.path.exists(LOGS_DIR):
-            os.makedirs(LOGS_DIR)
-            
-        # 捕获日志输出
-        class LogHandler(logging.Handler):
-            def __init__(self, signal_fn):
-                super().__init__()
-                self.signal_fn = signal_fn
-                
-            def emit(self, record):
-                msg = self.format(record)
-                self.signal_fn.emit(msg)
-                
-        self.log_handler = LogHandler(self.update_signal)
-        self.log_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        self.logger.addHandler(self.log_handler)
-        logging.getLogger().addHandler(self.log_handler)
-
-        # 清理旧日志处理器，避免重复日志
-        for handler in list(logging.getLogger().handlers):
-            if isinstance(handler, LogHandler) and handler != self.log_handler:
-                logging.getLogger().removeHandler(handler)
-        
-    def run(self):
-        import traceback
-
-        try:
-            run_label = "预演同步任务" if self.execution_mode == 'dry_run' else "同步任务"
-            self.update_signal.emit(f"开始执行{run_label}...")
-            self.progress_signal.emit(5)
-
-            progress_tracking = {
-                'started': time.time(),
-                'status': 'running',
-                'last_update': time.time(),
-                'departments_done': False,
-                'users_processed': 0,
-                'total_users': 0,
-            }
-
-            def update_progress():
-                if self.is_cancelled:
-                    return
-
-                elapsed = time.time() - progress_tracking['started']
-                if not progress_tracking['departments_done']:
-                    self.progress_signal.emit(min(30, int(10 + elapsed * 2)))
-                elif progress_tracking['total_users'] > 0:
-                    users_progress = progress_tracking['users_processed'] / progress_tracking['total_users']
-                    self.progress_signal.emit(min(90, int(30 + users_progress * 60)))
-
-                if time.time() - progress_tracking['last_update'] > 30:
-                    self.update_signal.emit(
-                        f"同步仍在进行中...(已运行 {int(elapsed)} 秒)"
-                    )
-                    progress_tracking['last_update'] = time.time()
-
-                self.stats_signal.emit(progress_tracking)
-                QTimer.singleShot(2000, update_progress)
-
-            QTimer.singleShot(1000, update_progress)
-
-            def sync_stats_callback(stage, data):
-                if stage == 'department_sync_done':
-                    progress_tracking['departments_done'] = True
-                    self.progress_signal.emit(30)
-                    self.update_signal.emit("部门结构同步完成")
-                elif stage == 'total_users':
-                    progress_tracking['total_users'] = data
-                    self.update_signal.emit(f"开始同步用户，共计 {data} 个")
-                elif stage == 'user_processed':
-                    progress_tracking['users_processed'] = data
-                    total = progress_tracking['total_users']
-                    if total > 0:
-                        user_progress = data / total
-                        self.progress_signal.emit(int(30 + user_progress * 60))
-                        should_log = (
-                            (total < 100 and (data % 5 == 0 or data == 1))
-                            or (100 <= total < 500 and (data % 10 == 0 or data == 1))
-                            or (total >= 500 and (data % 20 == 0 or data == 1))
-                        )
-                        if should_log:
-                            self.update_signal.emit(
-                                f"已处理用户 {data}/{total} ({int(user_progress * 100)}%)"
-                            )
-                elif stage == 'disable_stage_start':
-                    self.progress_signal.emit(90)
-                    self.update_signal.emit("开始处理需要禁用的账号...")
-                elif stage == 'users_to_disable' and data > 0:
-                    self.update_signal.emit(f"发现 {data} 个需要禁用的账号")
-                elif stage == 'user_disable_progress':
-                    self.progress_signal.emit(int(90 + data * 10))
-
-                progress_tracking['last_update'] = time.time()
-
-            os.chdir(APP_PATH)
-            config_path = os.path.join(APP_PATH, "config.ini")
-            if not os.path.exists(config_path):
-                raise FileNotFoundError(f"找不到配置文件: {config_path}")
-
-            self.update_signal.emit(f"开始使用配置文件: {config_path}")
-
-            try:
-                sync_stats = sync_main(
-                    stats_callback=sync_stats_callback,
-                    cancel_flag=self,
-                    execution_mode=self.execution_mode,
-                    trigger_type=self.trigger_type,
-                )
-                if self.is_cancelled:
-                    self.finished_signal.emit(False, "同步已取消", sync_stats)
-                else:
-                    self.progress_signal.emit(100)
-                    self.finished_signal.emit(True, "同步任务完成", sync_stats)
-            except Exception as e:
-                error_info = f"同步任务出错: {str(e)}\n{traceback.format_exc()}"
-                self.logger.error(error_info)
-                if not self.is_cancelled:
-                    self.progress_signal.emit(0)
-                self.finished_signal.emit(False, f"同步任务失败: {str(e)}", {})
-
-        except Exception as e:
-            error_info = f"同步线程异常: {str(e)}\n{traceback.format_exc()}"
-            self.logger.error(error_info)
-            self.finished_signal.emit(False, f"同步线程异常: {str(e)}", {})
-
-    def cancel(self):
-        """请求取消正在执行的同步任务。"""
-        self.is_cancelled = True
-        self.update_signal.emit("正在尝试取消同步任务...")
-
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -264,6 +98,9 @@ class MainWindow(QMainWindow):
         # 创建系统托盘图标
         self.create_tray_icon()
         
+        self.config_service = DesktopConfigService(APP_PATH)
+        self.local_strategy_service = DesktopLocalStrategyService()
+
         # 创建UI组件
         self.setup_ui()
         self.init_local_storage()
@@ -390,25 +227,83 @@ class MainWindow(QMainWindow):
                 padding: 0 5px;
             }
         """)
+
+    def _bind_local_storage_state(self, state):
+        self.local_storage_state = state
+        self.local_db_manager = state.db_manager
+        self.local_settings_repo = state.settings_repo
+        self.local_rule_repo = state.rule_repo
+        self.local_db_error = state.error
+        self.local_db_init_result = state.init_result
+
+    def _collect_desktop_config_values(self):
+        return DesktopConfigValues(
+            corp_id=self.corpid_edit.text(),
+            corp_secret=self.corpsecret_edit.text(),
+            webhook_url=self.webhook_edit.text(),
+            ldap_server=self.ldap_server_edit.text(),
+            ldap_domain=self.ldap_domain_edit.text(),
+            ldap_username=self.ldap_username_edit.text(),
+            ldap_password=self.ldap_password_edit.text(),
+            ldap_use_ssl=self.ldap_ssl_checkbox.currentText() == "启用SSL",
+            ldap_port=self.ldap_port_spinbox.value(),
+            schedule_time=self.schedule_time_edit.time().toString("HH:mm"),
+            retry_interval=self.interval_spinbox.value(),
+            max_retries=self.retry_spinbox.value(),
+        )
+
+    def _apply_desktop_config_values(self, values: DesktopConfigValues):
+        self.corpid_edit.setText(values.corp_id)
+        self.corpsecret_edit.setText(values.corp_secret)
+        self.webhook_edit.setText(values.webhook_url)
+        self.ldap_server_edit.setText(values.ldap_server)
+        self.ldap_domain_edit.setText(values.ldap_domain)
+        self.ldap_username_edit.setText(values.ldap_username)
+        self.ldap_password_edit.setText(values.ldap_password)
+        self.ldap_ssl_checkbox.setCurrentText("启用SSL" if values.ldap_use_ssl else "禁用SSL")
+        self.ldap_port_spinbox.setValue(values.ldap_port)
+
+        hour, minute = map(int, values.schedule_time.split(":"))
+        self.schedule_time_edit.setTime(QTime(hour, minute))
+        self.interval_spinbox.setValue(values.retry_interval)
+        self.retry_spinbox.setValue(values.max_retries)
+
+    def _collect_local_strategy_values(self):
+        execution_mode = self.execution_mode_combo.currentData() if hasattr(self, 'execution_mode_combo') else 'apply'
+        return DesktopLocalStrategyValues(
+            group_display_separator=self.group_separator_combo.currentData() or '-',
+            group_recursive_enabled=bool(self.group_recursive_combo.currentData()),
+            managed_relation_cleanup_enabled=bool(self.group_cleanup_combo.currentData()),
+            schedule_execution_mode=execution_mode,
+            soft_excluded_rules=self.collect_soft_excluded_rule_rows(),
+        )
+
+    def _apply_local_strategy_values(self, values: DesktopLocalStrategyValues):
+        separator_index = self.group_separator_combo.findData(values.group_display_separator)
+        if separator_index >= 0:
+            self.group_separator_combo.setCurrentIndex(separator_index)
+
+        recursive_index = self.group_recursive_combo.findData(values.group_recursive_enabled)
+        if recursive_index >= 0:
+            self.group_recursive_combo.setCurrentIndex(recursive_index)
+
+        cleanup_index = self.group_cleanup_combo.findData(values.managed_relation_cleanup_enabled)
+        if cleanup_index >= 0:
+            self.group_cleanup_combo.setCurrentIndex(cleanup_index)
+
+        if hasattr(self, 'execution_mode_combo'):
+            mode_index = self.execution_mode_combo.findData(values.schedule_execution_mode)
+            if mode_index >= 0:
+                self.execution_mode_combo.setCurrentIndex(mode_index)
+
+        self.load_protected_rule_table(values.protected_rules)
+        self.load_soft_excluded_rule_table(values.soft_excluded_rules)
         
     def save_local_settings(self):
-        if self.local_db_error:
-            raise RuntimeError(self.local_db_error)
-        if not self.local_settings_repo or not self.local_rule_repo:
-            return
-
-        separator = self.group_separator_combo.currentData() or '-'
-        recursive_enabled = bool(self.group_recursive_combo.currentData())
-        cleanup_enabled = bool(self.group_cleanup_combo.currentData())
-        execution_mode = self.execution_mode_combo.currentData() if hasattr(self, 'execution_mode_combo') else 'apply'
-
-        self.local_settings_repo.set_value('group_display_separator', separator, 'string')
-        self.local_settings_repo.set_value('group_recursive_enabled', str(recursive_enabled).lower(), 'bool')
-        self.local_settings_repo.set_value('group_recursive_enabled_user_override', 'true', 'bool')
-        self.local_settings_repo.set_value('managed_relation_cleanup_enabled', str(cleanup_enabled).lower(), 'bool')
-        self.local_settings_repo.set_value('schedule_execution_mode', execution_mode, 'string')
-
-        self.local_rule_repo.replace_soft_excluded_rules(self.collect_soft_excluded_rule_rows())
+        self.local_strategy_service.save(
+            self.local_storage_state,
+            self._collect_local_strategy_values(),
+        )
         self.refresh_local_strategy_summary()
 
     def add_soft_excluded_rule_row(self, group_name: str = '', enabled: bool = True, source: str = 'user_ui'):
@@ -524,7 +419,12 @@ class MainWindow(QMainWindow):
             label.setText("--")
 
         self.original_logs = []
-        self.sync_thread = SyncThread(execution_mode=execution_mode, trigger_type=trigger_type)
+        self.sync_thread = SyncThread(
+            app_path=APP_PATH,
+            logs_dir=LOGS_DIR,
+            execution_mode=execution_mode,
+            trigger_type=trigger_type,
+        )
         self.sync_thread.update_signal.connect(self.update_log)
         self.sync_thread.finished_signal.connect(self.sync_finished)
         self.sync_thread.progress_signal.connect(self.update_progress)
@@ -733,64 +633,16 @@ class MainWindow(QMainWindow):
 
     def init_local_storage(self):
         """初始化本地 SQLite 配置存储。"""
-        self.local_db_manager = None
-        self.local_settings_repo = None
-        self.local_rule_repo = None
-        self.local_db_error = None
-        self.local_db_init_result = {}
-
-        try:
-            self.local_db_manager = DatabaseManager()
-            self.local_db_init_result = self.local_db_manager.initialize() or {}
-            self.local_settings_repo = SettingsRepository(self.local_db_manager)
-            self.local_rule_repo = GroupExclusionRuleRepository(self.local_db_manager)
-            migration_source = self.local_db_init_result.get("migration_source_path")
-            if migration_source and hasattr(self, "log_text"):
-                self.log_text.append(f"已迁移旧 SQLite 数据库到新位置: {migration_source}")
-        except Exception as exc:
-            self.local_db_error = str(exc)
-            logging.getLogger(__name__).error(f"本地配置库初始化失败: {exc}")
+        self._bind_local_storage_state(self.local_strategy_service.initialize())
+        migration_source = self.local_db_init_result.get("migration_source_path")
+        if migration_source and hasattr(self, "log_text"):
+            self.log_text.append(f"已迁移旧 SQLite 数据库到新位置: {migration_source}")
 
     def refresh_local_strategy_summary(self):
         if not hasattr(self, 'local_strategy_summary_label'):
             return
-
-        if self.local_db_error:
-            self.local_strategy_summary_label.setText(f"本地策略存储不可用: {self.local_db_error}")
-            return
-
-        if not self.local_rule_repo or not self.local_db_manager:
-            self.local_strategy_summary_label.setText("本地策略存储尚未初始化")
-            return
-
-        enabled_rules = self.local_rule_repo.list_enabled_rules()
-        hard_protected = [
-            row for row in self.local_rule_repo.list_rules(rule_type='protect', protection_level='hard')
-            if row['is_enabled']
-        ]
-        soft_excluded = [
-            row for row in self.local_rule_repo.list_rules(rule_type='exclude', protection_level='soft')
-            if row['is_enabled']
-        ]
-
-        integrity_info = (self.local_db_init_result or {}).get("integrity_check") or {}
-        integrity_text = ""
-        if integrity_info:
-            integrity_text = (
-                f" | 完整性检查 {'通过' if integrity_info.get('ok') else integrity_info.get('result', '未知')}"
-            )
-
-        extra_notes = []
-        if (self.local_db_init_result or {}).get("migration_source_path"):
-            extra_notes.append("已迁移旧库")
-        if (self.local_db_init_result or {}).get("startup_snapshot_path"):
-            extra_notes.append("已创建启动快照")
-        extra_text = f" | {' | '.join(extra_notes)}" if extra_notes else ""
-
         self.local_strategy_summary_label.setText(
-            f"SQLite: {self.local_db_manager.db_path} | 备份目录 {self.local_db_manager.backup_dir} | "
-            f"启用规则 {len(enabled_rules)} 条 | 硬保护组 {len(hard_protected)} | 软排除组 {len(soft_excluded)}"
-            f"{integrity_text}{extra_text}"
+            self.local_strategy_service.build_summary(self.local_storage_state)
         )
 
     def load_local_settings(self):
@@ -798,70 +650,35 @@ class MainWindow(QMainWindow):
             self.log_text.append(f"本地策略配置不可用: {self.local_db_error}")
             self.refresh_local_strategy_summary()
             return
-        if not self.local_settings_repo or not self.local_rule_repo:
-            return
-
-        separator = self.local_settings_repo.get_value('group_display_separator', '-') or '-'
-        separator_index = self.group_separator_combo.findData(separator)
-        if separator_index >= 0:
-            self.group_separator_combo.setCurrentIndex(separator_index)
-
-        recursive_enabled = self.local_settings_repo.get_bool('group_recursive_enabled', True)
-        recursive_index = self.group_recursive_combo.findData(recursive_enabled)
-        if recursive_index >= 0:
-            self.group_recursive_combo.setCurrentIndex(recursive_index)
-
-        cleanup_enabled = self.local_settings_repo.get_bool('managed_relation_cleanup_enabled', False)
-        cleanup_index = self.group_cleanup_combo.findData(cleanup_enabled)
-        if cleanup_index >= 0:
-            self.group_cleanup_combo.setCurrentIndex(cleanup_index)
-
-        if hasattr(self, 'execution_mode_combo'):
-            saved_mode = self.local_settings_repo.get_value('schedule_execution_mode', 'apply') or 'apply'
-            mode_index = self.execution_mode_combo.findData(saved_mode)
-            if mode_index >= 0:
-                self.execution_mode_combo.setCurrentIndex(mode_index)
-
-        protected_rules = [
-            dict(row)
-            for row in self.local_rule_repo.list_rules(rule_type='protect', protection_level='hard')
-            if row['is_enabled']
-        ]
-        self.load_protected_rule_table(protected_rules)
-        self.load_soft_excluded_rule_table(self.local_rule_repo.list_soft_excluded_rules())
+        self._apply_local_strategy_values(self.local_strategy_service.load(self.local_storage_state))
         self.refresh_local_strategy_summary()
 
     def run_local_db_integrity_check(self):
-        if not self.local_db_manager:
-            QMessageBox.warning(self, "数据库不可用", "本地 SQLite 数据库尚未初始化。")
-            return
-
         try:
-            result = self.local_db_manager.run_integrity_check()
-            self.local_db_init_result = self.local_db_init_result or {}
-            self.local_db_init_result["integrity_check"] = result
+            result = self.local_strategy_service.run_integrity_check(self.local_storage_state)
+            self.local_db_init_result = self.local_storage_state.init_result
             self.refresh_local_strategy_summary()
             message = f"SQLite 完整性检查结果: {result['result']}"
             self.log_text.append(message)
             self.status_label.setText("数据库检查通过" if result.get("ok") else "数据库检查失败")
             dialog = QMessageBox.information if result.get("ok") else QMessageBox.warning
             dialog(self, "完整性检查", message)
+        except RuntimeError as exc:
+            QMessageBox.warning(self, "数据库不可用", str(exc))
         except Exception as exc:
             self.log_text.append(f"SQLite 完整性检查失败: {exc}")
             self.status_label.setText("数据库检查失败")
             QMessageBox.critical(self, "完整性检查失败", str(exc))
 
     def create_local_db_backup(self):
-        if not self.local_db_manager:
-            QMessageBox.warning(self, "数据库不可用", "本地 SQLite 数据库尚未初始化。")
-            return
-
         try:
-            backup_path = self.local_db_manager.backup_database(label="manual_ui")
+            backup_path = self.local_strategy_service.create_backup(self.local_storage_state, label="manual_ui")
             self.log_text.append(f"SQLite 备份已创建: {backup_path}")
             self.status_label.setText("数据库备份已创建")
             self.refresh_local_strategy_summary()
             QMessageBox.information(self, "备份完成", f"备份文件已生成:\n{backup_path}")
+        except RuntimeError as exc:
+            QMessageBox.warning(self, "数据库不可用", str(exc))
         except Exception as exc:
             self.log_text.append(f"SQLite 备份失败: {exc}")
             self.status_label.setText("数据库备份失败")
@@ -1222,51 +1039,9 @@ class MainWindow(QMainWindow):
     def load_config(self):
         """从配置文件加载界面配置。"""
         try:
-            config_path = os.path.join(APP_PATH, "config.ini")
+            config_path = self.config_service.config_path
             self.log_text.append(f"正在加载配置文件: {config_path}")
-
-            config = configparser.ConfigParser()
-            config.read(config_path, encoding='utf-8')
-
-            self.corpid_edit.setText(_get_config_value(config, ('SourceConnector', 'WeChat'), 'CorpID', fallback=''))
-            self.corpsecret_edit.setText(
-                _get_config_value(config, ('SourceConnector', 'WeChat'), 'CorpSecret', fallback='')
-            )
-            self.webhook_edit.setText(
-                _get_config_value(config, ('Notification', 'WeChatBot'), 'WebhookUrl', fallback='')
-            )
-
-            self.ldap_server_edit.setText(config.get('LDAP', 'Server', fallback=''))
-            self.ldap_domain_edit.setText(
-                config.get('LDAP', 'Domain', fallback=config.get('Domain', 'Name', fallback=''))
-            )
-            self.ldap_username_edit.setText(config.get('LDAP', 'Username', fallback=''))
-            self.ldap_password_edit.setText(config.get('LDAP', 'Password', fallback=''))
-
-            use_ssl = config.getboolean('LDAP', 'UseSSL', fallback=True)
-            self.ldap_ssl_checkbox.setCurrentText("启用SSL" if use_ssl else "禁用SSL")
-            self.ldap_port_spinbox.setValue(config.getint('LDAP', 'Port', fallback=636 if use_ssl else 389))
-
-            if 'Schedule' in config:
-                if 'Time' in config['Schedule']:
-                    try:
-                        hour, minute = map(int, config.get('Schedule', 'Time').split(':'))
-                        self.schedule_time_edit.setTime(QTime(hour, minute))
-                    except (ValueError, IndexError):
-                        self.schedule_time_edit.setTime(QTime(3, 0))
-
-                if 'RetryInterval' in config['Schedule']:
-                    try:
-                        self.interval_spinbox.setValue(config.getint('Schedule', 'RetryInterval'))
-                    except ValueError:
-                        self.interval_spinbox.setValue(60)
-
-                if 'MaxRetries' in config['Schedule']:
-                    try:
-                        self.retry_spinbox.setValue(config.getint('Schedule', 'MaxRetries'))
-                    except ValueError:
-                        self.retry_spinbox.setValue(3)
-
+            self._apply_desktop_config_values(self.config_service.load())
             self.log_text.append("配置加载成功")
             self.status_label.setText("配置已加载")
         except Exception as exc:
@@ -1276,92 +1051,10 @@ class MainWindow(QMainWindow):
     def save_config(self):
         """保存当前界面配置到配置文件。"""
         try:
-            config_path = os.path.join(APP_PATH, "config.ini")
+            config_path = self.config_service.config_path
             self.log_text.append(f"正在保存配置到: {config_path}")
-
-            config = configparser.ConfigParser()
-            if os.path.exists(config_path):
-                config.read(config_path, encoding='utf-8')
-
-            _ensure_config_sections(
-                config,
-                (
-                    'Source',
-                    'SourceConnector',
-                    'Notification',
-                    'WeChat',
-                    'WeChatBot',
-                    'Domain',
-                    'LDAP',
-                    'ExcludeUsers',
-                    'ExcludeDepartments',
-                    'Sync',
-                    'Account',
-                    'Schedule',
-                    'Logging',
-                ),
-            )
-
-            source_provider = _get_config_value(config, ('Source',), 'Provider', fallback='wecom').strip() or 'wecom'
-            agent_id = _get_config_value(config, ('SourceConnector', 'WeChat'), 'AgentID', fallback='')
-
-            config.set('Source', 'Provider', source_provider)
-            config.set('SourceConnector', 'CorpID', self.corpid_edit.text())
-            config.set('SourceConnector', 'CorpSecret', self.corpsecret_edit.text())
-            config.set('SourceConnector', 'AgentID', agent_id)
-            config.set('Notification', 'WebhookUrl', self.webhook_edit.text())
-
-            config.set('WeChat', 'CorpID', self.corpid_edit.text())
-            config.set('WeChat', 'CorpSecret', self.corpsecret_edit.text())
-            config.set('WeChat', 'AgentID', agent_id)
-            config.set('WeChatBot', 'WebhookUrl', self.webhook_edit.text())
-
-            config.set('LDAP', 'Server', self.ldap_server_edit.text())
-            config.set('LDAP', 'Domain', self.ldap_domain_edit.text())
-            config.set('LDAP', 'Username', self.ldap_username_edit.text())
-            config.set('LDAP', 'Password', self.ldap_password_edit.text())
-            use_ssl = self.ldap_ssl_checkbox.currentText() == "启用SSL"
-            config.set('LDAP', 'UseSSL', str(use_ssl).lower())
-            config.set('LDAP', 'Port', str(self.ldap_port_spinbox.value()))
-
-            config.set('Domain', 'Name', self.ldap_domain_edit.text())
-
-            if 'SystemAccounts' not in config['ExcludeUsers']:
-                config.set('ExcludeUsers', 'SystemAccounts', 'admin,administrator,guest,krbtgt')
-            if 'CustomAccounts' not in config['ExcludeUsers']:
-                config.set('ExcludeUsers', 'CustomAccounts', '')
-            if 'Names' not in config['ExcludeDepartments']:
-                config.set('ExcludeDepartments', 'Names', '')
-
-            if 'ForceFullSync' not in config['Sync']:
-                config.set('Sync', 'ForceFullSync', 'false')
-            if 'SyncMode' not in config['Sync']:
-                config.set('Sync', 'SyncMode', 'full')
-            if 'KeepHistoryDays' not in config['Sync']:
-                config.set('Sync', 'KeepHistoryDays', '30')
-
-            if 'DefaultPassword' not in config['Account']:
-                config.set('Account', 'DefaultPassword', '')
-            if 'ForceChangePassword' not in config['Account']:
-                config.set('Account', 'ForceChangePassword', 'true')
-            if 'PasswordComplexity' not in config['Account']:
-                config.set('Account', 'PasswordComplexity', 'strong')
-
-            config.set('Schedule', 'Time', self.schedule_time_edit.time().toString("HH:mm"))
-            config.set('Schedule', 'RetryInterval', str(self.interval_spinbox.value()))
-            config.set('Schedule', 'MaxRetries', str(self.retry_spinbox.value()))
-
-            if 'Level' not in config['Logging']:
-                config.set('Logging', 'Level', 'INFO')
-            if 'DetailedLogging' not in config['Logging']:
-                config.set('Logging', 'DetailedLogging', 'true')
-            if 'KeepLogsDays' not in config['Logging']:
-                config.set('Logging', 'KeepLogsDays', '30')
-
             self.save_local_settings()
-            with open(config_path, 'w', encoding='utf-8') as configfile:
-                config.write(configfile)
-
+            self.config_service.save(self._collect_desktop_config_values())
             self.status_label.setText("配置已保存")
             self.log_text.append("配置保存成功")
             self.setup_scheduler()
@@ -1387,20 +1080,6 @@ class MainWindow(QMainWindow):
         self.schedule_thread = ScheduleThread()
         self.schedule_thread.start()
 
-class ScheduleThread(QThread):
-    """执行定时任务的线程"""
-    def __init__(self):
-        super().__init__()
-        self.running = True
-    
-    def run(self):
-        while self.running:
-            schedule.run_pending()
-            time.sleep(1)
-    
-    def stop(self):
-        self.running = False
-
 def main():
     # 确保只有一个实例运行
     app = QApplication(sys.argv)
@@ -1415,75 +1094,9 @@ def main():
         if not os.path.exists(LOGS_DIR):
             os.makedirs(LOGS_DIR)
             
-        # 如果配置文件不存在，创建默认配置
-        config_path = os.path.join(APP_PATH, "config.ini")
-        if not os.path.exists(config_path):
-            default_config = """[Source]
-Provider = wecom
-
-[SourceConnector]
-CorpID =
-AgentID =
-CorpSecret =
-
-[Notification]
-WebhookUrl =
-
-[WeChat]
-CorpID = 
-AgentID =
-CorpSecret = 
-
-[WeChatBot]
-WebhookUrl = 
-
-[Domain]
-Name = 
-
-[LDAP]
-# LDAP服务器地址（域控制器地址）
-Server = dc.example.com
-# 域名
-Domain = example.com
-# 管理员用户名（格式：DOMAIN\\username 或 username@domain）
-Username = DOMAIN\\administrator
-# 管理员密码
-Password = 
-# 是否使用SSL/TLS加密连接
-UseSSL = true
-# LDAP端口（默认：636用于LDAPS，389用于LDAP）
-Port = 636
-
-[ExcludeUsers]
-SystemAccounts = admin,administrator,guest,krbtgt
-CustomAccounts = 
-
-[ExcludeDepartments]
-Names = 
-
-[Sync]
-ForceFullSync = false
-SyncMode = full
-KeepHistoryDays = 30
-
-[Account]
-DefaultPassword =
-ForceChangePassword = true
-PasswordComplexity = strong
-
-[Schedule]
-Time = 03:00
-RetryInterval = 60
-MaxRetries = 3
-
-[Logging]
-Level = INFO
-DetailedLogging = true
-KeepLogsDays = 30
-"""
-            with open(config_path, "w", encoding="utf-8") as f:
-                f.write(default_config)
-            print(f"已创建默认配置文件: {config_path}")
+        config_service = DesktopConfigService(APP_PATH)
+        if config_service.ensure_config_file():
+            print(f"已创建默认配置文件: {config_service.config_path}")
     except Exception as e:
         print(f"初始化应用程序环境出错: {str(e)}")
     

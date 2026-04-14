@@ -11,15 +11,15 @@
   <p class="section-subtitle">{{ t("Sign in to manage your directory synchronization operations.") }}</p>
 </div>
 
-<div class="card" style="max-width: 400px; margin: 0 auto;">
+<div class="card login-card">
   <form method="post" action="/login">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     
-    <div style="margin-bottom: 24px;">
+    <div class="login-form-section">
       {{ forms.input("username", t("Username"), required=True, placeholder=t("Enter your username")) }}
     </div>
     
-    <div style="margin-bottom: 32px;">
+    <div class="login-form-section login-form-section--spacious">
       {{ forms.input("password", t("Password"), type="password", required=True, placeholder=t("Enter your password")) }}
     </div>
 
@@ -28,7 +28,7 @@
 </div>
 
 <div class="login-footer">
-  <div style="margin-bottom: 24px;">
+  <div class="login-language">
     {{ ui.topbar_segmented_links(
       [
         ("en", language_options.get("en", "English"), language_urls.get("en", "/login")),

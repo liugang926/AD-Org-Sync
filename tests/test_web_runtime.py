@@ -1,7 +1,11 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
+from sync_app.storage.local_db import DatabaseManager, SyncJobRepository, WebAuditLogRepository
 from sync_app.web.runtime import (
     LoginRateLimiter,
+    WebSyncRunner,
     normalize_secure_cookie_mode,
     resolve_web_runtime_settings,
     web_runtime_requires_restart,
@@ -98,6 +102,31 @@ class WebRuntimeTests(unittest.TestCase):
         limiter.clear("admin", "127.0.0.1")
 
         self.assertEqual(limiter.check("admin", "127.0.0.1"), (False, 0))
+
+    def test_web_sync_runner_rejects_launch_when_database_has_active_job(self):
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "web_runtime.db"
+            db_manager = DatabaseManager(db_path=str(db_path))
+            db_manager.initialize()
+            audit_repo = WebAuditLogRepository(db_manager)
+            SyncJobRepository(db_manager).create_job(
+                job_id="job-running-001",
+                trigger_type="web",
+                execution_mode="apply",
+                status="RUNNING",
+                org_id="default",
+            )
+
+            runner = WebSyncRunner(db_path=str(db_path), audit_repo=audit_repo)
+            ok, message = runner.launch(
+                mode="apply",
+                actor_username="admin",
+                org_id="default",
+                config_path="config.ini",
+            )
+
+        self.assertFalse(ok)
+        self.assertIn("job-running-001", message)
 
 
 if __name__ == "__main__":

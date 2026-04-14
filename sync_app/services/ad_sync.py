@@ -813,57 +813,6 @@ class ADSyncLDAPS:
             changes[attribute_name] = [(MODIFY_REPLACE, [normalized_value])]
         return changes
 
-    def create_user(
-        self,
-        username: str,
-        display_name: str,
-        email: str,
-        ou_dn: str,
-        *,
-        extra_attributes: Optional[Dict[str, Dict[str, Any] | Any]] = None,
-    ) -> bool:
-        """创建AD用户"""
-        try:
-            # 生成复杂密码或使用配置的默认密码
-            password = self.default_password
-
-            # 未配置或不符合策略时，退回到随机强密码，避免使用静态弱口令。
-            if not password or not self._validate_password_complexity(password):
-                self.logger.warning("默认密码缺失或不符合复杂度要求，将生成随机密码")
-                password = self._generate_complex_password()
-            
-            user_dn = f"CN={display_name},{ou_dn}"
-            
-            # 构建用户属性
-            user_attributes = {
-                'objectClass': ['top', 'person', 'organizationalPerson', 'user'],
-                'cn': display_name,
-                'sAMAccountName': username,
-                'userPrincipalName': f"{username}@{self.domain}",
-                'displayName': display_name,
-                'mail': email,
-                'userAccountControl': 512 if not self.force_change_password else 544  # 512=启用, 544=启用+需要改密码
-            }
-            
-            # 创建用户
-            if self.connection.add(user_dn, attributes=user_attributes):
-                # 设置密码
-                self._set_user_password(user_dn, password)
-                
-                # 启用账户
-                self.connection.modify(user_dn, {
-                    'userAccountControl': [(MODIFY_REPLACE, [512])]
-                })
-                
-                self.logger.info(f"创建用户成功: {username} ({display_name})")
-                return True
-            else:
-                self.logger.error(f"创建用户失败: {username} ({display_name}), 错误: {self.connection.result}")
-                return False
-        except Exception as e:
-            self.logger.error(f"创建用户过程出错: {str(e)}")
-            return False
-    
     def _set_user_password(self, user_dn: str, password: str):
         """设置用户密码"""
         try:
@@ -914,48 +863,6 @@ class ADSyncLDAPS:
             password[i], password[j] = password[j], password[i]
         
         return ''.join(password)
-    
-    def update_user(self, username: str, display_name: str, email: str, ou_dn: str) -> bool:
-        """更新AD用户信息"""
-        try:
-            # 获取用户DN
-            user = self.get_user(username)
-            if not user:
-                self.logger.error(f"找不到用户: {username}")
-                return False
-            
-            user_dn = user['dn']
-            
-            # 检查用户当前是否已有邮箱
-            current_email = self.get_user_email(username)
-            
-            # 准备修改属性
-            changes = {
-                'displayName': [(MODIFY_REPLACE, [display_name])],
-                'userPrincipalName': [(MODIFY_REPLACE, [f"{username}@{self.domain}"])]
-            }
-            
-            if not current_email:
-                changes['mail'] = [(MODIFY_REPLACE, [email])]
-                self.logger.info(f"用户 {username} 无邮箱，设置新邮箱: {email}")
-            else:
-                self.logger.info(f"用户 {username} 已有邮箱 {current_email}，保持不变")
-            
-            # 执行修改
-            if self.connection.modify(user_dn, changes):
-                # 移动用户到指定OU
-                new_dn = f"CN={display_name},{ou_dn}"
-                if user_dn != new_dn:
-                    self.connection.modify_dn(user_dn, f"CN={display_name}", new_superior=ou_dn)
-                
-                self.logger.info(f"更新用户成功: {username} ({display_name})")
-                return True
-            else:
-                self.logger.error(f"更新用户信息失败: {username}, 错误: {self.connection.result}")
-                return False
-        except Exception as e:
-            self.logger.error(f"更新用户过程出错: {str(e)}")
-            return False
     
     def add_user_to_group(self, username: str, group_name: str) -> bool:
         """将用户添加到安全组"""
@@ -1254,113 +1161,6 @@ class ADSyncLDAPS:
             self.logger.error(f"检查用户状态失败 {username}: {str(e)}")
             return False
     
-    def disable_user(self, username: str) -> bool:
-        """禁用AD用户账户"""
-        try:
-            # 确保 Disabled Users OU 存在
-            if not self.ensure_disabled_users_ou():
-                self.logger.error("无法确保 Disabled Users OU 存在")
-            
-            # 首先检查用户是否存在且处于启用状态
-            if not self.is_user_active(username):
-                self.logger.info(f"用户 {username} 已经处于禁用状态或不存在")
-                return True
-            
-            # 获取用户
-            user = self.get_user(username)
-            if not user:
-                self.logger.error(f"找不到用户: {username}")
-                return False
-            
-            user_dn = user['dn']
-            
-            # 禁用账户（设置userAccountControl的第2位）
-            changes = {
-                'userAccountControl': [(MODIFY_REPLACE, [514])],  # 514 = 512 + 2 (启用+禁用)
-                'description': [(MODIFY_REPLACE, [f"Account disabled - Not found in source directory - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"])]
-            }
-            
-            if self.connection.modify(user_dn, changes):
-                self.logger.info(f"成功禁用账户: {username}")
-                
-                # 移动到禁用用户OU
-                disabled_ou = f"OU=Disabled Users,{self.base_dn}"
-                cn = user_dn.split(',')[0].split('=')[1]
-                
-                try:
-                    self.connection.modify_dn(user_dn, f"CN={cn}", new_superior=disabled_ou)
-                    self.logger.info(f"已将禁用账户 {username} 移动到 Disabled Users OU")
-                except Exception as e:
-                    self.logger.warning(f"移动禁用账户失败: {str(e)}")
-                
-                return True
-            else:
-                self.logger.error(f"禁用账户失败 {username}: {self.connection.result}")
-                return False
-        except Exception as e:
-            self.logger.error(f"禁用账户过程出错 {username}: {str(e)}")
-            return False
-    
-    def get_user_details(self, username: str) -> Dict:
-        """获取AD用户的详细信息"""
-        try:
-            search_filter = f"(&(objectClass=user)(sAMAccountName={escape_filter_chars(username)}))"
-            self.connection.search(
-                self.base_dn,
-                search_filter,
-                attributes=['displayName', 'mail', 'whenCreated', 'whenChanged', 'lastLogon', 'description', 'distinguishedName', 'objectGUID']
-            )
-            
-            if self.connection.entries:
-                entry = self.connection.entries[0]
-                guid_value = ""
-                raw_guid = getattr(entry, 'objectGUID', None)
-                guid_bytes = getattr(raw_guid, 'value', None)
-                if isinstance(guid_bytes, (bytes, bytearray)) and len(guid_bytes) == 16:
-                    guid_value = str(uuid.UUID(bytes_le=bytes(guid_bytes)))
-                return {
-                    'SamAccountName': username,
-                    'DisplayName': entry.displayName.value if hasattr(entry, 'displayName') else '',
-                    'Mail': entry.mail.value if hasattr(entry, 'mail') else '',
-                    'Created': str(entry.whenCreated.value) if hasattr(entry, 'whenCreated') else '',
-                    'Modified': str(entry.whenChanged.value) if hasattr(entry, 'whenChanged') else '',
-                    'LastLogonDate': str(entry.lastLogon.value) if hasattr(entry, 'lastLogon') else '',
-                    'Description': entry.description.value if hasattr(entry, 'description') else '',
-                    'DistinguishedName': str(getattr(entry, 'entry_dn', '') or ''),
-                    'ObjectGUID': guid_value,
-                }
-            return {}
-        except Exception as e:
-            self.logger.error(f"获取用户详情失败: {str(e)}")
-            return {}
-    
-    def ensure_disabled_users_ou(self) -> bool:
-        """确保 Disabled Users OU 存在"""
-        try:
-            disabled_ou = f"OU=Disabled Users,{self.base_dn}"
-            
-            if not self.ou_exists(disabled_ou):
-                self.logger.info("Disabled Users OU 不存在，正在创建...")
-                
-                ou_attributes = {
-                    'objectClass': ['top', 'organizationalUnit'],
-                    'ou': 'Disabled Users',
-                    'description': '存放已禁用的用户账户'
-                }
-                
-                if self.connection.add(disabled_ou, attributes=ou_attributes):
-                    self.logger.info("成功创建 Disabled Users OU")
-                    return True
-                else:
-                    self.logger.error(f"创建 Disabled Users OU 失败: {self.connection.result}")
-                    return False
-            else:
-                self.logger.debug("Disabled Users OU 已存在")
-                return True
-        except Exception as e:
-            self.logger.error(f"检查/创建 Disabled Users OU 时出错: {str(e)}")
-            return False
-    
     def create_user(
         self,
         username: str,
@@ -1624,4 +1424,3 @@ class ADSyncLDAPS:
 
 # 保持向后兼容，ADSync作为ADSyncLDAPS的别名
 ADSync = ADSyncLDAPS
-
