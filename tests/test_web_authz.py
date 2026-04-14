@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from starlette.requests import Request
 
-from sync_app.core.models import DepartmentNode
+from sync_app.core.models import DepartmentNode, SourceDirectoryUser
 from sync_app.services.config_store import save_editable_config
 from sync_app.web.app import resolve_web_runtime_settings
 from sync_app.web import create_app
@@ -443,6 +443,7 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn("All advanced capabilities are opt-in.", body)
         self.assertIn("Pending Lifecycle Queue", body)
         self.assertIn("Pending Replay Requests", body)
+        self.assertIn("Source Data Quality Snapshot", body)
         self.assertIn("Username Strategy Previewer", body)
         self.assertIn("Identity Route Explainer", body)
         self.assertIn("Department To AD OU Mapping", body)
@@ -702,6 +703,122 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(explanation["target_department"]["department_id"], 3)
         self.assertEqual(explanation["target_ou_path"], "Managed Users/Asia/China")
         self.assertEqual(explanation["username_preview"]["primary_candidate"]["username"], "smitha")
+
+    def test_advanced_sync_data_quality_snapshot_surfaces_naming_and_source_data_gaps(self):
+        self._login("superadmin")
+        self.app.state.connector_repo.upsert_connector(
+            connector_id="primary",
+            org_id="default",
+            name="Primary Naming Rule",
+            config_path=str(self.config_path),
+            root_department_ids=[],
+            username_strategy="email_localpart",
+            username_collision_policy="append_employee_id",
+            username_template="",
+            is_enabled=True,
+        )
+
+        class FakeSourceProvider:
+            def list_departments(self):
+                return [
+                    DepartmentNode(department_id=1, name="Headquarters", parent_id=0),
+                    DepartmentNode(department_id=2, name="Sales", parent_id=1),
+                ]
+
+            def list_department_users(self, department_id: int):
+                rows = {
+                    1: [
+                        {
+                            "userid": "alice1",
+                            "name": "Alice One",
+                            "email": "alice@example.com",
+                            "employee_id": "1001",
+                            "department": [1],
+                        },
+                        {
+                            "userid": "alice2",
+                            "name": "Alice Two",
+                            "email": "alice@regional.example.com",
+                            "employee_id": "1002",
+                            "department": [1],
+                        },
+                        {
+                            "userid": "bob",
+                            "name": "Bob",
+                            "email": "",
+                            "department": [1],
+                        },
+                    ],
+                    2: [
+                        {
+                            "userid": "carol",
+                            "name": "Carol",
+                            "email": "carol@example.com",
+                            "department": [2],
+                        },
+                    ],
+                }
+                return [SourceDirectoryUser.from_source_payload(item) for item in rows.get(department_id, [])]
+
+            def get_user_detail(self, source_user_id: str):
+                detail_rows = {
+                    "alice1": {
+                        "userid": "alice1",
+                        "name": "Alice One",
+                        "email": "alice@example.com",
+                        "employee_id": "1001",
+                        "department": [1],
+                    },
+                    "alice2": {
+                        "userid": "alice2",
+                        "name": "Alice Two",
+                        "email": "alice@regional.example.com",
+                        "employee_id": "1002",
+                        "department": [1],
+                    },
+                    "bob": {
+                        "userid": "bob",
+                        "name": "Bob",
+                        "email": "",
+                        "department": [1],
+                    },
+                    "carol": {
+                        "userid": "carol",
+                        "name": "Carol",
+                        "email": "carol@example.com",
+                        "department": [2],
+                    },
+                }
+                return detail_rows.get(source_user_id, {})
+
+            def search_users(self, _query: str, limit: int = 20):
+                return []
+
+            def close(self):
+                return None
+
+        with patch("sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()):
+            response = self._route("/advanced-sync/data-quality-snapshot", "GET")(
+                self._request("/advanced-sync/data-quality-snapshot")
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(self._text(response))
+        self.assertTrue(payload["ok"])
+        snapshot = payload["snapshot"]
+        self.assertEqual(snapshot["summary"]["total_users"], 4)
+        self.assertEqual(snapshot["summary"]["users_missing_email"], 1)
+        self.assertEqual(snapshot["summary"]["users_missing_employee_id"], 2)
+        self.assertEqual(snapshot["summary"]["managed_username_collision_count"], 1)
+        self.assertEqual(snapshot["summary"]["naming_prerequisite_gap_count"], 1)
+        issues_by_key = {item["key"]: item for item in snapshot["issues"]}
+        self.assertIn("missing_email", issues_by_key)
+        self.assertIn("missing_employee_id", issues_by_key)
+        self.assertIn("managed_username_collision", issues_by_key)
+        self.assertIn("naming_prerequisite_gap", issues_by_key)
+        self.assertEqual(issues_by_key["managed_username_collision"]["count"], 1)
+        self.assertIn("alice1", issues_by_key["managed_username_collision"]["samples"][0]["detail"])
+        self.assertEqual(issues_by_key["naming_prerequisite_gap"]["count"], 1)
 
     def test_jobs_page_shows_execution_readiness_and_impact_preview(self):
         self._login("superadmin")

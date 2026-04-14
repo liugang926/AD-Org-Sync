@@ -214,9 +214,23 @@
     <div
       class="grid cols-2"
       data-advanced-sync-page
+      data-data-quality-snapshot-url="/advanced-sync/data-quality-snapshot"
       data-username-preview-url="/advanced-sync/username-preview"
       data-identity-explain-url="/advanced-sync/identity-explain"
     >
+      {% call ui.detail_toggle(t("Source Data Quality Snapshot"), t("Run an on-demand scan against the configured source directory before dry run. This focuses on source data and connector rules, not manual bindings or per-user overrides."), open=False) %}
+        <div class="page-stack tight">
+          <div class="actions">
+            {{ ui.button(t("Analyze Source Directory"), type="button", variant="secondary", attrs='data-data-quality-run') }}
+          </div>
+          <div data-data-quality-results>
+            <div class="panel-note info">
+              {{ t("The on-demand snapshot will highlight missing email, missing employee ID, placement gaps, connector ambiguity, and predicted managed-username collisions.") }}
+            </div>
+          </div>
+        </div>
+      {% endcall %}
+
       {% call ui.detail_toggle(t("Username Strategy Previewer"), t("Test a connector rule with a sample payload before you save or rerun synchronization."), open=False) %}
         <div class="page-stack tight">
           <form method="post" data-username-preview-form class="page-stack tight">

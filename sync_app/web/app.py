@@ -317,6 +317,7 @@ def create_app(
 
     register_advanced_sync_routes(
         app,
+        build_source_data_quality_snapshot=sync_support_call("build_source_data_quality_snapshot"),
         attribute_mapping_direction_labels=ATTRIBUTE_MAPPING_DIRECTION_LABELS,
         build_username_preview=sync_support_call("build_username_preview"),
         describe_connector_config_source=request_support.describe_connector_config_source,

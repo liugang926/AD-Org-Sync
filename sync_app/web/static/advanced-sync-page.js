@@ -244,14 +244,153 @@
     `;
   };
 
+  const renderDataQualitySnapshot = (snapshot) => {
+    const summary = snapshot?.summary || {};
+    const issues = Array.isArray(snapshot?.issues) ? snapshot.issues : [];
+    const connectorBreakdown = Array.isArray(snapshot?.connector_breakdown)
+      ? snapshot.connector_breakdown
+      : [];
+    const analysisNotes = Array.isArray(snapshot?.analysis_notes) ? snapshot.analysis_notes : [];
+
+    const issueBlocks = issues.length
+      ? `
+        <div class="check-list">
+          ${issues
+            .map((issue) => {
+              const samples = Array.isArray(issue?.samples) ? issue.samples : [];
+              const sampleBlock = samples.length
+                ? `
+                  <div class="stack-tight">
+                    ${samples
+                      .map(
+                        (sample) => `
+                          <div class="panel-note info">
+                            <strong>${escapeHtml(sample?.title || "-")}</strong>
+                            <div class="muted">${escapeHtml(sample?.detail || "-")}</div>
+                          </div>
+                        `,
+                      )
+                      .join("")}
+                  </div>
+                `
+                : "";
+              return `
+                <div class="check-item">
+                  <div class="check-item__header">
+                    <h3 class="check-item__title">${escapeHtml(issue?.label || "Issue")}</h3>
+                    ${badge(issue?.severity || "warning", issue?.severity || "warning")}
+                  </div>
+                  <p class="check-item__detail">${escapeHtml(issue?.description || "-")}</p>
+                  <div class="muted">Affected records: ${escapeHtml(String(issue?.count || 0))}</div>
+                  <div class="muted">Recommended action: ${escapeHtml(issue?.action || "-")}</div>
+                  ${sampleBlock}
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+      `
+      : `
+        <div class="panel-note success">
+          No obvious source-data blockers were detected in this snapshot.
+        </div>
+      `;
+
+    const connectorBlock = connectorBreakdown.length
+      ? `
+        <div class="surface-inline">
+          ${connectorBreakdown
+            .map((item) =>
+              badge(
+                `${item?.name || item?.connector_id || "Connector"}: ${String(item?.user_count || 0)}`,
+                item?.connector_id === "__multiple__" || item?.connector_id === "__unrouted__" ? "warning" : "info",
+              ),
+            )
+            .join("")}
+        </div>
+      `
+      : "";
+
+    const notesBlock = analysisNotes.length
+      ? `
+        <div class="stack-tight">
+          ${analysisNotes
+            .map((note) => `<div class="muted">${escapeHtml(note || "")}</div>`)
+            .join("")}
+        </div>
+      `
+      : "";
+
+    return `
+      <div class="stack-tight">
+        <div class="surface-inline">
+          ${badge(
+            summary?.error_issue_count ? "Needs Attention" : summary?.warning_issue_count ? "Review Recommended" : "Healthy",
+            summary?.error_issue_count ? "error" : summary?.warning_issue_count ? "warning" : "success",
+          )}
+          <span class="muted">Generated at ${escapeHtml(snapshot?.generated_at || "-")}</span>
+        </div>
+        <div class="detail-grid">
+          ${detailItem("Users", escapeHtml(String(summary?.total_users || 0)))}
+          ${detailItem("Departments", escapeHtml(String(summary?.department_count || 0)))}
+          ${detailItem("Missing Email", escapeHtml(String(summary?.users_missing_email || 0)))}
+          ${detailItem("Missing Employee ID", escapeHtml(String(summary?.users_missing_employee_id || 0)))}
+          ${detailItem("Placement Gaps", escapeHtml(String(summary?.placement_unresolved_count || 0)))}
+          ${detailItem("Connector Ambiguity", escapeHtml(String(summary?.routing_ambiguity_count || 0)))}
+          ${detailItem("Naming Gaps", escapeHtml(String(summary?.naming_prerequisite_gap_count || 0)))}
+          ${detailItem("Username Collisions", escapeHtml(String(summary?.managed_username_collision_count || 0)))}
+          ${detailItem("Duplicate Emails", escapeHtml(String(summary?.duplicate_email_count || 0)))}
+          ${detailItem("Duplicate Employee IDs", escapeHtml(String(summary?.duplicate_employee_id_count || 0)))}
+        </div>
+        ${connectorBlock}
+        ${notesBlock}
+        <div>
+          <div class="muted">Detected Issues</div>
+          ${issueBlocks}
+        </div>
+      </div>
+    `;
+  };
+
   ADOrgSync.initAdvancedSyncPage = () => {
     const page = document.querySelector("[data-advanced-sync-page]");
     if (!(page instanceof HTMLElement)) {
       return;
     }
 
+    const dataQualitySnapshotUrl =
+      page.dataset.dataQualitySnapshotUrl || "/advanced-sync/data-quality-snapshot";
     const usernamePreviewUrl = page.dataset.usernamePreviewUrl || "/advanced-sync/username-preview";
     const identityExplainUrl = page.dataset.identityExplainUrl || "/advanced-sync/identity-explain";
+
+    const dataQualityButton = page.querySelector("[data-data-quality-run]");
+    const dataQualityResults = page.querySelector("[data-data-quality-results]");
+    if (dataQualityButton instanceof HTMLElement && dataQualityResults instanceof HTMLElement) {
+      dataQualityButton.addEventListener("click", () => {
+        ADOrgSync.setLoading?.(dataQualityButton);
+        setResultState(
+          dataQualityResults,
+          '<div class="panel-note info">Scanning source users, departments, and naming outcomes. This can take a little while on larger directories...</div>',
+        );
+        fetch(dataQualitySnapshotUrl, {
+          credentials: "same-origin",
+        })
+          .then((response) => response.json())
+          .then((json) => {
+            if (!json?.ok) {
+              throw new Error(json?.error || "Data quality snapshot failed.");
+            }
+            setResultState(dataQualityResults, renderDataQualitySnapshot(json.snapshot || {}));
+          })
+          .catch((error) => {
+            setResultState(
+              dataQualityResults,
+              `<div class="panel-note error">${escapeHtml(error?.message || "Data quality snapshot failed.")}</div>`,
+            );
+          })
+          .finally(() => clearLoading(dataQualityButton));
+      });
+    }
 
     const previewForm = page.querySelector("[data-username-preview-form]");
     const previewResults = page.querySelector("[data-username-preview-results]");
