@@ -211,6 +211,92 @@
 
   <div id="account-creation-rules"></div>
   {% call ui.panel(t("Account Creation Rules And Connector Routing"), t("Organization Scope"), "info", t("Configure how this organization creates AD accounts: source scope, naming strategy, duplicate handling, connector routing, and connector-level disabled-user OU placement.")) %}
+    <div
+      class="grid cols-2"
+      data-advanced-sync-page
+      data-username-preview-url="/advanced-sync/username-preview"
+      data-identity-explain-url="/advanced-sync/identity-explain"
+    >
+      {% call ui.detail_toggle(t("Username Strategy Previewer"), t("Test a connector rule with a sample payload before you save or rerun synchronization."), open=False) %}
+        <div class="page-stack tight">
+          <form method="post" data-username-preview-form class="page-stack tight">
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="preview_connector_id">{{ t("Connector Rule") }}</label>
+                <select id="preview_connector_id" name="connector_id">
+                  <option value="default">{{ t("Organization Default") }}</option>
+                  {% for connector in connectors %}
+                  {% if connector.connector_id != "default" %}
+                  <option value="{{ connector.connector_id }}">{{ connector.connector_id }} - {{ connector.name }}</option>
+                  {% endif %}
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="preview_sample_userid">{{ t("Sample Source User ID") }}</label>
+                <input id="preview_sample_userid" type="text" name="sample_userid" placeholder="zhangsan">
+              </div>
+              <div class="form-group">
+                <label for="preview_sample_name">{{ t("Sample Display Name") }}</label>
+                <input id="preview_sample_name" type="text" name="sample_name" placeholder="张三">
+              </div>
+              <div class="form-group">
+                <label for="preview_sample_email">{{ t("Sample Email") }}</label>
+                <input id="preview_sample_email" type="text" name="sample_email" placeholder="zhangsan@example.com">
+              </div>
+              <div class="form-group">
+                <label for="preview_sample_employee_id">{{ t("Sample Employee ID") }}</label>
+                <input id="preview_sample_employee_id" type="text" name="sample_employee_id" placeholder="100018">
+              </div>
+              <div class="form-group">
+                <label for="preview_sample_position">{{ t("Sample Position") }}</label>
+                <input id="preview_sample_position" type="text" name="sample_position" placeholder="Engineer">
+              </div>
+              <div class="form-group">
+                <label for="preview_sample_mobile">{{ t("Sample Mobile") }}</label>
+                <input id="preview_sample_mobile" type="text" name="sample_mobile" placeholder="13800000000">
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="preview_sample_payload_json">{{ t("Additional Source Payload JSON") }}</label>
+              <textarea id="preview_sample_payload_json" name="sample_payload_json" placeholder='{"cost_center":"CN01","workcode":"A1024"}'></textarea>
+              <div class="muted">{{ t("Optional. Paste extra source fields when your custom template depends on organization-specific attributes.") }}</div>
+            </div>
+            <div class="actions">
+              {{ ui.button(t("Preview Username Candidates"), type="submit", variant="secondary") }}
+            </div>
+          </form>
+          <div data-username-preview-results>
+            <div class="panel-note info">
+              {{ t("Sample preview results will appear here. Start with the connector rule you plan to use in production.") }}
+            </div>
+          </div>
+        </div>
+      {% endcall %}
+
+      {% call ui.detail_toggle(t("Identity Route Explainer"), t("Enter a real source user ID to see which connector, department placement, and naming rule would apply."), open=False) %}
+        <div class="page-stack tight">
+          <form method="get" data-identity-explain-form class="page-stack tight">
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="identity_explain_source_user_id">{{ t("Source User ID") }}</label>
+                <input id="identity_explain_source_user_id" type="text" name="source_user_id" placeholder="zhangsan">
+                <div class="muted">{{ t("Useful when an administrator needs to explain why a user was routed to a connector, skipped, or targeted at a specific OU.") }}</div>
+              </div>
+            </div>
+            <div class="actions">
+              {{ ui.button(t("Explain Identity Route"), type="submit", variant="secondary") }}
+            </div>
+          </form>
+          <div data-identity-explain-results>
+            <div class="panel-note info">
+              {{ t("Routing explanation results will appear here after you enter a source user ID.") }}
+            </div>
+          </div>
+        </div>
+      {% endcall %}
+    </div>
+
     {% call ui.detail_toggle(t("Configure Account Creation Rule"), t("Create or update one connector rule. Leave override fields blank to inherit organization-level LDAP settings."), open=(connectors|length == 0)) %}
       <form method="post" action="/advanced-sync/connectors">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

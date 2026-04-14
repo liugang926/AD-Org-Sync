@@ -443,6 +443,8 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn("All advanced capabilities are opt-in.", body)
         self.assertIn("Pending Lifecycle Queue", body)
         self.assertIn("Pending Replay Requests", body)
+        self.assertIn("Username Strategy Previewer", body)
+        self.assertIn("Identity Route Explainer", body)
         self.assertIn("Department To AD OU Mapping", body)
         self.assertIn("Same-Name Collision Policy", body)
         self.assertNotIn('name="advanced_connector_routing_enabled" value="1" checked', body)
@@ -591,6 +593,158 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(mapping_records[0].source_department_id, "20018")
         self.assertEqual(mapping_records[0].target_ou_path, "Managed Users/China")
         self.assertEqual(mapping_records[0].apply_mode, "subtree")
+
+    def test_advanced_sync_username_preview_returns_managed_candidate_details(self):
+        self._login("superadmin")
+        self.app.state.connector_repo.upsert_connector(
+            connector_id="asia",
+            org_id="default",
+            name="Asia Domain",
+            config_path=str(self.config_path),
+            root_department_ids=[2],
+            username_strategy="family_name_pinyin_given_initials",
+            username_collision_policy="append_employee_id",
+            username_template="",
+            is_enabled=True,
+        )
+
+        response = self._route("/advanced-sync/username-preview", "POST")(
+            self._request("/advanced-sync/username-preview", "POST"),
+            connector_id="asia",
+            sample_userid="asmith",
+            sample_name="Alice Smith",
+            sample_email="asmith@example.com",
+            sample_employee_id="10018",
+            sample_position="Engineer",
+            sample_mobile="13800000000",
+            sample_payload_json='{"cost_center":"CN01"}',
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(self._text(response))
+        self.assertTrue(payload["ok"])
+        preview = payload["preview"]
+        self.assertEqual(preview["connector"]["connector_id"], "asia")
+        self.assertEqual(preview["primary_candidate"]["username"], "smitha")
+        self.assertEqual(preview["template_context"]["employee_id"], "10018")
+        self.assertEqual(preview["template_context"]["position"], "Engineer")
+        self.assertTrue(any(item["username"] == "smitha10018" for item in preview["candidates"]))
+
+    def test_advanced_sync_identity_explainer_returns_connector_and_target_ou(self):
+        self._login("superadmin")
+        self.app.state.settings_repo.set_value(
+            "advanced_connector_routing_enabled",
+            "true",
+            "bool",
+            org_id="default",
+        )
+        self.app.state.connector_repo.upsert_connector(
+            connector_id="asia",
+            org_id="default",
+            name="Asia Domain",
+            config_path=str(self.config_path),
+            root_department_ids=[2],
+            username_strategy="family_name_pinyin_given_initials",
+            username_collision_policy="append_employee_id",
+            username_template="",
+            is_enabled=True,
+        )
+        self.app.state.department_ou_mapping_repo.upsert_mapping(
+            org_id="default",
+            connector_id="asia",
+            source_department_id="2",
+            source_department_name="Asia",
+            target_ou_path="Managed Users/Asia",
+            apply_mode="subtree",
+            notes="",
+            is_enabled=True,
+        )
+
+        config = self.app.state.org_config_repo.get_app_config("default", config_path=str(self.config_path))
+
+        class FakeSourceProvider:
+            def list_departments(self):
+                return [
+                    DepartmentNode(department_id=1, name="Headquarters", parent_id=0),
+                    DepartmentNode(department_id=2, name="Asia", parent_id=1),
+                    DepartmentNode(department_id=3, name="China", parent_id=2),
+                ]
+
+            def get_user_detail(self, source_user_id: str):
+                if source_user_id != "asmith":
+                    return {}
+                return {
+                    "userid": "asmith",
+                    "name": "Alice Smith",
+                    "email": "asmith@example.com",
+                    "department": [3],
+                    "employee_id": "10018",
+                }
+
+            def search_users(self, _query: str, limit: int = 20):
+                return []
+
+            def close(self):
+                return None
+
+        with patch("sync_app.web.sync_support.SyncSupport._get_source_provider", return_value=(config, FakeSourceProvider())):
+            response = self._route("/advanced-sync/identity-explain", "GET")(
+                self._request(
+                    "/advanced-sync/identity-explain",
+                    query={"user_id": "asmith"},
+                )
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(self._text(response))
+        self.assertTrue(payload["ok"])
+        explanation = payload["explanation"]
+        self.assertEqual(explanation["routing_status"], "resolved")
+        self.assertEqual(explanation["selected_connector"]["connector_id"], "asia")
+        self.assertEqual(explanation["target_department"]["department_id"], 3)
+        self.assertEqual(explanation["target_ou_path"], "Managed Users/Asia/China")
+        self.assertEqual(explanation["username_preview"]["primary_candidate"]["username"], "smitha")
+
+    def test_jobs_page_shows_execution_readiness_and_impact_preview(self):
+        self._login("superadmin")
+        self.app.state.job_repo.create_job(
+            "job-dryrun-001",
+            trigger_type="manual",
+            execution_mode="dry_run",
+            status="COMPLETED",
+            org_id="default",
+        )
+        self.app.state.job_repo.update_job(
+            "job-dryrun-001",
+            planned_operation_count=12,
+            error_count=0,
+            summary={
+                "planned_operation_count": 12,
+                "high_risk_operation_count": 2,
+                "conflict_count": 1,
+                "review_required": True,
+            },
+        )
+        self.app.state.review_repo.upsert_review_request(
+            job_id="job-dryrun-001",
+            plan_fingerprint="plan-001",
+            config_snapshot_hash="cfg-001",
+            high_risk_operation_count=2,
+        )
+        self.app.state.conflict_repo.add_conflict(
+            job_id="job-dryrun-001",
+            conflict_type="duplicate_user",
+            source_id="asmith",
+            message="duplicate identity",
+            severity="warning",
+        )
+
+        response = self._route("/jobs", "GET")(self._request("/jobs"))
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("Execution Readiness And Impact Preview", body)
+        self.assertIn("job-dryrun-001", body)
+        self.assertIn("Open Conflicts", body)
+        self.assertIn("Planned Changes", body)
+        self.assertIn("Latest high-risk dry run still needs review approval before apply can continue.", body)
 
     def test_job_detail_shows_failure_diagnostics_and_structured_log_payloads(self):
         self._login("superadmin")

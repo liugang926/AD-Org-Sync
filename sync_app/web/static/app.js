@@ -220,6 +220,7 @@
     initTableHover();
     initMobileNav();
     initSharedTomSelectFields();
+    ADOrgSync.initAdvancedSyncPage?.();
     ADOrgSync.initConfigPage?.();
     ADOrgSync.initMappingsPage?.();
   }

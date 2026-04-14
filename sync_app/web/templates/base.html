@@ -1,6 +1,7 @@
 {% import "components/ui.html" as ui %}
 {% set is_lightweight_shell = lightweight_shell|default(False) %}
 {% set load_tom_select_assets = (not is_lightweight_shell) and page in ['advanced-sync', 'mappings'] %}
+{% set load_advanced_sync_page_script = (not is_lightweight_shell) and page == 'advanced-sync' %}
 {% set load_config_page_script = (not is_lightweight_shell) and page == 'config' %}
 {% set load_mappings_page_script = (not is_lightweight_shell) and page == 'mappings' %}
 <!DOCTYPE html>
@@ -173,6 +174,9 @@
   <script src="/static/vendor/tom-select.complete.min.js" defer></script>
   {% endif %}
   <script src="/static/app.js" defer></script>
+  {% if load_advanced_sync_page_script %}
+  <script src="/static/advanced-sync-page.js" defer></script>
+  {% endif %}
   {% if load_config_page_script %}
   <script src="/static/config-page.js" defer></script>
   {% endif %}
