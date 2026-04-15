@@ -2,6 +2,7 @@ import json
 import os
 import re
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 from unittest.mock import patch
@@ -1182,6 +1183,17 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn('href="/advanced-sync#account-creation-rules"', body)
         self.assertIn('href="/advanced-sync#department-ou-routing"', body)
 
+    def test_config_page_surfaces_first_dry_run_launchpad(self):
+        self._login("superadmin")
+
+        response = self._route("/config", "GET")(self._request("/config"))
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("Next Step: Run The First Dry Run", body)
+        self.assertIn("Run First Dry Run", body)
+        self.assertIn('action="/jobs/run"', body)
+        self.assertIn('name="mode" value="dry_run"', body)
+
     def test_super_admin_can_resolve_conflict_with_manual_binding(self):
         self._login("superadmin")
         self.app.state.job_repo.create_job(
@@ -1208,8 +1220,14 @@ class WebAuthorizationTests(unittest.TestCase):
 
         response = self._route("/conflicts", "GET")(self._request("/conflicts"))
         self.assertEqual(response.status_code, 200)
-        self.assertIn("alice matched multiple AD candidates", self._text(response))
-        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(response))
+        response_text = self._text(response)
+        self.assertIn("alice matched multiple AD candidates", response_text)
+        self.assertIn("Binding decides identity first. It does not create a duplicate account by itself.", response_text)
+        self.assertIn(
+            "The next sync run will treat the chosen AD account as the authoritative target for this source user.",
+            response_text,
+        )
+        match = re.search(r'name="csrf_token" value="([^"]+)"', response_text)
         self.assertIsNotNone(match)
 
         response = self._route("/conflicts/{conflict_id}/resolve-binding", "POST")(
@@ -1749,6 +1767,64 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn("override-note-20", response_text)
         self.assertNotIn("override-note-19", response_text)
 
+    def test_mappings_page_shows_rule_governance_summary(self):
+        self._login("superadmin")
+        stale_iso = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat(timespec="seconds")
+        expiring_iso = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(timespec="seconds")
+        expired_iso = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds")
+
+        self.app.state.user_binding_repo.upsert_binding(
+            "alice",
+            "alice.ad",
+            source="manual",
+            notes="",
+            preserve_manual=False,
+        )
+        self.app.state.department_override_repo.upsert_override(
+            "bob",
+            "1001",
+            notes="",
+        )
+        self.app.state.exception_rule_repo.upsert_rule(
+            rule_type="skip_user_disable",
+            match_value="carol",
+            notes="temporary rule",
+            expires_at=expiring_iso,
+        )
+        self.app.state.exception_rule_repo.upsert_rule(
+            rule_type="skip_user_sync",
+            match_value="dave",
+            notes="",
+            expires_at=expired_iso,
+        )
+        with self.app.state.db_manager.transaction() as conn:
+            conn.execute(
+                "UPDATE user_identity_bindings SET updated_at = ? WHERE source_user_id = ?",
+                (stale_iso, "alice"),
+            )
+            conn.execute(
+                "UPDATE user_department_overrides SET updated_at = ? WHERE source_user_id = ?",
+                (stale_iso, "bob"),
+            )
+            conn.execute(
+                "UPDATE sync_exception_rules SET updated_at = ? WHERE match_value = ?",
+                (stale_iso, "dave"),
+            )
+
+        with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
+            mock_wecom.return_value.get_department_list.return_value = [{"id": 1001, "name": "Operations"}]
+            response = self._route("/mappings", "GET")(self._request("/mappings"))
+        self.assertEqual(response.status_code, 200)
+        response_text = self._text(response)
+        self.assertIn("Rule Governance Snapshot", response_text)
+        self.assertIn("Manual rules without notes", response_text)
+        self.assertIn("Exception rules expiring soon", response_text)
+        self.assertIn("Expired exception rules still enabled", response_text)
+        self.assertIn("Rules pending review", response_text)
+        self.assertIn("alice -&gt; alice.ad", response_text)
+        self.assertIn("bob -&gt; 1001", response_text)
+        self.assertIn("skip_user_sync: dave", response_text)
+
     def test_mappings_page_remembers_filters_for_current_session(self):
         self._login("superadmin")
         self.app.state.user_binding_repo.upsert_binding(
@@ -1795,6 +1871,63 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn("exception-note-25", response_text)
         self.assertNotIn("exception-note-24", response_text)
         self.assertIn("page 2 / 2", response_text)
+
+    def test_exceptions_page_shows_rule_governance_summary(self):
+        self._login("superadmin")
+        stale_iso = (datetime.now(timezone.utc) - timedelta(days=140)).isoformat(timespec="seconds")
+        expiring_iso = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(timespec="seconds")
+        expired_iso = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(timespec="seconds")
+
+        self.app.state.user_binding_repo.upsert_binding(
+            "legacy-user",
+            "legacy.ad",
+            source="manual",
+            notes="",
+            preserve_manual=False,
+        )
+        self.app.state.department_override_repo.upsert_override(
+            "temp-user",
+            "2001",
+            notes="",
+        )
+        self.app.state.exception_rule_repo.upsert_rule(
+            rule_type="skip_user_disable",
+            match_value="expiring-user",
+            notes="grace window",
+            expires_at=expiring_iso,
+        )
+        self.app.state.exception_rule_repo.upsert_rule(
+            rule_type="skip_department_placement",
+            match_value="2001",
+            notes="",
+            expires_at=expired_iso,
+        )
+        with self.app.state.db_manager.transaction() as conn:
+            conn.execute(
+                "UPDATE user_identity_bindings SET updated_at = ? WHERE source_user_id = ?",
+                (stale_iso, "legacy-user"),
+            )
+            conn.execute(
+                "UPDATE user_department_overrides SET updated_at = ? WHERE source_user_id = ?",
+                (stale_iso, "temp-user"),
+            )
+            conn.execute(
+                "UPDATE sync_exception_rules SET updated_at = ? WHERE match_value = ?",
+                (stale_iso, "2001"),
+            )
+
+        with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
+            mock_wecom.return_value.get_department_list.return_value = [{"id": 2001, "name": "Contractors"}]
+            response = self._route("/exceptions", "GET")(self._request("/exceptions"))
+        self.assertEqual(response.status_code, 200)
+        response_text = self._text(response)
+        self.assertIn("Rule Governance Snapshot", response_text)
+        self.assertIn("Expired exception rules still enabled", response_text)
+        self.assertIn("Exception rules expiring soon", response_text)
+        self.assertIn("Manual rules without notes", response_text)
+        self.assertIn("legacy-user -&gt; legacy.ad", response_text)
+        self.assertIn("temp-user -&gt; 2001", response_text)
+        self.assertIn("skip_department_placement: 2001", response_text)
 
     def test_exceptions_page_remembers_filters_for_current_session(self):
         self._login("superadmin")

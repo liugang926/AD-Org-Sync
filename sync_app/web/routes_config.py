@@ -80,8 +80,11 @@ def _config_saved_message(
         request.app.state.web_runtime_settings,
         persisted_web_runtime_settings,
     ):
-        return "Configuration saved. Restart the web process to apply deployment security changes."
-    return "Configuration saved"
+        return (
+            "Configuration saved. Restart the web process to apply deployment security changes, "
+            "then run the first dry run before apply."
+        )
+    return "Configuration saved. Run the first dry run before the first apply."
 
 
 def register_config_routes(

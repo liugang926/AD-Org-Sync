@@ -32,6 +32,14 @@
     </form>
   {% endcall %}
 
+  {% call ui.helper_block(t("How Manual Binding Works"), t("Binding decides identity first. It does not create a duplicate account by itself."), "info", t("Important")) %}
+    <ul class="helper-list">
+      <li>{{ t("On the next sync run, if the chosen AD username already exists, the system updates or reactivates that existing account under the current field ownership policy.") }}</li>
+      <li>{{ t("If the chosen AD username does not exist yet, the same binding lets the next run create the managed account with that username.") }}</li>
+      <li>{{ t("If multiple source users still point at one AD account, keep the conflict unresolved until each person has a unique identity decision.") }}</li>
+    </ul>
+  {% endcall %}
+
   {% if can("mappings.write") %}
   {% call ui.panel(t("Bulk Actions")) %}
     <form id="bulk-conflicts-form" method="post" action="/conflicts/bulk">
@@ -134,6 +142,7 @@
           <div class="section-header">
             <div class="section-header__copy">
               <h3 class="section-header__title">{{ t("Manual Binding") }}</h3>
+              <p class="section-header__description">{{ t("Use this when the AD identity is clear. The next sync run will treat the chosen AD account as the authoritative target for this source user.") }}</p>
             </div>
           </div>
           <form method="post" action="/conflicts/{{ item.id }}/resolve-binding">

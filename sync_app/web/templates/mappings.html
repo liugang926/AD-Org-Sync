@@ -3,6 +3,17 @@
 {% import "components/ui.html" as ui %}
 
 {% block content %}
+{% set governance = rule_governance_summary if rule_governance_summary is defined else {
+  "overall_status": "success",
+  "binding_count": 0,
+  "override_count": 0,
+  "exception_count": 0,
+  "missing_notes_count": 0,
+  "expiring_exception_count": 0,
+  "stale_rule_count": 0,
+  "stale_rule_window_days": 90,
+  "issues": [],
+} %}
 <div
   class="page-stack"
   data-mappings-page
@@ -25,6 +36,59 @@
     <div class="surface-inline">
       {{ ui.badge(t("Identity Overrides"), "info") }}
       <span class="muted">{{ t("Manual identity rules override automatic matching and default department placement.") }}</span>
+    </div>
+  {% endcall %}
+
+  {% call ui.panel(t("Rule Governance Snapshot"), description=t("Manual bindings, department overrides, and exception rules should stay documented, time-bounded, and periodically reviewed.")) %}
+    <div class="surface-inline">
+      {{ ui.badge(t("Needs Attention") if governance.overall_status != 'success' else t("Healthy"), ('warning' if governance.overall_status == 'warning' else ('error' if governance.overall_status == 'error' else 'success')) ) }}
+      <span class="muted">{{ t("This summary combines bindings, department overrides, and exception rules for the current organization.") }}</span>
+    </div>
+    <div class="compact-stats">
+      {{ ui.compact_stat(t("Bindings"), governance.binding_count) }}
+      {{ ui.compact_stat(t("Overrides"), governance.override_count) }}
+      {{ ui.compact_stat(t("Exceptions"), governance.exception_count) }}
+      {{ ui.compact_stat(t("Missing Notes"), governance.missing_notes_count) }}
+      {{ ui.compact_stat(t("Expiring Soon"), governance.expiring_exception_count, detail=t("Exception rules")) }}
+      {{ ui.compact_stat(t("Pending Review"), governance.stale_rule_count, detail=t("{days}-day window", days=governance.stale_rule_window_days)) }}
+    </div>
+    {% if governance.issues %}
+    <div class="check-list">
+      {% for issue in governance.issues %}
+      <div class="check-item">
+        <div class="check-item__header">
+          <h3 class="check-item__title">{{ t(issue.label) }}</h3>
+          {{ ui.badge(t(issue.severity|capitalize), issue.severity) }}
+        </div>
+        <p class="check-item__detail">{{ t(issue.description) }}</p>
+        <div class="muted">{{ t("Affected records") }}: {{ issue.count }}</div>
+        <div class="muted">{{ t("Suggested action") }}: {{ t(issue.action) }}</div>
+        {% if issue.samples %}
+        <div class="stack-tight">
+          {% for sample in issue.samples %}
+          <div class="panel-note info">
+            <strong>{{ sample.title }}</strong>
+            <div class="muted">{{ sample.detail }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    {% call ui.empty_state(t("Manual rules look healthy."), t("Nothing in the current bindings, overrides, or exceptions is calling for immediate cleanup."), "success") %}
+      {% if can("exceptions.read") %}
+      {{ ui.button(t("Review Exceptions"), href="/exceptions", variant="secondary") }}
+      {% endif %}
+    {% endcall %}
+    {% endif %}
+    <div class="actions">
+      {% if can("exceptions.read") %}
+      {{ ui.button(t("Open Exceptions"), href="/exceptions", variant="secondary") }}
+      {% endif %}
+      {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost") }}
+      {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
     </div>
   {% endcall %}
 
