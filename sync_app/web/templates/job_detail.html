@@ -58,6 +58,11 @@
 
   {% if job.summary and (job.summary.get("error") or job.summary.get("error_traceback") or job.summary.get("log_file")) %}
   {% call ui.panel(t("Failure Diagnostics")) %}
+    {% if job.summary.get("diagnostic_summary") %}
+    <div class="panel-note warning">
+      {{ job.summary.get("diagnostic_summary") }}
+    </div>
+    {% endif %}
     <div class="detail-grid">
       {% if job.summary.get("error") %}
       <div class="detail-item">
@@ -71,6 +76,12 @@
         <div class="value cell-mono">{{ job.summary.get("error_type") }}</div>
       </div>
       {% endif %}
+      {% if job.summary.get("error_category_label") %}
+      <div class="detail-item">
+        <div class="label">{{ t("Likely Cause") }}</div>
+        <div class="value">{{ ui.badge(job.summary.get("error_category_label"), 'warning') }}</div>
+      </div>
+      {% endif %}
       {% if job.summary.get("log_file") %}
       <div class="detail-item">
         <div class="label">{{ t("Log File") }}</div>
@@ -78,6 +89,19 @@
       </div>
       {% endif %}
     </div>
+    {% if job.summary.get("diagnostic_actions") %}
+    <div class="check-list">
+      {% for action in job.summary.get("diagnostic_actions") %}
+      <div class="check-item">
+        <div class="check-item__header">
+          <h3 class="check-item__title">{{ t("Suggested Action") }}</h3>
+          {{ ui.badge(t("Next Step"), "info") }}
+        </div>
+        <p class="check-item__detail">{{ action }}</p>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
     {% if job.summary.get("error_traceback") %}
     <details>
       <summary>{{ t("Show Traceback") }}</summary>

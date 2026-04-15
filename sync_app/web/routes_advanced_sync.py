@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from sync_app.core.sync_policies import (
     ATTRIBUTE_SYNC_MODES,
@@ -18,8 +18,11 @@ from sync_app.core.sync_policies import (
 def register_advanced_sync_routes(
     app: FastAPI,
     *,
+    build_source_data_quality_snapshot: Callable[[Request], dict[str, Any]],
     attribute_mapping_direction_labels: dict[str, str],
+    build_username_preview: Callable[..., dict[str, Any]],
     describe_connector_config_source: Callable[[Any], str],
+    explain_identity_routing: Callable[[Request, str], dict[str, Any]],
     flash: Callable[..., None],
     flash_t: Callable[..., None],
     get_current_org: Callable[[Request], Any],
@@ -167,6 +170,68 @@ def register_advanced_sync_routes(
                 ("exact", "Map exact department only"),
             ],
         )
+
+    @app.post("/advanced-sync/username-preview")
+    def advanced_sync_username_preview(
+        request: Request,
+        connector_id: str = Form("default"),
+        sample_userid: str = Form(""),
+        sample_name: str = Form(""),
+        sample_email: str = Form(""),
+        sample_employee_id: str = Form(""),
+        sample_position: str = Form(""),
+        sample_mobile: str = Form(""),
+        sample_payload_json: str = Form(""),
+    ):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
+        try:
+            preview = build_username_preview(
+                request,
+                connector_id=connector_id,
+                sample_userid=sample_userid,
+                sample_name=sample_name,
+                sample_email=sample_email,
+                sample_employee_id=sample_employee_id,
+                sample_position=sample_position,
+                sample_mobile=sample_mobile,
+                sample_payload_json=sample_payload_json,
+            )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": True, "preview": preview})
+
+    @app.get("/advanced-sync/identity-explain")
+    def advanced_sync_identity_explain(request: Request):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
+        source_user_id = str(request.query_params.get("user_id") or "").strip()
+        if not source_user_id:
+            return JSONResponse({"ok": False, "error": "Source user ID is required."}, status_code=400)
+        try:
+            explanation = explain_identity_routing(request, source_user_id)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": True, "explanation": explanation})
+
+    @app.get("/advanced-sync/data-quality-snapshot")
+    def advanced_sync_data_quality_snapshot(request: Request):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
+        try:
+            snapshot = build_source_data_quality_snapshot(request)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": True, "snapshot": snapshot})
 
     @app.post("/advanced-sync/policies")
     def advanced_sync_policy_submit(

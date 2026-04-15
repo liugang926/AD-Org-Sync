@@ -10,10 +10,112 @@ from sync_app.core.models import SyncJobSummary
 from sync_app.services.runtime_context import SyncContext
 
 
+def _build_failure_guidance(
+    *,
+    error_type: str,
+    error_message: str,
+    traceback_text: str,
+) -> dict[str, Any]:
+    normalized_text = "\n".join(
+        [
+            str(error_type or ""),
+            str(error_message or ""),
+            str(traceback_text or ""),
+        ]
+    ).lower()
+
+    def matches(*patterns: str) -> bool:
+        return any(pattern in normalized_text for pattern in patterns)
+
+    if matches("certificate", "ssl", "tls", "hostname mismatch", "self signed"):
+        return {
+            "error_category": "certificate",
+            "error_category_label": "TLS / Certificate",
+            "diagnostic_summary": "The failure looks like a TLS or certificate validation problem.",
+            "diagnostic_actions": [
+                "Verify the LDAP certificate chain, hostname, and CA certificate path.",
+                "Review LDAP SSL and certificate-validation settings before rerunning apply.",
+            ],
+        }
+    if matches("invalid credentials", "invalidcredential", "logon failure", "authentication", "bind failed"):
+        return {
+            "error_category": "authentication",
+            "error_category_label": "Authentication",
+            "diagnostic_summary": "The failure looks like a source or LDAP authentication problem.",
+            "diagnostic_actions": [
+                "Recheck the source connector secret and LDAP service-account credentials.",
+                "Run dashboard preflight again to confirm both source and LDAP authentication from this server.",
+            ],
+        }
+    if matches(
+        "connection refused",
+        "timed out",
+        "timeout",
+        "server down",
+        "can't contact ldap server",
+        "unable to access",
+        "name or service not known",
+        "temporary failure in name resolution",
+    ):
+        return {
+            "error_category": "connectivity",
+            "error_category_label": "Connectivity",
+            "diagnostic_summary": "The failure looks like a network or endpoint reachability problem.",
+            "diagnostic_actions": [
+                "Check DNS, firewall, and port reachability to the source system and LDAP endpoint.",
+                "Confirm the configured server, port, and proxy settings from the organization config page.",
+            ],
+        }
+    if matches("insufficient access", "access is denied", "unwillingtoperform", "constraint violation"):
+        return {
+            "error_category": "permissions",
+            "error_category_label": "Permissions",
+            "diagnostic_summary": "The service account appears to be authenticated but not authorized for the requested change.",
+            "diagnostic_actions": [
+                "Verify AD permissions for the target OU, attributes, and group-management actions.",
+                "Retry with a dry run after confirming delegated rights for the affected connector scope.",
+            ],
+        }
+    if matches("validation failed", "config validation", "missing", "required", "incomplete", "not implemented"):
+        return {
+            "error_category": "configuration",
+            "error_category_label": "Configuration",
+            "diagnostic_summary": "The failure looks like a configuration or required-field problem.",
+            "diagnostic_actions": [
+                "Review the organization config and advanced sync settings for missing or invalid values.",
+                "Run preflight again after saving config changes to confirm the environment is ready.",
+            ],
+        }
+    if matches("conflict", "connector", "department", "ou", "username", "already bound", "duplicate"):
+        return {
+            "error_category": "routing_or_naming",
+            "error_category_label": "Routing / Naming",
+            "diagnostic_summary": "The failure looks related to connector routing, naming policy, or identity conflict handling.",
+            "diagnostic_actions": [
+                "Use the Advanced Sync username previewer and identity route explainer to verify connector scope and account naming.",
+                "Review the conflict queue and advanced routing rules before rerunning apply.",
+            ],
+        }
+    return {
+        "error_category": "unknown",
+        "error_category_label": "Unknown",
+        "diagnostic_summary": "The failure did not match a known category. Use the traceback and log file for deeper analysis.",
+        "diagnostic_actions": [
+            "Open the referenced log file and traceback to inspect the full runtime context.",
+            "Re-run dry run first after correcting the suspected cause so the next failure is easier to isolate.",
+        ],
+    }
+
+
 def _build_failure_details(ctx: SyncContext, sync_error: Exception) -> dict[str, Any]:
     traceback_text = "".join(
         traceback.format_exception(type(sync_error), sync_error, sync_error.__traceback__)
     ).strip()
+    guidance = _build_failure_guidance(
+        error_type=type(sync_error).__name__,
+        error_message=str(sync_error),
+        traceback_text=traceback_text,
+    )
     return {
         "job_id": ctx.job_id,
         "org_id": ctx.organization.org_id,
@@ -22,6 +124,7 @@ def _build_failure_details(ctx: SyncContext, sync_error: Exception) -> dict[str,
         "error_type": type(sync_error).__name__,
         "error_traceback": traceback_text,
         "log_file": str(ctx.sync_stats.get("log_file") or ""),
+        **guidance,
     }
 
 
@@ -152,6 +255,13 @@ def finalize_interrupted_sync(ctx: SyncContext, interrupted_error: InterruptedEr
         "error": str(interrupted_error),
         "error_type": type(interrupted_error).__name__,
         "log_file": str(ctx.sync_stats.get("log_file") or ""),
+        "error_category": "canceled",
+        "error_category_label": "Canceled",
+        "diagnostic_summary": "The run was canceled before completion.",
+        "diagnostic_actions": [
+            "Confirm there is no active job lease or operator cancellation still blocking this organization.",
+            "Re-run dry run or apply after the blocking condition is cleared.",
+        ],
     }
     ctx.hooks.record_event(
         'WARNING',

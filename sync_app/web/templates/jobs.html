@@ -15,6 +15,97 @@
     </div>
   {% endcall %}
 
+  {% call ui.panel(t("Execution Readiness And Impact Preview"), description=t("This summary combines rollout preflight checks with the latest dry run so administrators can see whether apply is safe to continue.")) %}
+    <div class="surface-inline">
+      {{ ui.badge(t(job_center_summary.overall_label), job_center_summary.overall_status) }}
+      <span class="muted">{{ t("Next step") }}:</span>
+      <a href="{{ job_center_summary.next_action_url }}">{{ t(job_center_summary.next_action_label) }}</a>
+    </div>
+
+    <div class="compact-stats">
+      {{ ui.compact_stat(t("Preflight Success"), job_center_summary.preflight_summary.status_counts.success, detail=t("{warning} warnings / {error} errors", warning=job_center_summary.preflight_summary.status_counts.warning, error=job_center_summary.preflight_summary.status_counts.error)) }}
+      {{ ui.compact_stat(t("Open Conflicts"), job_center_summary.preflight_summary.open_conflict_count) }}
+      {{ ui.compact_stat(t("Planned Changes"), job_center_summary.impact_preview.planned_operation_count, detail=(job_center_summary.impact_preview.job_id or t("No dry run yet"))) }}
+      {{ ui.compact_stat(t("High-Risk Changes"), job_center_summary.impact_preview.high_risk_operation_count, detail=(t("Review required") if job_center_summary.review_required else t("No approval gate"))) }}
+      {{ ui.compact_stat(t("Dry Run Errors"), job_center_summary.impact_preview.error_count) }}
+    </div>
+
+    <div class="detail-grid">
+      <div class="detail-item">
+        <div class="label">{{ t("Latest Dry Run") }}</div>
+        <div class="value">
+          {% if job_center_summary.latest_dry_run %}
+          <a href="/jobs/{{ job_center_summary.latest_dry_run.job_id }}">{{ job_center_summary.latest_dry_run.job_id }}</a>
+          {% else %}
+          -
+          {% endif %}
+        </div>
+      </div>
+      <div class="detail-item">
+        <div class="label">{{ t("Latest Apply") }}</div>
+        <div class="value">
+          {% if job_center_summary.latest_apply %}
+          <a href="/jobs/{{ job_center_summary.latest_apply.job_id }}">{{ job_center_summary.latest_apply.job_id }}</a>
+          {% else %}
+          -
+          {% endif %}
+        </div>
+      </div>
+      <div class="detail-item">
+        <div class="label">{{ t("Review Gate") }}</div>
+        <div class="value">
+          {% if job_center_summary.review_required %}
+            {% if job_center_summary.review_record and job_center_summary.review_record.status == "approved" %}
+            {{ ui.badge(t("Approved"), "success") }}
+            {% else %}
+            {{ ui.badge(t("Pending"), "warning") }}
+            {% endif %}
+          {% else %}
+          {{ ui.badge(t("Not Required"), "success") }}
+          {% endif %}
+        </div>
+      </div>
+      <div class="detail-item">
+        <div class="label">{{ t("Latest Successful Dry Run") }}</div>
+        <div class="value">
+          {% if job_center_summary.latest_successful_dry_run %}
+          <a href="/jobs/{{ job_center_summary.latest_successful_dry_run.job_id }}">{{ job_center_summary.latest_successful_dry_run.job_id }}</a>
+          {% else %}
+          -
+          {% endif %}
+        </div>
+      </div>
+      <div class="detail-item">
+        <div class="label">{{ t("Preflight State") }}</div>
+        <div class="value">{{ ui.badge(t(job_center_summary.preflight_summary.overall_status|capitalize), job_center_summary.preflight_summary.overall_status if job_center_summary.preflight_summary.overall_status in ['success', 'warning', 'error'] else 'info') }}</div>
+      </div>
+      <div class="detail-item">
+        <div class="label">{{ t("Impact Snapshot Job") }}</div>
+        <div class="value">
+          {% if job_center_summary.impact_preview.job_id %}
+          <a href="/jobs/{{ job_center_summary.impact_preview.job_id }}">{{ job_center_summary.impact_preview.job_id }}</a>
+          {% else %}
+          -
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% if job_center_summary.blocked_reasons %}
+    <div class="check-list">
+      {% for reason in job_center_summary.blocked_reasons %}
+      <div class="check-item">
+        <div class="check-item__header">
+          <h3 class="check-item__title">{{ t("Action Required") }}</h3>
+          {{ ui.badge(t(job_center_summary.overall_label), job_center_summary.overall_status) }}
+        </div>
+        <p class="check-item__detail">{{ t(reason) }}</p>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endcall %}
+
   {% call ui.panel(t("Job Center"), description=t("Manually trigger a dry run or an apply sync. Only one synchronization job can run at a time. High-risk actions must first go through a dry run and review before apply execution is allowed.")) %}
     <div class="actions">
       {% if can("jobs.run") %}

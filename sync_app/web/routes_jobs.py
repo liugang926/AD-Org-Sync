@@ -12,18 +12,143 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 def register_job_routes(
     app: FastAPI,
     *,
+    build_preflight_snapshot: Callable[..., dict[str, Any]],
     enqueue_replay_request: Callable[..., Any],
     fetch_page: Callable[..., Any],
     flash: Callable[..., None],
     flash_t: Callable[..., None],
     get_current_org: Callable[[Request], Any],
     get_ui_language: Callable[[Request], str],
+    merge_saved_preflight_snapshot_data: Callable[[Any, dict[str, Any]], dict[str, Any]],
     parse_page_number: Callable[[str | None, int], int],
     reject_invalid_csrf: Callable[[Request, str, str], Any],
     render: Callable[..., Any],
     require_capability: Callable[[Request, str], Any],
     translate_text: Callable[..., str],
 ) -> None:
+    def normalize_job_status(value: str | None) -> str:
+        return str(value or "").strip().upper()
+
+    def is_successful_dry_run(job: Any) -> bool:
+        return (
+            str(getattr(job, "execution_mode", "") or "").strip().lower() == "dry_run"
+            and normalize_job_status(getattr(job, "status", "")) in {"COMPLETED", "COMPLETED_WITH_ERRORS"}
+        )
+
+    def build_job_center_summary(request: Request, current_org: Any) -> dict[str, Any]:
+        preflight_summary = merge_saved_preflight_snapshot_data(
+            request.session.get("_preflight_snapshot"),
+            build_preflight_snapshot(
+                request,
+                include_live=False,
+                current_org=current_org,
+            ),
+        )
+        recent_jobs = request.app.state.job_repo.list_recent_job_records(limit=30, org_id=current_org.org_id)
+        latest_dry_run = next(
+            (
+                job
+                for job in recent_jobs
+                if str(getattr(job, "execution_mode", "") or "").strip().lower() == "dry_run"
+            ),
+            None,
+        )
+        latest_successful_dry_run = next((job for job in recent_jobs if is_successful_dry_run(job)), None)
+        latest_apply = next(
+            (
+                job
+                for job in recent_jobs
+                if str(getattr(job, "execution_mode", "") or "").strip().lower() == "apply"
+            ),
+            None,
+        )
+
+        review_record = None
+        review_required = False
+        if latest_successful_dry_run:
+            summary = dict(getattr(latest_successful_dry_run, "summary", {}) or {})
+            review_required = bool(summary.get("review_required") or False)
+            if review_required:
+                review_record = request.app.state.review_repo.get_review_record_by_job_id(
+                    latest_successful_dry_run.job_id
+                )
+
+        blocked_reasons: list[str] = []
+        if str(preflight_summary.get("overall_status") or "") == "error":
+            blocked_reasons.append("Fix organization configuration or connectivity errors before running apply.")
+        if latest_dry_run and not latest_successful_dry_run:
+            blocked_reasons.append("The most recent dry run did not complete successfully. Re-run dry run after fixing errors.")
+        if not latest_successful_dry_run:
+            blocked_reasons.append("No successful dry run has been recorded for this organization yet.")
+        open_conflict_count = int(preflight_summary.get("open_conflict_count") or 0)
+        if open_conflict_count > 0:
+            blocked_reasons.append("Resolve the open conflict queue before running apply.")
+        if review_required and (
+            review_record is None or str(review_record.status or "").strip().lower() != "approved"
+        ):
+            blocked_reasons.append("Latest high-risk dry run still needs review approval before apply can continue.")
+
+        if str(preflight_summary.get("overall_status") or "") == "error":
+            overall_status = "error"
+            overall_label = "Blocked"
+        elif blocked_reasons:
+            overall_status = "warning"
+            overall_label = "Needs Attention"
+        else:
+            overall_status = "success"
+            overall_label = "Ready"
+
+        if str(preflight_summary.get("overall_status") or "") == "error":
+            next_action_url = "/config"
+            next_action_label = "Fix Configuration"
+        elif latest_dry_run and not latest_successful_dry_run:
+            next_action_url = f"/jobs/{latest_dry_run.job_id}"
+            next_action_label = "Inspect Dry Run Errors"
+        elif not latest_successful_dry_run:
+            next_action_url = "/jobs"
+            next_action_label = "Run Dry Run"
+        elif open_conflict_count > 0:
+            next_action_url = "/conflicts"
+            next_action_label = "Review Conflicts"
+        elif review_required and (
+            review_record is None or str(review_record.status or "").strip().lower() != "approved"
+        ):
+            next_action_url = f"/jobs/{latest_successful_dry_run.job_id}"
+            next_action_label = "Approve High-Risk Plan"
+        elif not latest_apply:
+            next_action_url = "/jobs"
+            next_action_label = "Run Apply"
+        else:
+            next_action_url = "/jobs"
+            next_action_label = "Review Latest Apply"
+
+        impact_job = latest_successful_dry_run or latest_dry_run
+        impact_summary = dict(getattr(impact_job, "summary", {}) or {}) if impact_job else {}
+        return {
+            "overall_status": overall_status,
+            "overall_label": overall_label,
+            "blocked_reasons": blocked_reasons,
+            "next_action_url": next_action_url,
+            "next_action_label": next_action_label,
+            "preflight_summary": preflight_summary,
+            "latest_dry_run": latest_dry_run,
+            "latest_successful_dry_run": latest_successful_dry_run,
+            "latest_apply": latest_apply,
+            "review_record": review_record,
+            "review_required": review_required,
+            "impact_preview": {
+                "job_id": getattr(impact_job, "job_id", ""),
+                "planned_operation_count": int(
+                    impact_summary.get("planned_operation_count")
+                    or getattr(impact_job, "planned_operation_count", 0)
+                    or 0
+                ),
+                "high_risk_operation_count": int(impact_summary.get("high_risk_operation_count") or 0),
+                "conflict_count": int(impact_summary.get("conflict_count") or 0),
+                "error_count": int(getattr(impact_job, "error_count", 0) or 0),
+            },
+        }
+
     @app.get("/jobs", response_class=HTMLResponse)
     def jobs_page(request: Request):
         user = require_capability(request, "jobs.read")
@@ -36,6 +161,7 @@ def register_job_routes(
             page="jobs",
             title="Job Center",
             jobs=request.app.state.job_repo.list_recent_job_records(limit=30, org_id=current_org.org_id),
+            job_center_summary=build_job_center_summary(request, current_org),
             active_job=request.app.state.job_repo.get_active_job_record(org_id=current_org.org_id),
             sync_runner_error=request.app.state.sync_runner.last_error,
             current_org=current_org,

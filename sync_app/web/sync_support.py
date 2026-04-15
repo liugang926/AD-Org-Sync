@@ -10,7 +10,25 @@ from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
 
-from sync_app.core.models import SourceDirectoryUser
+from sync_app.core.models import SourceDirectoryUser, UserDepartmentBundle
+from sync_app.core.sync_policies import (
+    build_template_context,
+    normalize_username_collision_policy,
+    normalize_username_strategy,
+    resolve_username_template,
+)
+from sync_app.services.runtime_connectors import (
+    build_department_connector_map,
+    build_department_scope_root_map,
+    is_department_in_connector_scope,
+    load_connector_specs,
+    resolve_department_ou_path,
+    trim_department_paths_to_scope,
+)
+from sync_app.services.runtime_identity import (
+    build_identity_candidates,
+    resolve_target_department,
+)
 from sync_app.web.request_support import RequestSupport
 
 
@@ -43,6 +61,284 @@ class SyncSupport:
         self.is_protected_ad_account_name = is_protected_ad_account_name_fn
         self.recommend_conflict_resolution = recommend_conflict_resolution_fn
         self.recommendation_requires_confirmation = recommendation_requires_confirmation_fn
+
+    @staticmethod
+    def _parse_root_unit_ids(raw_value: Any) -> list[int]:
+        values: list[int] = []
+        for item in str(raw_value or "").replace("\n", ",").split(","):
+            candidate = item.strip()
+            if candidate.isdigit():
+                values.append(int(candidate))
+        return values
+
+    @staticmethod
+    def _normalize_ou_path(raw_value: Any, *, default: str = "") -> str:
+        raw_text = str(raw_value or "").strip()
+        if not raw_text:
+            return default
+        dn_segments = [
+            part.split("=", 1)[1].strip()
+            for part in raw_text.split(",")
+            if "=" in part and part.strip().lower().startswith("ou=") and part.split("=", 1)[1].strip()
+        ]
+        if dn_segments:
+            segments = list(reversed(dn_segments))
+        else:
+            segments = [
+                segment.strip()
+                for segment in raw_text.replace("\\", "/").split("/")
+                if segment.strip()
+            ]
+        normalized = "/".join(segments)
+        return normalized or default
+
+    def _build_department_tree(self, departments: list[Any]) -> dict[int, Any]:
+        department_tree = {
+            int(item.department_id): item
+            for item in departments
+            if getattr(item, "department_id", None)
+        }
+        for department_id in list(department_tree):
+            path_names: list[str] = []
+            path_ids: list[int] = []
+            current_id = department_id
+            seen: set[int] = set()
+            while current_id and current_id in department_tree and current_id not in seen:
+                seen.add(current_id)
+                current_node = department_tree[current_id]
+                path_names.insert(0, current_node.name)
+                path_ids.insert(0, current_node.department_id)
+                current_id = current_node.parent_id
+            department_tree[department_id].set_hierarchy(path_names, path_ids)
+        return department_tree
+
+    def _load_source_user_from_provider(self, source_provider: Any, source_user_id: str) -> Optional[SourceDirectoryUser]:
+        normalized_source_user_id = str(source_user_id or "").strip()
+        if not normalized_source_user_id:
+            return None
+        detail_payload = source_provider.get_user_detail(normalized_source_user_id) or {}
+        if detail_payload:
+            source_user = SourceDirectoryUser.from_source_payload(detail_payload)
+            source_user.merge_payload(detail_payload)
+            return source_user
+        return next(
+            (
+                item
+                for item in source_provider.search_users(normalized_source_user_id, limit=50)
+                if str(item.source_user_id or "").strip() == normalized_source_user_id
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _merge_source_directory_user(
+        users_by_id: dict[str, SourceDirectoryUser],
+        user: SourceDirectoryUser,
+    ) -> None:
+        normalized_source_user_id = str(user.source_user_id or "").strip()
+        if not normalized_source_user_id:
+            return
+        existing = users_by_id.get(normalized_source_user_id)
+        if existing is None:
+            users_by_id[normalized_source_user_id] = SourceDirectoryUser.from_source_payload(
+                user.to_state_payload()
+            )
+            return
+        existing.merge_payload(user.raw_payload)
+        merged_departments = {
+            int(value)
+            for value in existing.departments
+            if str(value).strip().lstrip("-").isdigit()
+        }
+        merged_departments.update(
+            int(value)
+            for value in user.departments
+            if str(value).strip().lstrip("-").isdigit()
+        )
+        existing.departments = sorted(merged_departments)
+
+    @staticmethod
+    def _build_quality_issue(
+        *,
+        key: str,
+        label: str,
+        severity: str,
+        description: str,
+        action: str,
+        samples: list[dict[str, str]],
+        count: Optional[int] = None,
+    ) -> Optional[dict[str, Any]]:
+        normalized_count = int(count if count is not None else len(samples))
+        if normalized_count <= 0:
+            return None
+        return {
+            "key": key,
+            "label": label,
+            "severity": severity,
+            "count": normalized_count,
+            "description": description,
+            "action": action,
+            "samples": list(samples[:5]),
+        }
+
+    @staticmethod
+    def _format_quality_user_title(user: SourceDirectoryUser) -> str:
+        normalized_source_user_id = str(user.source_user_id or "").strip()
+        normalized_name = str(user.name or "").strip()
+        if normalized_name and normalized_name != normalized_source_user_id:
+            return f"{normalized_name} [{normalized_source_user_id}]"
+        return normalized_source_user_id or normalized_name or "-"
+
+    @staticmethod
+    def _describe_naming_prerequisite_gap(preview: dict[str, Any], user: SourceDirectoryUser) -> str:
+        strategy = str(preview.get("strategy") or "").strip().lower()
+        template_context = dict(preview.get("template_context") or {})
+        employee_id = str(template_context.get("employee_id") or "").strip()
+        email_localpart = str(template_context.get("email_localpart") or "").strip()
+        normalized_name = str(user.name or "").strip()
+        if strategy == "email_localpart" and not email_localpart:
+            return "Configured naming strategy depends on a work email local part, but the source email is blank."
+        if strategy in {
+            "employee_id",
+            "pinyin_initials_employee_id",
+            "pinyin_full_employee_id",
+        } and not employee_id:
+            return "Configured naming strategy depends on employee ID, but the source record does not expose one."
+        if strategy in {
+            "family_name_pinyin_given_initials",
+            "family_name_pinyin_given_name_pinyin",
+            "pinyin_initials_employee_id",
+            "pinyin_full_employee_id",
+        } and not normalized_name:
+            return "Configured naming strategy depends on display name, but the source record is blank."
+        if not preview.get("primary_candidate"):
+            return "No managed username candidate could be generated from the current source record."
+        return ""
+
+    def _build_runtime_connector_context(
+        self,
+        request: Request,
+        *,
+        config: Any,
+        department_tree: dict[int, Any],
+    ) -> dict[str, Any]:
+        current_org = self.request_support.get_current_org(request)
+        org_id = current_org.org_id
+        settings_repo = request.app.state.settings_repo
+        connector_specs = load_connector_specs(
+            config,
+            request.app.state.connector_repo,
+            connectors_enabled=settings_repo.get_bool(
+                "advanced_connector_routing_enabled",
+                False,
+                org_id=org_id,
+            ),
+            org_id=org_id,
+            default_root_department_ids=self._parse_root_unit_ids(
+                settings_repo.get_value("source_root_unit_ids", "", org_id=org_id)
+            ),
+            default_disabled_users_ou=self._normalize_ou_path(
+                settings_repo.get_value("disabled_users_ou_path", "Disabled Users", org_id=org_id),
+                default="Disabled Users",
+            ),
+            default_custom_group_ou_path=self._normalize_ou_path(
+                settings_repo.get_value("custom_group_ou_path", "Managed Groups", org_id=org_id),
+                default="Managed Groups",
+            ),
+            default_user_root_ou_path=self._normalize_ou_path(
+                settings_repo.get_value("directory_root_ou_path", "", org_id=org_id),
+            ),
+        )
+        department_connector_map = build_department_connector_map(department_tree, connector_specs)
+        department_scope_root_map = build_department_scope_root_map(
+            department_tree,
+            connector_specs,
+            department_connector_map,
+        )
+        trim_department_paths_to_scope(department_tree, department_scope_root_map)
+        department_ou_mappings_by_connector: dict[str, list[Any]] = {}
+        for record in request.app.state.department_ou_mapping_repo.list_mapping_records(
+            enabled_only=True,
+            org_id=org_id,
+        ):
+            department_ou_mappings_by_connector.setdefault(str(record.connector_id or "").strip(), []).append(record)
+        placement_blocked_department_ids = {
+            int(rule.match_value)
+            for rule in request.app.state.exception_rule_repo.list_enabled_rule_records(org_id=org_id)
+            if rule.rule_type == "skip_department_placement" and str(rule.match_value).strip().isdigit()
+        }
+        return {
+            "connector_specs": connector_specs,
+            "connector_specs_by_id": {
+                str(spec.get("connector_id") or "default"): spec for spec in connector_specs
+            },
+            "department_connector_map": department_connector_map,
+            "department_scope_root_map": department_scope_root_map,
+            "department_ou_mappings_by_connector": department_ou_mappings_by_connector,
+            "placement_blocked_department_ids": placement_blocked_department_ids,
+            "excluded_department_names": {str(name or "") for name in config.exclude_departments},
+            "user_ou_placement_strategy": settings_repo.get_value(
+                "user_ou_placement_strategy",
+                "source_primary_department",
+                org_id=org_id,
+            )
+            or "source_primary_department",
+        }
+
+    def _build_username_preview_from_user(
+        self,
+        user: SourceDirectoryUser,
+        *,
+        connector_spec: dict[str, Any],
+    ) -> dict[str, Any]:
+        strategy = normalize_username_strategy(connector_spec.get("username_strategy"))
+        collision_policy = normalize_username_collision_policy(
+            connector_spec.get("username_collision_policy")
+        )
+        username_template = str(connector_spec.get("username_template") or "").strip()
+        collision_template = str(connector_spec.get("username_collision_template") or "").strip()
+        candidates = build_identity_candidates(
+            user,
+            username_template=username_template,
+            username_strategy=strategy,
+            username_collision_policy=collision_policy,
+            username_collision_template=collision_template,
+        )
+        template_context = build_template_context(user)
+        common_context_keys = (
+            "userid",
+            "name",
+            "email",
+            "email_localpart",
+            "employee_id",
+            "pinyin_initials",
+            "pinyin_full",
+            "family_name_pinyin",
+            "given_initials",
+            "given_name_pinyin",
+            "name_ascii",
+            "position",
+            "mobile",
+        )
+        return {
+            "connector": {
+                "connector_id": str(connector_spec.get("connector_id") or "default"),
+                "name": str(connector_spec.get("name") or "Default Connector"),
+            },
+            "strategy": strategy,
+            "resolved_template": resolve_username_template(strategy, username_template),
+            "username_template": username_template,
+            "collision_policy": collision_policy,
+            "collision_template": collision_template,
+            "template_context": {
+                key: str(template_context.get(key) or "") for key in common_context_keys
+            },
+            "primary_candidate": next(
+                (candidate for candidate in candidates if candidate.get("managed")),
+                candidates[0] if candidates else None,
+            ),
+            "candidates": candidates,
+        }
 
     def _close_directory_resource(self, resource: Any) -> None:
         close_fn = getattr(resource, "close", None)
@@ -236,6 +532,607 @@ class SyncSupport:
                 }
             )
         return results[: max(int(limit or 20), 1)]
+
+    def build_username_preview(
+        self,
+        request: Request,
+        *,
+        connector_id: str,
+        sample_userid: str,
+        sample_name: str,
+        sample_email: str,
+        sample_employee_id: str = "",
+        sample_position: str = "",
+        sample_mobile: str = "",
+        sample_payload_json: str = "",
+    ) -> dict[str, Any]:
+        normalized_connector_id = str(connector_id or "default").strip() or "default"
+        extra_payload: dict[str, Any] = {}
+        normalized_payload_json = str(sample_payload_json or "").strip()
+        if normalized_payload_json:
+            try:
+                parsed_payload = json.loads(normalized_payload_json)
+            except json.JSONDecodeError as exc:
+                raise ValueError("Additional source payload JSON must be valid JSON.") from exc
+            if not isinstance(parsed_payload, dict):
+                raise ValueError("Additional source payload JSON must be an object.")
+            extra_payload = dict(parsed_payload)
+        payload = dict(extra_payload)
+        payload.update(
+            {
+                "userid": str(sample_userid or "").strip(),
+                "name": str(sample_name or "").strip(),
+                "email": str(sample_email or "").strip(),
+            }
+        )
+        if str(sample_employee_id or "").strip():
+            payload["employee_id"] = str(sample_employee_id or "").strip()
+        if str(sample_position or "").strip():
+            payload["position"] = str(sample_position or "").strip()
+        if str(sample_mobile or "").strip():
+            payload["mobile"] = str(sample_mobile or "").strip()
+        if not any(str(payload.get(key) or "").strip() for key in ("userid", "name", "email", "employee_id")):
+            raise ValueError("Fill at least one sample identity field before previewing.")
+
+        sample_user = SourceDirectoryUser.from_source_payload(payload)
+        current_org = self.request_support.get_current_org(request)
+        runtime_context = self._build_runtime_connector_context(
+            request,
+            config=self._get_org_app_config(request),
+            department_tree={},
+        )
+        connector_spec = runtime_context["connector_specs_by_id"].get(normalized_connector_id)
+        if connector_spec is None and normalized_connector_id != "default":
+            enabled_connectors = request.app.state.connector_repo.list_connector_records(
+                enabled_only=True,
+                org_id=current_org.org_id,
+            )
+            if len(enabled_connectors) == 1 and enabled_connectors[0].connector_id == normalized_connector_id:
+                default_spec = runtime_context["connector_specs_by_id"].get("default")
+                if default_spec is not None:
+                    connector_spec = {
+                        **default_spec,
+                        "connector_id": normalized_connector_id,
+                        "name": enabled_connectors[0].name or default_spec.get("name") or "Default Connector",
+                    }
+        if connector_spec is None:
+            raise ValueError(f"Connector {normalized_connector_id} was not found.")
+        preview = self._build_username_preview_from_user(sample_user, connector_spec=connector_spec)
+        preview["sample_user"] = {
+            "userid": sample_user.userid,
+            "name": sample_user.name,
+            "email": sample_user.email,
+        }
+        return preview
+
+    def explain_identity_routing(self, request: Request, source_user_id: str) -> dict[str, Any]:
+        normalized_source_user_id = str(source_user_id or "").strip()
+        if not normalized_source_user_id:
+            raise ValueError("Source user ID is required.")
+
+        current_org = self.request_support.get_current_org(request)
+        binding_record = request.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+            normalized_source_user_id,
+            org_id=current_org.org_id,
+        )
+        override_record = request.app.state.department_override_repo.get_override_record_by_source_user_id(
+            normalized_source_user_id,
+            org_id=current_org.org_id,
+        )
+        config, source_provider = self._get_source_provider(request)
+        try:
+            departments = source_provider.list_departments()
+            department_tree = self._build_department_tree(departments)
+            source_user = self._load_source_user_from_provider(source_provider, normalized_source_user_id)
+            if not source_user:
+                raise ValueError(f"Source user {normalized_source_user_id} was not found in the configured source directory.")
+
+            original_paths = {
+                department_id: {
+                    "path": list(node.path or []),
+                    "path_ids": list(node.path_ids or []),
+                }
+                for department_id, node in department_tree.items()
+            }
+            runtime_context = self._build_runtime_connector_context(
+                request,
+                config=config,
+                department_tree=department_tree,
+            )
+            connector_specs_by_id = runtime_context["connector_specs_by_id"]
+            department_connector_map = runtime_context["department_connector_map"]
+            department_scope_root_map = runtime_context["department_scope_root_map"]
+            excluded_department_names = runtime_context["excluded_department_names"]
+            placement_blocked_department_ids = runtime_context["placement_blocked_department_ids"]
+
+            def is_department_excluded(dept_info: Optional[Any]) -> bool:
+                return (
+                    not dept_info
+                    or dept_info.name in excluded_department_names
+                    or not is_department_in_connector_scope(
+                        dept_info,
+                        connector_specs_by_id=connector_specs_by_id,
+                        department_connector_map=department_connector_map,
+                        department_scope_root_map=department_scope_root_map,
+                    )
+                )
+
+            def is_department_blocked_for_placement(dept_info: Optional[Any]) -> bool:
+                return is_department_excluded(dept_info) or (
+                    bool(dept_info) and dept_info.department_id in placement_blocked_department_ids
+                )
+
+            bundle = UserDepartmentBundle(user=source_user)
+            department_rows: list[dict[str, Any]] = []
+            connector_candidates: set[str] = set()
+            for department_id in source_user.departments:
+                department = department_tree.get(int(department_id))
+                if department is None:
+                    continue
+                bundle.add_department(department)
+                connector_id = department_connector_map.get(department.department_id, "default")
+                connector_spec = connector_specs_by_id.get(connector_id, connector_specs_by_id["default"])
+                connector_candidates.add(connector_id)
+                original_path = original_paths.get(department.department_id, {})
+                department_rows.append(
+                    {
+                        "department_id": int(department.department_id),
+                        "name": str(department.name or ""),
+                        "path_display": " / ".join(list(original_path.get("path") or []) or [department.name]),
+                        "scoped_path_display": " / ".join(list(department.path or []) or [department.name]),
+                        "connector_id": connector_id,
+                        "connector_name": str(connector_spec.get("name") or "Default Connector"),
+                        "scope_root_id": runtime_context["department_scope_root_map"].get(department.department_id),
+                        "is_excluded": is_department_excluded(department),
+                        "is_blocked_for_placement": is_department_blocked_for_placement(department),
+                    }
+                )
+
+            if not connector_candidates:
+                connector_candidates = {"default"}
+            resolved_connector_ids = sorted(connector_candidates)
+            selected_connector_id = resolved_connector_ids[0] if len(resolved_connector_ids) == 1 else ""
+            selected_connector_spec = connector_specs_by_id.get(selected_connector_id) if selected_connector_id else None
+
+            override_department_id = None
+            if override_record and override_record.primary_department_id:
+                try:
+                    override_department_id = int(override_record.primary_department_id)
+                except (TypeError, ValueError):
+                    override_department_id = None
+
+            target_department, placement_reason = resolve_target_department(
+                bundle,
+                placement_strategy=runtime_context["user_ou_placement_strategy"],
+                is_department_excluded=is_department_blocked_for_placement,
+                override_department_id=override_department_id,
+            )
+            target_ou_segments = (
+                resolve_department_ou_path(
+                    target_department,
+                    connector_id=selected_connector_id,
+                    mappings_by_connector=runtime_context["department_ou_mappings_by_connector"],
+                )
+                if target_department and selected_connector_id
+                else []
+            )
+            preview = (
+                self._build_username_preview_from_user(source_user, connector_spec=selected_connector_spec)
+                if selected_connector_spec
+                else None
+            )
+            return {
+                "user": {
+                    "userid": source_user.userid,
+                    "name": source_user.name,
+                    "email": source_user.email,
+                },
+                "binding": (
+                    {
+                        "ad_username": binding_record.ad_username,
+                        "connector_id": binding_record.connector_id or "",
+                        "source": binding_record.source,
+                        "is_enabled": binding_record.is_enabled,
+                    }
+                    if binding_record
+                    else None
+                ),
+                "department_override": (
+                    {
+                        "primary_department_id": override_record.primary_department_id,
+                        "notes": override_record.notes,
+                    }
+                    if override_record
+                    else None
+                ),
+                "routing_status": "resolved" if selected_connector_id else "multiple_connector_candidates",
+                "connector_candidates": [
+                    {
+                        "connector_id": connector_id,
+                        "name": str(
+                            (connector_specs_by_id.get(connector_id) or {}).get("name") or "Default Connector"
+                        ),
+                    }
+                    for connector_id in resolved_connector_ids
+                ],
+                "selected_connector": (
+                    {
+                        "connector_id": selected_connector_id,
+                        "name": str(selected_connector_spec.get("name") or "Default Connector"),
+                        "root_department_ids": list(selected_connector_spec.get("root_department_ids") or []),
+                    }
+                    if selected_connector_spec
+                    else None
+                ),
+                "departments": department_rows,
+                "placement_strategy": runtime_context["user_ou_placement_strategy"],
+                "placement_reason": placement_reason,
+                "target_department": (
+                    {
+                        "department_id": int(target_department.department_id),
+                        "name": str(target_department.name or ""),
+                        "path_display": " / ".join(list(target_department.path or []) or [target_department.name]),
+                    }
+                    if target_department
+                    else None
+                ),
+                "target_ou_path": "/".join(target_ou_segments),
+                "username_preview": preview,
+            }
+        finally:
+            self._close_directory_resource(source_provider)
+
+    def build_source_data_quality_snapshot(self, request: Request) -> dict[str, Any]:
+        config, source_provider = self._get_source_provider(request)
+        try:
+            department_tree = self._build_department_tree(source_provider.list_departments())
+            users_by_id: dict[str, SourceDirectoryUser] = {}
+            for department_id in sorted(department_tree):
+                for user in source_provider.list_department_users(int(department_id)) or []:
+                    self._merge_source_directory_user(users_by_id, user)
+
+            for user in users_by_id.values():
+                template_context = build_template_context(user)
+                if str(user.name or "").strip() and str(user.email or "").strip() and str(
+                    template_context.get("employee_id") or ""
+                ).strip():
+                    continue
+                detail_payload = source_provider.get_user_detail(str(user.source_user_id or "").strip()) or {}
+                if detail_payload:
+                    user.merge_payload(detail_payload)
+        finally:
+            self._close_directory_resource(source_provider)
+
+        runtime_context = self._build_runtime_connector_context(
+            request,
+            config=config,
+            department_tree=department_tree,
+        )
+        connector_specs_by_id = runtime_context["connector_specs_by_id"]
+        department_connector_map = runtime_context["department_connector_map"]
+        department_scope_root_map = runtime_context["department_scope_root_map"]
+        excluded_department_names = runtime_context["excluded_department_names"]
+        placement_blocked_department_ids = runtime_context["placement_blocked_department_ids"]
+        placement_strategy = runtime_context["user_ou_placement_strategy"]
+
+        def is_department_excluded(dept_info: Optional[Any]) -> bool:
+            return (
+                not dept_info
+                or dept_info.name in excluded_department_names
+                or not is_department_in_connector_scope(
+                    dept_info,
+                    connector_specs_by_id=connector_specs_by_id,
+                    department_connector_map=department_connector_map,
+                    department_scope_root_map=department_scope_root_map,
+                )
+            )
+
+        def is_department_blocked_for_placement(dept_info: Optional[Any]) -> bool:
+            return is_department_excluded(dept_info) or (
+                bool(dept_info) and dept_info.department_id in placement_blocked_department_ids
+            )
+
+        missing_email_samples: list[dict[str, str]] = []
+        missing_employee_id_samples: list[dict[str, str]] = []
+        missing_department_samples: list[dict[str, str]] = []
+        placement_gap_samples: list[dict[str, str]] = []
+        routing_ambiguity_samples: list[dict[str, str]] = []
+        naming_gap_samples: list[dict[str, str]] = []
+        duplicate_emails: dict[str, list[SourceDirectoryUser]] = {}
+        duplicate_employee_ids: dict[str, list[SourceDirectoryUser]] = {}
+        managed_username_groups: dict[tuple[str, str], list[dict[str, str]]] = {}
+        connector_counts: dict[tuple[str, str], int] = {}
+        users_with_multiple_departments = 0
+
+        for source_user_id in sorted(users_by_id):
+            user = users_by_id[source_user_id]
+            template_context = build_template_context(user)
+            normalized_email = str(user.email or "").strip()
+            normalized_employee_id = str(template_context.get("employee_id") or "").strip()
+            user_title = self._format_quality_user_title(user)
+
+            if normalized_email:
+                duplicate_emails.setdefault(normalized_email.lower(), []).append(user)
+            else:
+                missing_email_samples.append(
+                    {
+                        "title": user_title,
+                        "detail": "No work email was found on the source directory record.",
+                    }
+                )
+
+            if normalized_employee_id:
+                duplicate_employee_ids.setdefault(normalized_employee_id.lower(), []).append(user)
+            else:
+                missing_employee_id_samples.append(
+                    {
+                        "title": user_title,
+                        "detail": "No employee ID was found on the source directory record.",
+                    }
+                )
+
+            if len(user.departments) > 1:
+                users_with_multiple_departments += 1
+
+            valid_departments = [
+                department_tree.get(int(department_id))
+                for department_id in user.departments
+                if str(department_id).strip().lstrip("-").isdigit()
+            ]
+            valid_departments = [item for item in valid_departments if item is not None]
+            if not valid_departments:
+                missing_department_samples.append(
+                    {
+                        "title": user_title,
+                        "detail": "No valid source department membership was found for routing and OU placement.",
+                    }
+                )
+                connector_counts[("__unrouted__", "No valid department routing")] = (
+                    connector_counts.get(("__unrouted__", "No valid department routing"), 0) + 1
+                )
+                continue
+
+            connector_candidates: dict[str, str] = {}
+            for department in valid_departments:
+                connector_id = department_connector_map.get(int(department.department_id), "default")
+                connector_spec = connector_specs_by_id.get(connector_id, connector_specs_by_id["default"])
+                connector_candidates[connector_id] = str(
+                    connector_spec.get("name") or "Default Connector"
+                )
+
+            if len(connector_candidates) > 1:
+                connector_counts[("__multiple__", "Multiple connector matches")] = (
+                    connector_counts.get(("__multiple__", "Multiple connector matches"), 0) + 1
+                )
+                routing_ambiguity_samples.append(
+                    {
+                        "title": user_title,
+                        "detail": "Matches multiple connector scopes: "
+                        + ", ".join(
+                            f"{name} [{connector_id}]"
+                            for connector_id, name in sorted(connector_candidates.items())
+                        ),
+                    }
+                )
+                continue
+
+            selected_connector_id = next(iter(connector_candidates.keys()), "default")
+            selected_connector_spec = connector_specs_by_id.get(
+                selected_connector_id,
+                connector_specs_by_id["default"],
+            )
+            selected_connector_name = str(
+                selected_connector_spec.get("name") or "Default Connector"
+            )
+            connector_counts[(selected_connector_id, selected_connector_name)] = (
+                connector_counts.get((selected_connector_id, selected_connector_name), 0) + 1
+            )
+
+            bundle = UserDepartmentBundle(user=user)
+            for department in valid_departments:
+                bundle.add_department(department)
+            target_department, _placement_reason = resolve_target_department(
+                bundle,
+                placement_strategy=placement_strategy,
+                is_department_excluded=is_department_blocked_for_placement,
+                override_department_id=None,
+            )
+            if target_department is None:
+                placement_gap_samples.append(
+                    {
+                        "title": user_title,
+                        "detail": "Current placement rules excluded every source department for this user."
+                        f" Effective connector: {selected_connector_name} [{selected_connector_id}].",
+                    }
+                )
+
+            preview = self._build_username_preview_from_user(
+                user,
+                connector_spec=selected_connector_spec,
+            )
+            naming_gap_detail = self._describe_naming_prerequisite_gap(preview, user)
+            if naming_gap_detail:
+                naming_gap_samples.append(
+                    {
+                        "title": user_title,
+                        "detail": naming_gap_detail
+                        + f" Effective connector: {selected_connector_name} [{selected_connector_id}].",
+                    }
+                )
+
+            primary_managed_candidate = next(
+                (
+                    candidate
+                    for candidate in list(preview.get("candidates") or [])
+                    if candidate.get("managed")
+                ),
+                None,
+            )
+            if primary_managed_candidate:
+                normalized_username = str(primary_managed_candidate.get("username") or "").strip().lower()
+                if normalized_username:
+                    managed_username_groups.setdefault(
+                        (selected_connector_id, normalized_username),
+                        [],
+                    ).append(
+                        {
+                            "title": user_title,
+                            "connector_id": selected_connector_id,
+                            "connector_name": selected_connector_name,
+                        }
+                    )
+
+        duplicate_email_samples = [
+            {
+                "title": email_value,
+                "detail": "Shared by "
+                + ", ".join(item.source_user_id for item in matched_users[:5]),
+            }
+            for email_value, matched_users in sorted(duplicate_emails.items())
+            if len({str(item.source_user_id or "").strip().lower() for item in matched_users}) > 1
+        ]
+        duplicate_employee_id_samples = [
+            {
+                "title": employee_id,
+                "detail": "Shared by "
+                + ", ".join(item.source_user_id for item in matched_users[:5]),
+            }
+            for employee_id, matched_users in sorted(duplicate_employee_ids.items())
+            if len({str(item.source_user_id or "").strip().lower() for item in matched_users}) > 1
+        ]
+        managed_username_collision_samples = [
+            {
+                "title": f"{username} [{matched_users[0]['connector_name']}]",
+                "detail": "Would be generated for "
+                + ", ".join(item["title"] for item in matched_users[:5]),
+            }
+            for (_connector_id, username), matched_users in sorted(managed_username_groups.items())
+            if len({str(item.get('title') or '').strip().lower() for item in matched_users}) > 1
+        ]
+
+        issues = [
+            self._build_quality_issue(
+                key="missing_departments",
+                label="Users without valid departments",
+                severity="error",
+                description="These users cannot be routed into the managed OU tree because the source directory does not expose a valid department membership.",
+                action="Fix the source department assignment first, then rerun dry run.",
+                samples=missing_department_samples,
+            ),
+            self._build_quality_issue(
+                key="routing_ambiguity",
+                label="Users matching multiple connectors",
+                severity="error",
+                description="These users span more than one connector scope, so runtime cannot choose a single provisioning target.",
+                action="Adjust connector root units or source department ownership so each user resolves to one connector.",
+                samples=routing_ambiguity_samples,
+            ),
+            self._build_quality_issue(
+                key="managed_username_collision",
+                label="Predicted managed username collisions",
+                severity="error",
+                description="Different users would generate the same primary managed AD username inside the same connector.",
+                action="Tune the username strategy or collision policy before running apply.",
+                samples=managed_username_collision_samples,
+            ),
+            self._build_quality_issue(
+                key="placement_unresolved",
+                label="Users blocked by placement rules",
+                severity="warning",
+                description="These users have departments, but the current placement policy excludes every candidate branch.",
+                action="Review placement strategy, exclusion rules, and connector root-unit scope.",
+                samples=placement_gap_samples,
+            ),
+            self._build_quality_issue(
+                key="naming_prerequisite_gap",
+                label="Users missing naming prerequisites",
+                severity="warning",
+                description="These source records are missing fields required by the currently selected naming strategy.",
+                action="Backfill the required fields or switch to a naming rule that fits the available source data.",
+                samples=naming_gap_samples,
+            ),
+            self._build_quality_issue(
+                key="missing_email",
+                label="Users missing work email",
+                severity="warning",
+                description="Blank work email makes email-based naming, write-back, and notification workflows harder to operate safely.",
+                action="Backfill email on the source directory record where it is supposed to exist.",
+                samples=missing_email_samples,
+            ),
+            self._build_quality_issue(
+                key="missing_employee_id",
+                label="Users missing employee ID",
+                severity="warning",
+                description="Blank employee ID reduces the quality of employee-ID-based naming and same-name collision handling.",
+                action="Backfill employee ID or switch the naming strategy away from employee-ID-driven rules.",
+                samples=missing_employee_id_samples,
+            ),
+            self._build_quality_issue(
+                key="duplicate_email",
+                label="Duplicate work emails",
+                severity="warning",
+                description="Multiple source users share the same work email.",
+                action="Confirm whether the duplicates are legitimate shared accounts or source-data defects.",
+                samples=duplicate_email_samples,
+                count=len(duplicate_email_samples),
+            ),
+            self._build_quality_issue(
+                key="duplicate_employee_id",
+                label="Duplicate employee IDs",
+                severity="warning",
+                description="Multiple source users share the same employee ID.",
+                action="Fix the source HR identifiers before relying on employee-ID naming or collision fallbacks.",
+                samples=duplicate_employee_id_samples,
+                count=len(duplicate_employee_id_samples),
+            ),
+        ]
+        normalized_issues = [issue for issue in issues if issue]
+        severity_rank = {"error": 0, "warning": 1, "info": 2, "success": 3}
+        normalized_issues.sort(
+            key=lambda item: (
+                severity_rank.get(str(item.get("severity") or "warning"), 9),
+                -int(item.get("count") or 0),
+                str(item.get("label") or ""),
+            )
+        )
+        error_issue_count = sum(1 for item in normalized_issues if item["severity"] == "error")
+        warning_issue_count = sum(1 for item in normalized_issues if item["severity"] == "warning")
+
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "analysis_notes": [
+                "Counts reflect unique source users merged across all returned department memberships.",
+                "Manual bindings and per-user department overrides are not expanded in this snapshot.",
+            ],
+            "summary": {
+                "total_users": len(users_by_id),
+                "department_count": len(department_tree),
+                "users_with_multiple_departments": users_with_multiple_departments,
+                "users_missing_email": len(missing_email_samples),
+                "users_missing_employee_id": len(missing_employee_id_samples),
+                "users_without_departments": len(missing_department_samples),
+                "placement_unresolved_count": len(placement_gap_samples),
+                "routing_ambiguity_count": len(routing_ambiguity_samples),
+                "naming_prerequisite_gap_count": len(naming_gap_samples),
+                "duplicate_email_count": len(duplicate_email_samples),
+                "duplicate_employee_id_count": len(duplicate_employee_id_samples),
+                "managed_username_collision_count": len(managed_username_collision_samples),
+                "error_issue_count": error_issue_count,
+                "warning_issue_count": warning_issue_count,
+            },
+            "connector_breakdown": [
+                {
+                    "connector_id": connector_id,
+                    "name": connector_name,
+                    "user_count": user_count,
+                }
+                for (connector_id, connector_name), user_count in sorted(
+                    connector_counts.items(),
+                    key=lambda item: (-item[1], item[0][1], item[0][0]),
+                )
+            ],
+            "issues": normalized_issues,
+        }
 
     def source_user_exists_in_source_provider(self, request: Request, source_user_id: str) -> tuple[bool, Optional[str]]:
         normalized_source_user_id = str(source_user_id or "").strip()

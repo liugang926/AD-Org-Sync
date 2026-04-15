@@ -317,8 +317,11 @@ def create_app(
 
     register_advanced_sync_routes(
         app,
+        build_source_data_quality_snapshot=sync_support_call("build_source_data_quality_snapshot"),
         attribute_mapping_direction_labels=ATTRIBUTE_MAPPING_DIRECTION_LABELS,
+        build_username_preview=sync_support_call("build_username_preview"),
         describe_connector_config_source=request_support.describe_connector_config_source,
+        explain_identity_routing=sync_support_call("explain_identity_routing"),
         flash=request_support.flash,
         flash_t=request_support.flash_t,
         get_current_org=request_support.get_current_org,
@@ -334,12 +337,14 @@ def create_app(
 
     register_job_routes(
         app,
+        build_preflight_snapshot=dashboard_support.build_preflight_snapshot,
         enqueue_replay_request=sync_support_call("enqueue_replay_request"),
         fetch_page=fetch_page,
         flash=request_support.flash,
         flash_t=request_support.flash_t,
         get_current_org=request_support.get_current_org,
         get_ui_language=request_support.get_ui_language,
+        merge_saved_preflight_snapshot_data=merge_saved_preflight_snapshot_data,
         parse_page_number=parse_page_number,
         reject_invalid_csrf=request_support.reject_invalid_csrf,
         render=request_support.render,
