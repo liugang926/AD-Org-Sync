@@ -11,6 +11,7 @@ from sync_app.core.exception_rules import (
     get_exception_rule_definition,
     normalize_exception_rule_type,
 )
+from sync_app.web.rule_governance import build_rule_governance_summary
 
 
 def register_exception_routes(
@@ -63,6 +64,11 @@ def register_exception_routes(
             page=page_number,
             page_size=25,
         )
+        rule_governance_summary = build_rule_governance_summary(
+            bindings=request.app.state.user_binding_repo.list_binding_records(org_id=current_org.org_id),
+            overrides=request.app.state.department_override_repo.list_override_records(org_id=current_org.org_id),
+            exception_rules=request.app.state.exception_rule_repo.list_rule_records(org_id=current_org.org_id),
+        )
         return render(
             request,
             "exceptions.html",
@@ -92,6 +98,7 @@ def register_exception_routes(
             ],
             department_name_map=load_department_name_map(request),
             filters_are_remembered=True,
+            rule_governance_summary=rule_governance_summary,
         )
 
     @app.post("/exceptions")

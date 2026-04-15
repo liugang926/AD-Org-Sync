@@ -82,6 +82,42 @@
     </ul>
   {% endcall %}
 
+  {% call ui.panel(t(config_rollout_status.title), description=(t("Configuration was just saved. Trigger the first dry run next so you can review matches, planned changes, and conflicts before apply.") if flash and flash.level == "success" and config_rollout_status.phase == "first_dry_run" else t(config_rollout_status.description)), class_name="toolbar-card") %}
+    <div class="surface-inline">
+      {{ ui.badge(t(config_rollout_status.badge_text), config_rollout_status.badge_level) }}
+      {% if config_rollout_status.active_job %}
+      <span class="muted">{{ t("Active job") }}:</span>
+      <a href="/jobs/{{ config_rollout_status.active_job.job_id }}">{{ config_rollout_status.active_job.job_id }}</a>
+      {% elif config_rollout_status.latest_successful_dry_run %}
+      <span class="muted">{{ t("Latest successful dry run") }}:</span>
+      <a href="/jobs/{{ config_rollout_status.latest_successful_dry_run.job_id }}">{{ config_rollout_status.latest_successful_dry_run.job_id }}</a>
+      {% else %}
+      <span class="muted">{{ t("No successful dry run recorded yet for this organization.") }}</span>
+      {% endif %}
+    </div>
+
+    <div class="compact-stats">
+      {{ ui.compact_stat(t("Open Conflicts"), config_rollout_status.open_conflict_count) }}
+      {{ ui.compact_stat(t("Latest Dry Run"), (config_rollout_status.latest_dry_run.job_id if config_rollout_status.latest_dry_run else "-"), detail=(t(config_rollout_status.latest_dry_run.status) if config_rollout_status.latest_dry_run else t("Not started"))) }}
+      {{ ui.compact_stat(t("Latest Apply"), (config_rollout_status.latest_apply.job_id if config_rollout_status.latest_apply else "-"), detail=(t(config_rollout_status.latest_apply.status) if config_rollout_status.latest_apply else t("Not started"))) }}
+    </div>
+
+    <div class="actions">
+      {% if config_rollout_status.show_run_dry_run and can("jobs.run") %}
+      <form class="inline" method="post" action="/jobs/run">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="mode" value="dry_run">
+        {{ ui.button(t("Run First Dry Run"), type="submit", variant="secondary", icon="play") }}
+      </form>
+      {% endif %}
+      {{ ui.button(t(config_rollout_status.primary_action_label), href=config_rollout_status.primary_action_url, variant=("ghost" if config_rollout_status.show_run_dry_run else "secondary"), icon="arrow-right") }}
+      {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost", icon="refresh-cw") }}
+      {% if config_rollout_status.open_conflict_count > 0 %}
+      {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost", icon="shield-alert") }}
+      {% endif %}
+    </div>
+  {% endcall %}
+
   <div class="dense-two-col">
     {% if can("mappings.read") %}
     {% call ui.helper_block(t("Need Manual Identity Binding Or Per-User Placement?"), t("Use Identity Overrides when one source user must bind to a specific AD account or land in a different primary department than the default placement strategy."), "info", t("Recommended")) %}

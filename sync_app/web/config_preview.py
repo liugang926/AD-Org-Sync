@@ -15,6 +15,129 @@ from sync_app.web.config_presentation import (
 from sync_app.web.runtime import resolve_web_runtime_settings, web_runtime_requires_restart
 
 
+def _normalize_job_status(value: str | None) -> str:
+    return str(value or "").strip().upper()
+
+
+def _is_successful_dry_run(job: Any) -> bool:
+    return (
+        str(getattr(job, "execution_mode", "") or "").strip().lower() == "dry_run"
+        and _normalize_job_status(getattr(job, "status", "")) in {"COMPLETED", "COMPLETED_WITH_ERRORS"}
+    )
+
+
+def _build_config_rollout_status(request: Request, current_org: Any) -> dict[str, Any]:
+    recent_jobs = request.app.state.job_repo.list_recent_job_records(limit=20, org_id=current_org.org_id)
+    latest_dry_run = next(
+        (
+            job
+            for job in recent_jobs
+            if str(getattr(job, "execution_mode", "") or "").strip().lower() == "dry_run"
+        ),
+        None,
+    )
+    latest_successful_dry_run = next((job for job in recent_jobs if _is_successful_dry_run(job)), None)
+    latest_apply = next(
+        (
+            job
+            for job in recent_jobs
+            if str(getattr(job, "execution_mode", "") or "").strip().lower() == "apply"
+        ),
+        None,
+    )
+    active_job = request.app.state.job_repo.get_active_job_record(org_id=current_org.org_id)
+    _open_conflicts, open_conflict_count = request.app.state.conflict_repo.list_conflict_records_page(
+        limit=1,
+        offset=0,
+        status="open",
+        org_id=current_org.org_id,
+    )
+
+    if active_job:
+        return {
+            "phase": "active_job",
+            "title": "Synchronization in Progress",
+            "description": "A background job is already active for this organization. Let it finish before starting another run.",
+            "badge_text": "Active",
+            "badge_level": "info",
+            "primary_action_label": "Open Active Job",
+            "primary_action_url": f"/jobs/{active_job.job_id}",
+            "show_run_dry_run": False,
+            "open_conflict_count": int(open_conflict_count or 0),
+            "latest_dry_run": latest_dry_run,
+            "latest_successful_dry_run": latest_successful_dry_run,
+            "latest_apply": latest_apply,
+            "active_job": active_job,
+        }
+
+    if not latest_successful_dry_run:
+        return {
+            "phase": "first_dry_run",
+            "title": "Next Step: Run The First Dry Run",
+            "description": "After the configuration is saved, start with a dry run so you can inspect identity matches, planned changes, and conflicts before the first apply.",
+            "badge_text": "Recommended",
+            "badge_level": "warning",
+            "primary_action_label": "Open Job Center",
+            "primary_action_url": "/jobs",
+            "show_run_dry_run": True,
+            "open_conflict_count": int(open_conflict_count or 0),
+            "latest_dry_run": latest_dry_run,
+            "latest_successful_dry_run": latest_successful_dry_run,
+            "latest_apply": latest_apply,
+            "active_job": active_job,
+        }
+
+    if int(open_conflict_count or 0) > 0:
+        return {
+            "phase": "review_conflicts",
+            "title": "Next Step: Resolve Identity Conflicts",
+            "description": "A successful dry run already exists. Clear the open conflict queue before the first apply so account ownership decisions stay explicit.",
+            "badge_text": "Needs Review",
+            "badge_level": "warning",
+            "primary_action_label": "Open Conflict Queue",
+            "primary_action_url": "/conflicts",
+            "show_run_dry_run": False,
+            "open_conflict_count": int(open_conflict_count or 0),
+            "latest_dry_run": latest_dry_run,
+            "latest_successful_dry_run": latest_successful_dry_run,
+            "latest_apply": latest_apply,
+            "active_job": active_job,
+        }
+
+    if not latest_apply:
+        return {
+            "phase": "ready_for_apply",
+            "title": "Next Step: Review Apply Readiness",
+            "description": "The first dry run is complete and no open conflicts are blocking the rollout. Review the Job Center before the first apply.",
+            "badge_text": "Ready",
+            "badge_level": "success",
+            "primary_action_label": "Open Job Center",
+            "primary_action_url": "/jobs",
+            "show_run_dry_run": False,
+            "open_conflict_count": int(open_conflict_count or 0),
+            "latest_dry_run": latest_dry_run,
+            "latest_successful_dry_run": latest_successful_dry_run,
+            "latest_apply": latest_apply,
+            "active_job": active_job,
+        }
+
+    return {
+        "phase": "review_latest",
+        "title": "Rollout State",
+        "description": "This organization already has dry run and apply history. Review the latest jobs before changing routing, naming, or exception rules.",
+        "badge_text": "Tracked",
+        "badge_level": "info",
+        "primary_action_label": "Open Job Center",
+        "primary_action_url": "/jobs",
+        "show_run_dry_run": False,
+        "open_conflict_count": int(open_conflict_count or 0),
+        "latest_dry_run": latest_dry_run,
+        "latest_successful_dry_run": latest_successful_dry_run,
+        "latest_apply": latest_apply,
+        "active_job": active_job,
+    }
+
+
 def build_config_change_preview(support: Any, request: Request, submission: dict[str, Any]) -> dict[str, Any]:
     current_org = support.request_support.get_current_org(request)
     current_state = support.build_current_config_state(request, current_org)
@@ -203,6 +326,7 @@ def build_config_page_context(
         protection_level="hard",
         org_id=current_org.org_id,
     )
+    config_rollout_status = _build_config_rollout_status(request, current_org)
     return {
         "page": "config",
         "title": f"{source_provider_name} Configuration",
@@ -218,5 +342,6 @@ def build_config_page_context(
         "protected_rules": protected_rules,
         "config_change_preview": config_change_preview,
         "config_preview_token": preview_token,
+        "config_rollout_status": config_rollout_status,
         "filters_are_remembered": True,
     }
