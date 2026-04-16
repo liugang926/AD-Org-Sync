@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
@@ -258,6 +259,28 @@ class WebAuthorizationTests(unittest.TestCase):
 
         response = self._route("/jobs", "GET")(self._request("/jobs"))
         self.assertEqual(response.status_code, 200)
+
+    def test_unauthenticated_private_pages_redirect_to_login(self):
+        with TestClient(self.app) as client:
+            response = client.get("/dashboard", follow_redirects=False)
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/login")
+
+            response = client.get("/config", follow_redirects=False)
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/login")
+
+    def test_unauthenticated_private_metadata_api_redirects_to_login(self):
+        with TestClient(self.app) as client:
+            response = client.get("/api/metadata/source-users?q=alice", follow_redirects=False)
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/login")
+
+    def test_healthz_remains_public_without_login(self):
+        with TestClient(self.app) as client:
+            response = client.get("/healthz")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["status"], "ok")
 
     def test_login_page_uses_lightweight_shell_without_external_runtime_assets(self):
         response = self._route("/login", "GET")(self._request("/login"))

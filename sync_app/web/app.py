@@ -5,9 +5,10 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.responses import RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from sync_app.core.common import APP_VERSION
@@ -101,6 +102,18 @@ ADVANCED_NAV_PAGES = {
 }
 SESSION_FILTER_PREFIX = "_page_filters"
 CONFIG_PREVIEW_SESSION_KEY = "_config_preview"
+PUBLIC_AUTH_PATHS = {
+    "/",
+    "/favicon.ico",
+    "/healthz",
+    "/login",
+    "/logout",
+    "/readyz",
+    "/setup",
+}
+PUBLIC_AUTH_PREFIXES = (
+    "/static/",
+)
 
 def _safe_redirect_target(value: str | None, default: str) -> str:
     candidate = str(value or "").strip()
@@ -169,6 +182,14 @@ def _normalize_ou_path_text(value: str | None, *, default: str = "") -> str:
     return normalized or default
 
 
+def _is_public_auth_path(path: str) -> bool:
+    normalized_path = str(path or "").strip() or "/"
+    return normalized_path in PUBLIC_AUTH_PATHS or any(
+        normalized_path.startswith(prefix)
+        for prefix in PUBLIC_AUTH_PREFIXES
+    )
+
+
 def create_app(
     *,
     db_path: str | None = None,
@@ -196,13 +217,6 @@ def create_app(
     app = FastAPI(title="AD Org Sync Web", version=APP_VERSION)
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-    app.add_middleware(
-        SessionMiddleware,
-        secret_key=runtime_state.session_secret,
-        same_site="strict",
-        https_only=runtime_state.session_cookie_secure,
-        max_age=runtime_state.session_minutes * 60,
-    )
     web_app_state.bind_to_app(app)
     app.router.on_startup.append(runtime_state.sync_runner.start)
     app.router.on_shutdown.append(runtime_state.sync_runner.stop)
@@ -227,6 +241,24 @@ def create_app(
         request_support.resolve_remembered_filters,
         to_text=_to_text,
         to_bool=_to_bool,
+    )
+
+    @app.middleware("http")
+    async def require_login_middleware(request: Request, call_next):
+        if request.method.upper() == "OPTIONS" or _is_public_auth_path(request.url.path):
+            return await call_next(request)
+        if not request.app.state.user_repo.has_any_user():
+            return RedirectResponse(url="/setup", status_code=303)
+        if not request_support.get_current_user(request):
+            return RedirectResponse(url="/login", status_code=303)
+        return await call_next(request)
+
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=runtime_state.session_secret,
+        same_site="strict",
+        https_only=runtime_state.session_cookie_secure,
+        max_age=runtime_state.session_minutes * 60,
     )
 
     config_support = ConfigSupport(
