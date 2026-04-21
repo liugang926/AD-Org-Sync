@@ -3,7 +3,13 @@ from __future__ import annotations
 import secrets
 from typing import Any, Dict, Optional
 
-from sync_app.core.models import SyncReplayRequestRecord, WebAuditLogRecord
+from sync_app.core.models import (
+    ConfigReleaseSnapshotRecord,
+    DataQualitySnapshotRecord,
+    IntegrationWebhookSubscriptionRecord,
+    SyncReplayRequestRecord,
+    WebAuditLogRecord,
+)
 from sync_app.storage.local_db import BaseRepository, dumps_json, normalize_org_id, utcnow_iso
 from sync_app.storage.schema import DEFAULT_APP_SETTINGS, ORG_SCOPED_APP_SETTINGS
 
@@ -396,3 +402,396 @@ class WebAuditLogRepository(BaseRepository):
             (*params, int(limit), max(int(offset), 0)),
         )
         return [WebAuditLogRecord.from_row(row) for row in rows], total
+
+
+class ConfigReleaseSnapshotRepository(BaseRepository):
+    def add_snapshot(
+        self,
+        *,
+        org_id: Optional[str] = None,
+        snapshot_name: str = "",
+        trigger_action: str = "manual_release",
+        created_by: str = "",
+        source_snapshot_id: Optional[int] = None,
+        bundle_hash: str = "",
+        bundle: Dict[str, Any],
+        summary: Optional[Dict[str, Any]] = None,
+        created_at: Optional[str] = None,
+    ) -> int:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        timestamp = str(created_at or utcnow_iso()).strip()
+        with self.db.transaction() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO config_release_snapshots (
+                  org_id, snapshot_name, trigger_action, created_by, source_snapshot_id,
+                  bundle_hash, bundle_json, summary_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized_org_id,
+                    str(snapshot_name or "").strip(),
+                    str(trigger_action or "manual_release").strip() or "manual_release",
+                    str(created_by or "").strip(),
+                    int(source_snapshot_id) if source_snapshot_id is not None else None,
+                    str(bundle_hash or "").strip(),
+                    dumps_json(bundle),
+                    dumps_json(summary),
+                    timestamp,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def get_snapshot_record(
+        self,
+        snapshot_id: int,
+        *,
+        org_id: Optional[str] = None,
+    ) -> Optional[ConfigReleaseSnapshotRecord]:
+        normalized_org_id = self._resolve_org_id(org_id)
+        if normalized_org_id:
+            row = self._fetchone(
+                """
+                SELECT *
+                FROM config_release_snapshots
+                WHERE id = ?
+                  AND org_id = ?
+                LIMIT 1
+                """,
+                (int(snapshot_id), normalized_org_id),
+            )
+        else:
+            row = self._fetchone(
+                """
+                SELECT *
+                FROM config_release_snapshots
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (int(snapshot_id),),
+            )
+        if not row:
+            return None
+        return ConfigReleaseSnapshotRecord.from_row(row)
+
+    def get_latest_snapshot_record(self, *, org_id: Optional[str] = None) -> Optional[ConfigReleaseSnapshotRecord]:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        row = self._fetchone(
+            """
+            SELECT *
+            FROM config_release_snapshots
+            WHERE org_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (normalized_org_id,),
+        )
+        if not row:
+            return None
+        return ConfigReleaseSnapshotRecord.from_row(row)
+
+    def list_snapshot_records(
+        self,
+        *,
+        org_id: Optional[str] = None,
+        limit: int = 20,
+    ) -> list[ConfigReleaseSnapshotRecord]:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        rows = self._fetchall(
+            """
+            SELECT *
+            FROM config_release_snapshots
+            WHERE org_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (normalized_org_id, int(limit)),
+        )
+        return [ConfigReleaseSnapshotRecord.from_row(row) for row in rows]
+
+
+class DataQualitySnapshotRepository(BaseRepository):
+    def add_snapshot(
+        self,
+        *,
+        org_id: Optional[str] = None,
+        trigger_action: str = "manual_scan",
+        created_by: str = "",
+        summary: Optional[Dict[str, Any]] = None,
+        snapshot: Dict[str, Any],
+        created_at: Optional[str] = None,
+    ) -> int:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        timestamp = str(created_at or utcnow_iso()).strip()
+        with self.db.transaction() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO data_quality_snapshots (
+                  org_id, trigger_action, created_by, summary_json, snapshot_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized_org_id,
+                    str(trigger_action or "manual_scan").strip() or "manual_scan",
+                    str(created_by or "").strip(),
+                    dumps_json(summary),
+                    dumps_json(snapshot),
+                    timestamp,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def get_snapshot_record(
+        self,
+        snapshot_id: int,
+        *,
+        org_id: Optional[str] = None,
+    ) -> Optional[DataQualitySnapshotRecord]:
+        normalized_org_id = self._resolve_org_id(org_id)
+        if normalized_org_id:
+            row = self._fetchone(
+                """
+                SELECT *
+                FROM data_quality_snapshots
+                WHERE id = ?
+                  AND org_id = ?
+                LIMIT 1
+                """,
+                (int(snapshot_id), normalized_org_id),
+            )
+        else:
+            row = self._fetchone(
+                """
+                SELECT *
+                FROM data_quality_snapshots
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (int(snapshot_id),),
+            )
+        if not row:
+            return None
+        return DataQualitySnapshotRecord.from_row(row)
+
+    def get_latest_snapshot_record(self, *, org_id: Optional[str] = None) -> Optional[DataQualitySnapshotRecord]:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        row = self._fetchone(
+            """
+            SELECT *
+            FROM data_quality_snapshots
+            WHERE org_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (normalized_org_id,),
+        )
+        if not row:
+            return None
+        return DataQualitySnapshotRecord.from_row(row)
+
+    def list_snapshot_records(
+        self,
+        *,
+        org_id: Optional[str] = None,
+        limit: int = 20,
+    ) -> list[DataQualitySnapshotRecord]:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        rows = self._fetchall(
+            """
+            SELECT *
+            FROM data_quality_snapshots
+            WHERE org_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (normalized_org_id, int(limit)),
+        )
+        return [DataQualitySnapshotRecord.from_row(row) for row in rows]
+
+
+class IntegrationWebhookSubscriptionRepository(BaseRepository):
+    def upsert_subscription(
+        self,
+        *,
+        org_id: Optional[str] = None,
+        event_type: str,
+        target_url: str,
+        secret: str = "",
+        description: str = "",
+        is_enabled: bool = True,
+    ) -> IntegrationWebhookSubscriptionRecord:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        normalized_event_type = str(event_type or "").strip().lower()
+        normalized_target_url = str(target_url or "").strip()
+        if not normalized_event_type:
+            raise ValueError("event_type is required")
+        if not normalized_target_url:
+            raise ValueError("target_url is required")
+        now = utcnow_iso()
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO integration_webhook_subscriptions (
+                  org_id, event_type, target_url, secret, description,
+                  is_enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(org_id, event_type, target_url) DO UPDATE SET
+                  secret = excluded.secret,
+                  description = excluded.description,
+                  is_enabled = excluded.is_enabled,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    normalized_org_id,
+                    normalized_event_type,
+                    normalized_target_url,
+                    str(secret or "").strip(),
+                    str(description or "").strip(),
+                    1 if is_enabled else 0,
+                    now,
+                    now,
+                ),
+            )
+        record = self.get_subscription_record_by_event_url(
+            org_id=normalized_org_id,
+            event_type=normalized_event_type,
+            target_url=normalized_target_url,
+        )
+        if record is None:
+            raise ValueError("subscription could not be loaded after save")
+        return record
+
+    def get_subscription_record(
+        self,
+        subscription_id: int,
+        *,
+        org_id: Optional[str] = None,
+    ) -> Optional[IntegrationWebhookSubscriptionRecord]:
+        normalized_org_id = self._resolve_org_id(org_id)
+        if normalized_org_id:
+            row = self._fetchone(
+                """
+                SELECT *
+                FROM integration_webhook_subscriptions
+                WHERE id = ?
+                  AND org_id = ?
+                LIMIT 1
+                """,
+                (int(subscription_id), normalized_org_id),
+            )
+        else:
+            row = self._fetchone(
+                """
+                SELECT *
+                FROM integration_webhook_subscriptions
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (int(subscription_id),),
+            )
+        if not row:
+            return None
+        return IntegrationWebhookSubscriptionRecord.from_row(row)
+
+    def get_subscription_record_by_event_url(
+        self,
+        *,
+        org_id: Optional[str] = None,
+        event_type: str,
+        target_url: str,
+    ) -> Optional[IntegrationWebhookSubscriptionRecord]:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        row = self._fetchone(
+            """
+            SELECT *
+            FROM integration_webhook_subscriptions
+            WHERE org_id = ?
+              AND event_type = ?
+              AND target_url = ?
+            LIMIT 1
+            """,
+            (
+                normalized_org_id,
+                str(event_type or "").strip().lower(),
+                str(target_url or "").strip(),
+            ),
+        )
+        if not row:
+            return None
+        return IntegrationWebhookSubscriptionRecord.from_row(row)
+
+    def list_subscription_records(
+        self,
+        *,
+        org_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        enabled_only: bool = False,
+        limit: int = 100,
+    ) -> list[IntegrationWebhookSubscriptionRecord]:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        clauses = ["org_id = ?"]
+        params: list[Any] = [normalized_org_id]
+        normalized_event_type = str(event_type or "").strip().lower()
+        if normalized_event_type:
+            clauses.append("event_type = ?")
+            params.append(normalized_event_type)
+        if enabled_only:
+            clauses.append("is_enabled = 1")
+        rows = self._fetchall(
+            f"""
+            SELECT *
+            FROM integration_webhook_subscriptions
+            WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            (*params, int(limit)),
+        )
+        return [IntegrationWebhookSubscriptionRecord.from_row(row) for row in rows]
+
+    def delete_subscription(
+        self,
+        subscription_id: int,
+        *,
+        org_id: Optional[str] = None,
+    ) -> int:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        with self.db.transaction() as conn:
+            return int(
+                conn.execute(
+                    """
+                    DELETE FROM integration_webhook_subscriptions
+                    WHERE id = ?
+                      AND org_id = ?
+                    """,
+                    (int(subscription_id), normalized_org_id),
+                ).rowcount
+            )
+
+    def record_delivery_result(
+        self,
+        subscription_id: int,
+        *,
+        last_status: str,
+        last_error: str = "",
+        attempted_at: Optional[str] = None,
+    ) -> None:
+        timestamp = str(attempted_at or utcnow_iso()).strip()
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE integration_webhook_subscriptions
+                SET last_attempt_at = ?,
+                    last_status = ?,
+                    last_error = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    timestamp,
+                    str(last_status or "").strip(),
+                    str(last_error or "").strip(),
+                    timestamp,
+                    int(subscription_id),
+                ),
+            )

@@ -44,12 +44,16 @@ from sync_app.web.preflight_support import DashboardSupport
 from sync_app.web.request_support import RequestSupport
 from sync_app.web.routes_admin import register_admin_routes
 from sync_app.web.routes_advanced_sync import register_advanced_sync_routes
+from sync_app.web.routes_automation_center import register_automation_center_routes
 from sync_app.web.routes_auth import register_auth_routes
 from sync_app.web.routes_conflicts import register_conflict_routes
 from sync_app.web.routes_config import register_config_routes
+from sync_app.web.routes_data_quality import register_data_quality_routes
 from sync_app.web.routes_dashboard import register_dashboard_routes
 from sync_app.web.routes_exceptions import register_exception_routes
+from sync_app.web.routes_integrations import register_integration_routes
 from sync_app.web.routes_jobs import register_job_routes
+from sync_app.web.routes_lifecycle import register_lifecycle_routes
 from sync_app.web.routes_mappings import register_mapping_routes
 from sync_app.web.routes_metadata import register_metadata_routes
 from sync_app.web.routes_organizations import register_organization_routes
@@ -93,6 +97,10 @@ ATTRIBUTE_MAPPING_DIRECTION_LABELS = {
 }
 ADVANCED_NAV_PAGES = {
     "advanced-sync",
+    "automation-center",
+    "data-quality",
+    "integrations",
+    "lifecycle",
     "organizations",
     "mappings",
     "exceptions",
@@ -113,6 +121,7 @@ PUBLIC_AUTH_PATHS = {
 }
 PUBLIC_AUTH_PREFIXES = (
     "/static/",
+    "/api/integrations/",
 )
 
 def _safe_redirect_target(value: str | None, default: str) -> str:
@@ -367,10 +376,49 @@ def create_app(
         to_bool=_to_bool,
     )
 
+    register_automation_center_routes(
+        app,
+        flash=request_support.flash,
+        get_current_org=request_support.get_current_org,
+        reject_invalid_csrf=request_support.reject_invalid_csrf,
+        render=request_support.render,
+        require_capability=request_support.require_capability,
+        to_bool=_to_bool,
+    )
+
+    register_data_quality_routes(
+        app,
+        build_source_data_quality_snapshot=sync_support_call("build_source_data_quality_snapshot"),
+        flash=request_support.flash,
+        get_current_org=request_support.get_current_org,
+        reject_invalid_csrf=request_support.reject_invalid_csrf,
+        render=request_support.render,
+        require_capability=request_support.require_capability,
+        stream_csv=stream_csv,
+    )
+
+    register_integration_routes(
+        app,
+        flash=request_support.flash,
+        get_current_org=request_support.get_current_org,
+        reject_invalid_csrf=request_support.reject_invalid_csrf,
+        render=request_support.render,
+        require_capability=request_support.require_capability,
+        to_bool=_to_bool,
+    )
+
+    register_lifecycle_routes(
+        app,
+        flash=request_support.flash,
+        get_current_org=request_support.get_current_org,
+        reject_invalid_csrf=request_support.reject_invalid_csrf,
+        render=request_support.render,
+        require_capability=request_support.require_capability,
+    )
+
     register_job_routes(
         app,
         build_preflight_snapshot=dashboard_support.build_preflight_snapshot,
-        enqueue_replay_request=sync_support_call("enqueue_replay_request"),
         fetch_page=fetch_page,
         flash=request_support.flash,
         flash_t=request_support.flash_t,
@@ -413,13 +461,18 @@ def create_app(
         build_config_change_preview=config_support.build_config_change_preview,
         build_config_editable_override=config_support.build_config_editable_override,
         build_config_page_context=config_support.build_config_page_context,
+        build_config_release_center_context=config_support.build_config_release_center_context,
         build_source_unit_catalog=config_support.build_source_unit_catalog,
         build_target_ou_catalog=config_support.build_target_ou_catalog,
         build_config_submission=config_support.build_config_submission,
         config_preview_session_key=CONFIG_PREVIEW_SESSION_KEY,
         flash=request_support.flash,
+        flash_t=request_support.flash_t,
+        get_current_org=request_support.get_current_org,
+        publish_config_release_snapshot=config_support.publish_config_release_snapshot,
         reject_invalid_csrf=request_support.reject_invalid_csrf,
         render=request_support.render,
+        rollback_config_release_snapshot=config_support.rollback_config_release_snapshot,
         require_capability=request_support.require_capability,
         resolve_web_runtime_settings=resolve_web_runtime_settings,
         web_runtime_requires_restart=web_runtime_requires_restart,
@@ -434,6 +487,7 @@ def create_app(
         get_current_org=request_support.get_current_org,
         iter_all_pages=iter_all_pages,
         load_department_name_map=sync_support_call("load_department_name_map"),
+        normalize_optional_datetime_input=sync_support_call("normalize_optional_datetime_input"),
         parse_bulk_bindings=parse_bulk_bindings,
         parse_page_number=parse_page_number,
         reject_invalid_csrf=request_support.reject_invalid_csrf,
@@ -473,6 +527,7 @@ def create_app(
         apply_conflict_manual_binding=sync_support_call("apply_conflict_manual_binding"),
         apply_conflict_recommendation=sync_support_call("apply_conflict_recommendation"),
         apply_conflict_skip_user_sync=sync_support_call("apply_conflict_skip_user_sync"),
+        build_conflict_decision_guide=sync_support_call("build_conflict_decision_guide"),
         build_conflicts_return_url=sync_support_call("build_conflicts_return_url"),
         fetch_page=fetch_page,
         flash=request_support.flash,

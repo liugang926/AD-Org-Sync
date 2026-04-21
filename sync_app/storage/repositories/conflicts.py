@@ -325,6 +325,41 @@ class SyncPlanReviewRepository(BaseRepository):
             return None
         return SyncPlanReviewRecord.from_row(row)
 
+    def list_review_records(
+        self,
+        *,
+        status: Optional[str] = None,
+        limit: int = 50,
+        org_id: Optional[str] = None,
+    ) -> list[SyncPlanReviewRecord]:
+        normalized_org_id = normalize_org_id(org_id)
+        params: list[Any] = []
+        if normalized_org_id:
+            sql = """
+                SELECT r.*
+                FROM sync_plan_reviews AS r
+                INNER JOIN sync_jobs AS j ON j.job_id = r.job_id
+                WHERE j.org_id = ?
+            """
+            params.append(normalized_org_id)
+        else:
+            sql = """
+                SELECT *
+                FROM sync_plan_reviews
+                WHERE 1 = 1
+            """
+        if status:
+            review_status_column = "r.status" if normalized_org_id else "status"
+            sql += f" AND {review_status_column} = ?"
+            params.append(str(status or "").strip())
+        if normalized_org_id:
+            sql += " ORDER BY r.created_at DESC, r.id DESC LIMIT ?"
+        else:
+            sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        params.append(max(int(limit or 0), 1))
+        rows = self._fetchall(sql, tuple(params))
+        return [SyncPlanReviewRecord.from_row(row) for row in rows]
+
     def approve_review(
         self,
         job_id: str,
@@ -495,11 +530,13 @@ class SyncExceptionRuleRepository(BaseRepository):
                 "LOWER(rule_type) LIKE ? OR "
                 "LOWER(match_type) LIKE ? OR "
                 "LOWER(match_value) LIKE ? OR "
+                "LOWER(COALESCE(rule_owner, '')) LIKE ? OR "
+                "LOWER(COALESCE(effective_reason, '')) LIKE ? OR "
                 "LOWER(COALESCE(notes, '')) LIKE ?"
                 ")"
             )
             like_pattern = f"%{normalized_query}%"
-            params.extend([like_pattern] * 4)
+            params.extend([like_pattern] * 6)
         where_clause = " WHERE " + " AND ".join(clauses)
         total = self._fetchcount(
             f"""
@@ -616,8 +653,9 @@ class SyncExceptionRuleRepository(BaseRepository):
                     """
                     UPDATE sync_exception_rules
                     SET last_matched_at = ?,
-                        is_enabled = CASE WHEN is_once = 1 THEN 0 ELSE is_enabled END,
-                        updated_at = ?
+                        last_hit_at = ?,
+                        hit_count = COALESCE(hit_count, 0) + 1,
+                        is_enabled = CASE WHEN is_once = 1 THEN 0 ELSE is_enabled END
                     WHERE org_id = ?
                       AND rule_type = ?
                       AND match_type = ?
@@ -638,8 +676,9 @@ class SyncExceptionRuleRepository(BaseRepository):
                     """
                     UPDATE sync_exception_rules
                     SET last_matched_at = ?,
-                        is_enabled = CASE WHEN is_once = 1 THEN 0 ELSE is_enabled END,
-                        updated_at = ?
+                        last_hit_at = ?,
+                        hit_count = COALESCE(hit_count, 0) + 1,
+                        is_enabled = CASE WHEN is_once = 1 THEN 0 ELSE is_enabled END
                     WHERE rule_type = ?
                       AND match_type = ?
                       AND match_value = ?
@@ -654,6 +693,78 @@ class SyncExceptionRuleRepository(BaseRepository):
                     ),
                 )
 
+    def update_governance_metadata(
+        self,
+        *,
+        rule_type: str,
+        match_value: str,
+        match_type: Optional[str] = None,
+        org_id: Optional[str] = None,
+        rule_owner: str | None = None,
+        effective_reason: str | None = None,
+        next_review_at: str | None = None,
+        last_reviewed_at: str | None = None,
+    ) -> None:
+        normalized_rule_type, normalized_match_type, normalized_match_value = self._normalize_rule_inputs(
+            rule_type=rule_type,
+            match_type=match_type,
+            match_value=match_value,
+        )
+        normalized_org_id = self._resolve_org_id(org_id)
+        updates: list[str] = []
+        params: list[Any] = []
+        if rule_owner is not None:
+            updates.append("rule_owner = ?")
+            params.append(str(rule_owner or "").strip())
+        if effective_reason is not None:
+            updates.append("effective_reason = ?")
+            params.append(str(effective_reason or "").strip())
+        if next_review_at is not None:
+            updates.append("next_review_at = ?")
+            params.append(str(next_review_at or "").strip())
+        if last_reviewed_at is not None:
+            updates.append("last_reviewed_at = ?")
+            params.append(str(last_reviewed_at or "").strip())
+        if not updates:
+            return
+        updates.append("updated_at = ?")
+        params.append(utcnow_iso())
+        with self.db.transaction() as conn:
+            if normalized_org_id:
+                conn.execute(
+                    f"""
+                    UPDATE sync_exception_rules
+                    SET {", ".join(updates)}
+                    WHERE org_id = ?
+                      AND rule_type = ?
+                      AND match_type = ?
+                      AND match_value = ?
+                    """,
+                    (
+                        *params,
+                        normalized_org_id,
+                        normalized_rule_type,
+                        normalized_match_type,
+                        normalized_match_value,
+                    ),
+                )
+            else:
+                conn.execute(
+                    f"""
+                    UPDATE sync_exception_rules
+                    SET {", ".join(updates)}
+                    WHERE rule_type = ?
+                      AND match_type = ?
+                      AND match_value = ?
+                    """,
+                    (
+                        *params,
+                        normalized_rule_type,
+                        normalized_match_type,
+                        normalized_match_value,
+                    ),
+                )
+
     def set_enabled(self, rule_id: int, enabled: bool, *, org_id: Optional[str] = None) -> None:
         normalized_org_id = self._resolve_org_id(org_id)
         with self.db.transaction() as conn:
@@ -662,21 +773,23 @@ class SyncExceptionRuleRepository(BaseRepository):
                     """
                     UPDATE sync_exception_rules
                     SET is_enabled = ?,
+                        last_reviewed_at = ?,
                         updated_at = ?
                     WHERE id = ?
                       AND org_id = ?
                     """,
-                    (1 if enabled else 0, utcnow_iso(), int(rule_id), normalized_org_id),
+                    (1 if enabled else 0, utcnow_iso(), utcnow_iso(), int(rule_id), normalized_org_id),
                 )
             else:
                 conn.execute(
                     """
                     UPDATE sync_exception_rules
                     SET is_enabled = ?,
+                        last_reviewed_at = ?,
                         updated_at = ?
                     WHERE id = ?
                     """,
-                    (1 if enabled else 0, utcnow_iso(), int(rule_id)),
+                    (1 if enabled else 0, utcnow_iso(), utcnow_iso(), int(rule_id)),
                 )
 
     def delete_rule(self, rule_id: int, *, org_id: Optional[str] = None) -> None:

@@ -155,6 +155,101 @@
   {% endcall %}
   {% endif %}
 
+  {% if job_comparison_sections %}
+  {% call ui.panel(t("Change Comparison")) %}
+    {% for section in job_comparison_sections %}
+    {% set diff = section.comparison %}
+    <section class="subcard stack-md">
+      <div class="section-header">
+        <div class="section-header__copy">
+          <h3 class="section-header__title">{{ t(section.label) }}</h3>
+          <p class="section-header__description">
+            {% if diff.baseline_job_id %}
+            <a href="/jobs/{{ diff.baseline_job_id }}">{{ diff.baseline_job_id }}</a>
+            {% else %}
+            -
+            {% endif %}
+            / {{ diff.baseline_started_at or "-" }}
+          </p>
+        </div>
+        {{ ui.badge(t("Changed") if diff.changed else t("No Material Change"), ("warning" if diff.changed else "success")) }}
+      </div>
+
+      <div class="compact-stats">
+        {{ ui.compact_stat(t("Ops Added"), diff.operation_diff.added_count) }}
+        {{ ui.compact_stat(t("Ops Removed"), diff.operation_diff.removed_count) }}
+        {{ ui.compact_stat(t("Ops Changed"), diff.operation_diff.changed_count) }}
+        {{ ui.compact_stat(t("Conflict Changes"), diff.conflict_diff.added_count + diff.conflict_diff.removed_count + diff.conflict_diff.changed_count) }}
+        {{ ui.compact_stat(t("High-Risk Delta"), diff.summary_delta.high_risk_operation_delta) }}
+      </div>
+
+      <div class="detail-grid">
+        <div class="detail-item">
+          <div class="label">{{ t("Planned Delta") }}</div>
+          <div class="value">{{ diff.summary_delta.planned_operation_delta }}</div>
+        </div>
+        <div class="detail-item">
+          <div class="label">{{ t("Conflict Delta") }}</div>
+          <div class="value">{{ diff.summary_delta.conflict_delta }}</div>
+        </div>
+        <div class="detail-item">
+          <div class="label">{{ t("Error Delta") }}</div>
+          <div class="value">{{ diff.summary_delta.error_delta }}</div>
+        </div>
+        <div class="detail-item">
+          <div class="label">{{ t("Overall Status") }}</div>
+          <div class="value">{{ ui.badge(t(diff.overall_status|capitalize), diff.overall_status) }}</div>
+        </div>
+      </div>
+
+      {% if diff.operation_diff.object_type_breakdown %}
+      <div class="stack-tight">
+        <div class="cell-strong">{{ t("Changed Target Objects") }}</div>
+        {% for item in diff.operation_diff.object_type_breakdown %}
+        <div class="panel-note info">
+          <strong>{{ item.name }}</strong>
+          <div class="muted">
+            {{ t("Added") }} {{ item.added_count }} /
+            {{ t("Removed") }} {{ item.removed_count }} /
+            {{ t("Changed") }} {{ item.changed_count }}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if diff.conflict_diff.conflict_type_breakdown %}
+      <div class="stack-tight">
+        <div class="cell-strong">{{ t("Changed Conflict Types") }}</div>
+        {% for item in diff.conflict_diff.conflict_type_breakdown %}
+        <div class="panel-note warning">
+          <strong>{{ item.name }}</strong>
+          <div class="muted">
+            {{ t("Added") }} {{ item.added_count }} /
+            {{ t("Removed") }} {{ item.removed_count }} /
+            {{ t("Changed") }} {{ item.changed_count }}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if diff.highlights %}
+      <div class="stack-tight">
+        <div class="cell-strong">{{ t("Highlights") }}</div>
+        {% for item in diff.highlights %}
+        <div class="panel-note info">
+          <strong>{{ item.title }}</strong>
+          <div class="muted">{{ item.detail }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </section>
+    {% endfor %}
+  {% endcall %}
+  {% endif %}
+
   {% call ui.panel(t("Planned Operations")) %}
     {% call ui.table_shell() %}
       <table class="table-sm">

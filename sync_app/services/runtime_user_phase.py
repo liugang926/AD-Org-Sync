@@ -110,13 +110,21 @@ def plan_user_actions(
         connector_ad_sync = get_ad_sync(connector_id)
         connector_domain = connector_spec["config"].domain
         display_name = user.name
-        override_record = ctx.repositories.department_override_repo.get_override_record_by_source_user_id(userid)
+        override_record = ctx.repositories.department_override_repo.get_override_record_by_source_user_id(
+            userid,
+            org_id=ctx.organization.org_id,
+        )
         override_department_id = None
         if override_record and override_record.primary_department_id:
             try:
                 override_department_id = int(override_record.primary_department_id)
             except (TypeError, ValueError):
                 override_department_id = None
+        if override_department_id is not None:
+            ctx.repositories.department_override_repo.record_rule_hit_for_source_user(
+                userid,
+                org_id=ctx.organization.org_id,
+            )
 
         target_dept, placement_reason = resolve_target_department(
             info,

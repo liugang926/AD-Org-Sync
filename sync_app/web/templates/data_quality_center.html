@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Data Quality Center"), t("Track source-directory quality over time, keep an eye on naming and routing risk, and export a repair list that HR or source-system owners can work through."), eyebrow=t("Operations"), badge_text=t("Organization Scope"), badge_level="info") %}
+    <form method="post" action="/data-quality/run" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {{ ui.button(t("Run Snapshot"), type="submit", variant="secondary", icon="refresh-cw") }}
+    </form>
+    {% if selected_snapshot %}
+    {{ ui.button(t("Export Repair List"), href=("/data-quality/export?snapshot_id=" ~ selected_snapshot.id), variant="ghost", icon="download") }}
+    {% endif %}
+    {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost", icon="waypoints") }}
+    {{ ui.button(t("Open Jobs"), href="/jobs", variant="ghost", icon="refresh-cw") }}
+  {% endcall %}
+
+  <div class="compact-stats">
+    {{ ui.compact_stat(t("Snapshots"), snapshot_count) }}
+    {{ ui.compact_stat(t("Total Users"), selected_summary.total_users or 0) }}
+    {{ ui.compact_stat(t("Department Anomalies"), selected_summary.department_anomaly_count or 0) }}
+    {{ ui.compact_stat(t("Naming Risks"), selected_summary.naming_risk_count or 0) }}
+    {{ ui.compact_stat(t("Duplicate Identifiers"), (selected_summary.duplicate_email_count or 0) + (selected_summary.duplicate_employee_id_count or 0)) }}
+    {{ ui.compact_stat(t("Error Issues"), selected_summary.error_issue_count or 0, detail=t("Warning issues: {count}", count=(selected_summary.warning_issue_count or 0))) }}
+  </div>
+
+  <div class="dense-two-col">
+    {% call ui.helper_block(t("What This Page Solves"), t("The old on-demand scan was useful for a point-in-time check. This center keeps history so admins can see whether data quality is improving or drifting before production apply."), "info") %}
+      <ul class="helper-list">
+        <li>{{ t("Watch missing email, missing employee ID, duplicate email, and duplicate employee ID over time.") }}</li>
+        <li>{{ t("Track department anomalies caused by missing departments, routing ambiguity, or placement gaps.") }}</li>
+        <li>{{ t("Keep a focused list of high-risk naming and routing users that deserve admin review.") }}</li>
+      </ul>
+    {% endcall %}
+    {% call ui.helper_block(t("Recommended Operating Loop"), t("Run a fresh snapshot before large dry runs, after source clean-up batches, and before the first unattended apply window."), "warning") %}
+      <ul class="helper-list">
+        <li>{{ t("Use the trend table to answer whether the backlog is moving in the right direction.") }}</li>
+        <li>{{ t("Use Export Repair List when you need to hand fixes back to HR or the source-directory owner.") }}</li>
+        <li>{{ t("If naming or routing blockers keep growing, fix those before broadening connector scope.") }}</li>
+      </ul>
+    {% endcall %}
+  </div>
+
+  {% if not has_snapshots %}
+  {% call ui.empty_state(t("No snapshots yet"), t("Run the first snapshot to capture trend history and generate a repair list."), "warning") %}
+    <form method="post" action="/data-quality/run" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {{ ui.button(t("Run First Snapshot"), type="submit", icon="refresh-cw") }}
+    </form>
+  {% endcall %}
+  {% else %}
+  {% call ui.panel(t("Selected Snapshot"), description=t("Review the current quality posture for the selected snapshot. Use the history table below to jump across older runs."), class_name="toolbar-card") %}
+    <div class="detail-grid">
+      <div class="detail-item"><div class="label">{{ t("Snapshot") }}</div><div class="value">{{ selected_snapshot_title or "-" }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Generated At") }}</div><div class="value">{{ selected_snapshot.created_at or "-" }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Created By") }}</div><div class="value">{{ selected_snapshot.created_by or "-" }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Trigger") }}</div><div class="value">{{ selected_snapshot.trigger_action or "-" }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Users Missing Email") }}</div><div class="value">{{ selected_summary.users_missing_email or 0 }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Users Missing Employee ID") }}</div><div class="value">{{ selected_summary.users_missing_employee_id or 0 }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Department Anomalies") }}</div><div class="value">{{ selected_summary.department_anomaly_count or 0 }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Naming Risks") }}</div><div class="value">{{ selected_summary.naming_risk_count or 0 }}</div></div>
+    </div>
+    {% if selected_analysis_notes %}
+    <div class="panel-note info">
+      <ul class="list-compact">
+        {% for note in selected_analysis_notes %}
+        <li>{{ t(note) }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  {% endcall %}
+
+  {% call ui.panel(t("Trend History"), description=t("These snapshot rows turn one-off analysis into an operational trend. Choose a snapshot to inspect its issue list and repair backlog.")) %}
+    {% call ui.table_shell() %}
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t("Snapshot") }}</th>
+          <th>{{ t("Generated At") }}</th>
+          <th>{{ t("Users") }}</th>
+          <th>{{ t("Missing Email") }}</th>
+          <th>{{ t("Missing Employee ID") }}</th>
+          <th>{{ t("Department Anomalies") }}</th>
+          <th>{{ t("Naming Risks") }}</th>
+          <th>{{ t("Duplicate Identifiers") }}</th>
+          <th>{{ t("Issues") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in snapshots %}
+        <tr>
+          <td>
+            <a href="{{ '/data-quality?snapshot_id=' ~ row.snapshot.id }}">{{ row.title }}</a>
+            {% if row.is_selected %}
+            <div class="muted">{{ t("Selected") }}</div>
+            {% endif %}
+          </td>
+          <td>{{ row.snapshot.created_at or "-" }}</td>
+          <td>{{ row.summary.total_users or 0 }}</td>
+          <td>{{ row.summary.users_missing_email or 0 }}</td>
+          <td>{{ row.summary.users_missing_employee_id or 0 }}</td>
+          <td>{{ row.department_anomaly_count }}</td>
+          <td>{{ row.naming_risk_count }}</td>
+          <td>{{ row.duplicate_identifier_count }}</td>
+          <td>
+            {{ ui.badge(t("Errors") ~ ': ' ~ (row.summary.error_issue_count or 0), "error") }}
+            {{ ui.badge(t("Warnings") ~ ': ' ~ (row.summary.warning_issue_count or 0), "warning") }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endcall %}
+  {% endcall %}
+
+  <div class="grid cols-2">
+    {% call ui.panel(t("Current Issue Summary"), description=t("This is the categorized backlog for the selected snapshot. Use it to decide what should block dry run or apply.")) %}
+      {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Issue") }}</th>
+            <th>{{ t("Severity") }}</th>
+            <th>{{ t("Count") }}</th>
+            <th>{{ t("Recommended Action") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for issue in selected_issues %}
+          <tr>
+            <td>{{ issue.label or "-" }}</td>
+            <td>{{ ui.badge(t(issue.severity|capitalize), ("error" if issue.severity == "error" else "warning")) }}</td>
+            <td>{{ issue.count or 0 }}</td>
+            <td>{{ issue.action or "-" }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="table-empty">{{ t("No issues captured for this snapshot.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endcall %}
+    {% endcall %}
+
+    {% call ui.panel(t("High-Risk User List"), description=t("Focus here first when naming, routing, or placement blockers could create unsafe sync behavior.")) %}
+      {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Category") }}</th>
+            <th>{{ t("Title") }}</th>
+            <th>{{ t("Connector") }}</th>
+            <th>{{ t("Detail") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in high_risk_items %}
+          <tr>
+            <td>{{ ui.badge(item.label or "-", ("error" if item.severity == "error" else "warning")) }}</td>
+            <td>{{ item.title or "-" }}</td>
+            <td>{{ item.connector_name or item.connector_id or "-" }}</td>
+            <td>{{ item.detail or "-" }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="table-empty">{{ t("No high-risk users are listed for this snapshot.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endcall %}
+    {% endcall %}
+  </div>
+
+  <div class="grid cols-2">
+    {% call ui.panel(t("Repair Export Preview"), description=t("These rows are what the CSV export will hand to HR or source-system owners. The table below shows the first few records from the current snapshot.")) %}
+      <div class="actions">
+        {{ ui.button(t("Download CSV"), href=("/data-quality/export?snapshot_id=" ~ selected_snapshot.id), variant="secondary", icon="download") }}
+      </div>
+      {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Issue") }}</th>
+            <th>{{ t("Title") }}</th>
+            <th>{{ t("Source User") }}</th>
+            <th>{{ t("Detail") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in selected_repair_items_preview %}
+          <tr>
+            <td>{{ item.label or "-" }}</td>
+            <td>{{ item.title or "-" }}</td>
+            <td>{{ item.source_user_id or (item.source_user_ids|join(", ") if item.source_user_ids else "-") }}</td>
+            <td>{{ item.detail or "-" }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="table-empty">{{ t("No repair rows were captured for this snapshot.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endcall %}
+      <div class="muted">{{ t("Total export rows") }}: {{ selected_repair_item_count }}</div>
+    {% endcall %}
+
+    {% call ui.panel(t("Connector Breakdown"), description=t("Use this view to see how many source users currently land under each connector scope or unresolved bucket.")) %}
+      {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Connector") }}</th>
+            <th>{{ t("Connector ID") }}</th>
+            <th>{{ t("User Count") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in selected_connector_breakdown %}
+          <tr>
+            <td>{{ row.name or "-" }}</td>
+            <td>{{ row.connector_id or "-" }}</td>
+            <td>{{ row.user_count or 0 }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="3" class="table-empty">{{ t("No connector breakdown was captured for this snapshot.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endcall %}
+    {% endcall %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

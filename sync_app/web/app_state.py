@@ -8,7 +8,9 @@ from fastapi import FastAPI
 
 from sync_app.storage.local_db import (
     AttributeMappingRuleRepository,
+    ConfigReleaseSnapshotRepository,
     CustomManagedGroupBindingRepository,
+    DataQualitySnapshotRepository,
     DatabaseManager,
     DepartmentOuMappingRepository,
     GroupExclusionRuleRepository,
@@ -20,6 +22,7 @@ from sync_app.storage.local_db import (
     SyncConnectorRepository,
     SyncConflictRepository,
     SyncEventRepository,
+    IntegrationWebhookSubscriptionRepository,
     SyncExceptionRuleRepository,
     SyncJobRepository,
     SyncOperationLogRepository,
@@ -61,6 +64,9 @@ class WebRepositoryState:
     exception_rule_repo: SyncExceptionRuleRepository
     user_repo: WebAdminUserRepository
     audit_repo: WebAuditLogRepository
+    config_release_snapshot_repo: ConfigReleaseSnapshotRepository
+    data_quality_snapshot_repo: DataQualitySnapshotRepository
+    integration_webhook_subscription_repo: IntegrationWebhookSubscriptionRepository
     user_binding_repo: UserIdentityBindingRepository
     department_override_repo: UserDepartmentOverrideRepository
 
@@ -127,6 +133,9 @@ def initialize_web_app_state(
         exception_rule_repo=SyncExceptionRuleRepository(db_manager),
         user_repo=WebAdminUserRepository(db_manager),
         audit_repo=WebAuditLogRepository(db_manager),
+        config_release_snapshot_repo=ConfigReleaseSnapshotRepository(db_manager),
+        data_quality_snapshot_repo=DataQualitySnapshotRepository(db_manager),
+        integration_webhook_subscription_repo=IntegrationWebhookSubscriptionRepository(db_manager),
         user_binding_repo=UserIdentityBindingRepository(db_manager),
         department_override_repo=UserDepartmentOverrideRepository(db_manager),
     )

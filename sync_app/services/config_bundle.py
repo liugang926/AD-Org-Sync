@@ -19,10 +19,11 @@ from sync_app.storage.local_db import (
 BUNDLE_TYPE = "organization_config_bundle"
 BUNDLE_VERSION = 1
 VOLATILE_ORG_SETTINGS = {"last_sync_time", "last_sync_success"}
+SENSITIVE_ORG_SETTINGS = {"integration_api_token"}
 EXPORTABLE_ORG_SETTINGS = tuple(
     key
     for key in sorted(ORG_SCOPED_APP_SETTINGS)
-    if key not in VOLATILE_ORG_SETTINGS
+    if key not in VOLATILE_ORG_SETTINGS | SENSITIVE_ORG_SETTINGS
 )
 
 

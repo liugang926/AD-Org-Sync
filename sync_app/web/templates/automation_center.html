@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+{% call ui.page_header(t("Notification And Automation Center"), t("Centralize rollout reminders, webhook delivery, and the safety rules that decide whether scheduled apply is allowed to continue."), eyebrow=t("Operations"), badge_text=t("Organization Scope"), badge_level="info") %}
+  {{ ui.button(t("Open Jobs"), href="/jobs", variant="ghost", icon="refresh-cw") }}
+  {{ ui.button(t("Open Conflicts"), href="/conflicts", variant="ghost", icon="shield-alert") }}
+  {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost", icon="waypoints") }}
+{% endcall %}
+
+<div class="dense-two-col">
+  {% call ui.helper_block(t("What This Center Does"), t("Use one page to answer three questions before unattended execution: will anyone be notified, is there backlog to clear, and is scheduled apply still safe to run?"), "info") %}
+    <ul class="helper-list">
+      <li>{{ t("Dry run failure and review reminders use the configured webhook URL.") }}</li>
+      <li>{{ t("Conflict backlog and rule-governance reminders help operators catch growing operational debt early.") }}</li>
+      <li>{{ t("Scheduled apply can be held behind a fresh dry run, zero conflicts, and approval state.") }}</li>
+    </ul>
+  {% endcall %}
+  {% call ui.helper_block(t("Channel Summary"), t("This center reuses the organization webhook and schedule settings. Schedule time is still edited from Config."), "warning") %}
+    <ul class="helper-list">
+      <li>{{ t("Webhook") }}: {{ notification_channel.webhook_masked if notification_channel.webhook_configured else t("Not configured") }}</li>
+      <li>{{ t("Daily Schedule Time") }}: {{ notification_channel.schedule_time or "-" }}</li>
+      <li>{{ t("Scheduled Mode") }}: {{ t(notification_channel.schedule_execution_mode|replace('_', ' ')) }}</li>
+    </ul>
+  {% endcall %}
+</div>
+
+<div class="compact-stats">
+  {{ ui.compact_stat(t("Active Signals"), active_signal_count) }}
+  {{ ui.compact_stat(t("Open Conflicts"), open_conflict_count) }}
+  {{ ui.compact_stat(t("Pending Reviews"), pending_review_count) }}
+  {{ ui.compact_stat(t("Rule Reminders"), rule_governance_issue_count) }}
+  {{ ui.compact_stat(t("Schedule Mode"), notification_channel.schedule_execution_mode|replace('_', ' ')|title) }}
+  {{ ui.compact_stat(t("Scheduled Apply"), (t("Dry Run Only") if scheduled_apply_guard.mode != "apply" else (t("Ready") if scheduled_apply_guard.allowed else t("Blocked")))) }}
+</div>
+
+{% if notification_warnings %}
+{% call ui.panel(t("Delivery Warnings"), description=t("Fix these first so notification policies can actually reach operators.")) %}
+  <div class="list-stack">
+    {% for item in notification_warnings %}
+    <div class="panel-note warning">{{ t(item) }}</div>
+    {% endfor %}
+  </div>
+{% endcall %}
+{% endif %}
+
+<div class="grid cols-2">
+  {% call ui.panel(t("Current Signals"), description=t("These are the signals that currently matter for this organization, regardless of whether notification delivery is enabled yet.")) %}
+    <div class="list-stack">
+      {% for signal in signals %}
+      <article class="subcard stack-tight">
+        <div class="stack-row">
+          <div>
+            <strong>{{ t(signal.label) }}</strong>
+            <div class="muted">{{ signal.description }}</div>
+          </div>
+          {{ ui.badge(t(signal.status|capitalize), signal.status) }}
+        </div>
+        <div class="dense-meta">
+          <div><strong>{{ t("Current Value") }}:</strong> {{ signal.value }}</div>
+          <div><strong>{{ t("Policy") }}:</strong> {{ t("Enabled") if signal.enabled else t("Disabled") }}</div>
+        </div>
+        <div class="muted">{{ signal.action }}</div>
+      </article>
+      {% endfor %}
+    </div>
+  {% endcall %}
+
+  {% call ui.panel(t("Scheduled Apply Readiness"), description=t("This is the actual release gate used for unattended apply when schedule mode is set to apply.")) %}
+    <div class="page-stack tight">
+      <div class="stack-row">
+        <div>
+          <strong>{{ scheduled_apply_guard.summary }}</strong>
+          <div class="muted">{{ t("Latest successful dry run") }}:
+            {% if scheduled_apply_guard.latest_successful_dry_run %}
+            <a href="/jobs/{{ scheduled_apply_guard.latest_successful_dry_run.job_id }}">{{ scheduled_apply_guard.latest_successful_dry_run.job_id }}</a>
+            {% else %}
+            -
+            {% endif %}
+          </div>
+        </div>
+        {{ ui.badge(t(scheduled_apply_guard.status|capitalize), scheduled_apply_guard.status) }}
+      </div>
+      <div class="dense-meta">
+        <div><strong>{{ t("Gate Enabled") }}:</strong> {{ t("Yes") if scheduled_apply_guard.gate_enabled else t("No") }}</div>
+        <div><strong>{{ t("Open Conflicts") }}:</strong> {{ scheduled_apply_guard.open_conflict_count }}</div>
+        <div><strong>{{ t("Review Approval Needed") }}:</strong> {{ t("Yes") if scheduled_apply_guard.review_required else t("No") }}</div>
+        <div><strong>{{ t("Dry Run Age") }}:</strong>
+          {% if scheduled_apply_guard.dry_run_age_hours is not none %}
+          {{ "%.1f"|format(scheduled_apply_guard.dry_run_age_hours) }}h
+          {% else %}
+          -
+          {% endif %}
+        </div>
+      </div>
+      {% if scheduled_apply_guard.reasons %}
+      <ul class="helper-list">
+        {% for reason in scheduled_apply_guard.reasons %}
+        <li>{{ t(reason) }}</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="panel-note success">{{ t("No blocking reason is active right now.") }}</div>
+      {% endif %}
+    </div>
+  {% endcall %}
+</div>
+
+{% call ui.panel(t("Policy Settings"), description=t("These controls decide which dry-run outcomes should send reminders and when scheduled apply must stop and wait for a human.")) %}
+  <form method="post" action="/automation-center/policies" class="page-stack tight">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-grid">
+      <div class="form-group">
+        <label for="schedule_execution_mode">{{ t("Scheduled Mode") }}</label>
+        <select id="schedule_execution_mode" name="schedule_execution_mode">
+          <option value="apply" {% if policy_settings.schedule_execution_mode == "apply" %}selected{% endif %}>{{ t("Apply") }}</option>
+          <option value="dry_run" {% if policy_settings.schedule_execution_mode == "dry_run" %}selected{% endif %}>{{ t("Dry Run") }}</option>
+        </select>
+        <div class="muted">{{ t("Choose whether the schedule is allowed to execute production apply or only dry run.") }}</div>
+      </div>
+      <div class="form-group">
+        <label for="ops_notify_conflict_backlog_threshold">{{ t("Conflict Backlog Threshold") }}</label>
+        <input id="ops_notify_conflict_backlog_threshold" type="number" min="1" name="ops_notify_conflict_backlog_threshold" value="{{ policy_settings.notify_conflict_backlog_threshold }}">
+        <div class="muted">{{ t("Send a reminder after dry run when open conflicts reach at least this count.") }}</div>
+      </div>
+      <div class="form-group">
+        <label for="ops_scheduled_apply_max_dry_run_age_hours">{{ t("Max Dry Run Age (Hours)") }}</label>
+        <input id="ops_scheduled_apply_max_dry_run_age_hours" type="number" min="1" name="ops_scheduled_apply_max_dry_run_age_hours" value="{{ policy_settings.scheduled_apply_max_dry_run_age_hours }}">
+        <div class="muted">{{ t("Scheduled apply must wait for a newer successful dry run once this age limit is exceeded.") }}</div>
+      </div>
+    </div>
+
+    <div class="form-grid">
+      <div class="form-group">
+        <label class="inline-checkbox">
+          <input type="checkbox" name="ops_notify_dry_run_failure_enabled" value="1" {% if policy_settings.notify_dry_run_failure_enabled %}checked{% endif %}>
+          {{ t("Notify when dry run fails") }}
+        </label>
+      </div>
+      <div class="form-group">
+        <label class="inline-checkbox">
+          <input type="checkbox" name="ops_notify_conflict_backlog_enabled" value="1" {% if policy_settings.notify_conflict_backlog_enabled %}checked{% endif %}>
+          {{ t("Notify when conflict backlog grows") }}
+        </label>
+      </div>
+      <div class="form-group">
+        <label class="inline-checkbox">
+          <input type="checkbox" name="ops_notify_review_pending_enabled" value="1" {% if policy_settings.notify_review_pending_enabled %}checked{% endif %}>
+          {{ t("Notify when high-risk approval is pending") }}
+        </label>
+      </div>
+      <div class="form-group">
+        <label class="inline-checkbox">
+          <input type="checkbox" name="ops_notify_rule_governance_enabled" value="1" {% if policy_settings.notify_rule_governance_enabled %}checked{% endif %}>
+          {{ t("Notify when rules are expiring or overdue for review") }}
+        </label>
+      </div>
+      <div class="form-group">
+        <label class="inline-checkbox">
+          <input type="checkbox" name="ops_scheduled_apply_gate_enabled" value="1" {% if policy_settings.scheduled_apply_gate_enabled %}checked{% endif %}>
+          {{ t("Enable scheduled apply safety gate") }}
+        </label>
+      </div>
+      <div class="form-group">
+        <label class="inline-checkbox">
+          <input type="checkbox" name="ops_scheduled_apply_requires_zero_conflicts" value="1" {% if policy_settings.scheduled_apply_requires_zero_conflicts %}checked{% endif %}>
+          {{ t("Require zero open conflicts before scheduled apply") }}
+        </label>
+      </div>
+      <div class="form-group">
+        <label class="inline-checkbox">
+          <input type="checkbox" name="ops_scheduled_apply_requires_review_approval" value="1" {% if policy_settings.scheduled_apply_requires_review_approval %}checked{% endif %}>
+          {{ t("Require approved high-risk review before scheduled apply") }}
+        </label>
+      </div>
+    </div>
+
+    <div class="actions">
+      {{ ui.button(t("Save Policies"), type="submit") }}
+      {{ ui.button(t("Open Config"), href="/config", variant="secondary") }}
+    </div>
+  </form>
+{% endcall %}
+
+{% if pending_review_records %}
+{% call ui.panel(t("Pending Review Queue"), description=t("These dry runs still need an approval decision before high-risk apply is considered safe.")) %}
+  <table>
+    <thead>
+      <tr>
+        <th>{{ t("Job") }}</th>
+        <th>{{ t("Status") }}</th>
+        <th>{{ t("High-Risk Changes") }}</th>
+        <th>{{ t("Created At") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in pending_review_records %}
+      <tr>
+        <td><a href="/jobs/{{ item.job_id }}">{{ item.job_id }}</a></td>
+        <td>{{ ui.badge(t(item.status), "warning") }}</td>
+        <td>{{ item.high_risk_operation_count }}</td>
+        <td>{{ item.created_at or "-" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endcall %}
+{% endif %}
+{% endblock %}

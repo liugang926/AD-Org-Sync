@@ -25,7 +25,14 @@ from sync_app.storage.repositories.groups import (
 )
 from sync_app.storage.repositories.lifecycle import OffboardingQueueRepository, UserLifecycleQueueRepository
 from sync_app.storage.repositories.state import ObjectStateRepository
-from sync_app.storage.repositories.system import SettingsRepository, SyncReplayRequestRepository, WebAuditLogRepository
+from sync_app.storage.repositories.system import (
+    ConfigReleaseSnapshotRepository,
+    DataQualitySnapshotRepository,
+    IntegrationWebhookSubscriptionRepository,
+    SettingsRepository,
+    SyncReplayRequestRepository,
+    WebAuditLogRepository,
+)
 
 __all__ = [
     "WebAdminUserRepository",
@@ -52,4 +59,7 @@ __all__ = [
     "SettingsRepository",
     "SyncReplayRequestRepository",
     "WebAuditLogRepository",
+    "ConfigReleaseSnapshotRepository",
+    "DataQualitySnapshotRepository",
+    "IntegrationWebhookSubscriptionRepository",
 ]

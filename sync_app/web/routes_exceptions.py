@@ -11,6 +11,7 @@ from sync_app.core.exception_rules import (
     get_exception_rule_definition,
     normalize_exception_rule_type,
 )
+from sync_app.storage.local_db import utcnow_iso
 from sync_app.web.rule_governance import build_rule_governance_summary
 
 
@@ -107,6 +108,9 @@ def register_exception_routes(
         csrf_token: str = Form(""),
         rule_type: str = Form(...),
         match_value: str = Form(...),
+        rule_owner: str = Form(""),
+        effective_reason: str = Form(""),
+        next_review_at: str = Form(""),
         notes: str = Form(""),
         expires_at: str = Form(""),
         is_once: Optional[str] = Form(None),
@@ -132,12 +136,14 @@ def register_exception_routes(
                 return RedirectResponse(url="/exceptions", status_code=303)
         try:
             normalized_expires_at = normalize_optional_datetime_input(expires_at)
+            normalized_next_review_at = normalize_optional_datetime_input(next_review_at)
         except ValueError as exc:
             flash(request, "error", str(exc))
             return RedirectResponse(url="/exceptions", status_code=303)
 
         try:
             current_org = get_current_org(request)
+            reviewed_at = utcnow_iso()
             request.app.state.exception_rule_repo.upsert_rule(
                 rule_type=normalized_rule_type,
                 match_value=normalized_match_value,
@@ -145,6 +151,15 @@ def register_exception_routes(
                 notes=notes.strip(),
                 expires_at=normalized_expires_at,
                 is_once=to_bool(is_once, False),
+            )
+            request.app.state.exception_rule_repo.update_governance_metadata(
+                rule_type=normalized_rule_type,
+                match_value=normalized_match_value,
+                org_id=current_org.org_id,
+                rule_owner=rule_owner,
+                effective_reason=effective_reason,
+                next_review_at=normalized_next_review_at,
+                last_reviewed_at=reviewed_at,
             )
         except ValueError as exc:
             flash(request, "error", str(exc))
@@ -177,6 +192,8 @@ def register_exception_routes(
                 "match_value": normalized_match_value,
                 "expires_at": normalized_expires_at,
                 "is_once": to_bool(is_once, False),
+                "rule_owner": str(rule_owner or "").strip(),
+                "next_review_at": normalized_next_review_at,
             },
         )
         flash(request, "success", "Exception rule saved")
@@ -206,6 +223,7 @@ def register_exception_routes(
         imported_count = 0
         import_errors: list[str] = []
         current_org = get_current_org(request)
+        reviewed_at = utcnow_iso()
         for row in rows:
             normalized_rule_type = normalize_exception_rule_type(row["rule_type"])
             rule_definition = get_exception_rule_definition(normalized_rule_type)
@@ -221,6 +239,7 @@ def register_exception_routes(
                     continue
             try:
                 normalized_expires_at = normalize_optional_datetime_input(str(row["expires_at"]))
+                normalized_next_review_at = normalize_optional_datetime_input(str(row.get("next_review_at") or ""))
                 request.app.state.exception_rule_repo.upsert_rule(
                     rule_type=normalized_rule_type,
                     match_value=str(row["match_value"]),
@@ -229,6 +248,15 @@ def register_exception_routes(
                     is_enabled=bool(row["is_enabled"]),
                     expires_at=normalized_expires_at,
                     is_once=bool(row["is_once"]),
+                )
+                request.app.state.exception_rule_repo.update_governance_metadata(
+                    rule_type=normalized_rule_type,
+                    match_value=str(row["match_value"]),
+                    org_id=current_org.org_id,
+                    rule_owner=str(row.get("rule_owner") or ""),
+                    effective_reason=str(row.get("effective_reason") or ""),
+                    next_review_at=normalized_next_review_at,
+                    last_reviewed_at=reviewed_at,
                 )
             except ValueError as exc:
                 import_errors.append(f"Line {row['line_number']}: {exc}")
@@ -292,14 +320,33 @@ def register_exception_routes(
                 yield [
                     item.rule_type,
                     item.match_value,
+                    item.rule_owner or "",
+                    item.effective_reason or "",
                     item.notes or "",
                     "true" if item.is_enabled else "false",
                     item.expires_at or "",
+                    item.next_review_at or "",
                     "true" if item.is_once else "false",
+                    item.last_reviewed_at or "",
+                    str(item.hit_count or 0),
+                    item.last_hit_at or "",
                 ]
 
         return stream_csv(
-            header=["rule_type", "match_value", "notes", "is_enabled", "expires_at", "is_once"],
+            header=[
+                "rule_type",
+                "match_value",
+                "rule_owner",
+                "effective_reason",
+                "notes",
+                "is_enabled",
+                "expires_at",
+                "next_review_at",
+                "is_once",
+                "last_reviewed_at",
+                "hit_count",
+                "last_hit_at",
+            ],
             row_iterable=iter_rows(),
             filename="exception-rules-export.csv",
         )

@@ -290,6 +290,10 @@ def resolve_identity_bindings_phase(
                 binding_connector_id,
                 set(),
             ).add(str(binding_record.ad_username).strip().lower())
+            ctx.repositories.user_binding_repo.record_rule_hit_for_source_user(
+                userid,
+                org_id=ctx.organization.org_id,
+            )
             ctx.hooks.record_operation(
                 stage_name='plan',
                 object_type='user_binding',

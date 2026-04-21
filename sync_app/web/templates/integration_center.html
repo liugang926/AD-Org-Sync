@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+{% call ui.page_header(t("External Integration Center"), t("Expose job status, conflicts, approval callbacks, and outbound webhooks through one organization-scoped integration surface."), eyebrow=t("Operations"), badge_text=t("Organization Scope"), badge_level="info") %}
+  {{ ui.button(t("Open Jobs"), href="/jobs", variant="ghost", icon="refresh-cw") }}
+  {{ ui.button(t("Open Conflicts"), href="/conflicts", variant="ghost", icon="shield-alert") }}
+  {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost", icon="waypoints") }}
+{% endcall %}
+
+<div class="dense-two-col">
+  {% call ui.helper_block(t("What This Center Adds"), t("Use this page when external systems need a stable way to read rollout state or approve a high-risk plan without logging into the admin UI."), "info") %}
+    <ul class="helper-list">
+      <li>{{ t("Job Status API returns recent jobs and detailed job state for the selected organization.") }}</li>
+      <li>{{ t("Conflict API exposes open or historical conflicts for ITSM, dashboards, or internal tooling.") }}</li>
+      <li>{{ t("Approval callback lets an external workflow approve a pending high-risk dry run and trigger replay.") }}</li>
+    </ul>
+  {% endcall %}
+  {% call ui.helper_block(t("Webhook Scope"), t("Subscriptions are organization-scoped and only receive the event types you explicitly register here."), "warning") %}
+    <ul class="helper-list">
+      <li>{{ t("job.completed") }}</li>
+      <li>{{ t("job.failed") }}</li>
+      <li>{{ t("job.review_required") }}</li>
+      <li>{{ t("review.approved") }}</li>
+    </ul>
+  {% endcall %}
+</div>
+
+<div class="compact-stats">
+  {{ ui.compact_stat(t("API Token"), (t("Configured") if api_token_configured else t("Not Configured"))) }}
+  {{ ui.compact_stat(t("Subscriptions"), subscription_records|length) }}
+  {{ ui.compact_stat(t("Active Subscriptions"), active_subscription_count) }}
+  {{ ui.compact_stat(t("Open Conflicts"), open_conflict_count) }}
+  {{ ui.compact_stat(t("Pending Reviews"), pending_review_count) }}
+</div>
+
+<div class="grid cols-2">
+  {% call ui.panel(t("API Token"), description=t("Rotate one organization-scoped bearer token that external systems can use for JSON API access.")) %}
+    <div class="page-stack tight">
+      <div class="surface-inline">
+        <strong>{{ t("Current Token") }}:</strong>
+        <span>{{ api_token_masked if api_token_configured else t("Not configured") }}</span>
+      </div>
+      <div class="muted">{{ t("Token storage is organization-scoped and excluded from config bundle export.") }}</div>
+      <div class="actions">
+        <form method="post" action="/integrations/token/rotate">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          {{ ui.button(t("Rotate Token"), type="submit", icon="key") }}
+        </form>
+        <form method="post" action="/integrations/token/clear">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          {{ ui.button(t("Clear Token"), type="submit", variant="secondary") }}
+        </form>
+      </div>
+    </div>
+  {% endcall %}
+
+  {% call ui.panel(t("API Endpoints"), description=t("These are the primary endpoints that external systems should target for this organization.")) %}
+    <div class="page-stack tight">
+      <div class="detail-grid">
+        <div class="detail-item"><div class="label">{{ t("Jobs") }}</div><div class="value"><code>{{ api_base_path }}/jobs</code></div></div>
+        <div class="detail-item"><div class="label">{{ t("Job Detail") }}</div><div class="value"><code>{{ api_base_path }}/jobs/&lt;job_id&gt;</code></div></div>
+        <div class="detail-item"><div class="label">{{ t("Conflicts") }}</div><div class="value"><code>{{ api_base_path }}/conflicts?status=open</code></div></div>
+        <div class="detail-item"><div class="label">{{ t("Approve Review") }}</div><div class="value"><code>{{ api_base_path }}/reviews/&lt;job_id&gt;/approve</code></div></div>
+      </div>
+      <div class="panel-note info">
+        <code>Authorization: Bearer &lt;token&gt;</code>
+      </div>
+    </div>
+  {% endcall %}
+</div>
+
+{% call ui.panel(t("Webhook Subscriptions"), description=t("Register one outbound target per event type and URL combination. Saving an existing pair updates it in place.")) %}
+  <form method="post" action="/integrations/subscriptions" class="page-stack tight">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-grid">
+      <div class="form-group">
+        <label for="event_type">{{ t("Event Type") }}</label>
+        <select id="event_type" name="event_type">
+          {% for option in subscription_event_options %}
+          <option value="{{ option.value }}">{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="target_url">{{ t("Target URL") }}</label>
+        <input id="target_url" name="target_url" type="url" required placeholder="https://example.invalid/hooks/ad-sync">
+      </div>
+      <div class="form-group">
+        <label for="secret">{{ t("Signature Secret") }}</label>
+        <input id="secret" name="secret" type="text" placeholder="{{ t('Optional shared secret') }}">
+      </div>
+      <div class="form-group">
+        <label for="description">{{ t("Description") }}</label>
+        <input id="description" name="description" type="text" placeholder="{{ t('Who receives this and why') }}">
+      </div>
+      <div class="form-group">
+        <label class="inline-checkbox">
+          <input type="checkbox" name="is_enabled" value="1" checked>
+          {{ t("Enable subscription immediately") }}
+        </label>
+      </div>
+    </div>
+    <div class="actions">
+      {{ ui.button(t("Save Subscription"), type="submit") }}
+    </div>
+  </form>
+
+  {% if subscription_records %}
+  <table>
+    <thead>
+      <tr>
+        <th>{{ t("Event") }}</th>
+        <th>{{ t("Target URL") }}</th>
+        <th>{{ t("Secret") }}</th>
+        <th>{{ t("Status") }}</th>
+        <th>{{ t("Last Attempt") }}</th>
+        <th>{{ t("Actions") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in subscription_records %}
+      <tr>
+        <td>
+          <strong>{{ item.event_type }}</strong>
+          {% if item.description %}
+          <div class="muted">{{ item.description }}</div>
+          {% endif %}
+        </td>
+        <td>{{ item.target_url }}</td>
+        <td>{{ item.secret_masked if item.secret_configured else t("Not set") }}</td>
+        <td>
+          {{ ui.badge((t("Enabled") if item.is_enabled else t("Disabled")), ("success" if item.is_enabled else "warning")) }}
+          {% if item.last_status %}
+          <div class="muted">{{ item.last_status }}</div>
+          {% endif %}
+          {% if item.last_error %}
+          <div class="muted">{{ item.last_error }}</div>
+          {% endif %}
+        </td>
+        <td>{{ item.last_attempt_at or "-" }}</td>
+        <td>
+          <form method="post" action="/integrations/subscriptions/{{ item.id }}/delete">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            {{ ui.button(t("Delete"), type="submit", variant="secondary") }}
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="panel-note info">{{ t("No webhook subscriptions have been registered for this organization yet.") }}</div>
+  {% endif %}
+{% endcall %}
+
+{% if recent_jobs %}
+{% call ui.panel(t("Recent Jobs"), description=t("Use these IDs when wiring external dashboards or approval callbacks.")) %}
+  <table>
+    <thead>
+      <tr>
+        <th>{{ t("Job") }}</th>
+        <th>{{ t("Mode") }}</th>
+        <th>{{ t("Status") }}</th>
+        <th>{{ t("High-Risk") }}</th>
+        <th>{{ t("Conflicts") }}</th>
+        <th>{{ t("Started") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in recent_jobs %}
+      <tr>
+        <td><a href="/jobs/{{ item.job_id }}">{{ item.job_id }}</a></td>
+        <td>{{ item.execution_mode }}</td>
+        <td>{{ ui.badge(item.status, ("warning" if item.review_required else "info")) }}</td>
+        <td>{{ item.summary.high_risk_operation_count if item.summary else 0 }}</td>
+        <td>{{ item.summary.conflict_count if item.summary else 0 }}</td>
+        <td>{{ item.started_at or "-" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endcall %}
+{% endif %}
+{% endblock %}

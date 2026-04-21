@@ -9,7 +9,10 @@ from typing import Any, Optional
 
 from sync_app.core.common import generate_job_id
 from sync_app.core.models import SyncJobRecord
+from sync_app.services.notification_automation_center import evaluate_scheduled_apply_readiness
 from sync_app.storage.local_db import DatabaseManager, SyncJobRepository
+from sync_app.storage.repositories.conflicts import SyncConflictRepository, SyncPlanReviewRepository
+from sync_app.storage.repositories.system import SettingsRepository
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +35,20 @@ def _open_job_repo(db_path: Optional[str]) -> tuple[DatabaseManager, SyncJobRepo
 
 def _build_worker_id(prefix: str) -> str:
     return f"{prefix}-{os.getpid()}-{threading.get_ident()}"
+
+
+def _should_guard_scheduled_apply(*, execution_mode: str, trigger_type: str) -> bool:
+    return (
+        str(execution_mode or "").strip().lower() == "apply"
+        and str(trigger_type or "").strip().lower() == "schedule"
+    )
+
+
+def _build_scheduled_apply_block_message(readiness: dict[str, Any]) -> str:
+    reasons = [str(item or "").strip() for item in list(readiness.get("reasons") or []) if str(item or "").strip()]
+    if reasons:
+        return "Scheduled apply blocked: " + " ".join(reasons)
+    return str(readiness.get("summary") or "Scheduled apply blocked by automation policy.")
 
 
 class _LeaseHeartbeat:
@@ -96,6 +113,8 @@ def enqueue_sync_job(
 ) -> SyncDispatchResult:
     _db_manager, job_repo = _open_job_repo(db_path)
     normalized_org_id = str(org_id or "").strip().lower() or "default"
+    normalized_execution_mode = str(execution_mode or "").strip().lower() or "apply"
+    normalized_trigger_type = str(trigger_type or "").strip().lower() or "manual"
     existing_job = job_repo.get_active_job_record(org_id=normalized_org_id)
     if existing_job:
         return SyncDispatchResult(
@@ -104,12 +123,30 @@ def enqueue_sync_job(
             message=f"Synchronization job {existing_job.job_id} is already queued or running",
         )
 
+    if _should_guard_scheduled_apply(
+        execution_mode=normalized_execution_mode,
+        trigger_type=normalized_trigger_type,
+    ):
+        readiness = evaluate_scheduled_apply_readiness(
+            settings_repo=SettingsRepository(_db_manager),
+            job_repo=job_repo,
+            conflict_repo=SyncConflictRepository(_db_manager),
+            review_repo=SyncPlanReviewRepository(_db_manager),
+            org_id=normalized_org_id,
+        )
+        if not readiness.get("allowed"):
+            return SyncDispatchResult(
+                accepted=False,
+                job=None,
+                message=_build_scheduled_apply_block_message(readiness),
+            )
+
     job_id = generate_job_id()
     job_repo.create_job(
         job_id=job_id,
         org_id=normalized_org_id,
-        trigger_type=str(trigger_type or "").strip() or "manual",
-        execution_mode=str(execution_mode or "").strip() or "apply",
+        trigger_type=normalized_trigger_type,
+        execution_mode=normalized_execution_mode,
         status="QUEUED",
         requested_by=str(requested_by or "").strip(),
         requested_config_path=str(config_path or "").strip(),

@@ -8,6 +8,38 @@ from sync_app.storage.local_db import BaseRepository, dumps_json, utcnow_iso
 
 
 class OffboardingQueueRepository(BaseRepository):
+    def get_record_by_id(
+        self,
+        record_id: int,
+        *,
+        org_id: Optional[str] = None,
+    ) -> Optional[OffboardingRecord]:
+        normalized_org_id = self._resolve_org_id(org_id)
+        if normalized_org_id:
+            row = self._fetchone(
+                """
+                SELECT *
+                FROM offboarding_queue
+                WHERE id = ?
+                  AND org_id = ?
+                LIMIT 1
+                """,
+                (int(record_id), normalized_org_id),
+            )
+        else:
+            row = self._fetchone(
+                """
+                SELECT *
+                FROM offboarding_queue
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (int(record_id),),
+            )
+        if not row:
+            return None
+        return OffboardingRecord.from_row(row)
+
     def get_record(
         self,
         *,
@@ -289,6 +321,38 @@ class OffboardingQueueRepository(BaseRepository):
 
 
 class UserLifecycleQueueRepository(BaseRepository):
+    def get_record_by_id(
+        self,
+        record_id: int,
+        *,
+        org_id: Optional[str] = None,
+    ) -> Optional[UserLifecycleRecord]:
+        normalized_org_id = self._resolve_org_id(org_id)
+        if normalized_org_id:
+            row = self._fetchone(
+                """
+                SELECT *
+                FROM user_lifecycle_queue
+                WHERE id = ?
+                  AND org_id = ?
+                LIMIT 1
+                """,
+                (int(record_id), normalized_org_id),
+            )
+        else:
+            row = self._fetchone(
+                """
+                SELECT *
+                FROM user_lifecycle_queue
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (int(record_id),),
+            )
+        if not row:
+            return None
+        return UserLifecycleRecord.from_row(row)
+
     def get_record(
         self,
         *,

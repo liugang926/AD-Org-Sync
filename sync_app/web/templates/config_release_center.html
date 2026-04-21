@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% import "components/forms.html" as forms %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Config Release Center"), t("Publish the current organization configuration as a release snapshot, compare it with earlier snapshots, and roll back when needed."), eyebrow=t("Setup"), badge_text=(t("Unpublished") if has_unpublished_changes else t("Published")), badge_level=("warning" if has_unpublished_changes else "success")) %}
+    {{ ui.button(t("Back To Config"), href="/config", variant="ghost", icon="arrow-left") }}
+    {% if can("organizations.manage") %}
+    {{ ui.button(t("Open Organizations"), href="/organizations", variant="secondary", icon="building-2") }}
+    {% endif %}
+  {% endcall %}
+
+  {% call ui.helper_block(t("Promotion Path"), t("Release snapshots are scoped to the current organization. Use the organization bundle import and export flow when you want to promote settings between test and production organizations."), "info", t("Bundle Flow")) %}
+    <div class="actions">
+      {% if can("organizations.manage") %}
+      {{ ui.button(t("Export Current Bundle"), href=("/organizations/" ~ current_org.org_id ~ "/export"), variant="secondary", icon="download") }}
+      {{ ui.button(t("Open Organization Center"), href="/organizations", variant="ghost", icon="layers") }}
+      {% endif %}
+    </div>
+  {% endcall %}
+
+  {% call ui.panel(t("Current Release State"), description=t("The release center compares the live organization settings with published snapshots so you can decide when to publish, compare, or roll back."), class_name="toolbar-card") %}
+    <div class="surface-inline">
+      {{ ui.badge(t("Unpublished") if has_unpublished_changes else t("Published"), ("warning" if has_unpublished_changes else "success")) }}
+      <span class="muted">{{ t("Current organization") }}:</span>
+      <strong>{{ current_org.name }}</strong>
+      {% if latest_snapshot %}
+      <span class="muted">{{ t("Latest snapshot") }}:</span>
+      <strong>{{ latest_snapshot_title }}</strong>
+      {% else %}
+      <span class="muted">{{ t("No published snapshots yet.") }}</span>
+      {% endif %}
+    </div>
+
+    <div class="compact-stats">
+      {{ ui.compact_stat(t("Published Snapshots"), snapshot_count) }}
+      {{ ui.compact_stat(t("Latest Snapshot"), latest_snapshot_title or "-") }}
+      {{ ui.compact_stat(t("Changed Groups"), comparison_diff.changed_group_count) }}
+      {{ ui.compact_stat(t("Changed Items"), comparison_diff.changed_item_count) }}
+    </div>
+
+    {% if can("config.write") %}
+    <form method="post" action="/config/releases/publish" class="page-stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid">
+        {{ forms.input("snapshot_name", t("Snapshot Name"), "", placeholder=t("Optional release label such as April production baseline"), help_text=t("Leave blank to use an automatic release number."), class_name="field-span-full") }}
+      </div>
+      <div class="actions">
+        {{ ui.button(t("Publish Current Snapshot"), type="submit", variant="secondary", icon="save") }}
+        {{ ui.button(t("Back To Config"), href="/config", variant="ghost", icon="arrow-left") }}
+      </div>
+    </form>
+    {% endif %}
+  {% endcall %}
+
+  {% call ui.panel(t(comparison_title), description=t("Current") ~ ": " ~ t(comparison_current_label) ~ " / " ~ t("Baseline") ~ ": " ~ t(comparison_baseline_label)) %}
+    {% if comparison_diff.changed %}
+    <div class="compact-stats">
+      {{ ui.compact_stat(t("Added"), comparison_diff.added_count) }}
+      {{ ui.compact_stat(t("Removed"), comparison_diff.removed_count) }}
+      {{ ui.compact_stat(t("Changed"), comparison_diff.changed_count) }}
+      {{ ui.compact_stat(t("Groups"), comparison_diff.changed_group_count) }}
+    </div>
+
+    <div class="stack-md">
+      {% for group in comparison_diff.groups %}
+      {% call ui.detail_toggle(t(group.title), t("{count} changed items", count=group["items"]|length), open=(loop.first)) %}
+        {% call ui.table_shell() %}
+          <table>
+            <thead>
+              <tr>
+                <th>{{ t("Item") }}</th>
+                <th>{{ t("Change") }}</th>
+                <th>{{ t("Before") }}</th>
+                <th>{{ t("After") }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in group["items"] %}
+              <tr>
+                <td>{{ item.label }}</td>
+                <td>
+                  {% set badge_level = "success" if item.change_type == "added" else ("error" if item.change_type == "removed" else "warning") %}
+                  {{ ui.badge(t(item.change_type|capitalize), badge_level) }}
+                </td>
+                <td><pre>{{ item.before }}</pre></td>
+                <td><pre>{{ item.after }}</pre></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endcall %}
+      {% endcall %}
+      {% endfor %}
+    </div>
+    {% else %}
+    {{ ui.empty_state(t("No Material Change"), t("The current comparison target matches its baseline, so there is nothing new to review right now."), "success") }}
+    {% endif %}
+  {% endcall %}
+
+  {% call ui.panel(t("Published Snapshots"), description=t("Each snapshot stores the full organization configuration bundle, including connector settings, mappings, routing, and exclusion rules.")) %}
+    {% if snapshots %}
+    {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Snapshot") }}</th>
+            <th>{{ t("Trigger") }}</th>
+            <th>{{ t("Summary") }}</th>
+            <th>{{ t("Created") }}</th>
+            <th>{{ t("Actions") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in snapshots %}
+          {% set summary = row.snapshot.summary or {} %}
+          <tr>
+            <td>
+              <div class="stack-tight">
+                <div class="cell-strong">{{ row.title }}</div>
+                <div class="muted">#{{ row.snapshot.id }}{% if row.is_latest %} · {{ t("Latest") }}{% endif %}</div>
+              </div>
+            </td>
+            <td>
+              <div class="stack-tight">
+                {{ ui.badge(t(row.trigger_label), ("warning" if row.snapshot.trigger_action == "rollback" else ("info" if row.snapshot.trigger_action == "rollback_safety" else "success"))) }}
+                {% if row.snapshot.source_snapshot_id %}
+                <div class="muted">{{ t("Source") }} #{{ row.snapshot.source_snapshot_id }}</div>
+                {% endif %}
+              </div>
+            </td>
+            <td>
+              {% if summary %}
+              <div class="stack-tight">
+                <div>{{ t("Groups") }} {{ summary.changed_group_count or 0 }} / {{ t("Items") }} {{ summary.changed_item_count or 0 }}</div>
+                <div class="muted">{{ t("Added") }} {{ summary.added_count or 0 }} / {{ t("Removed") }} {{ summary.removed_count or 0 }} / {{ t("Changed") }} {{ summary.changed_count or 0 }}</div>
+              </div>
+              {% else %}
+              <span class="muted">-</span>
+              {% endif %}
+            </td>
+            <td>
+              <div class="stack-tight">
+                <div>{{ row.snapshot.created_at or "-" }}</div>
+                <div class="muted">{{ row.snapshot.created_by or "-" }}</div>
+              </div>
+            </td>
+            <td>
+              <div class="actions">
+                {% if row.previous_snapshot_id %}
+                {{ ui.button(t("Compare"), href=("/config/releases?current_snapshot_id=" ~ row.snapshot.id ~ "&baseline_snapshot_id=" ~ row.previous_snapshot_id), variant="ghost", icon="git-compare") }}
+                {% endif %}
+                {{ ui.button(t("Download"), href=("/config/releases/" ~ row.snapshot.id ~ "/download"), variant="ghost", icon="download") }}
+                {% if can("config.write") %}
+                <form method="post" action="{{ '/config/releases/' ~ row.snapshot.id ~ '/rollback' }}" class="inline">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  {{ ui.button(t("Rollback"), type="submit", variant="secondary", icon="rotate-ccw", confirm_text=t("Roll back the current organization configuration to this snapshot?")) }}
+                </form>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    {% else %}
+    {{ ui.empty_state(t("No Published Snapshots"), t("Publish the current configuration once to create the first release baseline for this organization."), "info") }}
+    {% endif %}
+  {% endcall %}
+</div>
+{% endblock %}

@@ -53,6 +53,7 @@
       <span class="muted">{{ t("Current organization") }}:</span>
       <strong>{{ current_org.name if current_org else t("Default Organization") }}</strong>
     </div>
+    {{ ui.button(t("Open Release Center"), href="/config/releases", variant="secondary", icon="history") }}
   {% endcall %}
 
   <div class="dense-two-col">

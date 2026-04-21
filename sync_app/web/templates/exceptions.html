@@ -12,6 +12,9 @@
   "expiring_exception_count": 0,
   "expiring_soon_window_days": 14,
   "missing_notes_count": 0,
+  "missing_owner_count": 0,
+  "stale_rule_count": 0,
+  "total_hit_count": 0,
   "issues": [],
 } %}
 <div class="page-stack">
@@ -33,7 +36,10 @@
       {{ ui.compact_stat(t("Exceptions"), governance.exception_count) }}
       {{ ui.compact_stat(t("Expired"), governance.expired_exception_count, detail=t("Still enabled")) }}
       {{ ui.compact_stat(t("Expiring Soon"), governance.expiring_exception_count, detail=t("Within {days} days", days=governance.expiring_soon_window_days)) }}
-      {{ ui.compact_stat(t("Missing Notes"), governance.missing_notes_count) }}
+      {{ ui.compact_stat(t("Missing Reasons"), governance.missing_notes_count) }}
+      {{ ui.compact_stat(t("Missing Owners"), governance.missing_owner_count) }}
+      {{ ui.compact_stat(t("Pending Review"), governance.stale_rule_count) }}
+      {{ ui.compact_stat(t("Tracked Hits"), governance.total_hit_count) }}
     </div>
     {% if governance.issues %}
     <div class="check-list">
@@ -90,6 +96,9 @@
             </select>
           </div>
           {{ forms.input("match_value", t("Source User ID"), placeholder="alice", required=True, id="user_exception_match_value") }}
+          {{ forms.input("rule_owner", t("Rule Owner"), placeholder=t("iam@corp.example"), id="user_exception_rule_owner") }}
+          {{ forms.input("next_review_at", t("Next Review"), type="datetime-local", id="user_exception_next_review_at") }}
+          {{ forms.input("effective_reason", t("Effective Reason"), class_name="field-span-full", id="user_exception_effective_reason") }}
           {{ forms.input("notes", t("Notes"), placeholder=t('Why this user is special'), class_name="field-span-full", id="user_exception_notes") }}
           {{ forms.input("expires_at", t("Expires At"), type="datetime-local", id="user_exception_expires_at") }}
           {{ forms.checkbox("is_once", t("One-time Rule"), id="user_exception_is_once") }}
@@ -106,6 +115,9 @@
         <input type="hidden" name="rule_type" value="skip_department_placement">
         <div class="form-grid">
           {{ forms.input("match_value", t("Department ID"), placeholder="1001", required=True, id="placement_exception_match_value") }}
+          {{ forms.input("rule_owner", t("Rule Owner"), placeholder=t("ops@corp.example"), id="placement_exception_rule_owner") }}
+          {{ forms.input("next_review_at", t("Next Review"), type="datetime-local", id="placement_exception_next_review_at") }}
+          {{ forms.input("effective_reason", t("Effective Reason"), class_name="field-span-full", id="placement_exception_effective_reason") }}
           {{ forms.input("notes", t("Notes"), placeholder=t('Placement should stay on another managed department'), class_name="field-span-full", id="placement_exception_notes") }}
           {{ forms.input("expires_at", t("Expires At"), type="datetime-local", id="placement_exception_expires_at") }}
           {{ forms.checkbox("is_once", t("One-time Rule"), id="placement_exception_is_once") }}
@@ -123,6 +135,9 @@
       <input type="hidden" name="rule_type" value="skip_group_relation_cleanup">
       <div class="form-grid">
         {{ forms.input("match_value", t("AD Group sAMAccountName"), placeholder="WECOM_D1001", required=True, id="group_cleanup_match_value") }}
+        {{ forms.input("rule_owner", t("Rule Owner"), placeholder=t("ad-team@corp.example"), id="group_cleanup_rule_owner") }}
+        {{ forms.input("next_review_at", t("Next Review"), type="datetime-local", id="group_cleanup_next_review_at") }}
+        {{ forms.input("effective_reason", t("Effective Reason"), class_name="field-span-full", id="group_cleanup_effective_reason") }}
         {{ forms.input("notes", t("Notes"), placeholder=t('Keep manual parent relations for this group'), class_name="field-span-full", id="group_cleanup_notes") }}
         {{ forms.input("expires_at", t("Expires At"), type="datetime-local", id="group_cleanup_expires_at") }}
         {{ forms.checkbox("is_once", t("One-time Rule"), id="group_cleanup_is_once") }}
@@ -133,10 +148,10 @@
     </form>
   {% endcall %}
 
-  {% call ui.panel(t("Bulk Import"), description=t("CSV format: <code>rule_type,match_value,notes,is_enabled,expires_at,is_once</code>. Header row is optional.")) %}
+  {% call ui.panel(t("Bulk Import"), description=t("Legacy CSV format: <code>rule_type,match_value,notes,is_enabled,expires_at,is_once</code>. Governance format: <code>rule_type,match_value,rule_owner,effective_reason,notes,is_enabled,expires_at,next_review_at,is_once</code>.")) %}
     <form method="post" action="/exceptions/import">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ forms.textarea("bulk_rules", t("Bulk Rules"), placeholder="rule_type,match_value,notes,is_enabled,expires_at,is_once&#10;skip_user_disable,alice,Keep account enabled,true,2026-12-31T18:00,true&#10;skip_group_relation_cleanup,WECOM_D1001,Preserve manual parent,false,,false") }}
+      {{ forms.textarea("bulk_rules", t("Bulk Rules"), placeholder="rule_type,match_value,rule_owner,effective_reason,notes,is_enabled,expires_at,next_review_at,is_once&#10;skip_user_disable,alice,iam@corp.example,Grace period before disable,Keep account enabled,true,2026-12-31T18:00,2026-06-01T09:00,true&#10;skip_group_relation_cleanup,WECOM_D1001,ad-team@corp.example,Manual parent stays for migration,,false,,,false") }}
       <div class="actions">
         {{ ui.button(t("Import Rules"), type="submit", variant="secondary") }}
       </div>
@@ -151,7 +166,7 @@
   {% call ui.panel(t("Search And Filter")) %}
     <form method="get" action="/exceptions">
       <div class="form-grid">
-        {{ forms.input("q", t("Keyword"), exception_query or '', placeholder=t('rule, match value, notes')) }}
+        {{ forms.input("q", t("Keyword"), exception_query or '', placeholder=t('rule, match value, owner, or reason')) }}
         <div>
           <label>{{ t("Rule Type") }}</label>
           <select name="rule_type">
@@ -186,7 +201,7 @@
           <tr>
             <th>{{ t("Rule") }}</th>
             <th>{{ t("Match") }}</th>
-            <th>{{ t("Notes") }}</th>
+            <th>{{ t("Governance") }}</th>
             <th>{{ t("Mode") }}</th>
             <th>{{ t("Expires At") }}</th>
             <th>{{ t("Last Matched") }}</th>
@@ -210,7 +225,16 @@
               <div class="muted">{{ department_name_map.get(item.match_value) }}</div>
               {% endif %}
             </td>
-            <td>{{ item.notes or "-" }}</td>
+            <td>
+              <div><strong>{{ t("Owner") }}:</strong> {{ item.rule_owner or "-" }}</div>
+              <div><strong>{{ t("Reason") }}:</strong> {{ item.effective_reason or item.notes or "-" }}</div>
+              <div class="muted">{{ t("Next Review") }}: {{ item.next_review_at or "-" }}</div>
+              <div class="muted">{{ t("Last Reviewed") }}: {{ item.last_reviewed_at or item.updated_at or item.created_at or "-" }}</div>
+              <div class="muted">{{ t("Hits") }}: {{ item.hit_count or 0 }}{% if item.last_hit_at or item.last_matched_at %} · {{ t("Last Hit") }}: {{ item.last_hit_at or item.last_matched_at }}{% endif %}</div>
+              {% if item.notes and item.effective_reason and item.notes != item.effective_reason %}
+              <div class="muted">{{ t("Notes") }}: {{ item.notes }}</div>
+              {% endif %}
+            </td>
             <td>{{ t("One-time") if item.is_once else t("Persistent") }}</td>
             <td>{{ item.expires_at or "-" }}</td>
             <td>{{ item.last_matched_at or "-" }}</td>

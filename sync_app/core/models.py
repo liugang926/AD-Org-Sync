@@ -847,6 +847,116 @@ class WebAuditLogRecord(MappingLikeModel):
 
 
 @dataclass(slots=True)
+class ConfigReleaseSnapshotRecord(MappingLikeModel):
+    id: Optional[int] = None
+    org_id: str = ""
+    snapshot_name: str = ""
+    trigger_action: str = "manual_release"
+    created_by: str = ""
+    source_snapshot_id: Optional[int] = None
+    bundle_hash: str = ""
+    bundle: Optional[Dict[str, Any]] = None
+    summary: Optional[Dict[str, Any]] = None
+    created_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: Any) -> "ConfigReleaseSnapshotRecord":
+        bundle = row["bundle_json"] if "bundle_json" in row.keys() else None
+        if isinstance(bundle, str) and bundle:
+            try:
+                bundle = json.loads(bundle)
+            except json.JSONDecodeError:
+                bundle = {"raw": bundle}
+        summary = row["summary_json"] if "summary_json" in row.keys() else None
+        if isinstance(summary, str) and summary:
+            try:
+                summary = json.loads(summary)
+            except json.JSONDecodeError:
+                summary = {"raw": summary}
+        source_snapshot_id = row["source_snapshot_id"] if "source_snapshot_id" in row.keys() else None
+        return cls(
+            id=int(row["id"]) if row["id"] is not None else None,
+            org_id=str(row["org_id"] or ""),
+            snapshot_name=str(row["snapshot_name"] or ""),
+            trigger_action=str(row["trigger_action"] or "manual_release"),
+            created_by=str(row["created_by"] or ""),
+            source_snapshot_id=int(source_snapshot_id) if source_snapshot_id not in (None, "") else None,
+            bundle_hash=str(row["bundle_hash"] or ""),
+            bundle=bundle if isinstance(bundle, dict) or bundle is None else {"raw": bundle},
+            summary=summary if isinstance(summary, dict) or summary is None else {"raw": summary},
+            created_at=str(row["created_at"] or ""),
+        )
+
+
+@dataclass(slots=True)
+class DataQualitySnapshotRecord(MappingLikeModel):
+    id: Optional[int] = None
+    org_id: str = ""
+    trigger_action: str = "manual_scan"
+    created_by: str = ""
+    summary: Optional[Dict[str, Any]] = None
+    snapshot: Optional[Dict[str, Any]] = None
+    created_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: Any) -> "DataQualitySnapshotRecord":
+        summary = row["summary_json"] if "summary_json" in row.keys() else None
+        if isinstance(summary, str) and summary:
+            try:
+                summary = json.loads(summary)
+            except json.JSONDecodeError:
+                summary = {"raw": summary}
+        snapshot = row["snapshot_json"] if "snapshot_json" in row.keys() else None
+        if isinstance(snapshot, str) and snapshot:
+            try:
+                snapshot = json.loads(snapshot)
+            except json.JSONDecodeError:
+                snapshot = {"raw": snapshot}
+        return cls(
+            id=int(row["id"]) if row["id"] is not None else None,
+            org_id=str(row["org_id"] or ""),
+            trigger_action=str(row["trigger_action"] or "manual_scan"),
+            created_by=str(row["created_by"] or ""),
+            summary=summary if isinstance(summary, dict) or summary is None else {"raw": summary},
+            snapshot=snapshot if isinstance(snapshot, dict) or snapshot is None else {"raw": snapshot},
+            created_at=str(row["created_at"] or ""),
+        )
+
+
+@dataclass(slots=True)
+class IntegrationWebhookSubscriptionRecord(MappingLikeModel):
+    id: Optional[int] = None
+    org_id: str = ""
+    event_type: str = ""
+    target_url: str = ""
+    secret: str = ""
+    description: str = ""
+    is_enabled: bool = True
+    last_attempt_at: str = ""
+    last_status: str = ""
+    last_error: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: Any) -> "IntegrationWebhookSubscriptionRecord":
+        return cls(
+            id=int(row["id"]) if row["id"] is not None else None,
+            org_id=str(row["org_id"] or ""),
+            event_type=str(row["event_type"] or ""),
+            target_url=str(row["target_url"] or ""),
+            secret=str(row["secret"] or ""),
+            description=str(row["description"] or ""),
+            is_enabled=bool(row["is_enabled"]),
+            last_attempt_at=str(row["last_attempt_at"] or ""),
+            last_status=str(row["last_status"] or ""),
+            last_error=str(row["last_error"] or ""),
+            created_at=str(row["created_at"] or ""),
+            updated_at=str(row["updated_at"] or ""),
+        )
+
+
+@dataclass(slots=True)
 class SyncOperationRecord(MappingLikeModel):
     id: Optional[int] = None
     job_id: str = ""
@@ -982,10 +1092,16 @@ class SyncExceptionRuleRecord(MappingLikeModel):
     rule_type: str = ""
     match_type: str = ""
     match_value: str = ""
+    rule_owner: str = ""
+    effective_reason: str = ""
     notes: str = ""
     is_enabled: bool = True
     expires_at: str = ""
     is_once: bool = False
+    next_review_at: str = ""
+    last_reviewed_at: str = ""
+    hit_count: int = 0
+    last_hit_at: str = ""
     last_matched_at: str = ""
     created_at: str = ""
     updated_at: str = ""
@@ -998,10 +1114,16 @@ class SyncExceptionRuleRecord(MappingLikeModel):
             rule_type=str(row["rule_type"] or ""),
             match_type=str(row["match_type"] or ""),
             match_value=str(row["match_value"] or ""),
+            rule_owner=str(row["rule_owner"] or "") if "rule_owner" in row.keys() else "",
+            effective_reason=str(row["effective_reason"] or "") if "effective_reason" in row.keys() else "",
             notes=str(row["notes"] or ""),
             is_enabled=bool(row["is_enabled"]),
             expires_at=str(row["expires_at"] or ""),
             is_once=bool(row["is_once"]) if "is_once" in row.keys() else False,
+            next_review_at=str(row["next_review_at"] or "") if "next_review_at" in row.keys() else "",
+            last_reviewed_at=str(row["last_reviewed_at"] or "") if "last_reviewed_at" in row.keys() else "",
+            hit_count=int(row["hit_count"] or 0) if "hit_count" in row.keys() else 0,
+            last_hit_at=str(row["last_hit_at"] or "") if "last_hit_at" in row.keys() else "",
             last_matched_at=str(row["last_matched_at"] or ""),
             created_at=str(row["created_at"] or ""),
             updated_at=str(row["updated_at"] or ""),
@@ -1020,8 +1142,14 @@ class UserIdentityBindingRecord(MappingLikeModel):
     target_object_dn: str = ""
     managed_username_base: str = ""
     source: str = ""
+    rule_owner: str = ""
+    effective_reason: str = ""
     notes: str = ""
     is_enabled: bool = True
+    next_review_at: str = ""
+    last_reviewed_at: str = ""
+    hit_count: int = 0
+    last_hit_at: str = ""
     updated_at: str = ""
 
     @classmethod
@@ -1042,8 +1170,14 @@ class UserIdentityBindingRecord(MappingLikeModel):
             target_object_dn=str(row["target_object_dn"] or "") if "target_object_dn" in row.keys() else "",
             managed_username_base=str(row["managed_username_base"] or "") if "managed_username_base" in row.keys() else "",
             source=str(row["source"] or ""),
+            rule_owner=str(row["rule_owner"] or "") if "rule_owner" in row.keys() else "",
+            effective_reason=str(row["effective_reason"] or "") if "effective_reason" in row.keys() else "",
             notes=str(row["notes"] or ""),
             is_enabled=bool(row["is_enabled"]),
+            next_review_at=str(row["next_review_at"] or "") if "next_review_at" in row.keys() else "",
+            last_reviewed_at=str(row["last_reviewed_at"] or "") if "last_reviewed_at" in row.keys() else "",
+            hit_count=int(row["hit_count"] or 0) if "hit_count" in row.keys() else 0,
+            last_hit_at=str(row["last_hit_at"] or "") if "last_hit_at" in row.keys() else "",
             updated_at=str(row["updated_at"] or ""),
         )
 
@@ -1067,7 +1201,13 @@ class UserDepartmentOverrideRecord(MappingLikeModel):
     org_id: str = "default"
     source_user_id: str = ""
     primary_department_id: str = ""
+    rule_owner: str = ""
+    effective_reason: str = ""
     notes: str = ""
+    next_review_at: str = ""
+    last_reviewed_at: str = ""
+    hit_count: int = 0
+    last_hit_at: str = ""
     updated_at: str = ""
 
     @classmethod
@@ -1082,7 +1222,13 @@ class UserDepartmentOverrideRecord(MappingLikeModel):
             org_id=str(row["org_id"] or "default") if "org_id" in row.keys() else "default",
             source_user_id=str(source_user_id or ""),
             primary_department_id=str(row["primary_department_id"] or ""),
+            rule_owner=str(row["rule_owner"] or "") if "rule_owner" in row.keys() else "",
+            effective_reason=str(row["effective_reason"] or "") if "effective_reason" in row.keys() else "",
             notes=str(row["notes"] or ""),
+            next_review_at=str(row["next_review_at"] or "") if "next_review_at" in row.keys() else "",
+            last_reviewed_at=str(row["last_reviewed_at"] or "") if "last_reviewed_at" in row.keys() else "",
+            hit_count=int(row["hit_count"] or 0) if "hit_count" in row.keys() else 0,
+            last_hit_at=str(row["last_hit_at"] or "") if "last_hit_at" in row.keys() else "",
             updated_at=str(row["updated_at"] or ""),
         )
 
