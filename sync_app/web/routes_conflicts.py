@@ -18,6 +18,7 @@ def register_conflict_routes(
     apply_conflict_manual_binding: Callable[..., tuple[bool, str, int]],
     apply_conflict_recommendation: Callable[..., tuple[bool, str, int, dict[str, Any] | None]],
     apply_conflict_skip_user_sync: Callable[..., tuple[bool, str, int]],
+    build_conflict_decision_guide: Callable[..., dict[str, Any]],
     build_conflicts_return_url: Callable[[str, str, str], str],
     fetch_page: Callable[..., tuple[list[Any], dict[str, Any]]],
     flash: Callable[..., None],
@@ -77,6 +78,41 @@ def register_conflict_routes(
             conflict_job_id=job_id,
             current_org=current_org,
             filters_are_remembered=True,
+        )
+
+    @app.get("/conflicts/{conflict_id}/decision-guide", response_class=HTMLResponse)
+    def conflict_decision_guide_page(request: Request, conflict_id: int):
+        user = require_capability(request, "jobs.read")
+        if isinstance(user, RedirectResponse):
+            return user
+
+        current_org = get_current_org(request)
+        conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
+        if not conflict:
+            flash(request, "error", "Conflict record not found")
+            return RedirectResponse(url="/conflicts", status_code=303)
+
+        return_query = to_text(request.query_params.get("return_query"))
+        return_status = to_text(request.query_params.get("return_status")) or "open"
+        return_job_id = to_text(request.query_params.get("return_job_id")) or conflict.job_id
+        return_url = build_conflicts_return_url(return_query, return_status, return_job_id)
+        decision_guide = build_conflict_decision_guide(
+            request,
+            conflict,
+            ad_username=to_text(request.query_params.get("ad_username")),
+        )
+        return render(
+            request,
+            "conflict_decision_guide.html",
+            page="conflicts",
+            title=f"Decision Guide {conflict.source_id or conflict.id}",
+            conflict=conflict,
+            decision_guide=decision_guide,
+            current_org=current_org,
+            return_url=return_url,
+            return_query=return_query,
+            return_status=return_status,
+            return_job_id=return_job_id,
         )
 
     @app.post("/conflicts/{conflict_id}/resolve-binding")

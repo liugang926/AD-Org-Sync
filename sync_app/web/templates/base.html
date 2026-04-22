@@ -69,6 +69,10 @@
       {% if show_advanced_navigation %}
       {% if can("mappings.read") %}<a href="/mappings" class="{% if page == 'mappings' %}active{% endif %}"><i data-lucide="layers" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Identity Overrides") }}</span></a>{% endif %}
       {% if can("config.read") %}<a href="/advanced-sync" class="{% if page == 'advanced-sync' %}active{% endif %}"><i data-lucide="waypoints" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Advanced Sync") }}</span></a>{% endif %}
+      {% if can("config.read") %}<a href="/automation-center" class="{% if page == 'automation-center' %}active{% endif %}"><i data-lucide="bell-ring" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Automation Center") }}</span></a>{% endif %}
+      {% if can("config.read") %}<a href="/data-quality" class="{% if page == 'data-quality' %}active{% endif %}"><i data-lucide="shield-alert" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Data Quality Center") }}</span></a>{% endif %}
+      {% if can("config.read") %}<a href="/integrations" class="{% if page == 'integrations' %}active{% endif %}"><i data-lucide="plug" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Integration Center") }}</span></a>{% endif %}
+      {% if can("config.read") %}<a href="/lifecycle" class="{% if page == 'lifecycle' %}active{% endif %}"><i data-lucide="clock-3" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Lifecycle Workbench") }}</span></a>{% endif %}
       {% if can("account.manage") or can("exceptions.read") or can("organizations.manage") or can("database.read") or can("audit.read") %}
       <div class="sidebar-section-label">
         {{ t("Management") }}

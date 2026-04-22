@@ -573,7 +573,14 @@ from sync_app.storage.repositories.conflicts import (
 )
 from sync_app.storage.repositories.connectors import SyncConnectorRepository
 from sync_app.storage.repositories.exclusions import GroupExclusionRuleRepository
-from sync_app.storage.repositories.system import SettingsRepository, SyncReplayRequestRepository, WebAuditLogRepository
+from sync_app.storage.repositories.system import (
+    ConfigReleaseSnapshotRepository,
+    DataQualitySnapshotRepository,
+    IntegrationWebhookSubscriptionRepository,
+    SettingsRepository,
+    SyncReplayRequestRepository,
+    WebAuditLogRepository,
+)
 from sync_app.storage.repositories.mappings import (
     AttributeMappingRuleRepository,
     DepartmentOuMappingRepository,
@@ -586,7 +593,4 @@ from sync_app.storage.repositories.groups import (
 )
 from sync_app.storage.repositories.lifecycle import OffboardingQueueRepository, UserLifecycleQueueRepository
 from sync_app.storage.repositories.state import ObjectStateRepository
-
-
-
 

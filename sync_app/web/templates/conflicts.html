@@ -84,6 +84,9 @@
       {% endif %}
       <div class="actions flush-top">
         {{ ui.button(t("Open Job Detail"), href="/jobs/" ~ item.job_id, variant="ghost", size="small") }}
+        {% if item.conflict_type in ["multiple_ad_candidates", "shared_ad_account"] %}
+        {{ ui.button(t("Open Decision Guide"), href="/conflicts/" ~ item.id ~ "/decision-guide?return_query=" ~ ((conflict_query or '')|urlencode) ~ "&return_status=" ~ ((conflict_status or 'open')|urlencode) ~ "&return_job_id=" ~ ((conflict_job_id or item.job_id)|urlencode), variant="ghost", size="small") }}
+        {% endif %}
         {% if item.source_id and show_advanced_navigation %}
         {{ ui.button(t("Search Identity Overrides"), href="/mappings?q=" ~ item.source_id, variant="ghost", size="small") }}
         {% endif %}

@@ -276,6 +276,13 @@ class WebAuthorizationTests(unittest.TestCase):
             self.assertEqual(response.status_code, 303)
             self.assertEqual(response.headers["location"], "/login")
 
+    def test_unauthenticated_integration_api_returns_json_401_instead_of_login_redirect(self):
+        with TestClient(self.app) as client:
+            response = client.get("/api/integrations/orgs/default/jobs", follow_redirects=False)
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(response.json()["ok"], False)
+            self.assertIn("token", response.json()["error"].lower())
+
     def test_healthz_remains_public_without_login(self):
         with TestClient(self.app) as client:
             response = client.get("/healthz")
@@ -413,6 +420,9 @@ class WebAuthorizationTests(unittest.TestCase):
             csrf_token=match.group(1),
             rule_type="skip_user_disable",
             match_value="alice",
+            rule_owner="iam@corp.example",
+            effective_reason="Grace period before disable",
+            next_review_at="2030-02-01T09:00:00+00:00",
             notes="keep enabled",
             expires_at="2030-01-01T10:00",
             is_once="1",
@@ -425,6 +435,10 @@ class WebAuthorizationTests(unittest.TestCase):
                 and item.match_value == "alice"
                 and item.is_once
                 and item.expires_at
+                and item.rule_owner == "iam@corp.example"
+                and item.effective_reason == "Grace period before disable"
+                and item.next_review_at == "2030-02-01T09:00:00+00:00"
+                and item.last_reviewed_at
                 for item in self.app.state.exception_rule_repo.list_rule_records()
             )
         )
@@ -433,9 +447,9 @@ class WebAuthorizationTests(unittest.TestCase):
             self._request("/exceptions/import", "POST"),
             csrf_token=match.group(1),
             bulk_rules=(
-                "rule_type,match_value,notes,is_enabled,expires_at,is_once\n"
-                "skip_user_sync,bob,bulk import,true,2031-01-01T09:00,true\n"
-                "skip_group_relation_cleanup,WECOM_D1001,bulk import,false,,false"
+                "rule_type,match_value,rule_owner,effective_reason,notes,is_enabled,expires_at,next_review_at,is_once\n"
+                "skip_user_sync,bob,ops@corp.example,Bulk replay guard,bulk import,true,2031-01-01T09:00,2031-02-01T09:00,true\n"
+                "skip_group_relation_cleanup,WECOM_D1001,ad-team@corp.example,Preserve manual parent,bulk import,false,,,false"
             ),
         )
         self.assertEqual(response.status_code, 303)
@@ -445,6 +459,9 @@ class WebAuthorizationTests(unittest.TestCase):
                 and item.match_value == "bob"
                 and item.is_once
                 and item.expires_at
+                and item.rule_owner == "ops@corp.example"
+                and item.effective_reason == "Bulk replay guard"
+                and item.next_review_at
                 for item in self.app.state.exception_rule_repo.list_rule_records()
             )
         )
@@ -452,10 +469,13 @@ class WebAuthorizationTests(unittest.TestCase):
         export_response = self._route("/exceptions/export", "GET")(self._request("/exceptions/export"))
         self.assertEqual(export_response.status_code, 200)
         export_text = self._response_body(export_response).decode("utf-8-sig")
-        self.assertIn("rule_type,match_value,notes,is_enabled,expires_at,is_once", export_text)
-        self.assertIn("skip_user_disable,alice,keep enabled,true,", export_text)
+        self.assertIn(
+            "rule_type,match_value,rule_owner,effective_reason,notes,is_enabled,expires_at,next_review_at,is_once,last_reviewed_at,hit_count,last_hit_at",
+            export_text,
+        )
+        self.assertIn("skip_user_disable,alice,iam@corp.example,Grace period before disable,keep enabled,true,", export_text)
         self.assertIn(",true", export_text)
-        self.assertIn("skip_user_sync,bob,bulk import,true,", export_text)
+        self.assertIn("skip_user_sync,bob,ops@corp.example,Bulk replay guard,bulk import,true,", export_text)
 
     def test_super_admin_can_manage_advanced_sync_settings_connectors_and_mappings(self):
         self._login("superadmin")
@@ -464,6 +484,10 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
         self.assertIn("Advanced Sync", body)
+        self.assertIn('href="/automation-center"', body)
+        self.assertIn('href="/data-quality"', body)
+        self.assertIn('href="/integrations"', body)
+        self.assertIn('href="/lifecycle"', body)
         self.assertIn("All advanced capabilities are opt-in.", body)
         self.assertIn("Pending Lifecycle Queue", body)
         self.assertIn("Pending Replay Requests", body)
@@ -618,6 +642,116 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(mapping_records[0].source_department_id, "20018")
         self.assertEqual(mapping_records[0].target_ou_path, "Managed Users/China")
         self.assertEqual(mapping_records[0].apply_mode, "subtree")
+
+    def test_super_admin_can_use_lifecycle_workbench(self):
+        self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
+        now = datetime.now(timezone.utc)
+
+        self.app.state.offboarding_repo.upsert_pending(
+            connector_id="default",
+            source_user_id="off-001",
+            ad_username="off.001",
+            due_at=(now - timedelta(hours=2)).isoformat(timespec="seconds"),
+            org_id="default",
+            reason="source account missing",
+            manager_userids=["manager.off"],
+        )
+        self.app.state.lifecycle_repo.upsert_pending(
+            lifecycle_type="contractor_expiry",
+            connector_id="default",
+            source_user_id="contract-001",
+            ad_username="contract.001",
+            effective_at=(now + timedelta(days=2)).isoformat(timespec="seconds"),
+            org_id="default",
+            reason="contract reached end date",
+            employment_type="contractor",
+            sponsor_userid="sponsor.contract",
+            manager_userids=["manager.contract"],
+        )
+        replay_request_id = self.app.state.replay_request_repo.enqueue_request(
+            request_type="seed_replay",
+            execution_mode="apply",
+            requested_by="superadmin",
+            target_scope="source_user",
+            target_id="seed-user",
+            trigger_reason="seeded_for_lifecycle_test",
+            org_id="default",
+        )
+
+        offboarding_record = self.app.state.offboarding_repo.get_record(
+            connector_id="default",
+            ad_username="off.001",
+            org_id="default",
+        )
+        contractor_record = self.app.state.lifecycle_repo.get_record_for_source_user(
+            lifecycle_type="contractor_expiry",
+            connector_id="default",
+            source_user_id="contract-001",
+            org_id="default",
+        )
+        self.assertIsNotNone(offboarding_record)
+        self.assertIsNotNone(contractor_record)
+
+        response = self._route("/lifecycle", "GET")(self._request("/lifecycle"))
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("Lifecycle Workbench", body)
+        self.assertIn("Future Onboarding Queue", body)
+        self.assertIn("Contractor Expiry Queue", body)
+        self.assertIn("Offboarding Grace Queue", body)
+        self.assertIn("Replay Queue", body)
+        self.assertIn("Actionable Now", body)
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', body)
+        self.assertIsNotNone(csrf_match)
+        csrf_token = csrf_match.group(1)
+
+        replay_response = self._route("/lifecycle/replay", "POST")(
+            self._request("/lifecycle/replay", "POST"),
+            csrf_token=csrf_token,
+            action="retry",
+            request_ids=[replay_request_id],
+        )
+        self.assertEqual(replay_response.status_code, 303)
+        self.assertEqual(replay_response.headers["location"], "/lifecycle")
+        original_replay_request = self.app.state.replay_request_repo.get_request_record(replay_request_id)
+        self.assertIsNotNone(original_replay_request)
+        self.assertEqual(original_replay_request.status, "superseded")
+
+        offboarding_response = self._route("/lifecycle/offboarding", "POST")(
+            self._request("/lifecycle/offboarding", "POST"),
+            csrf_token=csrf_token,
+            action="approve",
+            record_ids=[offboarding_record.id],
+            delay_days=1,
+        )
+        self.assertEqual(offboarding_response.status_code, 303)
+        self.assertEqual(offboarding_response.headers["location"], "/lifecycle")
+        pending_replay_requests = self.app.state.replay_request_repo.list_request_records(
+            status="pending",
+            org_id="default",
+            limit=10,
+        )
+        self.assertGreaterEqual(len(pending_replay_requests), 2)
+
+        lifecycle_response = self._route("/lifecycle/lifecycle-queue", "POST")(
+            self._request("/lifecycle/lifecycle-queue", "POST"),
+            csrf_token=csrf_token,
+            lifecycle_type="contractor_expiry",
+            action="defer",
+            record_ids=[contractor_record.id],
+            delay_days=3,
+        )
+        self.assertEqual(lifecycle_response.status_code, 303)
+        self.assertEqual(lifecycle_response.headers["location"], "/lifecycle")
+        self.assertTrue(
+            any(
+                rule.rule_type == "skip_user_disable"
+                and rule.match_value == "contract-001"
+                and rule.expires_at
+                for rule in self.app.state.exception_rule_repo.list_enabled_rule_records(org_id="default")
+            )
+        )
 
     def test_advanced_sync_username_preview_returns_managed_candidate_details(self):
         self._login("superadmin")
@@ -843,6 +977,365 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(issues_by_key["managed_username_collision"]["count"], 1)
         self.assertIn("alice1", issues_by_key["managed_username_collision"]["samples"][0]["detail"])
         self.assertEqual(issues_by_key["naming_prerequisite_gap"]["count"], 1)
+        self.assertGreaterEqual(len(snapshot["repair_items"]), 5)
+        self.assertGreaterEqual(len(snapshot["high_risk_items"]), 2)
+
+    def test_super_admin_can_use_data_quality_center(self):
+        self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
+        self.app.state.connector_repo.upsert_connector(
+            connector_id="primary",
+            org_id="default",
+            name="Primary Naming Rule",
+            config_path=str(self.config_path),
+            root_department_ids=[],
+            username_strategy="email_localpart",
+            username_collision_policy="append_employee_id",
+            username_template="",
+            is_enabled=True,
+        )
+
+        page = self._route("/data-quality", "GET")(self._request("/data-quality"))
+        self.assertEqual(page.status_code, 200)
+        page_text = self._text(page)
+        self.assertIn("Data Quality Center", page_text)
+        self.assertIn("Run Snapshot", page_text)
+        self.assertIn("No snapshots yet", page_text)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', page_text)
+        self.assertIsNotNone(match)
+
+        class FakeSourceProvider:
+            def list_departments(self):
+                return [
+                    DepartmentNode(department_id=1, name="Headquarters", parent_id=0),
+                    DepartmentNode(department_id=2, name="Sales", parent_id=1),
+                ]
+
+            def list_department_users(self, department_id: int):
+                rows = {
+                    1: [
+                        {
+                            "userid": "alice1",
+                            "name": "Alice One",
+                            "email": "alice@example.com",
+                            "employee_id": "1001",
+                            "department": [1],
+                        },
+                        {
+                            "userid": "alice2",
+                            "name": "Alice Two",
+                            "email": "alice@regional.example.com",
+                            "employee_id": "1002",
+                            "department": [1],
+                        },
+                        {
+                            "userid": "bob",
+                            "name": "Bob",
+                            "email": "",
+                            "department": [1],
+                        },
+                    ],
+                    2: [
+                        {
+                            "userid": "carol",
+                            "name": "Carol",
+                            "email": "carol@example.com",
+                            "department": [2],
+                        },
+                    ],
+                }
+                return [SourceDirectoryUser.from_source_payload(item) for item in rows.get(department_id, [])]
+
+            def get_user_detail(self, source_user_id: str):
+                detail_rows = {
+                    "alice1": {
+                        "userid": "alice1",
+                        "name": "Alice One",
+                        "email": "alice@example.com",
+                        "employee_id": "1001",
+                        "department": [1],
+                    },
+                    "alice2": {
+                        "userid": "alice2",
+                        "name": "Alice Two",
+                        "email": "alice@regional.example.com",
+                        "employee_id": "1002",
+                        "department": [1],
+                    },
+                    "bob": {
+                        "userid": "bob",
+                        "name": "Bob",
+                        "email": "",
+                        "department": [1],
+                    },
+                    "carol": {
+                        "userid": "carol",
+                        "name": "Carol",
+                        "email": "carol@example.com",
+                        "department": [2],
+                    },
+                }
+                return detail_rows.get(source_user_id, {})
+
+            def search_users(self, _query: str, limit: int = 20):
+                return []
+
+            def close(self):
+                return None
+
+        with patch("sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()):
+            run_response = self._route("/data-quality/run", "POST")(
+                self._request("/data-quality/run", "POST"),
+                csrf_token=match.group(1),
+            )
+        self.assertEqual(run_response.status_code, 303)
+        self.assertIn("/data-quality?snapshot_id=", run_response.headers["location"])
+
+        snapshots = self.app.state.data_quality_snapshot_repo.list_snapshot_records(org_id="default", limit=5)
+        self.assertEqual(len(snapshots), 1)
+        snapshot_id = snapshots[0].id
+
+        center_response = self._route("/data-quality", "GET")(
+            self._request("/data-quality", query={"snapshot_id": str(snapshot_id)})
+        )
+        self.assertEqual(center_response.status_code, 200)
+        center_text = self._text(center_response)
+        self.assertIn("Trend History", center_text)
+        self.assertIn("Repair Export Preview", center_text)
+        self.assertIn("Current Issue Summary", center_text)
+        self.assertIn("Predicted managed username collisions", center_text)
+
+        export_response = self._route("/data-quality/export", "GET")(
+            self._request("/data-quality/export", query={"snapshot_id": str(snapshot_id)})
+        )
+        self.assertEqual(export_response.status_code, 200)
+        export_text = self._response_body(export_response).decode("utf-8-sig")
+        self.assertIn(
+            "issue_key,issue_label,severity,title,source_user_id,source_user_ids,display_name,connector_id,connector_name,detail,action",
+            export_text,
+        )
+        self.assertIn("missing_email", export_text)
+        self.assertIn("managed_username_collision", export_text)
+
+    def test_super_admin_can_use_automation_center(self):
+        self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
+
+        self.app.state.job_repo.create_job(
+            "job-automation-dryrun",
+            trigger_type="unit_test",
+            execution_mode="dry_run",
+            status="COMPLETED",
+            org_id="default",
+            started_at="2026-04-21T00:00:00+00:00",
+        )
+        self.app.state.job_repo.update_job(
+            "job-automation-dryrun",
+            summary={
+                "planned_operation_count": 5,
+                "conflict_count": 1,
+                "high_risk_operation_count": 2,
+                "review_required": True,
+            },
+        )
+        self.app.state.conflict_repo.add_conflict(
+            job_id="job-automation-dryrun",
+            conflict_type="multiple_ad_candidates",
+            source_id="alice",
+            target_key="identity_binding",
+            message="needs review",
+        )
+        self.app.state.review_repo.upsert_review_request(
+            job_id="job-automation-dryrun",
+            plan_fingerprint="plan-automation",
+            config_snapshot_hash="cfg-automation",
+            high_risk_operation_count=2,
+        )
+        self.app.state.exception_rule_repo.upsert_rule(
+            rule_type="skip_user_disable",
+            match_value="alice",
+            org_id="default",
+            notes="Grace period",
+            expires_at=(datetime.now(timezone.utc) + timedelta(days=3)).isoformat(timespec="seconds"),
+        )
+
+        response = self._route("/automation-center", "GET")(self._request("/automation-center"))
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("Notification And Automation Center", body)
+        self.assertIn("Scheduled Apply Readiness", body)
+        self.assertIn("Conflict Backlog", body)
+        self.assertIn("High-Risk Approval Queue", body)
+        self.assertIn("Rule Expiry And Review", body)
+        self.assertIn("job-automation-dryrun", body)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', body)
+        self.assertIsNotNone(match)
+
+        save_response = self._route("/automation-center/policies", "POST")(
+            self._request("/automation-center/policies", "POST"),
+            csrf_token=match.group(1),
+            schedule_execution_mode="apply",
+            ops_notify_dry_run_failure_enabled="1",
+            ops_notify_conflict_backlog_enabled="1",
+            ops_notify_conflict_backlog_threshold=2,
+            ops_notify_review_pending_enabled="1",
+            ops_notify_rule_governance_enabled="1",
+            ops_scheduled_apply_gate_enabled="1",
+            ops_scheduled_apply_max_dry_run_age_hours=12,
+            ops_scheduled_apply_requires_zero_conflicts="1",
+            ops_scheduled_apply_requires_review_approval="1",
+        )
+        self.assertEqual(save_response.status_code, 303)
+        self.assertEqual(save_response.headers["location"], "/automation-center")
+        self.assertTrue(self.app.state.settings_repo.get_bool("ops_notify_dry_run_failure_enabled", False, org_id="default"))
+        self.assertTrue(self.app.state.settings_repo.get_bool("ops_notify_conflict_backlog_enabled", False, org_id="default"))
+        self.assertEqual(
+            self.app.state.settings_repo.get_int("ops_notify_conflict_backlog_threshold", 0, org_id="default"),
+            2,
+        )
+        self.assertTrue(self.app.state.settings_repo.get_bool("ops_notify_review_pending_enabled", False, org_id="default"))
+        self.assertTrue(self.app.state.settings_repo.get_bool("ops_notify_rule_governance_enabled", False, org_id="default"))
+        self.assertTrue(self.app.state.settings_repo.get_bool("ops_scheduled_apply_gate_enabled", False, org_id="default"))
+        self.assertEqual(
+            self.app.state.settings_repo.get_int("ops_scheduled_apply_max_dry_run_age_hours", 0, org_id="default"),
+            12,
+        )
+
+    def test_super_admin_can_manage_external_integrations_and_use_integration_api(self):
+        self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
+
+        self.app.state.job_repo.create_job(
+            "job-integration-001",
+            trigger_type="manual",
+            execution_mode="dry_run",
+            status="COMPLETED",
+            org_id="default",
+            started_at="2026-04-21T00:00:00+00:00",
+        )
+        self.app.state.job_repo.update_job(
+            "job-integration-001",
+            summary={
+                "planned_operation_count": 4,
+                "conflict_count": 1,
+                "high_risk_operation_count": 1,
+                "review_required": True,
+                "plan_fingerprint": "plan-integration-001",
+            },
+            ended=True,
+        )
+        self.app.state.conflict_repo.add_conflict(
+            job_id="job-integration-001",
+            conflict_type="multiple_ad_candidates",
+            source_id="alice",
+            target_key="identity_binding",
+            message="needs identity decision",
+        )
+        self.app.state.review_repo.upsert_review_request(
+            job_id="job-integration-001",
+            plan_fingerprint="plan-integration-001",
+            config_snapshot_hash="cfg-integration-001",
+            high_risk_operation_count=1,
+        )
+
+        response = self._route("/integrations", "GET")(self._request("/integrations"))
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("External Integration Center", body)
+        self.assertIn("/api/integrations/orgs/default/jobs", body)
+        self.assertIn("Webhook Subscriptions", body)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', body)
+        self.assertIsNotNone(match)
+        csrf_token = match.group(1)
+
+        rotate_response = self._route("/integrations/token/rotate", "POST")(
+            self._request("/integrations/token/rotate", "POST"),
+            csrf_token=csrf_token,
+        )
+        self.assertEqual(rotate_response.status_code, 303)
+        self.assertEqual(rotate_response.headers["location"], "/integrations")
+        integration_token = self.app.state.settings_repo.get_value(
+            "integration_api_token",
+            "",
+            org_id="default",
+            fallback_to_global=False,
+        )
+        self.assertTrue(integration_token)
+
+        save_response = self._route("/integrations/subscriptions", "POST")(
+            self._request("/integrations/subscriptions", "POST"),
+            csrf_token=csrf_token,
+            event_type="job.completed",
+            target_url="https://example.invalid/hooks/jobs",
+            secret="shared-secret",
+            description="Job status sink",
+            is_enabled="1",
+        )
+        self.assertEqual(save_response.status_code, 303)
+        self.assertEqual(save_response.headers["location"], "/integrations")
+        subscription_records = self.app.state.integration_webhook_subscription_repo.list_subscription_records(
+            org_id="default",
+            limit=10,
+        )
+        self.assertEqual(len(subscription_records), 1)
+        self.assertEqual(subscription_records[0].event_type, "job.completed")
+        subscription_id = int(subscription_records[0].id or 0)
+
+        with TestClient(self.app) as client:
+            unauthorized = client.get("/api/integrations/orgs/default/jobs", follow_redirects=False)
+            self.assertEqual(unauthorized.status_code, 401)
+
+            headers = {"Authorization": f"Bearer {integration_token}"}
+            jobs_response = client.get("/api/integrations/orgs/default/jobs", headers=headers)
+            self.assertEqual(jobs_response.status_code, 200)
+            jobs_payload = jobs_response.json()
+            self.assertTrue(jobs_payload["ok"])
+            self.assertEqual(jobs_payload["items"][0]["job_id"], "job-integration-001")
+
+            job_response = client.get("/api/integrations/orgs/default/jobs/job-integration-001", headers=headers)
+            self.assertEqual(job_response.status_code, 200)
+            self.assertTrue(job_response.json()["item"]["review_required"])
+
+            conflicts_response = client.get(
+                "/api/integrations/orgs/default/conflicts?status=open",
+                headers=headers,
+            )
+            self.assertEqual(conflicts_response.status_code, 200)
+            self.assertEqual(conflicts_response.json()["count"], 1)
+
+            approve_response = client.post(
+                "/api/integrations/orgs/default/reviews/job-integration-001/approve",
+                headers=headers,
+                json={
+                    "reviewer_username": "itsm-workflow",
+                    "review_notes": "Approved externally",
+                },
+            )
+            self.assertEqual(approve_response.status_code, 200)
+            approval_payload = approve_response.json()
+            self.assertTrue(approval_payload["ok"])
+            self.assertTrue(approval_payload["fresh_approval"])
+            self.assertEqual(approval_payload["review"]["status"], "approved")
+
+        updated_review = self.app.state.review_repo.get_review_record_by_job_id("job-integration-001")
+        self.assertIsNotNone(updated_review)
+        self.assertEqual(updated_review.status, "approved")
+
+        delete_response = self._route("/integrations/subscriptions/{subscription_id}/delete", "POST")(
+            self._request(f"/integrations/subscriptions/{subscription_id}/delete", "POST"),
+            subscription_id=subscription_id,
+            csrf_token=csrf_token,
+        )
+        self.assertEqual(delete_response.status_code, 303)
+        self.assertEqual(
+            len(
+                self.app.state.integration_webhook_subscription_repo.list_subscription_records(
+                    org_id="default",
+                    limit=10,
+                )
+            ),
+            0,
+        )
 
     def test_jobs_page_shows_execution_readiness_and_impact_preview(self):
         self._login("superadmin")
@@ -1034,6 +1527,70 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIsNone(self.app.state.user_binding_repo.get_binding_record_by_source_user_id("ghost"))
         self.assertIn("does not exist", self.session["_flash"]["message"])
 
+    def test_super_admin_can_save_mapping_governance_metadata(self):
+        self._login("superadmin")
+
+        response = self._route("/mappings", "GET")(self._request("/mappings"))
+        self.assertEqual(response.status_code, 200)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(response))
+        self.assertIsNotNone(match)
+        csrf_token = match.group(1)
+
+        with patch(
+            "sync_app.web.sync_support.SyncSupport.source_user_exists_in_source_provider",
+            return_value=(True, None),
+        ), patch(
+            "sync_app.web.sync_support.SyncSupport.validate_binding_target",
+            return_value=None,
+        ):
+            bind_response = self._route("/mappings/bind", "POST")(
+                self._request("/mappings/bind", "POST"),
+                csrf_token=csrf_token,
+                source_user_id="alice",
+                ad_username="alice.ad",
+                rule_owner="iam@corp.example",
+                effective_reason="Known legacy mailbox binding",
+                next_review_at="2026-05-01T09:00:00+00:00",
+                notes="legacy note",
+            )
+
+        self.assertEqual(bind_response.status_code, 303)
+        binding = self.app.state.user_binding_repo.get_binding_record_by_source_user_id("alice")
+        self.assertIsNotNone(binding)
+        self.assertEqual(binding.rule_owner, "iam@corp.example")
+        self.assertEqual(binding.effective_reason, "Known legacy mailbox binding")
+        self.assertEqual(binding.next_review_at, "2026-05-01T09:00:00+00:00")
+        self.assertTrue(binding.last_reviewed_at)
+
+        with patch(
+            "sync_app.web.sync_support.SyncSupport.source_user_exists_in_source_provider",
+            return_value=(True, None),
+        ), patch(
+            "sync_app.web.sync_support.SyncSupport.department_exists_in_source_provider",
+            return_value=(True, None),
+        ), patch(
+            "sync_app.web.sync_support.SyncSupport.source_user_has_department",
+            return_value=(True, None),
+        ):
+            override_response = self._route("/mappings/override", "POST")(
+                self._request("/mappings/override", "POST"),
+                csrf_token=csrf_token,
+                source_user_id="alice",
+                primary_department_id="1001",
+                rule_owner="ops@corp.example",
+                effective_reason="Primary placement must stay in HQ",
+                next_review_at="2026-05-02T09:00:00+00:00",
+                notes="override note",
+            )
+
+        self.assertEqual(override_response.status_code, 303)
+        override = self.app.state.department_override_repo.get_override_record_by_source_user_id("alice")
+        self.assertIsNotNone(override)
+        self.assertEqual(override.rule_owner, "ops@corp.example")
+        self.assertEqual(override.effective_reason, "Primary placement must stay in HQ")
+        self.assertEqual(override.next_review_at, "2026-05-02T09:00:00+00:00")
+        self.assertTrue(override.last_reviewed_at)
+
     def test_super_admin_cannot_save_department_override_outside_selected_user_scope(self):
         self._login("superadmin")
 
@@ -1071,7 +1628,7 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertEqual(mappings_response.status_code, 200)
         mappings_text = self._text(mappings_response)
         self.assertIn("Source User ID", mappings_text)
-        self.assertIn("Search source user, AD user, or notes", mappings_text)
+        self.assertIn("Search source user, AD user, owner, or reason", mappings_text)
         self.assertNotIn("WeCom User ID", mappings_text)
         self.assertNotIn("Search WeCom user, AD user, or notes", mappings_text)
 
@@ -1438,6 +1995,7 @@ class WebAuthorizationTests(unittest.TestCase):
         response_text = self._text(response)
         self.assertIn("Recommended Action", response_text)
         self.assertIn("Apply Recommendation", response_text)
+        self.assertIn(f"/conflicts/{conflict_id}/decision-guide", response_text)
         self.assertIn("alice", response_text)
         match = re.search(r'name="csrf_token" value="([^"]+)"', response_text)
         self.assertIsNotNone(match)
@@ -1516,6 +2074,118 @@ class WebAuthorizationTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 303)
         self.assertEqual(self.app.state.conflict_repo.get_conflict_record(conflict_id).status, "resolved")
+
+    def test_conflict_decision_guide_page_renders_binding_outcomes(self):
+        self._login("superadmin")
+        self.app.state.job_repo.create_job(
+            "job-conflict-guide",
+            trigger_type="unit_test",
+            execution_mode="dry_run",
+            status="COMPLETED",
+        )
+        conflict_id = self.app.state.conflict_repo.add_conflict(
+            job_id="job-conflict-guide",
+            conflict_type="multiple_ad_candidates",
+            source_id="alice",
+            target_key="identity_binding",
+            message="alice matched multiple AD candidates",
+            resolution_hint="create manual binding",
+            details={
+                "userid": "alice",
+                "candidates": [
+                    {"rule": "existing_ad_userid", "username": "alice"},
+                    {"rule": "existing_ad_email_localpart", "username": "alice.alt"},
+                ],
+            },
+        )
+
+        with patch(
+            "sync_app.web.sync_support.SyncSupport.build_conflict_decision_guide",
+            return_value={
+                "source_user": {"userid": "alice", "name": "Alice Zhang", "email": "alice@example.com"},
+                "routing": {
+                    "binding": None,
+                    "target_department": {"name": "Headquarters"},
+                    "target_ou_path": "Managed Users/HQ",
+                    "placement_reason": "source_primary_department",
+                    "username_preview": {"primary_candidate": {"username": "alice"}},
+                },
+                "routing_error": "",
+                "recommendation": {"label": "Create manual binding", "reason": "alice is the strongest match"},
+                "candidate_options": [
+                    {
+                        "username": "alice",
+                        "rule": "existing_ad_userid",
+                        "explanation": "Matches source userid directly.",
+                        "is_recommended": True,
+                        "is_selected": True,
+                    },
+                    {
+                        "username": "alice.alt",
+                        "rule": "existing_ad_email_localpart",
+                        "explanation": "Matches email local part.",
+                        "is_recommended": False,
+                        "is_selected": False,
+                    },
+                ],
+                "selected_target_username": "alice",
+                "selected_connector": {"connector_id": "default", "name": "Default Connector"},
+                "target_account": {
+                    "username": "alice",
+                    "exists": True,
+                    "enabled": True,
+                    "display_name": "Alice Zhang",
+                    "mail": "alice@example.com",
+                    "title": "Engineer",
+                    "description": "",
+                    "telephone_number": "",
+                    "last_logon": "2026-04-16T08:00:00+00:00",
+                    "distinguished_name": "CN=Alice Zhang,OU=Managed Users,OU=HQ,DC=example,DC=local",
+                    "ou_path": "HQ/Managed Users",
+                },
+                "existing_binding_owner": None,
+                "field_updates": [
+                    {"name": "displayName", "source": "Core user sync"},
+                    {"name": "mail", "source": "Core user sync"},
+                    {"name": "title", "source": "position"},
+                ],
+                "shared_source_user_ids": [],
+                "decision": {
+                    "bind_now": {
+                        "status": "success",
+                        "action": "update_user",
+                        "label": "Update existing AD account",
+                        "summary": "The next sync should update alice under the current field ownership rules.",
+                        "will_create_new_account": False,
+                        "will_conflict_continue": False,
+                        "notes": ["Choosing alice should clear this ambiguity."],
+                    },
+                    "without_binding": {
+                        "status": "warning",
+                        "summary": "If you do not bind, the conflict stays open.",
+                        "will_create_new_account": False,
+                        "will_conflict_continue": True,
+                        "notes": ["The system still sees multiple existing AD matches."],
+                    },
+                },
+            },
+        ):
+            response = self._route("/conflicts/{conflict_id}/decision-guide", "GET")(
+                self._request(
+                    f"/conflicts/{conflict_id}/decision-guide",
+                    query={"return_status": "open", "return_job_id": "job-conflict-guide"},
+                ),
+                conflict_id=conflict_id,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("Same-Account Decision Guide", body)
+        self.assertIn("If You Bind This Account", body)
+        self.assertIn("If You Do Not Bind", body)
+        self.assertIn("Expected AD Field Updates", body)
+        self.assertIn("Bind This AD Account", body)
+        self.assertIn("alice.alt", body)
 
     def test_conflicts_page_uses_database_pagination(self):
         self._login("superadmin")
@@ -1642,6 +2312,119 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertNotIn("operation-message-00", response_text)
         self.assertIn("job-detail-conflict-29", response_text)
         self.assertNotIn("job-detail-conflict-00", response_text)
+
+    def test_job_detail_shows_change_comparison_for_previous_dry_run_and_apply(self):
+        self._login("superadmin")
+
+        previous_apply_job_id = "job-compare-apply"
+        previous_dry_run_job_id = "job-compare-dry-prev"
+        current_job_id = "job-compare-dry-current"
+
+        self.app.state.job_repo.create_job(
+            previous_apply_job_id,
+            trigger_type="unit_test",
+            execution_mode="apply",
+            status="COMPLETED",
+            started_at="2026-04-15T00:00:00+00:00",
+        )
+        self.app.state.planned_operation_repo.add_operation(
+            previous_apply_job_id,
+            "user",
+            "create_user",
+            source_id="alice",
+            target_dn="CN=alice,OU=Managed,DC=example,DC=local",
+        )
+        self.app.state.job_repo.update_job(
+            previous_apply_job_id,
+            planned_operation_count=1,
+            summary={"planned_operation_count": 1, "conflict_count": 0, "high_risk_operation_count": 0},
+        )
+
+        self.app.state.job_repo.create_job(
+            previous_dry_run_job_id,
+            trigger_type="unit_test",
+            execution_mode="dry_run",
+            status="COMPLETED",
+            started_at="2026-04-16T00:00:00+00:00",
+        )
+        self.app.state.planned_operation_repo.add_operation(
+            previous_dry_run_job_id,
+            "user",
+            "create_user",
+            source_id="alice",
+            target_dn="CN=alice,OU=Managed,DC=example,DC=local",
+            desired_state={"mail": "alice@example.com"},
+            risk_level="normal",
+        )
+        self.app.state.conflict_repo.add_conflict(
+            job_id=previous_dry_run_job_id,
+            conflict_type="multiple_ad_candidates",
+            source_id="alice",
+            target_key="identity_binding",
+            message="previous dry-run conflict",
+        )
+        self.app.state.job_repo.update_job(
+            previous_dry_run_job_id,
+            planned_operation_count=1,
+            summary={"planned_operation_count": 1, "conflict_count": 1, "high_risk_operation_count": 0},
+        )
+
+        self.app.state.job_repo.create_job(
+            current_job_id,
+            trigger_type="unit_test",
+            execution_mode="dry_run",
+            status="COMPLETED",
+            started_at="2026-04-17T00:00:00+00:00",
+        )
+        self.app.state.planned_operation_repo.add_operation(
+            current_job_id,
+            "user",
+            "create_user",
+            source_id="alice",
+            target_dn="CN=alice,OU=Managed,DC=example,DC=local",
+            desired_state={"mail": "alice@corp.example"},
+            risk_level="high",
+        )
+        self.app.state.planned_operation_repo.add_operation(
+            current_job_id,
+            "group",
+            "create_group",
+            source_id="dept-02",
+            target_dn="CN=Dept02,OU=Managed,DC=example,DC=local",
+        )
+        self.app.state.conflict_repo.add_conflict(
+            job_id=current_job_id,
+            conflict_type="multiple_ad_candidates",
+            source_id="alice",
+            target_key="identity_binding",
+            message="previous dry-run conflict",
+        )
+        self.app.state.conflict_repo.add_conflict(
+            job_id=current_job_id,
+            conflict_type="shared_ad_account",
+            source_id="bob",
+            target_key="bob",
+            message="current dry-run shared account conflict",
+        )
+        self.app.state.job_repo.update_job(
+            current_job_id,
+            planned_operation_count=2,
+            summary={"planned_operation_count": 2, "conflict_count": 2, "high_risk_operation_count": 1},
+        )
+
+        response = self._route("/jobs/{job_id}", "GET")(
+            self._request(f"/jobs/{current_job_id}"),
+            job_id=current_job_id,
+        )
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("Change Comparison", body)
+        self.assertIn("Compared With Previous Successful Dry Run", body)
+        self.assertIn("Compared With Previous Apply", body)
+        self.assertIn(previous_dry_run_job_id, body)
+        self.assertIn(previous_apply_job_id, body)
+        self.assertIn("shared_ad_account", body)
+        self.assertIn("Changed Target Objects", body)
 
     def test_audit_page_supports_search_and_pagination(self):
         self._login("superadmin")
@@ -1841,6 +2624,7 @@ class WebAuthorizationTests(unittest.TestCase):
         response_text = self._text(response)
         self.assertIn("Rule Governance Snapshot", response_text)
         self.assertIn("Manual rules without notes", response_text)
+        self.assertIn("Manual rules without owner", response_text)
         self.assertIn("Exception rules expiring soon", response_text)
         self.assertIn("Expired exception rules still enabled", response_text)
         self.assertIn("Rules pending review", response_text)
@@ -1948,6 +2732,8 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn("Expired exception rules still enabled", response_text)
         self.assertIn("Exception rules expiring soon", response_text)
         self.assertIn("Manual rules without notes", response_text)
+        self.assertIn("Manual rules without owner", response_text)
+        self.assertIn("Rules pending review", response_text)
         self.assertIn("legacy-user -&gt; legacy.ad", response_text)
         self.assertIn("temp-user -&gt; 2001", response_text)
         self.assertIn("skip_department_placement: 2001", response_text)
@@ -2027,6 +2813,104 @@ class WebAuthorizationTests(unittest.TestCase):
         self.assertIn('name="directory_root_ou_path"', text)
         self.assertIn('name="disabled_users_ou_path"', text)
         self.assertIn('name="custom_group_ou_path"', text)
+
+    def test_config_page_links_to_release_center(self):
+        self._login("superadmin")
+
+        response = self._route("/config", "GET")(self._request("/config"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('href="/config/releases"', self._text(response))
+
+    def test_super_admin_can_publish_and_rollback_config_release_snapshots(self):
+        self._login("superadmin")
+
+        release_page = self._route("/config/releases", "GET")(self._request("/config/releases"))
+        self.assertEqual(release_page.status_code, 200)
+        release_text = self._text(release_page)
+        self.assertIn("Config Release Center", release_text)
+        self.assertIn("Publish Current Snapshot", release_text)
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', release_text)
+        self.assertIsNotNone(csrf_match)
+
+        publish_response = self._route("/config/releases/publish", "POST")(
+            self._request("/config/releases/publish", "POST"),
+            csrf_token=csrf_match.group(1),
+            snapshot_name="Release Candidate",
+        )
+        self.assertEqual(publish_response.status_code, 303)
+        self.assertEqual(publish_response.headers["location"], "/config/releases")
+
+        snapshots = self.app.state.config_release_snapshot_repo.list_snapshot_records(org_id="default", limit=10)
+        self.assertEqual(len(snapshots), 1)
+        first_snapshot = snapshots[0]
+        self.assertEqual(first_snapshot.snapshot_name, "Release Candidate")
+
+        self.app.state.org_config_repo.save_config(
+            "default",
+            {
+                "corpid": "corp-rollback",
+                "agentid": "10001",
+                "corpsecret": "secret-rollback",
+                "webhook_url": "https://example.invalid/cgi-bin/webhook/send?key=rollback",
+                "ldap_server": "dc99.example.local",
+                "ldap_domain": "example.local",
+                "ldap_username": "administrator",
+                "ldap_password": "Password123!",
+                "ldap_use_ssl": True,
+                "ldap_port": 636,
+                "ldap_validate_cert": False,
+                "ldap_ca_cert_path": "",
+                "default_password": "ChangeMe123!",
+                "force_change_password": True,
+                "password_complexity": "strong",
+            },
+            config_path=str(self.config_path),
+        )
+
+        changed_release_page = self._route("/config/releases", "GET")(self._request("/config/releases"))
+        self.assertEqual(changed_release_page.status_code, 200)
+        changed_release_text = self._text(changed_release_page)
+        self.assertIn("Unpublished", changed_release_text)
+        self.assertIn("Unpublished Configuration Changes", changed_release_text)
+        rollback_csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', changed_release_text)
+        self.assertIsNotNone(rollback_csrf_match)
+
+        rollback_response = self._route("/config/releases/{snapshot_id}/rollback", "POST")(
+            self._request(f"/config/releases/{first_snapshot.id}/rollback", "POST"),
+            snapshot_id=first_snapshot.id,
+            csrf_token=rollback_csrf_match.group(1),
+        )
+        self.assertEqual(rollback_response.status_code, 303)
+        self.assertEqual(rollback_response.headers["location"], "/config/releases")
+
+        restored_config = self.app.state.org_config_repo.get_editable_config(
+            "default",
+            config_path=str(self.config_path),
+        )
+        self.assertEqual(restored_config["corpid"], "corp-001")
+        self.assertEqual(restored_config["ldap_server"], "dc01.example.local")
+
+        trigger_actions = [
+            record.trigger_action
+            for record in self.app.state.config_release_snapshot_repo.list_snapshot_records(
+                org_id="default",
+                limit=10,
+            )
+        ]
+        self.assertIn("rollback", trigger_actions)
+
+        download_response = self._route("/config/releases/{snapshot_id}/download", "GET")(
+            self._request(f"/config/releases/{first_snapshot.id}/download"),
+            snapshot_id=first_snapshot.id,
+        )
+        self.assertEqual(download_response.status_code, 200)
+        self.assertIn(
+            f'attachment; filename="default-config-release-{first_snapshot.id}.json"',
+            download_response.headers.get("content-disposition", ""),
+        )
+        download_payload = json.loads(self._text(download_response))
+        self.assertEqual(download_payload["organization"]["org_id"], "default")
+        self.assertEqual(download_payload["organization_config"]["corpid"], "corp-001")
 
     def test_config_source_unit_catalog_returns_department_tree(self):
         self._login("superadmin")
@@ -3139,6 +4023,10 @@ class WebAuthorizationTests(unittest.TestCase):
         dashboard_text = self._text(dashboard)
         self.assertIn('action="/ui-mode"', dashboard_text)
         self.assertNotIn('href="/advanced-sync"', dashboard_text)
+        self.assertNotIn('href="/automation-center"', dashboard_text)
+        self.assertNotIn('href="/data-quality"', dashboard_text)
+        self.assertNotIn('href="/integrations"', dashboard_text)
+        self.assertNotIn('href="/lifecycle"', dashboard_text)
         self.assertNotIn('href="/mappings"', dashboard_text)
         self.assertNotIn('href="/organizations"', dashboard_text)
         match = re.search(r'name="csrf_token" value="([^"]+)"', dashboard_text)
@@ -3156,6 +4044,10 @@ class WebAuthorizationTests(unittest.TestCase):
         advanced_dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))
         advanced_text = self._text(advanced_dashboard)
         self.assertIn('href="/advanced-sync"', advanced_text)
+        self.assertIn('href="/automation-center"', advanced_text)
+        self.assertIn('href="/data-quality"', advanced_text)
+        self.assertIn('href="/integrations"', advanced_text)
+        self.assertIn('href="/lifecycle"', advanced_text)
         self.assertIn('href="/mappings"', advanced_text)
         self.assertIn("Identity Overrides", advanced_text)
         self.assertIn('href="/organizations"', advanced_text)

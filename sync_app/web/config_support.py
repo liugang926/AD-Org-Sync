@@ -5,6 +5,12 @@ from typing import Any, Callable, Optional
 from fastapi import FastAPI, Request
 
 from sync_app.core.models import OrganizationRecord, WebAdminUserRecord
+from sync_app.services.config_release import (
+    build_config_release_center_data as _build_config_release_center_data,
+    build_config_release_snapshot_title,
+    publish_current_config_release_snapshot as _publish_current_config_release_snapshot,
+    rollback_config_release_snapshot as _rollback_config_release_snapshot,
+)
 from sync_app.web.config_catalog import (
     build_source_unit_catalog as _build_source_unit_catalog,
     build_target_ou_catalog as _build_target_ou_catalog,
@@ -215,6 +221,77 @@ class ConfigSupport:
             editable_override=editable_override,
             config_change_preview=config_change_preview,
             preview_token=preview_token,
+        )
+
+    def build_config_release_center_context(
+        self,
+        request: Request,
+        *,
+        current_snapshot_id: Optional[int] = None,
+        baseline_snapshot_id: Optional[int] = None,
+    ) -> dict[str, Any]:
+        current_org = self.request_support.get_current_org(request)
+        release_data = _build_config_release_center_data(
+            request.app.state.db_manager,
+            current_org.org_id,
+            current_snapshot_id=current_snapshot_id,
+            baseline_snapshot_id=baseline_snapshot_id,
+        )
+        latest_snapshot = release_data.get("latest_snapshot")
+        selected_current_snapshot = release_data.get("selected_current_snapshot")
+        selected_baseline_snapshot = release_data.get("selected_baseline_snapshot")
+        return {
+            "page": "config",
+            "title": "Config Release Center",
+            "current_org": current_org,
+            "latest_snapshot_title": (
+                build_config_release_snapshot_title(latest_snapshot)
+                if latest_snapshot is not None
+                else ""
+            ),
+            "selected_current_snapshot_title": (
+                build_config_release_snapshot_title(selected_current_snapshot)
+                if selected_current_snapshot is not None
+                else ""
+            ),
+            "selected_baseline_snapshot_title": (
+                build_config_release_snapshot_title(selected_baseline_snapshot)
+                if selected_baseline_snapshot is not None
+                else ""
+            ),
+            **release_data,
+        }
+
+    def publish_config_release_snapshot(
+        self,
+        request: Request,
+        *,
+        user: WebAdminUserRecord,
+        snapshot_name: str = "",
+    ) -> dict[str, Any]:
+        current_org = self.request_support.get_current_org(request)
+        return _publish_current_config_release_snapshot(
+            request.app.state.db_manager,
+            current_org.org_id,
+            created_by=user.username,
+            snapshot_name=str(snapshot_name or "").strip(),
+            trigger_action="manual_release",
+            force=False,
+        )
+
+    def rollback_config_release_snapshot(
+        self,
+        request: Request,
+        *,
+        user: WebAdminUserRecord,
+        snapshot_id: int,
+    ) -> dict[str, Any]:
+        current_org = self.request_support.get_current_org(request)
+        return _rollback_config_release_snapshot(
+            request.app.state.db_manager,
+            snapshot_id,
+            org_id=current_org.org_id,
+            created_by=user.username,
         )
 
     def apply_config_submission(self, request: Request, *, user: WebAdminUserRecord, submission: dict[str, Any]) -> None:

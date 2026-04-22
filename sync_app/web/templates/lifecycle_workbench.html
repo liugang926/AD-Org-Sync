@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Lifecycle Workbench"), t("Review scheduled onboarding, contract expiry, offboarding grace periods, and replay backlog from one daily operations page."), eyebrow=t("Operations"), badge_text=t("Organization Scope"), badge_level="info") %}
+    <div class="surface-inline">
+      <span class="muted">{{ t("Current organization") }}:</span>
+      <strong>{{ current_org.name }}</strong>
+    </div>
+    {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost", icon="waypoints") }}
+    {{ ui.button(t("Open Exceptions"), href="/exceptions", variant="secondary", icon="ban") }}
+    {{ ui.button(t("Open Jobs"), href="/jobs", variant="ghost", icon="refresh-cw") }}
+  {% endcall %}
+
+  <div class="compact-stats">
+    {{ ui.compact_stat(t("Future Onboarding"), summary.future_onboarding_count) }}
+    {{ ui.compact_stat(t("Contract Expiry"), summary.contractor_expiry_count) }}
+    {{ ui.compact_stat(t("Offboarding Grace"), summary.offboarding_count) }}
+    {{ ui.compact_stat(t("Replay Queue"), summary.replay_request_count) }}
+    {{ ui.compact_stat(t("Manual Holds"), summary.manual_hold_count, detail=t("Exception-backed")) }}
+    {{ ui.compact_stat(t("Actionable Now"), summary.actionable_now_count) }}
+  </div>
+
+  <div class="dense-two-col">
+    {% call ui.helper_block(t("How Actions Work"), t("Workbench actions try to use durable state whenever possible instead of only changing a transient queue row."), "info") %}
+      <ul class="helper-list">
+        <li>{{ t("Offboarding approve moves the grace deadline to now and queues replay for the next sync run.") }}</li>
+        <li>{{ t("Lifecycle defer and skip create or update exception rules so the hold survives across sync runs.") }}</li>
+        <li>{{ t("Replay retry creates a fresh replay request and supersedes the original pending entry.") }}</li>
+      </ul>
+    {% endcall %}
+    {% call ui.helper_block(t("Daily Review Focus"), t("Treat this page like a work queue: clear urgent items first, then review anything under manual hold before the next production apply."), "warning") %}
+      <ul class="helper-list">
+        <li>{{ t("Look for Grace Elapsed and Ready items before you leave for the day.") }}</li>
+        <li>{{ t("Manual Holds usually mean an exception rule is suppressing a disable or sync action.") }}</li>
+        <li>{{ t("If an item keeps returning, review the source data and existing exception rules together.") }}</li>
+      </ul>
+    {% endcall %}
+  </div>
+
+  {% call ui.panel(t("Future Onboarding Queue"), description=t("Use defer or skip when a future hire should remain blocked beyond the source start date. Retry is useful after source data changes.")) %}
+    <form method="post" action="/lifecycle/lifecycle-queue" class="page-stack tight">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="lifecycle_type" value="future_onboarding">
+      <div class="actions">
+        <label class="inline-form-field">
+          <span>{{ t("Delay Days") }}</span>
+          <input type="number" min="1" name="delay_days" value="1">
+        </label>
+        {{ ui.button(t("Defer Selected"), type="submit", variant="secondary", icon="clock-3", name="action", value="defer") }}
+        {{ ui.button(t("Skip Selected"), type="submit", variant="ghost", icon="ban", name="action", value="skip") }}
+        {{ ui.button(t("Retry Selected"), type="submit", variant="ghost", icon="refresh-cw", name="action", value="retry") }}
+      </div>
+      {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Select") }}</th>
+            <th>{{ t("Source User ID") }}</th>
+            <th>{{ t("AD Username") }}</th>
+            <th>{{ t("Effective At") }}</th>
+            <th>{{ t("Sponsor") }}</th>
+            <th>{{ t("Managers") }}</th>
+            <th>{{ t("State") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in future_onboarding_rows %}
+          <tr>
+            <td><input type="checkbox" name="record_ids" value="{{ row.record.id }}"></td>
+            <td>{{ row.record.source_user_id or "-" }}</td>
+            <td>{{ row.record.ad_username or "-" }}</td>
+            <td>{{ row.record.effective_at or "-" }}</td>
+            <td>{{ row.record.sponsor_userid or "-" }}</td>
+            <td>{{ row.record.manager_userids|join(", ") if row.record.manager_userids else "-" }}</td>
+            <td>
+              {{ ui.badge(t(row.state.label), row.state.level) }}
+              {% if row.manual_hold %}
+              <div class="muted">
+                {{ row.manual_hold.reason or t("Manual hold is active.") }}
+                {% if row.manual_hold.expires_at %}
+                {{ t("Until {expires_at}", expires_at=row.manual_hold.expires_at) }}
+                {% endif %}
+              </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="7" class="muted">{{ t("No future onboarding records.") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% call ui.panel(t("Contractor Expiry Queue"), description=t("Approve runs the expiry path on the next sync run. Defer or skip creates a skip disable exception so the hold survives.")) %}
+    <form method="post" action="/lifecycle/lifecycle-queue" class="page-stack tight">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="lifecycle_type" value="contractor_expiry">
+      <div class="actions">
+        <label class="inline-form-field">
+          <span>{{ t("Delay Days") }}</span>
+          <input type="number" min="1" name="delay_days" value="1">
+        </label>
+        {{ ui.button(t("Approve Selected"), type="submit", variant="secondary", icon="check", name="action", value="approve") }}
+        {{ ui.button(t("Defer Selected"), type="submit", variant="secondary", icon="clock-3", name="action", value="defer") }}
+        {{ ui.button(t("Skip Selected"), type="submit", variant="ghost", icon="ban", name="action", value="skip") }}
+        {{ ui.button(t("Retry Selected"), type="submit", variant="ghost", icon="refresh-cw", name="action", value="retry") }}
+      </div>
+      {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Select") }}</th>
+            <th>{{ t("Source User ID") }}</th>
+            <th>{{ t("AD Username") }}</th>
+            <th>{{ t("Effective At") }}</th>
+            <th>{{ t("Employment Type") }}</th>
+            <th>{{ t("Sponsor") }}</th>
+            <th>{{ t("State") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in contractor_expiry_rows %}
+          <tr>
+            <td><input type="checkbox" name="record_ids" value="{{ row.record.id }}"></td>
+            <td>{{ row.record.source_user_id or "-" }}</td>
+            <td>{{ row.record.ad_username or "-" }}</td>
+            <td>{{ row.record.effective_at or "-" }}</td>
+            <td>{{ row.record.employment_type or "-" }}</td>
+            <td>{{ row.record.sponsor_userid or "-" }}</td>
+            <td>
+              {{ ui.badge(t(row.state.label), row.state.level) }}
+              {% if row.manual_hold %}
+              <div class="muted">
+                {{ row.manual_hold.reason or t("Manual hold is active.") }}
+                {% if row.manual_hold.expires_at %}
+                {{ t("Until {expires_at}", expires_at=row.manual_hold.expires_at) }}
+                {% endif %}
+              </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="7" class="muted">{{ t("No contractor expiry records.") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% call ui.panel(t("Offboarding Grace Queue"), description=t("Approve moves the selected accounts to immediate disable eligibility. Defer extends the grace deadline. Skip adds a skip disable exception when a source user is known.")) %}
+    <form method="post" action="/lifecycle/offboarding" class="page-stack tight">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="actions">
+        <label class="inline-form-field">
+          <span>{{ t("Delay Days") }}</span>
+          <input type="number" min="1" name="delay_days" value="1">
+        </label>
+        {{ ui.button(t("Approve Selected"), type="submit", variant="secondary", icon="check", name="action", value="approve") }}
+        {{ ui.button(t("Defer Selected"), type="submit", variant="secondary", icon="clock-3", name="action", value="defer") }}
+        {{ ui.button(t("Skip Selected"), type="submit", variant="ghost", icon="ban", name="action", value="skip") }}
+        {{ ui.button(t("Retry Selected"), type="submit", variant="ghost", icon="refresh-cw", name="action", value="retry") }}
+      </div>
+      {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Select") }}</th>
+            <th>{{ t("Source User ID") }}</th>
+            <th>{{ t("AD Username") }}</th>
+            <th>{{ t("Due At") }}</th>
+            <th>{{ t("Managers") }}</th>
+            <th>{{ t("State") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in offboarding_rows %}
+          <tr>
+            <td><input type="checkbox" name="record_ids" value="{{ row.record.id }}"></td>
+            <td>{{ row.record.source_user_id or "-" }}</td>
+            <td>{{ row.record.ad_username or "-" }}</td>
+            <td>{{ row.record.due_at or "-" }}</td>
+            <td>{{ row.record.manager_userids|join(", ") if row.record.manager_userids else "-" }}</td>
+            <td>
+              {{ ui.badge(t(row.state.label), row.state.level) }}
+              {% if row.manual_hold %}
+              <div class="muted">
+                {{ row.manual_hold.reason or t("Manual hold is active.") }}
+                {% if row.manual_hold.expires_at %}
+                {{ t("Until {expires_at}", expires_at=row.manual_hold.expires_at) }}
+                {% endif %}
+              </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6" class="muted">{{ t("No offboarding grace records.") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endcall %}
+    </form>
+  {% endcall %}
+
+  {% call ui.panel(t("Replay Queue"), description=t("Retry creates a fresh replay request and supersedes the selected pending requests. Skip cancels the selected pending requests.")) %}
+    <form method="post" action="/lifecycle/replay" class="page-stack tight">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="actions">
+        {{ ui.button(t("Retry Selected"), type="submit", variant="secondary", icon="refresh-cw", name="action", value="retry") }}
+        {{ ui.button(t("Skip Selected"), type="submit", variant="ghost", icon="ban", name="action", value="skip") }}
+      </div>
+      {% call ui.table_shell() %}
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Select") }}</th>
+            <th>{{ t("Request Type") }}</th>
+            <th>{{ t("Mode") }}</th>
+            <th>{{ t("Scope") }}</th>
+            <th>{{ t("Target") }}</th>
+            <th>{{ t("Requested By") }}</th>
+            <th>{{ t("Created At") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in replay_rows %}
+          <tr>
+            <td><input type="checkbox" name="request_ids" value="{{ row.record.id }}"></td>
+            <td>{{ row.record.request_type or "-" }}</td>
+            <td>{{ row.record.execution_mode or "-" }}</td>
+            <td>{{ row.record.target_scope or "-" }}</td>
+            <td>{{ row.record.target_id or "-" }}</td>
+            <td>{{ row.record.requested_by or "-" }}</td>
+            <td>{{ row.record.created_at or "-" }}</td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="7" class="muted">{{ t("No pending replay requests.") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endcall %}
+    </form>
+  {% endcall %}
+</div>
+{% endblock %}

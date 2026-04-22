@@ -29,6 +29,7 @@ from sync_app.services.runtime_identity import (
     build_identity_candidates,
     resolve_target_department,
 )
+from sync_app.services.conflict_decision import build_binding_decision_summary
 from sync_app.web.request_support import RequestSupport
 
 
@@ -214,6 +215,50 @@ class SyncSupport:
         if not preview.get("primary_candidate"):
             return "No managed username candidate could be generated from the current source record."
         return ""
+
+    @staticmethod
+    def _build_quality_repair_item(
+        *,
+        key: str,
+        label: str,
+        severity: str,
+        title: str,
+        detail: str,
+        action: str,
+        source_user_id: str = "",
+        display_name: str = "",
+        source_user_ids: Optional[list[str]] = None,
+        connector_id: str = "",
+        connector_name: str = "",
+    ) -> dict[str, Any]:
+        normalized_source_user_ids = [
+            str(value or "").strip()
+            for value in list(source_user_ids or [])
+            if str(value or "").strip()
+        ]
+        return {
+            "key": key,
+            "label": label,
+            "severity": severity,
+            "title": str(title or "").strip() or "-",
+            "detail": str(detail or "").strip(),
+            "action": str(action or "").strip(),
+            "source_user_id": str(source_user_id or "").strip(),
+            "display_name": str(display_name or "").strip(),
+            "source_user_ids": normalized_source_user_ids,
+            "connector_id": str(connector_id or "").strip(),
+            "connector_name": str(connector_name or "").strip(),
+        }
+
+    @staticmethod
+    def _build_quality_samples(repair_items: list[dict[str, Any]], *, limit: int = 5) -> list[dict[str, str]]:
+        return [
+            {
+                "title": str(item.get("title") or "-"),
+                "detail": str(item.get("detail") or ""),
+            }
+            for item in list(repair_items[: max(int(limit or 0), 0)])
+        ]
 
     def _build_runtime_connector_context(
         self,
@@ -782,6 +827,314 @@ class SyncSupport:
         finally:
             self._close_directory_resource(source_provider)
 
+    def _build_conflict_candidate_options(
+        self,
+        conflict: Any,
+        recommendation: Optional[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        details = getattr(conflict, "details", None) or {}
+        if not isinstance(details, dict):
+            details = {}
+
+        candidates_by_username: dict[str, dict[str, Any]] = {}
+
+        def add_candidate(
+            username: str,
+            *,
+            rule: str = "",
+            explanation: str = "",
+            is_recommended: bool = False,
+        ) -> None:
+            normalized_username = str(username or "").strip()
+            if not normalized_username:
+                return
+            key = normalized_username.lower()
+            existing = candidates_by_username.get(key)
+            if existing is None:
+                candidates_by_username[key] = {
+                    "username": normalized_username,
+                    "rule": str(rule or ""),
+                    "explanation": str(explanation or ""),
+                    "is_recommended": bool(is_recommended),
+                }
+                return
+            if rule and not existing["rule"]:
+                existing["rule"] = str(rule)
+            if explanation and not existing["explanation"]:
+                existing["explanation"] = str(explanation)
+            if is_recommended:
+                existing["is_recommended"] = True
+
+        if recommendation and recommendation.get("ad_username"):
+            add_candidate(
+                str(recommendation.get("ad_username") or ""),
+                rule="recommended_action",
+                explanation=str(recommendation.get("reason") or ""),
+                is_recommended=True,
+            )
+
+        for candidate in list(details.get("candidates") or []):
+            if not isinstance(candidate, dict):
+                continue
+            add_candidate(
+                str(candidate.get("username") or ""),
+                rule=str(candidate.get("rule") or ""),
+                explanation=str(candidate.get("explanation") or ""),
+            )
+
+        conflict_type = str(getattr(conflict, "conflict_type", "") or "").strip().lower()
+        if conflict_type == "shared_ad_account":
+            add_candidate(
+                str(getattr(conflict, "target_key", "") or details.get("ad_username") or ""),
+                rule="shared_ad_account",
+                explanation="This AD account is currently shared by multiple source users.",
+            )
+
+        return sorted(
+            candidates_by_username.values(),
+            key=lambda item: (
+                0 if item["is_recommended"] else 1,
+                str(item["username"] or "").lower(),
+            ),
+        )
+
+    def _load_target_account_summary(self, request: Request, ad_username: str) -> dict[str, Any]:
+        normalized_ad_username = str(ad_username or "").strip()
+        if not normalized_ad_username:
+            return {
+                "username": "",
+                "exists": False,
+                "enabled": None,
+                "display_name": "",
+                "mail": "",
+                "title": "",
+                "description": "",
+                "telephone_number": "",
+                "last_logon": "",
+                "distinguished_name": "",
+                "ou_path": "",
+            }
+
+        user_details: dict[str, Any] = {}
+        batch_record = None
+        enabled: bool | None = None
+        try:
+            _config, target_provider = self._get_target_provider(request)
+            try:
+                if hasattr(target_provider, "get_users_batch"):
+                    batch_records = dict(target_provider.get_users_batch([normalized_ad_username]) or {})
+                    batch_record = next(
+                        (
+                            item
+                            for key, item in batch_records.items()
+                            if str(key or "").strip().lower() == normalized_ad_username.lower()
+                        ),
+                        None,
+                    )
+                if hasattr(target_provider, "get_user_details"):
+                    user_details = dict(target_provider.get_user_details(normalized_ad_username) or {})
+                is_user_active = getattr(target_provider, "is_user_active", None)
+                if callable(is_user_active):
+                    enabled = bool(is_user_active(normalized_ad_username))
+            finally:
+                self._close_directory_resource(target_provider)
+        except Exception as exc:
+            self.logger.warning("failed to load target account summary for %s: %s", normalized_ad_username, exc)
+
+        exists = bool(user_details) or batch_record is not None
+        distinguished_name = str(
+            user_details.get("DistinguishedName")
+            or getattr(batch_record, "dn", "")
+            or ""
+        )
+        return {
+            "username": normalized_ad_username,
+            "exists": exists,
+            "enabled": enabled if exists else None,
+            "display_name": str(
+                user_details.get("DisplayName")
+                or getattr(batch_record, "display_name", "")
+                or ""
+            ),
+            "mail": str(
+                user_details.get("Mail")
+                or getattr(batch_record, "email", "")
+                or ""
+            ),
+            "title": str(user_details.get("Title") or ""),
+            "description": str(user_details.get("Description") or ""),
+            "telephone_number": str(user_details.get("TelephoneNumber") or ""),
+            "last_logon": str(user_details.get("LastLogonDate") or ""),
+            "distinguished_name": distinguished_name,
+            "ou_path": self._normalize_ou_path(distinguished_name),
+        }
+
+    def _build_conflict_field_updates(
+        self,
+        request: Request,
+        *,
+        connector_id: str,
+    ) -> list[dict[str, str]]:
+        current_org = self.request_support.get_current_org(request)
+        items: list[dict[str, str]] = []
+        seen_fields: set[str] = set()
+
+        def add_item(name: str, *, source: str) -> None:
+            normalized_name = str(name or "").strip()
+            if not normalized_name:
+                return
+            key = normalized_name.lower()
+            if key in seen_fields:
+                return
+            seen_fields.add(key)
+            items.append(
+                {
+                    "name": normalized_name,
+                    "source": str(source or ""),
+                }
+            )
+
+        add_item("displayName", source="Core user sync")
+        add_item("mail", source="Core user sync")
+        add_item("target OU", source="OU placement")
+
+        for rule in request.app.state.mapping_rule_repo.list_rule_records(
+            direction="source_to_ad",
+            connector_id=str(connector_id or "").strip() or "default",
+            enabled_only=True,
+            org_id=current_org.org_id,
+        ):
+            add_item(
+                str(getattr(rule, "target_field", "") or ""),
+                source=str(getattr(rule, "source_field", "") or "Attribute mapping"),
+            )
+        return items
+
+    def build_conflict_decision_guide(
+        self,
+        request: Request,
+        conflict: Any,
+        *,
+        ad_username: str = "",
+    ) -> dict[str, Any]:
+        current_org = self.request_support.get_current_org(request)
+        current_org_id = current_org.org_id
+        details = getattr(conflict, "details", None) or {}
+        if not isinstance(details, dict):
+            details = {}
+
+        recommendation = self.recommend_conflict_resolution(conflict)
+        explanation = None
+        explanation_error = ""
+        if str(getattr(conflict, "source_id", "") or "").strip():
+            try:
+                explanation = self.explain_identity_routing(request, str(conflict.source_id))
+            except Exception as exc:
+                explanation_error = str(exc)
+
+        candidate_options = self._build_conflict_candidate_options(conflict, recommendation)
+        selected_target_username = str(ad_username or "").strip()
+        if not selected_target_username:
+            selected_target_username = next(
+                (
+                    str(item.get("username") or "").strip()
+                    for item in candidate_options
+                    if item.get("is_recommended")
+                ),
+                "",
+            )
+        if not selected_target_username:
+            selected_target_username = next(
+                (str(item.get("username") or "").strip() for item in candidate_options),
+                "",
+            )
+        if not selected_target_username:
+            selected_target_username = str(getattr(conflict, "target_key", "") or "").strip()
+        for item in candidate_options:
+            item["is_selected"] = (
+                str(item.get("username") or "").strip().lower()
+                == selected_target_username.lower()
+            )
+
+        selected_connector = dict((explanation or {}).get("selected_connector") or {})
+        current_binding = dict((explanation or {}).get("binding") or {})
+        connector_id = str(
+            selected_connector.get("connector_id")
+            or current_binding.get("connector_id")
+            or "default"
+        ).strip() or "default"
+
+        target_account = self._load_target_account_summary(request, selected_target_username)
+        existing_binding_owner = (
+            request.app.state.user_binding_repo.get_binding_record_by_ad_username(
+                selected_target_username,
+                org_id=current_org_id,
+            )
+            if selected_target_username
+            else None
+        )
+        field_updates = self._build_conflict_field_updates(
+            request,
+            connector_id=connector_id,
+        )
+        config = self._get_org_app_config(request)
+        shared_source_user_ids = [
+            str(item or "").strip()
+            for item in list(details.get("source_user_ids") or details.get("wecom_userids") or [])
+            if str(item or "").strip()
+        ]
+        decision = build_binding_decision_summary(
+            conflict_type=str(getattr(conflict, "conflict_type", "") or ""),
+            source_user_id=str(getattr(conflict, "source_id", "") or ""),
+            selected_target_username=selected_target_username,
+            target_exists=bool(target_account.get("exists")),
+            target_enabled=target_account.get("enabled"),
+            current_binding_owner=(
+                str(getattr(existing_binding_owner, "source_user_id", "") or "")
+                if existing_binding_owner
+                else ""
+            ),
+            is_protected_account=(
+                self.is_protected_ad_account_name(selected_target_username, config.exclude_accounts)
+                if selected_target_username
+                else False
+            ),
+            shared_source_user_ids=shared_source_user_ids,
+            rehire_restore_enabled=request.app.state.settings_repo.get_bool(
+                "rehire_restore_enabled",
+                False,
+                org_id=current_org_id,
+            ),
+        )
+        return {
+            "source_user": dict((explanation or {}).get("user") or {})
+            or {
+                "userid": str(getattr(conflict, "source_id", "") or ""),
+                "name": str(getattr(conflict, "source_id", "") or ""),
+                "email": "",
+            },
+            "routing": explanation or {},
+            "routing_error": explanation_error,
+            "recommendation": recommendation or {},
+            "candidate_options": candidate_options,
+            "selected_target_username": selected_target_username,
+            "selected_connector": selected_connector,
+            "target_account": target_account,
+            "existing_binding_owner": (
+                {
+                    "source_user_id": str(getattr(existing_binding_owner, "source_user_id", "") or ""),
+                    "connector_id": str(getattr(existing_binding_owner, "connector_id", "") or ""),
+                    "source": str(getattr(existing_binding_owner, "source", "") or ""),
+                    "notes": str(getattr(existing_binding_owner, "notes", "") or ""),
+                }
+                if existing_binding_owner
+                else None
+            ),
+            "field_updates": field_updates,
+            "shared_source_user_ids": shared_source_user_ids,
+            "decision": decision,
+        }
+
     def build_source_data_quality_snapshot(self, request: Request) -> dict[str, Any]:
         config, source_provider = self._get_source_provider(request)
         try:
@@ -832,12 +1185,12 @@ class SyncSupport:
                 bool(dept_info) and dept_info.department_id in placement_blocked_department_ids
             )
 
-        missing_email_samples: list[dict[str, str]] = []
-        missing_employee_id_samples: list[dict[str, str]] = []
-        missing_department_samples: list[dict[str, str]] = []
-        placement_gap_samples: list[dict[str, str]] = []
-        routing_ambiguity_samples: list[dict[str, str]] = []
-        naming_gap_samples: list[dict[str, str]] = []
+        missing_email_repair_items: list[dict[str, Any]] = []
+        missing_employee_id_repair_items: list[dict[str, Any]] = []
+        missing_department_repair_items: list[dict[str, Any]] = []
+        placement_gap_repair_items: list[dict[str, Any]] = []
+        routing_ambiguity_repair_items: list[dict[str, Any]] = []
+        naming_gap_repair_items: list[dict[str, Any]] = []
         duplicate_emails: dict[str, list[SourceDirectoryUser]] = {}
         duplicate_employee_ids: dict[str, list[SourceDirectoryUser]] = {}
         managed_username_groups: dict[tuple[str, str], list[dict[str, str]]] = {}
@@ -854,21 +1207,33 @@ class SyncSupport:
             if normalized_email:
                 duplicate_emails.setdefault(normalized_email.lower(), []).append(user)
             else:
-                missing_email_samples.append(
-                    {
-                        "title": user_title,
-                        "detail": "No work email was found on the source directory record.",
-                    }
+                missing_email_repair_items.append(
+                    self._build_quality_repair_item(
+                        key="missing_email",
+                        label="Users missing work email",
+                        severity="warning",
+                        title=user_title,
+                        detail="No work email was found on the source directory record.",
+                        action="Backfill email on the source directory record where it is supposed to exist.",
+                        source_user_id=user.source_user_id,
+                        display_name=user.name,
+                    )
                 )
 
             if normalized_employee_id:
                 duplicate_employee_ids.setdefault(normalized_employee_id.lower(), []).append(user)
             else:
-                missing_employee_id_samples.append(
-                    {
-                        "title": user_title,
-                        "detail": "No employee ID was found on the source directory record.",
-                    }
+                missing_employee_id_repair_items.append(
+                    self._build_quality_repair_item(
+                        key="missing_employee_id",
+                        label="Users missing employee ID",
+                        severity="warning",
+                        title=user_title,
+                        detail="No employee ID was found on the source directory record.",
+                        action="Backfill employee ID or switch the naming strategy away from employee-ID-driven rules.",
+                        source_user_id=user.source_user_id,
+                        display_name=user.name,
+                    )
                 )
 
             if len(user.departments) > 1:
@@ -881,11 +1246,17 @@ class SyncSupport:
             ]
             valid_departments = [item for item in valid_departments if item is not None]
             if not valid_departments:
-                missing_department_samples.append(
-                    {
-                        "title": user_title,
-                        "detail": "No valid source department membership was found for routing and OU placement.",
-                    }
+                missing_department_repair_items.append(
+                    self._build_quality_repair_item(
+                        key="missing_departments",
+                        label="Users without valid departments",
+                        severity="error",
+                        title=user_title,
+                        detail="No valid source department membership was found for routing and OU placement.",
+                        action="Fix the source department assignment first, then rerun dry run.",
+                        source_user_id=user.source_user_id,
+                        display_name=user.name,
+                    )
                 )
                 connector_counts[("__unrouted__", "No valid department routing")] = (
                     connector_counts.get(("__unrouted__", "No valid department routing"), 0) + 1
@@ -904,15 +1275,25 @@ class SyncSupport:
                 connector_counts[("__multiple__", "Multiple connector matches")] = (
                     connector_counts.get(("__multiple__", "Multiple connector matches"), 0) + 1
                 )
-                routing_ambiguity_samples.append(
-                    {
-                        "title": user_title,
-                        "detail": "Matches multiple connector scopes: "
+                routing_ambiguity_repair_items.append(
+                    self._build_quality_repair_item(
+                        key="routing_ambiguity",
+                        label="Users matching multiple connectors",
+                        severity="error",
+                        title=user_title,
+                        detail="Matches multiple connector scopes: "
                         + ", ".join(
                             f"{name} [{connector_id}]"
                             for connector_id, name in sorted(connector_candidates.items())
                         ),
-                    }
+                        action="Adjust connector root units or source department ownership so each user resolves to one connector.",
+                        source_user_id=user.source_user_id,
+                        display_name=user.name,
+                        connector_name=", ".join(
+                            f"{name} [{connector_id}]"
+                            for connector_id, name in sorted(connector_candidates.items())
+                        ),
+                    )
                 )
                 continue
 
@@ -938,12 +1319,20 @@ class SyncSupport:
                 override_department_id=None,
             )
             if target_department is None:
-                placement_gap_samples.append(
-                    {
-                        "title": user_title,
-                        "detail": "Current placement rules excluded every source department for this user."
+                placement_gap_repair_items.append(
+                    self._build_quality_repair_item(
+                        key="placement_unresolved",
+                        label="Users blocked by placement rules",
+                        severity="warning",
+                        title=user_title,
+                        detail="Current placement rules excluded every source department for this user."
                         f" Effective connector: {selected_connector_name} [{selected_connector_id}].",
-                    }
+                        action="Review placement strategy, exclusion rules, and connector root-unit scope.",
+                        source_user_id=user.source_user_id,
+                        display_name=user.name,
+                        connector_id=selected_connector_id,
+                        connector_name=selected_connector_name,
+                    )
                 )
 
             preview = self._build_username_preview_from_user(
@@ -952,12 +1341,20 @@ class SyncSupport:
             )
             naming_gap_detail = self._describe_naming_prerequisite_gap(preview, user)
             if naming_gap_detail:
-                naming_gap_samples.append(
-                    {
-                        "title": user_title,
-                        "detail": naming_gap_detail
+                naming_gap_repair_items.append(
+                    self._build_quality_repair_item(
+                        key="naming_prerequisite_gap",
+                        label="Users missing naming prerequisites",
+                        severity="warning",
+                        title=user_title,
+                        detail=naming_gap_detail
                         + f" Effective connector: {selected_connector_name} [{selected_connector_id}].",
-                    }
+                        action="Backfill the required fields or switch to a naming rule that fits the available source data.",
+                        source_user_id=user.source_user_id,
+                        display_name=user.name,
+                        connector_id=selected_connector_id,
+                        connector_name=selected_connector_name,
+                    )
                 )
 
             primary_managed_candidate = next(
@@ -977,38 +1374,67 @@ class SyncSupport:
                     ).append(
                         {
                             "title": user_title,
+                            "source_user_id": user.source_user_id,
+                            "display_name": user.name,
                             "connector_id": selected_connector_id,
                             "connector_name": selected_connector_name,
                         }
                     )
 
-        duplicate_email_samples = [
-            {
-                "title": email_value,
-                "detail": "Shared by "
+        duplicate_email_repair_items = [
+            self._build_quality_repair_item(
+                key="duplicate_email",
+                label="Duplicate work emails",
+                severity="warning",
+                title=email_value,
+                detail="Shared by "
                 + ", ".join(item.source_user_id for item in matched_users[:5]),
-            }
+                action="Confirm whether the duplicates are legitimate shared accounts or source-data defects.",
+                source_user_ids=[item.source_user_id for item in matched_users],
+            )
             for email_value, matched_users in sorted(duplicate_emails.items())
             if len({str(item.source_user_id or "").strip().lower() for item in matched_users}) > 1
         ]
-        duplicate_employee_id_samples = [
-            {
-                "title": employee_id,
-                "detail": "Shared by "
+        duplicate_employee_id_repair_items = [
+            self._build_quality_repair_item(
+                key="duplicate_employee_id",
+                label="Duplicate employee IDs",
+                severity="warning",
+                title=employee_id,
+                detail="Shared by "
                 + ", ".join(item.source_user_id for item in matched_users[:5]),
-            }
+                action="Fix the source HR identifiers before relying on employee-ID naming or collision fallbacks.",
+                source_user_ids=[item.source_user_id for item in matched_users],
+            )
             for employee_id, matched_users in sorted(duplicate_employee_ids.items())
             if len({str(item.source_user_id or "").strip().lower() for item in matched_users}) > 1
         ]
-        managed_username_collision_samples = [
-            {
-                "title": f"{username} [{matched_users[0]['connector_name']}]",
-                "detail": "Would be generated for "
+        managed_username_collision_repair_items = [
+            self._build_quality_repair_item(
+                key="managed_username_collision",
+                label="Predicted managed username collisions",
+                severity="error",
+                title=f"{username} [{matched_users[0]['connector_name']}]",
+                detail="Would be generated for "
                 + ", ".join(item["title"] for item in matched_users[:5]),
-            }
-            for (_connector_id, username), matched_users in sorted(managed_username_groups.items())
+                action="Tune the username strategy or collision policy before running apply.",
+                source_user_ids=[str(item.get("source_user_id") or "").strip() for item in matched_users],
+                connector_id=connector_id,
+                connector_name=str(matched_users[0]["connector_name"] or ""),
+            )
+            for (connector_id, username), matched_users in sorted(managed_username_groups.items())
             if len({str(item.get('title') or '').strip().lower() for item in matched_users}) > 1
         ]
+
+        missing_department_samples = self._build_quality_samples(missing_department_repair_items)
+        routing_ambiguity_samples = self._build_quality_samples(routing_ambiguity_repair_items)
+        managed_username_collision_samples = self._build_quality_samples(managed_username_collision_repair_items)
+        placement_gap_samples = self._build_quality_samples(placement_gap_repair_items)
+        naming_gap_samples = self._build_quality_samples(naming_gap_repair_items)
+        missing_email_samples = self._build_quality_samples(missing_email_repair_items)
+        missing_employee_id_samples = self._build_quality_samples(missing_employee_id_repair_items)
+        duplicate_email_samples = self._build_quality_samples(duplicate_email_repair_items)
+        duplicate_employee_id_samples = self._build_quality_samples(duplicate_employee_id_repair_items)
 
         issues = [
             self._build_quality_issue(
@@ -1018,6 +1444,7 @@ class SyncSupport:
                 description="These users cannot be routed into the managed OU tree because the source directory does not expose a valid department membership.",
                 action="Fix the source department assignment first, then rerun dry run.",
                 samples=missing_department_samples,
+                count=len(missing_department_repair_items),
             ),
             self._build_quality_issue(
                 key="routing_ambiguity",
@@ -1026,6 +1453,7 @@ class SyncSupport:
                 description="These users span more than one connector scope, so runtime cannot choose a single provisioning target.",
                 action="Adjust connector root units or source department ownership so each user resolves to one connector.",
                 samples=routing_ambiguity_samples,
+                count=len(routing_ambiguity_repair_items),
             ),
             self._build_quality_issue(
                 key="managed_username_collision",
@@ -1034,6 +1462,7 @@ class SyncSupport:
                 description="Different users would generate the same primary managed AD username inside the same connector.",
                 action="Tune the username strategy or collision policy before running apply.",
                 samples=managed_username_collision_samples,
+                count=len(managed_username_collision_repair_items),
             ),
             self._build_quality_issue(
                 key="placement_unresolved",
@@ -1042,6 +1471,7 @@ class SyncSupport:
                 description="These users have departments, but the current placement policy excludes every candidate branch.",
                 action="Review placement strategy, exclusion rules, and connector root-unit scope.",
                 samples=placement_gap_samples,
+                count=len(placement_gap_repair_items),
             ),
             self._build_quality_issue(
                 key="naming_prerequisite_gap",
@@ -1050,6 +1480,7 @@ class SyncSupport:
                 description="These source records are missing fields required by the currently selected naming strategy.",
                 action="Backfill the required fields or switch to a naming rule that fits the available source data.",
                 samples=naming_gap_samples,
+                count=len(naming_gap_repair_items),
             ),
             self._build_quality_issue(
                 key="missing_email",
@@ -1058,6 +1489,7 @@ class SyncSupport:
                 description="Blank work email makes email-based naming, write-back, and notification workflows harder to operate safely.",
                 action="Backfill email on the source directory record where it is supposed to exist.",
                 samples=missing_email_samples,
+                count=len(missing_email_repair_items),
             ),
             self._build_quality_issue(
                 key="missing_employee_id",
@@ -1066,6 +1498,7 @@ class SyncSupport:
                 description="Blank employee ID reduces the quality of employee-ID-based naming and same-name collision handling.",
                 action="Backfill employee ID or switch the naming strategy away from employee-ID-driven rules.",
                 samples=missing_employee_id_samples,
+                count=len(missing_employee_id_repair_items),
             ),
             self._build_quality_issue(
                 key="duplicate_email",
@@ -1074,7 +1507,7 @@ class SyncSupport:
                 description="Multiple source users share the same work email.",
                 action="Confirm whether the duplicates are legitimate shared accounts or source-data defects.",
                 samples=duplicate_email_samples,
-                count=len(duplicate_email_samples),
+                count=len(duplicate_email_repair_items),
             ),
             self._build_quality_issue(
                 key="duplicate_employee_id",
@@ -1083,7 +1516,7 @@ class SyncSupport:
                 description="Multiple source users share the same employee ID.",
                 action="Fix the source HR identifiers before relying on employee-ID naming or collision fallbacks.",
                 samples=duplicate_employee_id_samples,
-                count=len(duplicate_employee_id_samples),
+                count=len(duplicate_employee_id_repair_items),
             ),
         ]
         normalized_issues = [issue for issue in issues if issue]
@@ -1097,6 +1530,23 @@ class SyncSupport:
         )
         error_issue_count = sum(1 for item in normalized_issues if item["severity"] == "error")
         warning_issue_count = sum(1 for item in normalized_issues if item["severity"] == "warning")
+        repair_items = [
+            *missing_department_repair_items,
+            *routing_ambiguity_repair_items,
+            *managed_username_collision_repair_items,
+            *placement_gap_repair_items,
+            *naming_gap_repair_items,
+            *missing_email_repair_items,
+            *missing_employee_id_repair_items,
+            *duplicate_email_repair_items,
+            *duplicate_employee_id_repair_items,
+        ]
+        high_risk_items = [
+            item
+            for item in repair_items
+            if str(item.get("severity") or "").strip().lower() == "error"
+            or str(item.get("key") or "").strip().lower() in {"placement_unresolved", "naming_prerequisite_gap"}
+        ]
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -1108,15 +1558,24 @@ class SyncSupport:
                 "total_users": len(users_by_id),
                 "department_count": len(department_tree),
                 "users_with_multiple_departments": users_with_multiple_departments,
-                "users_missing_email": len(missing_email_samples),
-                "users_missing_employee_id": len(missing_employee_id_samples),
-                "users_without_departments": len(missing_department_samples),
-                "placement_unresolved_count": len(placement_gap_samples),
-                "routing_ambiguity_count": len(routing_ambiguity_samples),
-                "naming_prerequisite_gap_count": len(naming_gap_samples),
-                "duplicate_email_count": len(duplicate_email_samples),
-                "duplicate_employee_id_count": len(duplicate_employee_id_samples),
-                "managed_username_collision_count": len(managed_username_collision_samples),
+                "users_missing_email": len(missing_email_repair_items),
+                "users_missing_employee_id": len(missing_employee_id_repair_items),
+                "users_without_departments": len(missing_department_repair_items),
+                "placement_unresolved_count": len(placement_gap_repair_items),
+                "routing_ambiguity_count": len(routing_ambiguity_repair_items),
+                "naming_prerequisite_gap_count": len(naming_gap_repair_items),
+                "duplicate_email_count": len(duplicate_email_repair_items),
+                "duplicate_employee_id_count": len(duplicate_employee_id_repair_items),
+                "managed_username_collision_count": len(managed_username_collision_repair_items),
+                "department_anomaly_count": (
+                    len(missing_department_repair_items)
+                    + len(placement_gap_repair_items)
+                    + len(routing_ambiguity_repair_items)
+                ),
+                "naming_risk_count": (
+                    len(naming_gap_repair_items)
+                    + len(managed_username_collision_repair_items)
+                ),
                 "error_issue_count": error_issue_count,
                 "warning_issue_count": warning_issue_count,
             },
@@ -1132,6 +1591,8 @@ class SyncSupport:
                 )
             ],
             "issues": normalized_issues,
+            "repair_items": repair_items,
+            "high_risk_items": high_risk_items,
         }
 
     def source_user_exists_in_source_provider(self, request: Request, source_user_id: str) -> tuple[bool, Optional[str]]:
@@ -1281,16 +1742,34 @@ class SyncSupport:
             if len(trimmed_columns) < 2:
                 errors.append(f"Line {line_number}: expected at least rule_type,match_value")
                 continue
-            enabled_value = trimmed_columns[3] if len(trimmed_columns) >= 4 else "true"
+            if len(trimmed_columns) >= 8:
+                rule_owner = trimmed_columns[2]
+                effective_reason = trimmed_columns[3]
+                notes = trimmed_columns[4]
+                enabled_value = trimmed_columns[5] if len(trimmed_columns) >= 6 else "true"
+                expires_at = trimmed_columns[6] if len(trimmed_columns) >= 7 else ""
+                next_review_at = trimmed_columns[7] if len(trimmed_columns) >= 8 else ""
+                is_once = self.to_bool(trimmed_columns[8], False) if len(trimmed_columns) >= 9 else False
+            else:
+                rule_owner = ""
+                effective_reason = ""
+                notes = trimmed_columns[2] if len(trimmed_columns) >= 3 else ""
+                enabled_value = trimmed_columns[3] if len(trimmed_columns) >= 4 else "true"
+                expires_at = trimmed_columns[4] if len(trimmed_columns) >= 5 else ""
+                next_review_at = ""
+                is_once = self.to_bool(trimmed_columns[5], False) if len(trimmed_columns) >= 6 else False
             rows.append(
                 {
                     "line_number": line_number,
                     "rule_type": trimmed_columns[0],
                     "match_value": trimmed_columns[1],
-                    "notes": trimmed_columns[2] if len(trimmed_columns) >= 3 else "",
+                    "rule_owner": rule_owner,
+                    "effective_reason": effective_reason,
+                    "notes": notes,
                     "is_enabled": self.to_bool(enabled_value, True),
-                    "expires_at": trimmed_columns[4] if len(trimmed_columns) >= 5 else "",
-                    "is_once": self.to_bool(trimmed_columns[5], False) if len(trimmed_columns) >= 6 else False,
+                    "expires_at": expires_at,
+                    "next_review_at": next_review_at,
+                    "is_once": is_once,
                 }
             )
         return rows, errors

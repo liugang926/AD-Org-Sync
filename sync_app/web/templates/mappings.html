@@ -9,7 +9,9 @@
   "override_count": 0,
   "exception_count": 0,
   "missing_notes_count": 0,
+  "missing_owner_count": 0,
   "expiring_exception_count": 0,
+  "total_hit_count": 0,
   "stale_rule_count": 0,
   "stale_rule_window_days": 90,
   "issues": [],
@@ -48,9 +50,11 @@
       {{ ui.compact_stat(t("Bindings"), governance.binding_count) }}
       {{ ui.compact_stat(t("Overrides"), governance.override_count) }}
       {{ ui.compact_stat(t("Exceptions"), governance.exception_count) }}
-      {{ ui.compact_stat(t("Missing Notes"), governance.missing_notes_count) }}
+      {{ ui.compact_stat(t("Missing Reasons"), governance.missing_notes_count) }}
+      {{ ui.compact_stat(t("Missing Owners"), governance.missing_owner_count) }}
       {{ ui.compact_stat(t("Expiring Soon"), governance.expiring_exception_count, detail=t("Exception rules")) }}
       {{ ui.compact_stat(t("Pending Review"), governance.stale_rule_count, detail=t("{days}-day window", days=governance.stale_rule_window_days)) }}
+      {{ ui.compact_stat(t("Tracked Hits"), governance.total_hit_count) }}
     </div>
     {% if governance.issues %}
     <div class="check-list">
@@ -120,6 +124,9 @@
             id="binding_ad_username",
             attrs='data-mapping-target-user-select data-placeholder="' ~ t("Search and choose an AD user") ~ '"'
           ) }}
+          {{ forms.input("rule_owner", t("Rule Owner"), placeholder=t("alice@corp.example"), id="binding_rule_owner") }}
+          {{ forms.input("next_review_at", t("Next Review"), type="datetime-local", id="binding_next_review_at") }}
+          {{ forms.input("effective_reason", t("Effective Reason"), class_name="field-span-full", id="binding_effective_reason") }}
           {{ forms.input("notes", t("Notes"), class_name="field-span-full", id="binding_notes") }}
         </div>
         <div class="actions">
@@ -154,6 +161,9 @@
             id="override_primary_department_id",
             attrs='data-mapping-source-department-select data-source-user-select="override_source_user_id" disabled'
           ) }}
+          {{ forms.input("rule_owner", t("Rule Owner"), placeholder=t("ops@corp.example"), id="override_rule_owner") }}
+          {{ forms.input("next_review_at", t("Next Review"), type="datetime-local", id="override_next_review_at") }}
+          {{ forms.input("effective_reason", t("Effective Reason"), class_name="field-span-full", id="override_effective_reason") }}
           {{ forms.input("notes", t("Notes"), class_name="field-span-full", id="override_notes") }}
         </div>
         <div class="actions">
@@ -163,10 +173,10 @@
     {% endcall %}
   </div>
 
-  {% call ui.panel(t("Bulk Import Identity Bindings"), description=t("One row per line. Format: <code>source_user_id,ad_username,notes</code>. Notes are optional.")) %}
+  {% call ui.panel(t("Bulk Import Identity Bindings"), description=t("One row per line. Legacy format: <code>source_user_id,ad_username,notes</code>. Governance format: <code>source_user_id,ad_username,rule_owner,effective_reason,next_review_at,notes</code>.")) %}
     <form method="post" action="/mappings/import">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ forms.textarea("bulk_bindings", t("Bulk Content"), placeholder="alice,alice.ad,Headquarters&#10;bob,bob.ad") }}
+      {{ forms.textarea("bulk_bindings", t("Bulk Content"), placeholder="alice,alice.ad,iam@corp.example,Trusted legacy account,2026-05-01T09:00,Headquarters&#10;bob,bob.ad,Needs manual binding") }}
       <div class="actions">
         {{ ui.button(t("Import Bindings"), type="submit", variant="secondary") }}
       </div>
@@ -181,7 +191,7 @@
   {% call ui.panel(t("Search And Filter")) %}
     <form method="get" action="/mappings">
       <div class="form-grid">
-        {{ forms.input("q", t("Keyword"), mapping_query or '', placeholder=t('Search source user, AD user, or notes')) }}
+        {{ forms.input("q", t("Keyword"), mapping_query or '', placeholder=t('Search source user, AD user, owner, or reason')) }}
         {{ forms.select("status", t("Status"), [("all", t("All")), ("enabled", t("Enabled Only")), ("disabled", t("Disabled Only"))], selected_value=(mapping_status or 'all')) }}
       </div>
       {% if filters_are_remembered %}
@@ -223,7 +233,7 @@
             <th>{{ t("AD Username") }}</th>
             <th>{{ t("Status") }}</th>
             <th>{{ t("Source") }}</th>
-            <th>{{ t("Notes") }}</th>
+            <th>{{ t("Governance") }}</th>
             <th>{{ t("Updated At") }}</th>
             <th>{{ t("Actions") }}</th>
           </tr>
@@ -235,7 +245,16 @@
             <td class="cell-mono">{{ item.ad_username }}</td>
             <td>{{ t("Enabled") if item.is_enabled else t("Disabled") }}</td>
             <td>{{ item.source }}</td>
-            <td>{{ item.notes or "-" }}</td>
+            <td>
+              <div><strong>{{ t("Owner") }}:</strong> {{ item.rule_owner or "-" }}</div>
+              <div><strong>{{ t("Reason") }}:</strong> {{ item.effective_reason or item.notes or "-" }}</div>
+              <div class="muted">{{ t("Next Review") }}: {{ item.next_review_at or "-" }}</div>
+              <div class="muted">{{ t("Last Reviewed") }}: {{ item.last_reviewed_at or item.updated_at or "-" }}</div>
+              <div class="muted">{{ t("Hits") }}: {{ item.hit_count or 0 }}{% if item.last_hit_at %} · {{ t("Last Hit") }}: {{ item.last_hit_at }}{% endif %}</div>
+              {% if item.notes and item.effective_reason and item.notes != item.effective_reason %}
+              <div class="muted">{{ t("Notes") }}: {{ item.notes }}</div>
+              {% endif %}
+            </td>
             <td>{{ item.updated_at or "-" }}</td>
             <td>
               {% if can("mappings.write") %}
@@ -273,7 +292,7 @@
             <th>{{ t("Source User ID") }}</th>
             <th>{{ t("Primary Department ID") }}</th>
             <th>{{ t("Department Name") }}</th>
-            <th>{{ t("Notes") }}</th>
+            <th>{{ t("Governance") }}</th>
             <th>{{ t("Updated At") }}</th>
             <th>{{ t("Actions") }}</th>
           </tr>
@@ -284,7 +303,16 @@
             <td class="cell-strong">{{ item.source_user_id or item.wecom_userid }}</td>
             <td>{{ item.primary_department_id }}</td>
             <td>{{ department_name_map.get(item.primary_department_id, "-") }}</td>
-            <td>{{ item.notes or "-" }}</td>
+            <td>
+              <div><strong>{{ t("Owner") }}:</strong> {{ item.rule_owner or "-" }}</div>
+              <div><strong>{{ t("Reason") }}:</strong> {{ item.effective_reason or item.notes or "-" }}</div>
+              <div class="muted">{{ t("Next Review") }}: {{ item.next_review_at or "-" }}</div>
+              <div class="muted">{{ t("Last Reviewed") }}: {{ item.last_reviewed_at or item.updated_at or "-" }}</div>
+              <div class="muted">{{ t("Hits") }}: {{ item.hit_count or 0 }}{% if item.last_hit_at %} · {{ t("Last Hit") }}: {{ item.last_hit_at }}{% endif %}</div>
+              {% if item.notes and item.effective_reason and item.notes != item.effective_reason %}
+              <div class="muted">{{ t("Notes") }}: {{ item.notes }}</div>
+              {% endif %}
+            </td>
             <td>{{ item.updated_at or "-" }}</td>
             <td>
               {% if can("mappings.write") %}

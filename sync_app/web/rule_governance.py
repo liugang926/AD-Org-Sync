@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Optional
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from sync_app.core.models import (
     SyncExceptionRuleRecord,
@@ -11,6 +11,7 @@ from sync_app.core.models import (
 
 EXPIRING_SOON_WINDOW_DAYS = 14
 STALE_RULE_WINDOW_DAYS = 90
+RECENT_HIT_WINDOW_DAYS = 30
 
 
 def _parse_timestamp(value: str) -> Optional[datetime]:
@@ -59,6 +60,14 @@ def _build_issue(
     }
 
 
+def _record_reason(record: Any) -> str:
+    return str(getattr(record, "effective_reason", "") or getattr(record, "notes", "") or "").strip()
+
+
+def _record_owner(record: Any) -> str:
+    return str(getattr(record, "rule_owner", "") or "").strip()
+
+
 def _binding_title(record: UserIdentityBindingRecord) -> str:
     return f"{record.source_user_id or '-'} -> {record.ad_username or '-'}"
 
@@ -71,6 +80,24 @@ def _exception_title(record: SyncExceptionRuleRecord) -> str:
     return f"{record.rule_type or '-'}: {record.match_value or '-'}"
 
 
+def _build_review_due_sample(
+    *,
+    title: str,
+    next_review_at: str,
+    review_anchor_label: str,
+) -> dict[str, str]:
+    if next_review_at:
+        return {
+            "title": title,
+            "detail": f"Next review was due at {next_review_at}. Confirm whether the rule is still needed.",
+        }
+    anchor_value = review_anchor_label if review_anchor_label else "an unknown time"
+    return {
+        "title": title,
+        "detail": f"Rule has not been reviewed since {anchor_value}.",
+    }
+
+
 def build_rule_governance_summary(
     *,
     bindings: list[UserIdentityBindingRecord],
@@ -81,61 +108,116 @@ def build_rule_governance_summary(
     reference_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     expiring_deadline = reference_time + timedelta(days=EXPIRING_SOON_WINDOW_DAYS)
     stale_deadline = reference_time - timedelta(days=STALE_RULE_WINDOW_DAYS)
+    recent_hit_deadline = reference_time - timedelta(days=RECENT_HIT_WINDOW_DAYS)
 
     missing_notes_samples: list[dict[str, str]] = []
+    missing_owner_samples: list[dict[str, str]] = []
     stale_rule_samples: list[dict[str, str]] = []
     expiring_exception_samples: list[dict[str, str]] = []
     expired_exception_samples: list[dict[str, str]] = []
+    total_hit_count = 0
+    recently_hit_rule_count = 0
 
     for record in bindings:
-        if not str(record.notes or "").strip():
+        total_hit_count += int(record.hit_count or 0)
+        last_hit_at = _record_timestamp(record.last_hit_at)
+        if last_hit_at is not None and last_hit_at >= recent_hit_deadline:
+            recently_hit_rule_count += 1
+        if not _record_reason(record):
             missing_notes_samples.append(
                 {
                     "title": _binding_title(record),
                     "detail": "Identity binding has no explanation recorded.",
                 }
             )
-        record_updated_at = _record_timestamp(record.updated_at)
-        if record_updated_at is not None and record_updated_at < stale_deadline:
-            stale_rule_samples.append(
+        if not _record_owner(record):
+            missing_owner_samples.append(
                 {
                     "title": _binding_title(record),
-                    "detail": f"Identity binding has not been reviewed since {record.updated_at}.",
+                    "detail": "Identity binding has no owner assigned.",
                 }
+            )
+        review_anchor = _record_timestamp(record.last_reviewed_at, record.updated_at)
+        next_review_at = _parse_timestamp(record.next_review_at)
+        if (
+            next_review_at is not None and next_review_at <= reference_time
+        ) or (
+            next_review_at is None and review_anchor is not None and review_anchor < stale_deadline
+        ):
+            stale_rule_samples.append(
+                _build_review_due_sample(
+                    title=_binding_title(record),
+                    next_review_at=record.next_review_at,
+                    review_anchor_label=record.last_reviewed_at or record.updated_at,
+                )
             )
 
     for record in overrides:
-        if not str(record.notes or "").strip():
+        total_hit_count += int(record.hit_count or 0)
+        last_hit_at = _record_timestamp(record.last_hit_at)
+        if last_hit_at is not None and last_hit_at >= recent_hit_deadline:
+            recently_hit_rule_count += 1
+        if not _record_reason(record):
             missing_notes_samples.append(
                 {
                     "title": _override_title(record),
                     "detail": "Department override has no reason recorded.",
                 }
             )
-        record_updated_at = _record_timestamp(record.updated_at)
-        if record_updated_at is not None and record_updated_at < stale_deadline:
-            stale_rule_samples.append(
+        if not _record_owner(record):
+            missing_owner_samples.append(
                 {
                     "title": _override_title(record),
-                    "detail": f"Department override has not been reviewed since {record.updated_at}.",
+                    "detail": "Department override has no owner assigned.",
                 }
+            )
+        review_anchor = _record_timestamp(record.last_reviewed_at, record.updated_at)
+        next_review_at = _parse_timestamp(record.next_review_at)
+        if (
+            next_review_at is not None and next_review_at <= reference_time
+        ) or (
+            next_review_at is None and review_anchor is not None and review_anchor < stale_deadline
+        ):
+            stale_rule_samples.append(
+                _build_review_due_sample(
+                    title=_override_title(record),
+                    next_review_at=record.next_review_at,
+                    review_anchor_label=record.last_reviewed_at or record.updated_at,
+                )
             )
 
     for record in exception_rules:
-        if not str(record.notes or "").strip():
+        total_hit_count += int(record.hit_count or 0)
+        last_hit_at = _record_timestamp(record.last_hit_at, record.last_matched_at)
+        if last_hit_at is not None and last_hit_at >= recent_hit_deadline:
+            recently_hit_rule_count += 1
+        if not _record_reason(record):
             missing_notes_samples.append(
                 {
                     "title": _exception_title(record),
                     "detail": "Exception rule has no justification recorded.",
                 }
             )
-        record_updated_at = _record_timestamp(record.updated_at, record.created_at)
-        if record_updated_at is not None and record_updated_at < stale_deadline:
-            stale_rule_samples.append(
+        if not _record_owner(record):
+            missing_owner_samples.append(
                 {
                     "title": _exception_title(record),
-                    "detail": f"Exception rule has not been reviewed since {record.updated_at or record.created_at}.",
+                    "detail": "Exception rule has no owner assigned.",
                 }
+            )
+        review_anchor = _record_timestamp(record.last_reviewed_at, record.updated_at, record.created_at)
+        next_review_at = _parse_timestamp(record.next_review_at)
+        if (
+            next_review_at is not None and next_review_at <= reference_time
+        ) or (
+            next_review_at is None and review_anchor is not None and review_anchor < stale_deadline
+        ):
+            stale_rule_samples.append(
+                _build_review_due_sample(
+                    title=_exception_title(record),
+                    next_review_at=record.next_review_at,
+                    review_anchor_label=record.last_reviewed_at or record.updated_at or record.created_at,
+                )
             )
         expires_at = _parse_timestamp(record.expires_at)
         if not record.is_enabled or expires_at is None:
@@ -182,6 +264,14 @@ def build_rule_governance_summary(
             samples=missing_notes_samples,
         ),
         _build_issue(
+            key="missing_owner",
+            label="Manual rules without owner",
+            severity="warning",
+            description="These bindings, overrides, or exceptions do not identify who is responsible for keeping them accurate.",
+            action="Assign a rule owner so upcoming reviews and cleanup have a clear accountable contact.",
+            samples=missing_owner_samples,
+        ),
+        _build_issue(
             key="stale_rules",
             label="Rules pending review",
             severity="warning",
@@ -207,13 +297,18 @@ def build_rule_governance_summary(
         "override_count": len(overrides),
         "exception_count": len(exception_rules),
         "missing_notes_count": len(missing_notes_samples),
+        "missing_owner_count": len(missing_owner_samples),
+        "review_due_count": len(stale_rule_samples),
         "stale_rule_count": len(stale_rule_samples),
         "expiring_exception_count": len(expiring_exception_samples),
         "expired_exception_count": len(expired_exception_samples),
+        "total_hit_count": total_hit_count,
+        "recently_hit_rule_count": recently_hit_rule_count,
         "error_issue_count": error_issue_count,
         "warning_issue_count": warning_issue_count,
         "expiring_soon_window_days": EXPIRING_SOON_WINDOW_DAYS,
         "stale_rule_window_days": STALE_RULE_WINDOW_DAYS,
+        "recent_hit_window_days": RECENT_HIT_WINDOW_DAYS,
         "issues": normalized_issues,
         "overall_status": (
             "error"

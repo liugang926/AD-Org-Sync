@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import secrets
 from typing import Any, Callable, Optional
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 CONFIG_SUBMISSION_FIELD_NAMES = (
     "source_provider",
@@ -87,6 +88,16 @@ def _config_saved_message(
     return "Configuration saved. Run the first dry run before the first apply."
 
 
+def _parse_optional_int(value: str | None) -> Optional[int]:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        return int(normalized)
+    except (TypeError, ValueError):
+        return None
+
+
 def register_config_routes(
     app: FastAPI,
     *,
@@ -94,13 +105,18 @@ def register_config_routes(
     build_config_change_preview: Callable[..., dict[str, Any]],
     build_config_editable_override: Callable[..., dict[str, Any]],
     build_config_page_context: Callable[..., dict[str, Any]],
+    build_config_release_center_context: Callable[..., dict[str, Any]],
     build_source_unit_catalog: Callable[..., dict[str, Any]],
     build_target_ou_catalog: Callable[..., dict[str, Any]],
     build_config_submission: Callable[..., dict[str, Any]],
     config_preview_session_key: str,
     flash: Callable[..., None],
+    flash_t: Callable[..., None],
+    get_current_org: Callable[[Request], Any],
+    publish_config_release_snapshot: Callable[..., dict[str, Any]],
     reject_invalid_csrf: Callable[[Request, str, str], Any],
     render: Callable[..., Any],
+    rollback_config_release_snapshot: Callable[..., dict[str, Any]],
     require_capability: Callable[[Request, str], Any],
     resolve_web_runtime_settings: Callable[..., dict[str, Any]],
     web_runtime_requires_restart: Callable[..., bool],
@@ -115,6 +131,134 @@ def register_config_routes(
             request,
             "config.html",
             **build_config_page_context(request),
+        )
+
+    @app.get("/config/releases", response_class=HTMLResponse)
+    def config_release_center_page(request: Request):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        return render(
+            request,
+            "config_release_center.html",
+            **build_config_release_center_context(
+                request,
+                current_snapshot_id=_parse_optional_int(request.query_params.get("current_snapshot_id")),
+                baseline_snapshot_id=_parse_optional_int(request.query_params.get("baseline_snapshot_id")),
+            ),
+        )
+
+    @app.post("/config/releases/publish")
+    def config_release_publish(
+        request: Request,
+        csrf_token: str = Form(""),
+        snapshot_name: str = Form(""),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        csrf_error = reject_invalid_csrf(request, csrf_token, "/config/releases")
+        if csrf_error:
+            return csrf_error
+        result = publish_config_release_snapshot(
+            request,
+            user=user,
+            snapshot_name=snapshot_name,
+        )
+        snapshot = result.get("snapshot")
+        if not result.get("created"):
+            flash(
+                request,
+                "warning",
+                "Current configuration already matches the latest published snapshot.",
+            )
+            return RedirectResponse(url="/config/releases", status_code=303)
+        if snapshot is not None:
+            request.app.state.audit_repo.add_log(
+                org_id=getattr(snapshot, "org_id", ""),
+                actor_username=user.username,
+                action_type="config.release_publish",
+                target_type="config_release_snapshot",
+                target_id=str(getattr(snapshot, "id", "") or ""),
+                result="success",
+                message="Published configuration snapshot",
+                payload={
+                    "snapshot_name": getattr(snapshot, "snapshot_name", ""),
+                    "trigger_action": getattr(snapshot, "trigger_action", ""),
+                    "bundle_hash": getattr(snapshot, "bundle_hash", ""),
+                },
+            )
+        flash_t(
+            request,
+            "success",
+            "Published configuration snapshot {snapshot_id}",
+            snapshot_id=str(getattr(snapshot, "id", "") or ""),
+        )
+        return RedirectResponse(url="/config/releases", status_code=303)
+
+    @app.post("/config/releases/{snapshot_id}/rollback")
+    def config_release_rollback(
+        request: Request,
+        snapshot_id: int,
+        csrf_token: str = Form(""),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        csrf_error = reject_invalid_csrf(request, csrf_token, "/config/releases")
+        if csrf_error:
+            return csrf_error
+        try:
+            result = rollback_config_release_snapshot(
+                request,
+                user=user,
+                snapshot_id=snapshot_id,
+            )
+        except ValueError as exc:
+            flash(request, "error", str(exc))
+            return RedirectResponse(url="/config/releases", status_code=303)
+        target_snapshot = result.get("target_snapshot")
+        rollback_snapshot = result.get("rollback_snapshot")
+        request.app.state.audit_repo.add_log(
+            org_id=getattr(target_snapshot, "org_id", ""),
+            actor_username=user.username,
+            action_type="config.release_rollback",
+            target_type="config_release_snapshot",
+            target_id=str(snapshot_id),
+            result="success",
+            message="Rolled back configuration snapshot",
+            payload={
+                "target_snapshot_id": snapshot_id,
+                "rollback_snapshot_id": getattr(rollback_snapshot, "id", None),
+                "safety_snapshot_id": getattr(result.get("safety_snapshot"), "id", None),
+            },
+        )
+        flash_t(
+            request,
+            "success",
+            "Rolled back to configuration snapshot {snapshot_id}",
+            snapshot_id=str(snapshot_id),
+        )
+        return RedirectResponse(url="/config/releases", status_code=303)
+
+    @app.get("/config/releases/{snapshot_id}/download")
+    def config_release_download(request: Request, snapshot_id: int):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        snapshot = request.app.state.config_release_snapshot_repo.get_snapshot_record(
+            snapshot_id,
+            org_id=current_org.org_id,
+        )
+        if not snapshot or not isinstance(snapshot.bundle, dict):
+            flash(request, "error", "Configuration snapshot not found")
+            return RedirectResponse(url="/config/releases", status_code=303)
+        filename = f"{snapshot.org_id}-config-release-{snapshot.id}.json"
+        return Response(
+            content=json.dumps(snapshot.bundle, ensure_ascii=False, indent=2).encode("utf-8"),
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
     @app.post("/config/source-units/catalog")

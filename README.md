@@ -185,6 +185,15 @@ Health endpoints:
 
 Detailed deployment notes are in [docs/deployment-windows-service.md](docs/deployment-windows-service.md).
 
+## Operational Guides
+
+Current `v1` operational docs:
+
+- [Admin V1 Operations Guide](docs/guides/admin-v1-operations-guide.md)
+- [External Integrations API v1](docs/api/external-integrations-v1.md)
+- [V1 Go-Live Checklist](docs/runbooks/v1-go-live-checklist.md)
+- [Full Feature Execution Roadmap](docs/plan/full-feature-execution-roadmap.md)
+
 ## Browser Regression
 
 The project now includes Playwright-backed browser regression coverage for login, dashboard header controls, config provider fields, and jobs empty-state actions.

@@ -5,6 +5,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from sync_app.storage.local_db import utcnow_iso
 from sync_app.web.rule_governance import build_rule_governance_summary
 
 
@@ -18,6 +19,7 @@ def register_mapping_routes(
     get_current_org: Callable[[Request], Any],
     iter_all_pages: Callable[..., Any],
     load_department_name_map: Callable[[Request], dict[str, str]],
+    normalize_optional_datetime_input: Callable[[str], str],
     parse_bulk_bindings: Callable[[str], tuple[list[dict[str, str]], list[str]]],
     parse_page_number: Callable[[str | None, int], int],
     reject_invalid_csrf: Callable[[Request, str, str], Any],
@@ -115,8 +117,14 @@ def register_mapping_routes(
                     "",
                     "true" if item.is_enabled else "false",
                     item.source,
+                    item.rule_owner or "",
+                    item.effective_reason or "",
+                    item.next_review_at or "",
                     item.notes,
                     item.updated_at,
+                    item.last_reviewed_at or "",
+                    str(item.hit_count or 0),
+                    item.last_hit_at or "",
                 ]
             for item in iter_all_pages(
                 lambda *, limit, offset: request.app.state.department_override_repo.list_override_records_page(
@@ -133,8 +141,14 @@ def register_mapping_routes(
                     item.primary_department_id,
                     "",
                     "",
+                    item.rule_owner or "",
+                    item.effective_reason or "",
+                    item.next_review_at or "",
                     item.notes,
                     item.updated_at,
+                    item.last_reviewed_at or "",
+                    str(item.hit_count or 0),
+                    item.last_hit_at or "",
                 ]
 
         return stream_csv(
@@ -145,8 +159,14 @@ def register_mapping_routes(
                 "primary_department_id",
                 "is_enabled",
                 "source",
+                "rule_owner",
+                "effective_reason",
+                "next_review_at",
                 "notes",
                 "updated_at",
+                "last_reviewed_at",
+                "hit_count",
+                "last_hit_at",
             ],
             row_iterable=iter_rows(),
             filename="mappings-export.csv",
@@ -159,6 +179,9 @@ def register_mapping_routes(
         source_user_id: str = Form(""),
         legacy_source_user_id: str = Form("", alias="wecom_userid"),
         ad_username: str = Form(...),
+        rule_owner: str = Form(""),
+        effective_reason: str = Form(""),
+        next_review_at: str = Form(""),
         notes: str = Form(""),
     ):
         user = require_capability(request, "mappings.write")
@@ -184,7 +207,14 @@ def register_mapping_routes(
             flash(request, "error", conflict_message)
             return RedirectResponse(url="/mappings", status_code=303)
 
+        try:
+            normalized_next_review_at = normalize_optional_datetime_input(next_review_at)
+        except ValueError as exc:
+            flash(request, "error", str(exc))
+            return RedirectResponse(url="/mappings", status_code=303)
+
         current_org = get_current_org(request)
+        reviewed_at = utcnow_iso()
         request.app.state.user_binding_repo.upsert_binding_for_source_user(
             source_user_id,
             ad_username,
@@ -192,6 +222,14 @@ def register_mapping_routes(
             source="manual",
             notes=notes.strip(),
             preserve_manual=False,
+        )
+        request.app.state.user_binding_repo.update_governance_metadata_for_source_user(
+            source_user_id,
+            org_id=current_org.org_id,
+            rule_owner=rule_owner,
+            effective_reason=effective_reason,
+            next_review_at=normalized_next_review_at,
+            last_reviewed_at=reviewed_at,
         )
         request.app.state.audit_repo.add_log(
             org_id=current_org.org_id,
@@ -201,7 +239,12 @@ def register_mapping_routes(
             target_id=source_user_id,
             result="success",
             message="Saved source to AD identity binding",
-            payload={"source_user_id": source_user_id, "ad_username": ad_username},
+            payload={
+                "source_user_id": source_user_id,
+                "ad_username": ad_username,
+                "rule_owner": str(rule_owner or "").strip(),
+                "next_review_at": normalized_next_review_at,
+            },
         )
         flash(request, "success", "Identity binding saved")
         return RedirectResponse(url="/mappings", status_code=303)
@@ -230,10 +273,16 @@ def register_mapping_routes(
         imported_count = 0
         conflicts: list[str] = []
         current_org = get_current_org(request)
+        reviewed_at = utcnow_iso()
         for row in rows:
             conflict_message = validate_binding_target(request, row["source_user_id"], row["ad_username"])
             if conflict_message:
                 conflicts.append(conflict_message)
+                continue
+            try:
+                normalized_next_review_at = normalize_optional_datetime_input(str(row.get("next_review_at") or ""))
+            except ValueError as exc:
+                conflicts.append(f"{row['source_user_id']}: {exc}")
                 continue
             request.app.state.user_binding_repo.upsert_binding_for_source_user(
                 row["source_user_id"],
@@ -242,6 +291,14 @@ def register_mapping_routes(
                 source="manual",
                 notes=row["notes"],
                 preserve_manual=False,
+            )
+            request.app.state.user_binding_repo.update_governance_metadata_for_source_user(
+                row["source_user_id"],
+                org_id=current_org.org_id,
+                rule_owner=row.get("rule_owner"),
+                effective_reason=row.get("effective_reason"),
+                next_review_at=normalized_next_review_at,
+                last_reviewed_at=reviewed_at,
             )
             imported_count += 1
 
@@ -320,6 +377,9 @@ def register_mapping_routes(
         source_user_id: str = Form(""),
         legacy_source_user_id: str = Form("", alias="wecom_userid"),
         primary_department_id: str = Form(...),
+        rule_owner: str = Form(""),
+        effective_reason: str = Form(""),
+        next_review_at: str = Form(""),
         notes: str = Form(""),
     ):
         user = require_capability(request, "mappings.write")
@@ -354,12 +414,27 @@ def register_mapping_routes(
             flash(request, "error", override_error or "Selected department does not belong to the source user")
             return RedirectResponse(url="/mappings", status_code=303)
 
+        try:
+            normalized_next_review_at = normalize_optional_datetime_input(next_review_at)
+        except ValueError as exc:
+            flash(request, "error", str(exc))
+            return RedirectResponse(url="/mappings", status_code=303)
+
         current_org = get_current_org(request)
+        reviewed_at = utcnow_iso()
         request.app.state.department_override_repo.upsert_override_for_source_user(
             source_user_id,
             primary_department_id,
             org_id=current_org.org_id,
             notes=notes.strip(),
+        )
+        request.app.state.department_override_repo.update_governance_metadata_for_source_user(
+            source_user_id,
+            org_id=current_org.org_id,
+            rule_owner=rule_owner,
+            effective_reason=effective_reason,
+            next_review_at=normalized_next_review_at,
+            last_reviewed_at=reviewed_at,
         )
         request.app.state.audit_repo.add_log(
             org_id=current_org.org_id,
@@ -369,7 +444,12 @@ def register_mapping_routes(
             target_id=source_user_id,
             result="success",
             message="Saved primary department override",
-            payload={"source_user_id": source_user_id, "primary_department_id": primary_department_id},
+            payload={
+                "source_user_id": source_user_id,
+                "primary_department_id": primary_department_id,
+                "rule_owner": str(rule_owner or "").strip(),
+                "next_review_at": normalized_next_review_at,
+            },
         )
         flash(request, "success", "Primary department override saved")
         return RedirectResponse(url="/mappings", status_code=303)

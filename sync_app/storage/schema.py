@@ -53,6 +53,16 @@ DEFAULT_APP_SETTINGS = {
     "custom_group_archive_enabled": ("false", "bool"),
     "scheduled_review_execution_enabled": ("false", "bool"),
     "automatic_replay_enabled": ("false", "bool"),
+    "ops_notify_dry_run_failure_enabled": ("false", "bool"),
+    "ops_notify_conflict_backlog_enabled": ("false", "bool"),
+    "ops_notify_conflict_backlog_threshold": ("5", "int"),
+    "ops_notify_review_pending_enabled": ("false", "bool"),
+    "ops_notify_rule_governance_enabled": ("false", "bool"),
+    "ops_scheduled_apply_gate_enabled": ("true", "bool"),
+    "ops_scheduled_apply_max_dry_run_age_hours": ("24", "int"),
+    "ops_scheduled_apply_requires_zero_conflicts": ("true", "bool"),
+    "ops_scheduled_apply_requires_review_approval": ("true", "bool"),
+    "integration_api_token": ("", "string"),
     "future_onboarding_enabled": ("false", "bool"),
     "future_onboarding_start_field": ("hire_date", "string"),
     "contractor_lifecycle_enabled": ("false", "bool"),
@@ -95,6 +105,16 @@ ORG_SCOPED_APP_SETTINGS = {
     "custom_group_archive_enabled",
     "scheduled_review_execution_enabled",
     "automatic_replay_enabled",
+    "ops_notify_dry_run_failure_enabled",
+    "ops_notify_conflict_backlog_enabled",
+    "ops_notify_conflict_backlog_threshold",
+    "ops_notify_review_pending_enabled",
+    "ops_notify_rule_governance_enabled",
+    "ops_scheduled_apply_gate_enabled",
+    "ops_scheduled_apply_max_dry_run_age_hours",
+    "ops_scheduled_apply_requires_zero_conflicts",
+    "ops_scheduled_apply_requires_review_approval",
+    "integration_api_token",
     "future_onboarding_enabled",
     "future_onboarding_start_field",
     "contractor_lifecycle_enabled",
@@ -1290,6 +1310,109 @@ MIGRATIONS = [
 
         CREATE INDEX IF NOT EXISTS idx_sync_jobs_lease_expires_at
         ON sync_jobs (lease_expires_at);
+        """,
+    ),
+    (
+        23,
+        "add governance lifecycle metadata for bindings, overrides, and exception rules",
+        """
+        ALTER TABLE user_identity_bindings ADD COLUMN rule_owner TEXT NOT NULL DEFAULT '';
+        ALTER TABLE user_identity_bindings ADD COLUMN effective_reason TEXT NOT NULL DEFAULT '';
+        ALTER TABLE user_identity_bindings ADD COLUMN next_review_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE user_identity_bindings ADD COLUMN last_reviewed_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE user_identity_bindings ADD COLUMN hit_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE user_identity_bindings ADD COLUMN last_hit_at TEXT NOT NULL DEFAULT '';
+
+        ALTER TABLE user_department_overrides ADD COLUMN rule_owner TEXT NOT NULL DEFAULT '';
+        ALTER TABLE user_department_overrides ADD COLUMN effective_reason TEXT NOT NULL DEFAULT '';
+        ALTER TABLE user_department_overrides ADD COLUMN next_review_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE user_department_overrides ADD COLUMN last_reviewed_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE user_department_overrides ADD COLUMN hit_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE user_department_overrides ADD COLUMN last_hit_at TEXT NOT NULL DEFAULT '';
+
+        ALTER TABLE sync_exception_rules ADD COLUMN rule_owner TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_exception_rules ADD COLUMN effective_reason TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_exception_rules ADD COLUMN next_review_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_exception_rules ADD COLUMN last_reviewed_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_exception_rules ADD COLUMN hit_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE sync_exception_rules ADD COLUMN last_hit_at TEXT NOT NULL DEFAULT '';
+
+        CREATE INDEX IF NOT EXISTS idx_user_identity_bindings_review
+        ON user_identity_bindings (org_id, next_review_at, last_reviewed_at);
+
+        CREATE INDEX IF NOT EXISTS idx_user_department_overrides_review
+        ON user_department_overrides (org_id, next_review_at, last_reviewed_at);
+
+        CREATE INDEX IF NOT EXISTS idx_sync_exception_rules_review
+        ON sync_exception_rules (org_id, is_enabled, next_review_at, last_reviewed_at);
+        """,
+    ),
+    (
+        24,
+        "add configuration release snapshot history",
+        """
+        CREATE TABLE IF NOT EXISTS config_release_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL DEFAULT 'default',
+          snapshot_name TEXT NOT NULL DEFAULT '',
+          trigger_action TEXT NOT NULL DEFAULT 'manual_release',
+          created_by TEXT NOT NULL DEFAULT '',
+          source_snapshot_id INTEGER,
+          bundle_hash TEXT NOT NULL DEFAULT '',
+          bundle_json TEXT NOT NULL,
+          summary_json TEXT,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_config_release_snapshots_org_created
+        ON config_release_snapshots (org_id, created_at DESC, id DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_config_release_snapshots_org_hash
+        ON config_release_snapshots (org_id, bundle_hash);
+        """,
+    ),
+    (
+        25,
+        "add data quality snapshot history",
+        """
+        CREATE TABLE IF NOT EXISTS data_quality_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL DEFAULT 'default',
+          trigger_action TEXT NOT NULL DEFAULT 'manual_scan',
+          created_by TEXT NOT NULL DEFAULT '',
+          summary_json TEXT,
+          snapshot_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_data_quality_snapshots_org_created
+        ON data_quality_snapshots (org_id, created_at DESC, id DESC);
+        """,
+    ),
+    (
+        26,
+        "add external integration webhook subscriptions",
+        """
+        CREATE TABLE IF NOT EXISTS integration_webhook_subscriptions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL DEFAULT 'default',
+          event_type TEXT NOT NULL,
+          target_url TEXT NOT NULL,
+          secret TEXT NOT NULL DEFAULT '',
+          description TEXT NOT NULL DEFAULT '',
+          is_enabled INTEGER NOT NULL DEFAULT 1,
+          last_attempt_at TEXT NOT NULL DEFAULT '',
+          last_status TEXT NOT NULL DEFAULT '',
+          last_error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_integration_webhook_subscriptions_unique
+        ON integration_webhook_subscriptions (org_id, event_type, target_url);
+
+        CREATE INDEX IF NOT EXISTS idx_integration_webhook_subscriptions_lookup
+        ON integration_webhook_subscriptions (org_id, event_type, is_enabled, updated_at DESC, id DESC);
         """,
     ),
 ]

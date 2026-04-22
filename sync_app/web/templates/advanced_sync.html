@@ -8,6 +8,10 @@
     <span class="muted">{{ t("Current organization: {name}", name=current_org.name) }}</span>
   </div>
   {% endif %}
+  {{ ui.button(t("Open Automation Center"), href="/automation-center", variant="ghost", icon="bell-ring") }}
+  {{ ui.button(t("Open Data Quality Center"), href="/data-quality", variant="ghost", icon="shield-alert") }}
+  {{ ui.button(t("Open Integration Center"), href="/integrations", variant="ghost", icon="plug") }}
+  {{ ui.button(t("Open Lifecycle Workbench"), href="/lifecycle", variant="ghost", icon="clock-3") }}
 {% endcall %}
 
 <div class="dense-two-col">

@@ -18,9 +18,14 @@ from sync_app.core.models import (
 )
 from sync_app.providers.source import build_source_provider, get_source_provider_display_name
 from sync_app.providers.target import build_target_provider
+from sync_app.services.external_integrations import emit_job_lifecycle_events
 from sync_app.services.ad_sync import (
     ADSyncLDAPS,
     build_custom_group_sam,
+)
+from sync_app.services.notification_automation_center import (
+    build_notification_automation_policy_settings,
+    evaluate_scheduled_apply_readiness,
 )
 from sync_app.services.reports import (
     _generate_skip_detail_report,
@@ -48,6 +53,7 @@ from sync_app.services.runtime_services import (
     evaluate_group_policy as evaluate_group_policy_rule_set,
     has_exception_rule as has_exception_rule_match,
 )
+from sync_app.web.rule_governance import build_rule_governance_summary
 
 
 FIELD_OWNERSHIP_POLICY = {
@@ -268,16 +274,127 @@ def _notify_sync_cancelled(ctx: SyncContext, interrupted_error: InterruptedError
             ctx.logger.error('failed to send cancel notification')
 
 
+def _send_webhook_notification(ctx: SyncContext, message: str) -> None:
+    if not ctx.config.webhook_url:
+        return
+    try:
+        WebhookNotificationClient(ctx.config.webhook_url).send_message(message)
+    except Exception:
+        ctx.logger.error('failed to send webhook notification')
+
+
+def _notify_post_dry_run_digest(ctx: SyncContext, dry_run_result: dict[str, Any]) -> None:
+    if ctx.execution_mode != 'dry_run' or not ctx.config.webhook_url:
+        return
+
+    policy_settings = build_notification_automation_policy_settings(
+        ctx.repositories.settings_repo,
+        ctx.organization.org_id,
+    )
+    summary = dict(dry_run_result.get("summary") or {})
+    open_conflicts_total = ctx.repositories.conflict_repo.list_conflict_records_page(
+        limit=1,
+        offset=0,
+        status="open",
+        org_id=ctx.organization.org_id,
+    )[1]
+    reminder_lines: list[str] = []
+
+    if (
+        policy_settings["notify_conflict_backlog_enabled"]
+        and int(open_conflicts_total or 0) >= int(policy_settings["notify_conflict_backlog_threshold"] or 1)
+    ):
+        reminder_lines.append(
+            f"- Conflict backlog reached {int(open_conflicts_total or 0)} open conflict(s) "
+            f"(threshold: {int(policy_settings['notify_conflict_backlog_threshold'])})."
+        )
+
+    if policy_settings["notify_review_pending_enabled"] and bool(summary.get("review_required") or False):
+        reminder_lines.append(
+            f"- High-risk dry run {ctx.job_id} still needs approval before apply can continue."
+        )
+
+    if policy_settings["notify_rule_governance_enabled"]:
+        governance = build_rule_governance_summary(
+            bindings=ctx.repositories.user_binding_repo.list_binding_records(org_id=ctx.organization.org_id),
+            overrides=ctx.repositories.department_override_repo.list_override_records(org_id=ctx.organization.org_id),
+            exception_rules=ctx.repositories.exception_rule_repo.list_rule_records(org_id=ctx.organization.org_id),
+        )
+        governance_issue_count = (
+            int(governance.get("expired_exception_count") or 0)
+            + int(governance.get("expiring_exception_count") or 0)
+            + int(governance.get("review_due_count") or 0)
+        )
+        if governance_issue_count > 0:
+            reminder_lines.append(
+                f"- Rule governance has {governance_issue_count} reminder(s): "
+                f"{int(governance.get('expired_exception_count') or 0)} expired, "
+                f"{int(governance.get('expiring_exception_count') or 0)} expiring, "
+                f"{int(governance.get('review_due_count') or 0)} overdue for review."
+            )
+
+    if not reminder_lines:
+        return
+
+    scheduled_apply_readiness = evaluate_scheduled_apply_readiness(
+        settings_repo=ctx.repositories.settings_repo,
+        job_repo=ctx.repositories.job_repo,
+        conflict_repo=ctx.repositories.conflict_repo,
+        review_repo=ctx.repositories.review_repo,
+        org_id=ctx.organization.org_id,
+        policy_settings=policy_settings,
+    )
+    readiness_line = (
+        f"> Scheduled apply gate: {scheduled_apply_readiness.get('summary') or '-'}"
+        if scheduled_apply_readiness.get("mode") == "apply"
+        else "> Scheduled apply gate: schedule mode is dry run"
+    )
+    if scheduled_apply_readiness.get("reasons"):
+        readiness_line += f" ({'; '.join(str(item) for item in scheduled_apply_readiness['reasons'])})"
+
+    _send_webhook_notification(
+        ctx,
+        (
+            f"## {ctx.environment.source_provider_name}-AD dry-run reminders\n\n"
+            f"> Job: {ctx.job_id}\n"
+            f"> Finish time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"> Open conflicts: {int(open_conflicts_total or 0)}\n"
+            f"> High-risk operations: {int(summary.get('high_risk_operation_count') or 0)}\n"
+            f"{readiness_line}\n\n"
+            "### Attention Required\n"
+            + "\n".join(reminder_lines)
+        ),
+    )
+
+
 def _notify_sync_failed(ctx: SyncContext, sync_error: Exception) -> None:
-    if ctx.execution_mode == 'apply' and ctx.config.webhook_url:
-        try:
-            WebhookNotificationClient(ctx.config.webhook_url).send_message(
-                f'## {ctx.environment.source_provider_name} to AD sync failed (LDAPS)\n\n'
+    should_notify = False
+    title = f"{ctx.environment.source_provider_name} to AD sync failed (LDAPS)"
+    if ctx.execution_mode == 'apply':
+        should_notify = True
+    elif ctx.execution_mode == 'dry_run':
+        should_notify = ctx.repositories.settings_repo.get_bool(
+            "ops_notify_dry_run_failure_enabled",
+            False,
+            org_id=ctx.organization.org_id,
+        )
+        title = f"{ctx.environment.source_provider_name} dry run failed"
+    if should_notify and ctx.config.webhook_url:
+        _send_webhook_notification(
+            ctx,
+            (
+                f"## {title}\n\n"
                 f"> Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
                 f"### Error\n{sync_error}"
-            )
-        except Exception:
-            ctx.logger.error('failed to send error notification')
+            ),
+        )
+
+
+def _emit_external_job_events(ctx: SyncContext) -> None:
+    try:
+        emit_job_lifecycle_events(ctx.db_manager, job_id=ctx.job_id)
+    except Exception as exc:
+        ctx.logger.warning("failed to emit external integration events for job %s: %s", ctx.job_id, exc)
 
 def run_sync_job(
     stats_callback=None,
@@ -644,6 +761,9 @@ def run_sync_job(
             display_separator=display_separator,
         )
         if early_response is not None:
+            _emit_external_job_events(ctx)
+            if execution_mode == 'dry_run' and isinstance(early_response, dict):
+                _notify_post_dry_run_digest(ctx, early_response)
             return early_response
 
         mark_job('RUNNING')
@@ -654,7 +774,9 @@ def run_sync_job(
             display_separator=display_separator,
             planned_hierarchy_pairs=planned_hierarchy_pairs,
         )
-        return finalize_successful_sync(ctx)
+        successful_result = finalize_successful_sync(ctx)
+        _emit_external_job_events(ctx)
+        return successful_result
 
     except InterruptedError as interrupted_error:
         canceled_result = finalize_interrupted_sync(ctx, interrupted_error)
@@ -664,6 +786,7 @@ def run_sync_job(
     except Exception as sync_error:
         finalize_failed_sync(ctx, sync_error)
         _notify_sync_failed(ctx, sync_error)
+        _emit_external_job_events(ctx)
         logger.error(f"sync job failed: {sync_error}")
         raise
     finally:

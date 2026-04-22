@@ -107,6 +107,12 @@
         <div class="actions">
           {% if show_advanced_navigation %}
           {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="secondary") }}
+          {% if can("config.read") %}
+          {{ ui.button(t("Open Automation Center"), href="/automation-center", variant="ghost") }}
+          {{ ui.button(t("Open Data Quality Center"), href="/data-quality", variant="ghost") }}
+          {{ ui.button(t("Open Integration Center"), href="/integrations", variant="ghost") }}
+          {{ ui.button(t("Open Lifecycle Workbench"), href="/lifecycle", variant="ghost") }}
+          {% endif %}
           {% endif %}
           {% if can("organizations.manage") and show_advanced_navigation %}
           {{ ui.button(t("Manage Organizations"), href="/organizations", variant="ghost") }}

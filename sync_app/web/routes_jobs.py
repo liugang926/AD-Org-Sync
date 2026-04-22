@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import json
-import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from sync_app.services.external_integrations import approve_job_review as approve_job_review_action
+from sync_app.services.job_diff import build_job_comparison_summary
+
 
 def register_job_routes(
     app: FastAPI,
     *,
     build_preflight_snapshot: Callable[..., dict[str, Any]],
-    enqueue_replay_request: Callable[..., Any],
     fetch_page: Callable[..., Any],
     flash: Callable[..., None],
     flash_t: Callable[..., None],
@@ -34,6 +35,76 @@ def register_job_routes(
             str(getattr(job, "execution_mode", "") or "").strip().lower() == "dry_run"
             and normalize_job_status(getattr(job, "status", "")) in {"COMPLETED", "COMPLETED_WITH_ERRORS"}
         )
+
+    def is_successful_apply(job: Any) -> bool:
+        return (
+            str(getattr(job, "execution_mode", "") or "").strip().lower() == "apply"
+            and normalize_job_status(getattr(job, "status", "")) in {"COMPLETED", "COMPLETED_WITH_ERRORS"}
+        )
+
+    def parse_job_started_at(job: Any) -> datetime | None:
+        raw_value = str(getattr(job, "started_at", "") or "").strip()
+        if not raw_value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def find_previous_job(
+        recent_jobs: list[Any],
+        current_job: Any,
+        matcher: Callable[[Any], bool],
+    ) -> Any | None:
+        current_started_at = parse_job_started_at(current_job)
+        for candidate in recent_jobs:
+            if str(getattr(candidate, "job_id", "") or "") == str(getattr(current_job, "job_id", "") or ""):
+                continue
+            if not matcher(candidate):
+                continue
+            if current_started_at is not None:
+                candidate_started_at = parse_job_started_at(candidate)
+                if candidate_started_at is None or candidate_started_at >= current_started_at:
+                    continue
+            return candidate
+        return None
+
+    def build_job_comparison_sections(request: Request, current_org: Any, job: Any) -> list[dict[str, Any]]:
+        recent_jobs = request.app.state.job_repo.list_recent_job_records(limit=200, org_id=current_org.org_id)
+        sections: list[dict[str, Any]] = []
+
+        previous_successful_dry_run = find_previous_job(recent_jobs, job, is_successful_dry_run)
+        if previous_successful_dry_run is not None:
+            sections.append(
+                {
+                    "label": "Compared With Previous Successful Dry Run",
+                    "comparison": build_job_comparison_summary(
+                        current_job=job,
+                        baseline_job=previous_successful_dry_run,
+                        planned_operation_repo=request.app.state.planned_operation_repo,
+                        conflict_repo=request.app.state.conflict_repo,
+                    ),
+                }
+            )
+
+        previous_successful_apply = find_previous_job(recent_jobs, job, is_successful_apply)
+        if previous_successful_apply is not None:
+            sections.append(
+                {
+                    "label": "Compared With Previous Apply",
+                    "comparison": build_job_comparison_summary(
+                        current_job=job,
+                        baseline_job=previous_successful_apply,
+                        planned_operation_repo=request.app.state.planned_operation_repo,
+                        conflict_repo=request.app.state.conflict_repo,
+                    ),
+                }
+            )
+
+        return sections
 
     def build_job_center_summary(request: Request, current_org: Any) -> dict[str, Any]:
         preflight_summary = merge_saved_preflight_snapshot_data(
@@ -191,14 +262,12 @@ def register_job_routes(
             flash(request, "error", "Job does not belong to the current organization")
             return RedirectResponse(url="/jobs", status_code=303)
 
-        review_ttl_minutes = max(request.app.state.settings_repo.get_int("high_risk_review_ttl_minutes", 240), 1)
-        expires_at = time.time() + review_ttl_minutes * 60
-        expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(timespec="seconds")
-        request.app.state.review_repo.approve_review(
-            job_id,
+        result = approve_job_review_action(
+            request.app.state.db_manager,
+            org_id=current_org.org_id,
+            job_id=job_id,
             reviewer_username=user.username,
             review_notes=review_notes.strip(),
-            expires_at=expires_at_iso,
         )
         request.app.state.audit_repo.add_log(
             org_id=current_org.org_id,
@@ -208,17 +277,11 @@ def register_job_routes(
             target_id=job_id,
             result="success",
             message="Approved high-risk synchronization plan",
-            payload={"expires_at": expires_at_iso},
-        )
-        enqueue_replay_request(
-            app=request.app,
-            request_type="plan_approval",
-            requested_by=user.username,
-            org_id=current_org.org_id,
-            target_scope="job",
-            target_id=job_id,
-            trigger_reason="high_risk_plan_approved",
-            payload={"expires_at": expires_at_iso},
+            payload={
+                "expires_at": result["expires_at_iso"],
+                "replay_request_id": result["replay_request_id"],
+                "fresh_approval": result["fresh_approval"],
+            },
         )
         flash(request, "success", "High-risk plan approved. You can rerun apply now.")
         return RedirectResponse(url=f"/jobs/{job_id}", status_code=303)
@@ -268,6 +331,7 @@ def register_job_routes(
             title=translate_text(get_ui_language(request), "Job Detail {job_id}", job_id=job_id),
             job=job,
             current_org=current_org,
+            job_comparison_sections=build_job_comparison_sections(request, current_org, job),
             events=(events_result := fetch_page(
                 lambda *, limit, offset: request.app.state.event_repo.list_events_for_job_page(
                     job_id,

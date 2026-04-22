@@ -190,11 +190,13 @@ class UserIdentityBindingRepository(BaseRepository):
                 "LOWER(source_user_id) LIKE ? OR "
                 "LOWER(connector_id) LIKE ? OR "
                 "LOWER(ad_username) LIKE ? OR "
+                "LOWER(COALESCE(rule_owner, '')) LIKE ? OR "
+                "LOWER(COALESCE(effective_reason, '')) LIKE ? OR "
                 "LOWER(COALESCE(notes, '')) LIKE ?"
                 ")"
             )
             like_pattern = f"%{normalized_query}%"
-            params.extend([like_pattern] * 4)
+            params.extend([like_pattern] * 6)
         where_clause = " WHERE " + " AND ".join(clauses)
         total = self._fetchcount(
             f"""
@@ -311,6 +313,88 @@ class UserIdentityBindingRepository(BaseRepository):
             org_id=org_id,
         )
 
+    def update_governance_metadata_for_source_user(
+        self,
+        source_user_id: str,
+        *,
+        org_id: Optional[str] = None,
+        rule_owner: str | None = None,
+        effective_reason: str | None = None,
+        next_review_at: str | None = None,
+        last_reviewed_at: str | None = None,
+    ) -> None:
+        normalized_org_id = self._resolve_org_id(org_id)
+        updates: list[str] = []
+        params: list[Any] = []
+        if rule_owner is not None:
+            updates.append("rule_owner = ?")
+            params.append(str(rule_owner or "").strip())
+        if effective_reason is not None:
+            updates.append("effective_reason = ?")
+            params.append(str(effective_reason or "").strip())
+        if next_review_at is not None:
+            updates.append("next_review_at = ?")
+            params.append(str(next_review_at or "").strip())
+        if last_reviewed_at is not None:
+            updates.append("last_reviewed_at = ?")
+            params.append(str(last_reviewed_at or "").strip())
+        if not updates:
+            return
+        updates.append("updated_at = ?")
+        params.append(utcnow_iso())
+        with self.db.transaction() as conn:
+            if normalized_org_id:
+                conn.execute(
+                    f"""
+                    UPDATE user_identity_bindings
+                    SET {", ".join(updates)}
+                    WHERE org_id = ?
+                      AND source_user_id = ?
+                    """,
+                    (*params, normalized_org_id, str(source_user_id or "").strip()),
+                )
+            else:
+                conn.execute(
+                    f"""
+                    UPDATE user_identity_bindings
+                    SET {", ".join(updates)}
+                    WHERE source_user_id = ?
+                    """,
+                    (*params, str(source_user_id or "").strip()),
+                )
+
+    def record_rule_hit_for_source_user(
+        self,
+        source_user_id: str,
+        *,
+        org_id: Optional[str] = None,
+        hit_at: str | None = None,
+    ) -> None:
+        normalized_org_id = self._resolve_org_id(org_id)
+        normalized_hit_at = str(hit_at or utcnow_iso()).strip()
+        with self.db.transaction() as conn:
+            if normalized_org_id:
+                conn.execute(
+                    """
+                    UPDATE user_identity_bindings
+                    SET hit_count = COALESCE(hit_count, 0) + 1,
+                        last_hit_at = ?
+                    WHERE org_id = ?
+                      AND source_user_id = ?
+                    """,
+                    (normalized_hit_at, normalized_org_id, str(source_user_id or "").strip()),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE user_identity_bindings
+                    SET hit_count = COALESCE(hit_count, 0) + 1,
+                        last_hit_at = ?
+                    WHERE source_user_id = ?
+                    """,
+                    (normalized_hit_at, str(source_user_id or "").strip()),
+                )
+
     def update_binding_anchor(
         self,
         source_user_id: str,
@@ -369,21 +453,23 @@ class UserIdentityBindingRepository(BaseRepository):
                     """
                     UPDATE user_identity_bindings
                     SET is_enabled = ?,
+                        last_reviewed_at = ?,
                         updated_at = ?
                     WHERE org_id = ?
                       AND source_user_id = ?
                     """,
-                    (1 if enabled else 0, utcnow_iso(), normalized_org_id, source_user_id),
+                    (1 if enabled else 0, utcnow_iso(), utcnow_iso(), normalized_org_id, source_user_id),
                 )
             else:
                 conn.execute(
                     """
                     UPDATE user_identity_bindings
                     SET is_enabled = ?,
+                        last_reviewed_at = ?,
                         updated_at = ?
                     WHERE source_user_id = ?
                     """,
-                    (1 if enabled else 0, utcnow_iso(), source_user_id),
+                    (1 if enabled else 0, utcnow_iso(), utcnow_iso(), source_user_id),
                 )
 
     def set_enabled_for_source_user(
@@ -485,11 +571,13 @@ class UserDepartmentOverrideRepository(BaseRepository):
                 "("
                 "LOWER(source_user_id) LIKE ? OR "
                 "LOWER(primary_department_id) LIKE ? OR "
+                "LOWER(COALESCE(rule_owner, '')) LIKE ? OR "
+                "LOWER(COALESCE(effective_reason, '')) LIKE ? OR "
                 "LOWER(COALESCE(notes, '')) LIKE ?"
                 ")"
             )
             like_pattern = f"%{normalized_query}%"
-            params.extend([like_pattern] * 3)
+            params.extend([like_pattern] * 5)
         where_clause = " WHERE " + " AND ".join(clauses)
         total = self._fetchcount(
             f"""
@@ -553,6 +641,88 @@ class UserDepartmentOverrideRepository(BaseRepository):
             org_id=org_id,
             notes=notes,
         )
+
+    def update_governance_metadata_for_source_user(
+        self,
+        source_user_id: str,
+        *,
+        org_id: Optional[str] = None,
+        rule_owner: str | None = None,
+        effective_reason: str | None = None,
+        next_review_at: str | None = None,
+        last_reviewed_at: str | None = None,
+    ) -> None:
+        normalized_org_id = self._resolve_org_id(org_id)
+        updates: list[str] = []
+        params: list[Any] = []
+        if rule_owner is not None:
+            updates.append("rule_owner = ?")
+            params.append(str(rule_owner or "").strip())
+        if effective_reason is not None:
+            updates.append("effective_reason = ?")
+            params.append(str(effective_reason or "").strip())
+        if next_review_at is not None:
+            updates.append("next_review_at = ?")
+            params.append(str(next_review_at or "").strip())
+        if last_reviewed_at is not None:
+            updates.append("last_reviewed_at = ?")
+            params.append(str(last_reviewed_at or "").strip())
+        if not updates:
+            return
+        updates.append("updated_at = ?")
+        params.append(utcnow_iso())
+        with self.db.transaction() as conn:
+            if normalized_org_id:
+                conn.execute(
+                    f"""
+                    UPDATE user_department_overrides
+                    SET {", ".join(updates)}
+                    WHERE org_id = ?
+                      AND source_user_id = ?
+                    """,
+                    (*params, normalized_org_id, str(source_user_id or "").strip()),
+                )
+            else:
+                conn.execute(
+                    f"""
+                    UPDATE user_department_overrides
+                    SET {", ".join(updates)}
+                    WHERE source_user_id = ?
+                    """,
+                    (*params, str(source_user_id or "").strip()),
+                )
+
+    def record_rule_hit_for_source_user(
+        self,
+        source_user_id: str,
+        *,
+        org_id: Optional[str] = None,
+        hit_at: str | None = None,
+    ) -> None:
+        normalized_org_id = self._resolve_org_id(org_id)
+        normalized_hit_at = str(hit_at or utcnow_iso()).strip()
+        with self.db.transaction() as conn:
+            if normalized_org_id:
+                conn.execute(
+                    """
+                    UPDATE user_department_overrides
+                    SET hit_count = COALESCE(hit_count, 0) + 1,
+                        last_hit_at = ?
+                    WHERE org_id = ?
+                      AND source_user_id = ?
+                    """,
+                    (normalized_hit_at, normalized_org_id, str(source_user_id or "").strip()),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE user_department_overrides
+                    SET hit_count = COALESCE(hit_count, 0) + 1,
+                        last_hit_at = ?
+                    WHERE source_user_id = ?
+                    """,
+                    (normalized_hit_at, str(source_user_id or "").strip()),
+                )
 
     def delete_override(self, source_user_id: str, *, org_id: Optional[str] = None) -> None:
         normalized_org_id = self._resolve_org_id(org_id)

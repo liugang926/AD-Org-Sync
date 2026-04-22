@@ -16,12 +16,28 @@ def parse_bulk_bindings(text: str) -> tuple[list[dict[str, str]], list[str]]:
 
     for index, raw_line in enumerate(raw_lines, start=1):
         parts = next(csv.reader([raw_line], skipinitialspace=True), [])
+        trimmed_parts = [str(part or "").strip() for part in parts]
+        if index == 1 and trimmed_parts[:2] == ["source_user_id", "ad_username"]:
+            continue
         if len(parts) < 2:
             errors.append(f"Line {index}: expected at least source_user_id,ad_username")
             continue
-        source_user_id = str(parts[0]).strip()
-        ad_username = str(parts[1]).strip()
-        notes = str(parts[2]).strip() if len(parts) > 2 else ""
+        source_user_id = trimmed_parts[0]
+        ad_username = trimmed_parts[1]
+        rule_owner = ""
+        effective_reason = ""
+        next_review_at = ""
+        notes = ""
+        if len(trimmed_parts) >= 5:
+            rule_owner = trimmed_parts[2]
+            effective_reason = trimmed_parts[3]
+            next_review_at = trimmed_parts[4]
+            notes = trimmed_parts[5] if len(trimmed_parts) > 5 else ""
+        elif len(trimmed_parts) == 4:
+            rule_owner = trimmed_parts[2]
+            notes = trimmed_parts[3]
+        elif len(trimmed_parts) > 2:
+            notes = trimmed_parts[2]
         if not source_user_id or not ad_username:
             errors.append(f"Line {index}: source user ID and AD username are required")
             continue
@@ -29,6 +45,9 @@ def parse_bulk_bindings(text: str) -> tuple[list[dict[str, str]], list[str]]:
             {
                 "source_user_id": source_user_id,
                 "ad_username": ad_username,
+                "rule_owner": rule_owner,
+                "effective_reason": effective_reason,
+                "next_review_at": next_review_at,
                 "notes": notes,
             }
         )
