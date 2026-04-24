@@ -31,7 +31,7 @@ from sync_app.web.dashboard_state import (
     merge_saved_preflight_snapshot as merge_saved_preflight_snapshot_data,
 )
 from sync_app.web.helpers import parse_bulk_bindings
-from sync_app.web.app_state import initialize_web_app_state
+from sync_app.web.app_state import get_web_repositories, initialize_web_app_state
 from sync_app.web.config_support import ConfigSupport
 from sync_app.web.i18n import translate
 from sync_app.web.pagination import (
@@ -58,11 +58,8 @@ from sync_app.web.routes_mappings import register_mapping_routes
 from sync_app.web.routes_metadata import register_metadata_routes
 from sync_app.web.routes_organizations import register_organization_routes
 from sync_app.web.routes_public import register_public_routes
+from sync_app.web.runtime import resolve_web_runtime_settings, web_runtime_requires_restart
 from sync_app.web.sync_support import SyncSupport
-from sync_app.web.runtime import (
-    resolve_web_runtime_settings,
-    web_runtime_requires_restart,
-)
 from sync_app.web.security import (
     hash_password,
     rotate_csrf_token,
@@ -229,6 +226,8 @@ def create_app(
     web_app_state.bind_to_app(app)
     app.router.on_startup.append(runtime_state.sync_runner.start)
     app.router.on_shutdown.append(runtime_state.sync_runner.stop)
+    app.router.on_startup.append(runtime_state.integration_outbox_worker.start)
+    app.router.on_shutdown.append(runtime_state.integration_outbox_worker.stop)
 
     department_name_cache: dict[str, Any] = {
         "expires_at": 0.0,
@@ -256,7 +255,8 @@ def create_app(
     async def require_login_middleware(request: Request, call_next):
         if request.method.upper() == "OPTIONS" or _is_public_auth_path(request.url.path):
             return await call_next(request)
-        if not request.app.state.user_repo.has_any_user():
+        repositories = get_web_repositories(request)
+        if not repositories.user_repo.has_any_user():
             return RedirectResponse(url="/setup", status_code=303)
         if not request_support.get_current_user(request):
             return RedirectResponse(url="/login", status_code=303)
@@ -461,7 +461,6 @@ def create_app(
         build_config_change_preview=config_support.build_config_change_preview,
         build_config_editable_override=config_support.build_config_editable_override,
         build_config_page_context=config_support.build_config_page_context,
-        build_config_release_center_context=config_support.build_config_release_center_context,
         build_source_unit_catalog=config_support.build_source_unit_catalog,
         build_target_ou_catalog=config_support.build_target_ou_catalog,
         build_config_submission=config_support.build_config_submission,
@@ -469,13 +468,9 @@ def create_app(
         flash=request_support.flash,
         flash_t=request_support.flash_t,
         get_current_org=request_support.get_current_org,
-        publish_config_release_snapshot=config_support.publish_config_release_snapshot,
         reject_invalid_csrf=request_support.reject_invalid_csrf,
         render=request_support.render,
-        rollback_config_release_snapshot=config_support.rollback_config_release_snapshot,
         require_capability=request_support.require_capability,
-        resolve_web_runtime_settings=resolve_web_runtime_settings,
-        web_runtime_requires_restart=web_runtime_requires_restart,
     )
 
     register_mapping_routes(

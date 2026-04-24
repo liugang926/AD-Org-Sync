@@ -11,6 +11,7 @@ from sync_app.services.lifecycle_workbench import (
     apply_replay_bulk_action,
     build_lifecycle_workbench_data,
 )
+from sync_app.web.app_state import get_web_repositories
 
 
 def _normalize_id_list(values: list[int] | None) -> list[int]:
@@ -71,6 +72,7 @@ def register_lifecycle_routes(
         if isinstance(user, RedirectResponse):
             return user
         current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
         return render(
             request,
             "lifecycle_workbench.html",
@@ -78,7 +80,7 @@ def register_lifecycle_routes(
             title="Lifecycle Workbench",
             current_org=current_org,
             **build_lifecycle_workbench_data(
-                request.app.state.db_manager,
+                repositories.db_manager,
                 current_org.org_id,
             ),
         )
@@ -104,9 +106,10 @@ def register_lifecycle_routes(
             return RedirectResponse(url="/lifecycle", status_code=303)
 
         current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
         try:
             result = apply_offboarding_bulk_action(
-                request.app.state.db_manager,
+                repositories.db_manager,
                 current_org.org_id,
                 actor_username=user.username,
                 action=action,
@@ -117,7 +120,7 @@ def register_lifecycle_routes(
             flash(request, "error", str(exc))
             return RedirectResponse(url="/lifecycle", status_code=303)
 
-        request.app.state.audit_repo.add_log(
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type=f"lifecycle_workbench.offboarding_{str(action or '').strip().lower() or 'update'}",
@@ -160,9 +163,10 @@ def register_lifecycle_routes(
             return RedirectResponse(url="/lifecycle", status_code=303)
 
         current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
         try:
             result = apply_lifecycle_bulk_action(
-                request.app.state.db_manager,
+                repositories.db_manager,
                 current_org.org_id,
                 actor_username=user.username,
                 lifecycle_type=lifecycle_type,
@@ -174,7 +178,7 @@ def register_lifecycle_routes(
             flash(request, "error", str(exc))
             return RedirectResponse(url="/lifecycle", status_code=303)
 
-        request.app.state.audit_repo.add_log(
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type=f"lifecycle_workbench.{str(lifecycle_type or '').strip().lower() or 'lifecycle'}_{str(action or '').strip().lower() or 'update'}",
@@ -223,9 +227,10 @@ def register_lifecycle_routes(
             return RedirectResponse(url="/lifecycle", status_code=303)
 
         current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
         try:
             result = apply_replay_bulk_action(
-                request.app.state.db_manager,
+                repositories.db_manager,
                 current_org.org_id,
                 actor_username=user.username,
                 action=action,
@@ -235,7 +240,7 @@ def register_lifecycle_routes(
             flash(request, "error", str(exc))
             return RedirectResponse(url="/lifecycle", status_code=303)
 
-        request.app.state.audit_repo.add_log(
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type=f"lifecycle_workbench.replay_{str(action or '').strip().lower() or 'update'}",

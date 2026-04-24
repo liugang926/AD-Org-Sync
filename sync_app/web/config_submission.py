@@ -5,12 +5,14 @@ from typing import Any, Optional
 from fastapi import Request
 
 from sync_app.core.models import AppConfig, OrganizationRecord, WebAdminUserRecord
+from sync_app.services.typed_settings import BrandingSettings, DirectoryUiSettings, WebRuntimeSettings
 from sync_app.web.config_domain import (
     build_current_config_state_from_sources,
     build_preview_app_config_from_values,
     normalize_config_submission_values,
 )
 from sync_app.providers.source import normalize_source_provider
+from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
 from sync_app.web.config_persistence import apply_config_submission as _apply_config_submission
 from sync_app.web.config_preview import (
     build_config_change_preview as _build_config_change_preview,
@@ -20,87 +22,48 @@ from sync_app.web.config_preview import (
 
 
 def build_current_config_state(support: Any, request: Request, current_org: OrganizationRecord) -> dict[str, Any]:
-    current_org_config_path = current_org.config_path or request.app.state.config_path
-    current_org_values = request.app.state.org_config_repo.get_raw_config(
+    repositories = get_web_repositories(request)
+    runtime_state = get_web_runtime_state(request)
+    current_org_config_path = current_org.config_path or runtime_state.config_path
+    current_org_values = repositories.org_config_repo.get_raw_config(
         current_org.org_id,
         config_path=current_org_config_path,
     )
+    directory_ui_settings = DirectoryUiSettings.load(
+        repositories.settings_repo,
+        org_id=current_org.org_id,
+    )
+    web_runtime_settings = WebRuntimeSettings.load(repositories.settings_repo)
+    branding_settings = BrandingSettings.load(
+        repositories.settings_repo,
+        default_display_name=support.default_brand_display_name,
+        default_mark_text=support.default_brand_mark_text,
+        default_attribution=support.default_brand_attribution,
+    )
     settings_values = {
-        "group_display_separator": request.app.state.settings_repo.get_value(
-            "group_display_separator",
-            "-",
-            org_id=current_org.org_id,
-        ),
-        "group_recursive_enabled": request.app.state.settings_repo.get_bool(
-            "group_recursive_enabled",
-            True,
-            org_id=current_org.org_id,
-        ),
-        "managed_relation_cleanup_enabled": request.app.state.settings_repo.get_bool(
-            "managed_relation_cleanup_enabled",
-            False,
-            org_id=current_org.org_id,
-        ),
-        "schedule_execution_mode": request.app.state.settings_repo.get_value(
-            "schedule_execution_mode",
-            "apply",
-            org_id=current_org.org_id,
-        ),
-        "web_bind_host": request.app.state.settings_repo.get_value("web_bind_host", "127.0.0.1"),
-        "web_bind_port": request.app.state.settings_repo.get_int("web_bind_port", 8000),
-        "web_public_base_url": request.app.state.settings_repo.get_value("web_public_base_url", ""),
-        "web_session_cookie_secure_mode": request.app.state.settings_repo.get_value(
-            "web_session_cookie_secure_mode",
-            "auto",
-        ),
-        "web_trust_proxy_headers": request.app.state.settings_repo.get_bool("web_trust_proxy_headers", False),
-        "web_forwarded_allow_ips": request.app.state.settings_repo.get_value("web_forwarded_allow_ips", "127.0.0.1"),
-        "brand_display_name": request.app.state.settings_repo.get_value(
-            "brand_display_name",
-            support.default_brand_display_name,
-        ),
-        "brand_mark_text": request.app.state.settings_repo.get_value(
-            "brand_mark_text",
-            support.default_brand_mark_text,
-        ),
-        "brand_attribution": request.app.state.settings_repo.get_value(
-            "brand_attribution",
-            support.default_brand_attribution,
-        ),
-        "user_ou_placement_strategy": request.app.state.settings_repo.get_value(
-            "user_ou_placement_strategy",
-            "source_primary_department",
-            org_id=current_org.org_id,
-        ),
-        "source_root_unit_ids": request.app.state.settings_repo.get_value(
-            "source_root_unit_ids",
-            "",
-            org_id=current_org.org_id,
-        ),
-        "source_root_unit_display_text": request.app.state.settings_repo.get_value(
-            "source_root_unit_display_text",
-            "",
-            org_id=current_org.org_id,
-        ),
-        "directory_root_ou_path": request.app.state.settings_repo.get_value(
-            "directory_root_ou_path",
-            "",
-            org_id=current_org.org_id,
-        ),
-        "disabled_users_ou_path": request.app.state.settings_repo.get_value(
-            "disabled_users_ou_path",
-            "Disabled Users",
-            org_id=current_org.org_id,
-        ),
-        "custom_group_ou_path": request.app.state.settings_repo.get_value(
-            "custom_group_ou_path",
-            "Managed Groups",
-            org_id=current_org.org_id,
-        ),
+        "group_display_separator": directory_ui_settings.group_display_separator,
+        "group_recursive_enabled": directory_ui_settings.group_recursive_enabled,
+        "managed_relation_cleanup_enabled": directory_ui_settings.managed_relation_cleanup_enabled,
+        "schedule_execution_mode": directory_ui_settings.schedule_execution_mode,
+        "web_bind_host": web_runtime_settings.bind_host,
+        "web_bind_port": web_runtime_settings.bind_port,
+        "web_public_base_url": web_runtime_settings.public_base_url,
+        "web_session_cookie_secure_mode": web_runtime_settings.session_cookie_secure_mode,
+        "web_trust_proxy_headers": web_runtime_settings.trust_proxy_headers,
+        "web_forwarded_allow_ips": web_runtime_settings.forwarded_allow_ips,
+        "brand_display_name": branding_settings.brand_display_name,
+        "brand_mark_text": branding_settings.brand_mark_text,
+        "brand_attribution": branding_settings.brand_attribution,
+        "user_ou_placement_strategy": directory_ui_settings.user_ou_placement_strategy,
+        "source_root_unit_ids": directory_ui_settings.source_root_unit_ids,
+        "source_root_unit_display_text": directory_ui_settings.source_root_unit_display_text,
+        "directory_root_ou_path": directory_ui_settings.directory_root_ou_path,
+        "disabled_users_ou_path": directory_ui_settings.disabled_users_ou_path,
+        "custom_group_ou_path": directory_ui_settings.custom_group_ou_path,
     }
     soft_excluded_groups = support.request_support.normalize_soft_excluded_groups_text(
         "\n".join(
-            request.app.state.exclusion_repo.list_soft_excluded_group_names(
+            repositories.exclusion_repo.list_soft_excluded_group_names(
                 enabled_only=False,
                 org_id=current_org.org_id,
             )
@@ -158,8 +121,10 @@ def build_config_submission(
     soft_excluded_groups: str = "",
 ) -> dict[str, Any]:
     current_org = support.request_support.get_current_org(request)
-    current_org_config_path = current_org.config_path or request.app.state.config_path
-    current_org_values = request.app.state.org_config_repo.get_raw_config(
+    repositories = get_web_repositories(request)
+    runtime_state = get_web_runtime_state(request)
+    current_org_config_path = current_org.config_path or runtime_state.config_path
+    current_org_values = repositories.org_config_repo.get_raw_config(
         current_org.org_id,
         config_path=current_org_config_path,
     )
@@ -229,7 +194,7 @@ def build_config_submission(
 
 def build_preview_app_config(support: Any, request: Request, submission: dict[str, Any]) -> AppConfig:
     current_org = support.request_support.get_current_org(request)
-    current_config = request.app.state.org_config_repo.get_app_config(
+    current_config = get_web_repositories(request).org_config_repo.get_app_config(
         current_org.org_id,
         config_path=submission["legacy_config_path"],
     )

@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -148,7 +149,7 @@ class SyncDispatchTests(unittest.TestCase):
                 execution_mode="dry_run",
                 status="COMPLETED",
                 org_id="default",
-                started_at="2026-04-21T00:00:00+00:00",
+                started_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
             )
             job_repo.update_job(
                 "job-dry-run-green",

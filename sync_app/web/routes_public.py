@@ -6,6 +6,8 @@ from typing import Any, Callable
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from sync_app.web.app_state import get_web_repositories
+
 
 def register_public_routes(
     app: FastAPI,
@@ -21,18 +23,19 @@ def register_public_routes(
 
     @app.get("/readyz")
     def readyz(request: Request):
+        repositories = get_web_repositories(request)
         db_ok = False
         db_error = ""
         try:
-            with request.app.state.db_manager.connection() as conn:
+            with repositories.db_manager.connection() as conn:
                 conn.execute("SELECT 1").fetchone()
             db_ok = True
         except Exception as exc:  # pragma: no cover - defensive reporting path
             db_error = str(exc)
 
-        default_org = request.app.state.organization_repo.get_organization_record("default")
+        default_org = repositories.organization_repo.get_organization_record("default")
         static_assets_ok = favicon_path.parent.exists()
-        admin_bootstrapped = request.app.state.user_repo.has_any_user()
+        admin_bootstrapped = repositories.user_repo.has_any_user()
         ready = db_ok and static_assets_ok and default_org is not None and admin_bootstrapped
         status = "ready" if ready else ("setup_required" if db_ok and static_assets_ok and default_org else "degraded")
         payload = {
@@ -44,7 +47,7 @@ def register_public_routes(
                 "default_organization": default_org is not None,
                 "admin_bootstrapped": admin_bootstrapped,
             },
-            "db_path": request.app.state.db_manager.db_path,
+            "db_path": repositories.db_manager.db_path,
             "setup_url": "/setup" if not admin_bootstrapped else "",
         }
         if db_error:
@@ -61,7 +64,7 @@ def register_public_routes(
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
-        if not request.app.state.user_repo.has_any_user():
+        if not get_web_repositories(request).user_repo.has_any_user():
             return RedirectResponse(url="/setup", status_code=303)
         if get_current_user(request):
             return RedirectResponse(url="/dashboard", status_code=303)

@@ -6,6 +6,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from sync_app.web.authz import WEB_ADMIN_ROLES, normalize_role
+from sync_app.web.app_state import get_web_repositories
 
 
 def register_admin_routes(
@@ -42,6 +43,7 @@ def register_admin_routes(
         user = require_capability(request, "account.manage")
         if isinstance(user, RedirectResponse):
             return user
+        repositories = get_web_repositories(request)
         csrf_error = reject_invalid_csrf(request, csrf_token, "/account")
         if csrf_error:
             return csrf_error
@@ -57,8 +59,8 @@ def register_admin_routes(
             flash(request, "error", password_error)
             return RedirectResponse(url="/account", status_code=303)
 
-        request.app.state.user_repo.set_password(user.username, hash_password(new_password))
-        request.app.state.audit_repo.add_log(
+        repositories.user_repo.set_password(user.username, hash_password(new_password))
+        repositories.audit_repo.add_log(
             actor_username=user.username,
             action_type="account.password_change",
             target_type="web_admin_user",
@@ -74,12 +76,13 @@ def register_admin_routes(
         user = require_capability(request, "users.manage")
         if isinstance(user, RedirectResponse):
             return user
+        repositories = get_web_repositories(request)
         return render(
             request,
             "users.html",
             page="users",
             title="Admin Users",
-            users=request.app.state.user_repo.list_user_records(),
+            users=repositories.user_repo.list_user_records(),
         )
 
     @app.post("/users")
@@ -93,6 +96,7 @@ def register_admin_routes(
         user = require_capability(request, "users.manage")
         if isinstance(user, RedirectResponse):
             return user
+        repositories = get_web_repositories(request)
         csrf_error = reject_invalid_csrf(request, csrf_token, "/users")
         if csrf_error:
             return csrf_error
@@ -108,12 +112,12 @@ def register_admin_routes(
         if password_error:
             flash(request, "error", password_error)
             return RedirectResponse(url="/users", status_code=303)
-        if request.app.state.user_repo.get_user_record_by_username(username):
+        if repositories.user_repo.get_user_record_by_username(username):
             flash(request, "error", "Username already exists")
             return RedirectResponse(url="/users", status_code=303)
 
-        request.app.state.user_repo.create_user(username, hash_password(password), role=role)
-        request.app.state.audit_repo.add_log(
+        repositories.user_repo.create_user(username, hash_password(password), role=role)
+        repositories.audit_repo.add_log(
             actor_username=user.username,
             action_type="user.create",
             target_type="web_admin_user",
@@ -134,11 +138,12 @@ def register_admin_routes(
         user = require_capability(request, "users.manage")
         if isinstance(user, RedirectResponse):
             return user
+        repositories = get_web_repositories(request)
         csrf_error = reject_invalid_csrf(request, csrf_token, "/users")
         if csrf_error:
             return csrf_error
 
-        target = request.app.state.user_repo.get_user_record_by_id(user_id)
+        target = repositories.user_repo.get_user_record_by_id(user_id)
         if not target:
             flash(request, "error", "Target account was not found")
             return RedirectResponse(url="/users", status_code=303)
@@ -147,8 +152,8 @@ def register_admin_routes(
             return RedirectResponse(url="/users", status_code=303)
 
         new_state = not target.is_enabled
-        request.app.state.user_repo.set_enabled(user_id, new_state)
-        request.app.state.audit_repo.add_log(
+        repositories.user_repo.set_enabled(user_id, new_state)
+        repositories.audit_repo.add_log(
             actor_username=user.username,
             action_type="user.toggle",
             target_type="web_admin_user",
@@ -170,6 +175,7 @@ def register_admin_routes(
         if isinstance(user, RedirectResponse):
             return user
         current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
         remembered_filters = resolve_remembered_filters(
             request,
             page_name="audit",
@@ -182,7 +188,7 @@ def register_admin_routes(
             page="audit",
             title="Audit Logs",
             logs=(audit_result := fetch_page(
-                lambda *, limit, offset: request.app.state.audit_repo.list_recent_logs_page(
+                lambda *, limit, offset: repositories.audit_repo.list_recent_logs_page(
                     limit=limit,
                     offset=offset,
                     query=audit_query,

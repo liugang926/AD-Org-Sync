@@ -957,6 +957,59 @@ class IntegrationWebhookSubscriptionRecord(MappingLikeModel):
 
 
 @dataclass(slots=True)
+class IntegrationWebhookOutboxRecord(MappingLikeModel):
+    id: Optional[int] = None
+    org_id: str = ""
+    subscription_id: Optional[int] = None
+    event_type: str = ""
+    delivery_id: str = ""
+    target_url: str = ""
+    secret: str = ""
+    payload: Optional[Dict[str, Any]] = None
+    status: str = "pending"
+    attempt_count: int = 0
+    max_attempts: int = 5
+    next_attempt_at: str = ""
+    last_attempt_at: str = ""
+    last_status: str = ""
+    last_error: str = ""
+    locked_at: str = ""
+    lease_expires_at: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: Any) -> "IntegrationWebhookOutboxRecord":
+        payload = row["payload_json"] if "payload_json" in row.keys() else None
+        if isinstance(payload, str) and payload:
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                payload = {"raw": payload}
+        return cls(
+            id=int(row["id"]) if row["id"] is not None else None,
+            org_id=str(row["org_id"] or ""),
+            subscription_id=int(row["subscription_id"]) if row["subscription_id"] is not None else None,
+            event_type=str(row["event_type"] or ""),
+            delivery_id=str(row["delivery_id"] or ""),
+            target_url=str(row["target_url"] or ""),
+            secret=str(row["secret"] or ""),
+            payload=payload if isinstance(payload, dict) or payload is None else {"raw": payload},
+            status=str(row["status"] or "pending"),
+            attempt_count=int(row["attempt_count"] or 0),
+            max_attempts=int(row["max_attempts"] or 0),
+            next_attempt_at=str(row["next_attempt_at"] or ""),
+            last_attempt_at=str(row["last_attempt_at"] or ""),
+            last_status=str(row["last_status"] or ""),
+            last_error=str(row["last_error"] or ""),
+            locked_at=str(row["locked_at"] or ""),
+            lease_expires_at=str(row["lease_expires_at"] or ""),
+            created_at=str(row["created_at"] or ""),
+            updated_at=str(row["updated_at"] or ""),
+        )
+
+
+@dataclass(slots=True)
 class SyncOperationRecord(MappingLikeModel):
     id: Optional[int] = None
     job_id: str = ""

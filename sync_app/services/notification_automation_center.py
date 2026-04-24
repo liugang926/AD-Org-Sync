@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from sync_app.clients.wechat_bot import mask_webhook_url
 from sync_app.core.models import SyncJobRecord, SyncPlanReviewRecord
+from sync_app.services.typed_settings import NotificationAutomationPolicySettings
 from sync_app.storage.local_db import DatabaseManager
 from sync_app.storage.repositories.conflicts import SyncConflictRepository, SyncExceptionRuleRepository, SyncPlanReviewRepository
 from sync_app.storage.repositories.jobs import SyncJobRepository
@@ -56,54 +57,7 @@ def build_notification_automation_policy_settings(
     settings_repo: SettingsRepository,
     org_id: str,
 ) -> dict[str, Any]:
-    normalized_org_id = str(org_id or "").strip().lower() or "default"
-    schedule_execution_mode = settings_repo.get_value("schedule_execution_mode", "apply", org_id=normalized_org_id)
-    return {
-        "schedule_execution_mode": "dry_run" if str(schedule_execution_mode or "").strip().lower() == "dry_run" else "apply",
-        "notify_dry_run_failure_enabled": settings_repo.get_bool(
-            "ops_notify_dry_run_failure_enabled",
-            False,
-            org_id=normalized_org_id,
-        ),
-        "notify_conflict_backlog_enabled": settings_repo.get_bool(
-            "ops_notify_conflict_backlog_enabled",
-            False,
-            org_id=normalized_org_id,
-        ),
-        "notify_conflict_backlog_threshold": max(
-            settings_repo.get_int("ops_notify_conflict_backlog_threshold", 5, org_id=normalized_org_id),
-            1,
-        ),
-        "notify_review_pending_enabled": settings_repo.get_bool(
-            "ops_notify_review_pending_enabled",
-            False,
-            org_id=normalized_org_id,
-        ),
-        "notify_rule_governance_enabled": settings_repo.get_bool(
-            "ops_notify_rule_governance_enabled",
-            False,
-            org_id=normalized_org_id,
-        ),
-        "scheduled_apply_gate_enabled": settings_repo.get_bool(
-            "ops_scheduled_apply_gate_enabled",
-            True,
-            org_id=normalized_org_id,
-        ),
-        "scheduled_apply_max_dry_run_age_hours": max(
-            settings_repo.get_int("ops_scheduled_apply_max_dry_run_age_hours", 24, org_id=normalized_org_id),
-            1,
-        ),
-        "scheduled_apply_requires_zero_conflicts": settings_repo.get_bool(
-            "ops_scheduled_apply_requires_zero_conflicts",
-            True,
-            org_id=normalized_org_id,
-        ),
-        "scheduled_apply_requires_review_approval": settings_repo.get_bool(
-            "ops_scheduled_apply_requires_review_approval",
-            True,
-            org_id=normalized_org_id,
-        ),
-    }
+    return NotificationAutomationPolicySettings.load(settings_repo, org_id=org_id).to_dict()
 
 
 def evaluate_scheduled_apply_readiness(

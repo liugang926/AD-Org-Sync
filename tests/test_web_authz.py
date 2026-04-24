@@ -1,243 +1,18 @@
 import json
 import os
 import re
-import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from urllib.parse import urlencode
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from starlette.requests import Request
 
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
 from sync_app.services.config_store import save_editable_config
 from sync_app.web.app import resolve_web_runtime_settings
-from sync_app.web import create_app
-from sync_app.web.security import hash_password
+from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
 
-class WebAuthorizationTests(unittest.TestCase):
-    def setUp(self):
-        test_root = Path(os.getcwd()) / "test_artifacts"
-        test_root.mkdir(exist_ok=True)
-        self.db_path = test_root / "web_authz.db"
-        self.config_path = test_root / "web_authz.ini"
-
-        for path in (self.db_path, self.config_path):
-            if path.exists():
-                path.unlink()
-
-        save_editable_config(
-            {
-                "corpid": "corp-001",
-                "agentid": "10001",
-                "corpsecret": "secret-001",
-                "webhook_url": "https://example.invalid/cgi-bin/webhook/send?key=test",
-                "ldap_server": "dc01.example.local",
-                "ldap_domain": "example.local",
-                "ldap_username": "administrator",
-                "ldap_password": "Password123!",
-                "ldap_use_ssl": True,
-                "ldap_port": 636,
-                "ldap_validate_cert": False,
-                "ldap_ca_cert_path": "",
-                "default_password": "ChangeMe123!",
-                "force_change_password": True,
-                "password_complexity": "strong",
-                "schedule_time": "03:00",
-                "retry_interval": 60,
-                "max_retries": 3,
-            },
-            config_path=str(self.config_path),
-        )
-
-        self.app = create_app(db_path=str(self.db_path), config_path=str(self.config_path))
-        self.app.state.user_repo.create_user("superadmin", hash_password("Admin123!"), role="super_admin")
-        self.app.state.user_repo.create_user("operator1", hash_password("Admin123!"), role="operator")
-        self.app.state.user_repo.create_user("auditor1", hash_password("Admin123!"), role="auditor")
-        self.session: dict[str, str] = {}
-
-    def tearDown(self):
-        for suffix in ("", "-wal", "-shm"):
-            path = Path(str(self.db_path) + suffix)
-            if path.exists():
-                try:
-                    path.unlink()
-                except PermissionError:
-                    pass
-        if self.config_path.exists():
-            self.config_path.unlink()
-        for config_file in self.db_path.parent.glob("web_authz*.ini"):
-            if config_file == self.config_path:
-                continue
-            try:
-                config_file.unlink()
-            except PermissionError:
-                pass
-        backup_dir = self.db_path.parent / "backups"
-        if backup_dir.exists():
-            for item in backup_dir.glob("*"):
-                try:
-                    item.unlink()
-                except PermissionError:
-                    pass
-
-    def _route(self, path: str, method: str):
-        method = method.upper()
-        for route in self.app.router.routes:
-            if getattr(route, "path", None) == path and method in getattr(route, "methods", set()):
-                return route.endpoint
-        raise AssertionError(f"route not found: {method} {path}")
-
-    def _request(
-        self,
-        path: str,
-        method: str = "GET",
-        *,
-        query: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> Request:
-        query_string = urlencode(query or {}).encode("utf-8")
-        scope = {
-            "type": "http",
-            "method": method.upper(),
-            "path": path,
-            "headers": [
-                (str(key).lower().encode("utf-8"), str(value).encode("utf-8"))
-                for key, value in (headers or {}).items()
-            ],
-            "query_string": query_string,
-            "app": self.app,
-            "session": self.session,
-        }
-        return Request(scope)
-
-    @staticmethod
-    def _response_body(response) -> bytes:
-        render_for_test = getattr(response, "render_for_test", None)
-        if callable(render_for_test):
-            return render_for_test()
-        body = getattr(response, "body", None)
-        if body is not None:
-            return body
-        raise AssertionError(f"response does not expose body bytes: {response!r}")
-
-    @classmethod
-    def _text(cls, response) -> str:
-        return cls._response_body(response).decode("utf-8")
-
-    def _login(self, username: str):
-        self.session = {}
-        login_page = self._route("/login", "GET")(self._request("/login"))
-        self.assertEqual(login_page.status_code, 200)
-        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(login_page))
-        self.assertIsNotNone(match)
-        response = self._route("/login", "POST")(
-            self._request("/login", "POST"),
-            csrf_token=match.group(1),
-            username=username,
-            password="Admin123!",
-        )
-        self.assertEqual(response.status_code, 303)
-        self.assertEqual(self.session.get("username"), username)
-
-    def _build_config_form_payload(self, **overrides):
-        current_org = self.app.state.organization_repo.get_default_organization_record()
-        self.assertIsNotNone(current_org)
-        editable = self.app.state.org_config_repo.get_editable_config(
-            current_org.org_id,
-            config_path=str(self.config_path),
-        )
-        payload = {
-            "corpid": editable["corpid"],
-            "agentid": editable["agentid"],
-            "corpsecret": "secret-001",
-            "webhook_url": "https://example.invalid/cgi-bin/webhook/send?key=test",
-            "ldap_server": editable["ldap_server"],
-            "ldap_domain": editable["ldap_domain"],
-            "ldap_username": editable["ldap_username"],
-            "ldap_password": "Password123!",
-            "ldap_port": editable["ldap_port"],
-            "ldap_use_ssl": "true" if editable["ldap_use_ssl"] else "false",
-            "ldap_validate_cert": "true" if editable["ldap_validate_cert"] else "false",
-            "ldap_ca_cert_path": editable["ldap_ca_cert_path"],
-            "default_password": "ChangeMe123!",
-            "force_change_password": "true" if editable["force_change_password"] else "false",
-            "password_complexity": editable["password_complexity"],
-            "schedule_time": editable["schedule_time"],
-            "retry_interval": editable["retry_interval"],
-            "max_retries": editable["max_retries"],
-            "group_display_separator": self.app.state.settings_repo.get_value(
-                "group_display_separator",
-                "-",
-                org_id=current_org.org_id,
-            ),
-            "group_recursive_enabled": "true"
-            if self.app.state.settings_repo.get_bool("group_recursive_enabled", True, org_id=current_org.org_id)
-            else "false",
-            "managed_relation_cleanup_enabled": "true"
-            if self.app.state.settings_repo.get_bool("managed_relation_cleanup_enabled", False, org_id=current_org.org_id)
-            else "false",
-            "schedule_execution_mode": self.app.state.settings_repo.get_value(
-                "schedule_execution_mode",
-                "apply",
-                org_id=current_org.org_id,
-            ),
-            "web_bind_host": self.app.state.settings_repo.get_value("web_bind_host", "127.0.0.1"),
-            "web_bind_port": self.app.state.settings_repo.get_int("web_bind_port", 8000),
-            "web_public_base_url": self.app.state.settings_repo.get_value("web_public_base_url", ""),
-            "web_session_cookie_secure_mode": self.app.state.settings_repo.get_value(
-                "web_session_cookie_secure_mode",
-                "auto",
-            ),
-            "web_trust_proxy_headers": "true"
-            if self.app.state.settings_repo.get_bool("web_trust_proxy_headers", False)
-            else "false",
-            "web_forwarded_allow_ips": self.app.state.settings_repo.get_value(
-                "web_forwarded_allow_ips",
-                "127.0.0.1",
-            ),
-            "brand_display_name": self.app.state.settings_repo.get_value("brand_display_name", "AD Org Sync"),
-            "brand_mark_text": self.app.state.settings_repo.get_value("brand_mark_text", "AD"),
-            "brand_attribution": self.app.state.settings_repo.get_value(
-                "brand_attribution",
-                "微信公众号：大刘讲IT",
-            ),
-            "user_ou_placement_strategy": self.app.state.settings_repo.get_value(
-                "user_ou_placement_strategy",
-                "source_primary_department",
-                org_id=current_org.org_id,
-            ),
-            "source_root_unit_ids": self.app.state.settings_repo.get_value(
-                "source_root_unit_ids",
-                "",
-                org_id=current_org.org_id,
-            ),
-            "directory_root_ou_path": self.app.state.settings_repo.get_value(
-                "directory_root_ou_path",
-                "",
-                org_id=current_org.org_id,
-            ),
-            "disabled_users_ou_path": self.app.state.settings_repo.get_value(
-                "disabled_users_ou_path",
-                "Disabled Users",
-                org_id=current_org.org_id,
-            ),
-            "custom_group_ou_path": self.app.state.settings_repo.get_value(
-                "custom_group_ou_path",
-                "Managed Groups",
-                org_id=current_org.org_id,
-            ),
-            "soft_excluded_groups": "\n".join(
-                self.app.state.exclusion_repo.list_soft_excluded_group_names(
-                    enabled_only=False,
-                    org_id=current_org.org_id,
-                )
-            ),
-        }
-        payload.update(overrides)
-        return payload
+class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_operator_cannot_access_config_or_database_actions(self):
         self._login("operator1")
@@ -1336,6 +1111,97 @@ class WebAuthorizationTests(unittest.TestCase):
             ),
             0,
         )
+
+    def test_super_admin_can_requeue_failed_integration_deliveries(self):
+        self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
+
+        subscription = self.app.state.integration_webhook_subscription_repo.upsert_subscription(
+            org_id="default",
+            event_type="job.failed",
+            target_url="https://example.invalid/hooks/recover",
+            secret="",
+            description="Recovery sink",
+            is_enabled=True,
+        )
+        failed_delivery = self.app.state.integration_webhook_outbox_repo.enqueue_delivery(
+            org_id="default",
+            subscription_id=int(subscription.id or 0),
+            event_type="job.failed",
+            delivery_id="delivery-recover-001",
+            target_url=subscription.target_url,
+            payload={
+                "_delivery_kind": "integration.event",
+                "event_type": "job.failed",
+                "payload": {"job": {"job_id": "job-recover-001"}},
+            },
+            max_attempts=1,
+            next_attempt_at="2026-04-22T00:00:00+00:00",
+        )
+        self.app.state.integration_webhook_outbox_repo.mark_delivery_retry(
+            int(failed_delivery.id or 0),
+            last_status="503 Service Unavailable",
+            last_error="temporary outage",
+            attempted_at="2026-04-22T01:00:00+00:00",
+            retry_delay_seconds=60,
+        )
+
+        response = self._route("/integrations", "GET")(self._request("/integrations"))
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("Failed Delivery Recovery", body)
+        self.assertIn("Retry Failed Deliveries", body)
+        self.assertIn("temporary outage", body)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', body)
+        self.assertIsNotNone(match)
+        csrf_token = match.group(1)
+
+        retry_response = self._route("/integrations/deliveries/{delivery_id}/retry", "POST")(
+            self._request(f"/integrations/deliveries/{int(failed_delivery.id or 0)}/retry", "POST"),
+            delivery_id=int(failed_delivery.id or 0),
+            csrf_token=csrf_token,
+        )
+        self.assertEqual(retry_response.status_code, 303)
+        self.assertEqual(retry_response.headers["location"], "/integrations")
+        refreshed = self.app.state.integration_webhook_outbox_repo.get_delivery_record(int(failed_delivery.id or 0))
+        self.assertIsNotNone(refreshed)
+        self.assertEqual(refreshed.status, "pending")
+        self.assertEqual(refreshed.max_attempts, 2)
+
+        second_failed_delivery = self.app.state.integration_webhook_outbox_repo.enqueue_delivery(
+            org_id="default",
+            subscription_id=int(subscription.id or 0),
+            event_type="job.failed",
+            delivery_id="delivery-recover-002",
+            target_url=subscription.target_url,
+            payload={
+                "_delivery_kind": "integration.event",
+                "event_type": "job.failed",
+                "payload": {"job": {"job_id": "job-recover-002"}},
+            },
+            max_attempts=1,
+            next_attempt_at="2026-04-22T00:00:00+00:00",
+        )
+        self.app.state.integration_webhook_outbox_repo.mark_delivery_retry(
+            int(second_failed_delivery.id or 0),
+            last_status="503 Service Unavailable",
+            last_error="temporary outage 2",
+            attempted_at="2026-04-22T01:10:00+00:00",
+            retry_delay_seconds=60,
+        )
+
+        retry_all_response = self._route("/integrations/deliveries/retry-failed", "POST")(
+            self._request("/integrations/deliveries/retry-failed", "POST"),
+            csrf_token=csrf_token,
+        )
+        self.assertEqual(retry_all_response.status_code, 303)
+        self.assertEqual(retry_all_response.headers["location"], "/integrations")
+        bulk_refreshed = self.app.state.integration_webhook_outbox_repo.get_delivery_record(
+            int(second_failed_delivery.id or 0)
+        )
+        self.assertIsNotNone(bulk_refreshed)
+        self.assertEqual(bulk_refreshed.status, "pending")
+        self.assertEqual(bulk_refreshed.max_attempts, 2)
 
     def test_jobs_page_shows_execution_readiness_and_impact_preview(self):
         self._login("superadmin")

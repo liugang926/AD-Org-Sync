@@ -24,6 +24,7 @@ from sync_app.web.config_submission import (
     build_current_config_state as _build_current_config_state,
     build_preview_app_config as _build_preview_app_config,
 )
+from sync_app.web.app_state import get_web_repositories
 from sync_app.web.request_support import RequestSupport
 
 
@@ -231,8 +232,9 @@ class ConfigSupport:
         baseline_snapshot_id: Optional[int] = None,
     ) -> dict[str, Any]:
         current_org = self.request_support.get_current_org(request)
+        repositories = get_web_repositories(request)
         release_data = _build_config_release_center_data(
-            request.app.state.db_manager,
+            repositories.db_manager,
             current_org.org_id,
             current_snapshot_id=current_snapshot_id,
             baseline_snapshot_id=baseline_snapshot_id,
@@ -270,8 +272,9 @@ class ConfigSupport:
         snapshot_name: str = "",
     ) -> dict[str, Any]:
         current_org = self.request_support.get_current_org(request)
+        repositories = get_web_repositories(request)
         return _publish_current_config_release_snapshot(
-            request.app.state.db_manager,
+            repositories.db_manager,
             current_org.org_id,
             created_by=user.username,
             snapshot_name=str(snapshot_name or "").strip(),
@@ -287,8 +290,9 @@ class ConfigSupport:
         snapshot_id: int,
     ) -> dict[str, Any]:
         current_org = self.request_support.get_current_org(request)
+        repositories = get_web_repositories(request)
         return _rollback_config_release_snapshot(
-            request.app.state.db_manager,
+            repositories.db_manager,
             snapshot_id,
             org_id=current_org.org_id,
             created_by=user.username,

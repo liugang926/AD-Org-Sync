@@ -14,6 +14,7 @@ from sync_app.core.config import (
 )
 from sync_app.core.models import AppConfig, OrganizationRecord
 from sync_app.providers.source import get_source_provider_schema
+from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
 from sync_app.web.dashboard_state import (
     build_getting_started_data as build_getting_started_view_state,
     count_check_statuses,
@@ -48,7 +49,8 @@ class DashboardSupport:
     ) -> tuple[Optional[AppConfig], list[str], list[str]]:
         try:
             if organization is not None:
-                config = self.app.state.org_config_repo.get_app_config(
+                repositories = get_web_repositories(self.app)
+                config = repositories.org_config_repo.get_app_config(
                     organization.org_id,
                     config_path=config_path_override or organization.config_path or self.config_path,
                 )
@@ -70,9 +72,10 @@ class DashboardSupport:
         security_warnings: list[str],
         include_live: bool = False,
     ) -> dict[str, Any]:
-        recent_jobs = request.app.state.job_repo.list_recent_job_records(limit=100, org_id=current_org.org_id)
-        connector_count = request.app.state.connector_repo.count_connectors(org_id=current_org.org_id)
-        open_conflicts_total = request.app.state.conflict_repo.list_conflict_records_page(
+        repositories = get_web_repositories(request)
+        recent_jobs = repositories.job_repo.list_recent_job_records(limit=100, org_id=current_org.org_id)
+        connector_count = repositories.connector_repo.count_connectors(org_id=current_org.org_id)
+        open_conflicts_total = repositories.conflict_repo.list_conflict_records_page(
             limit=1,
             offset=0,
             status="open",
@@ -127,7 +130,7 @@ class DashboardSupport:
             }
         )
 
-        breaker_enabled = request.app.state.settings_repo.get_bool(
+        breaker_enabled = repositories.settings_repo.get_bool(
             "disable_circuit_breaker_enabled",
             False,
             org_id=current_org.org_id,
@@ -334,24 +337,26 @@ class DashboardSupport:
 
     def build_dashboard_data(self, request: Request) -> dict[str, Any]:
         current_org = self.request_support.get_current_org(request)
+        repositories = get_web_repositories(request)
+        runtime_state = get_web_runtime_state(request)
         config, validation_errors, security_warnings = self.load_config_summary(current_org)
-        persisted_web_runtime_settings = resolve_web_runtime_settings(request.app.state.settings_repo)
-        web_runtime_settings = dict(request.app.state.web_runtime_settings)
+        persisted_web_runtime_settings = resolve_web_runtime_settings(repositories.settings_repo)
+        web_runtime_settings = dict(runtime_state.web_runtime_settings)
         web_runtime_warnings = list(web_runtime_settings.get("warnings", []))
         if web_runtime_requires_restart(
-            request.app.state.startup_persisted_web_runtime_settings,
+            runtime_state.startup_persisted_web_runtime_settings,
             persisted_web_runtime_settings,
         ):
             web_runtime_warnings.append(
                 "Web deployment settings changed in storage. Restart the web process to apply proxy and cookie updates."
             )
-        recent_jobs = request.app.state.job_repo.list_recent_job_records(limit=10, org_id=current_org.org_id)
-        active_job = request.app.state.job_repo.get_active_job_record(org_id=current_org.org_id)
-        db_info = request.app.state.db_manager.runtime_info()
-        enabled_rules = request.app.state.exclusion_repo.list_enabled_rule_records(org_id=current_org.org_id)
-        bindings = request.app.state.user_binding_repo.list_enabled_binding_records(org_id=current_org.org_id)
-        overrides = request.app.state.department_override_repo.list_override_records(org_id=current_org.org_id)
-        exception_rules = request.app.state.exception_rule_repo.list_enabled_rule_records(org_id=current_org.org_id)
+        recent_jobs = repositories.job_repo.list_recent_job_records(limit=10, org_id=current_org.org_id)
+        active_job = repositories.job_repo.get_active_job_record(org_id=current_org.org_id)
+        db_info = repositories.db_manager.runtime_info()
+        enabled_rules = repositories.exclusion_repo.list_enabled_rule_records(org_id=current_org.org_id)
+        bindings = repositories.user_binding_repo.list_enabled_binding_records(org_id=current_org.org_id)
+        overrides = repositories.department_override_repo.list_override_records(org_id=current_org.org_id)
+        exception_rules = repositories.exception_rule_repo.list_enabled_rule_records(org_id=current_org.org_id)
         preflight_snapshot = merge_saved_preflight_snapshot_data(
             request.session.get("_preflight_snapshot"),
             self.build_preflight_snapshot(
@@ -368,9 +373,9 @@ class DashboardSupport:
             "active_job": active_job,
             "recent_jobs": recent_jobs,
             "current_org": current_org,
-            "current_org_connector_count": request.app.state.connector_repo.count_connectors(org_id=current_org.org_id),
-            "current_org_job_count": request.app.state.job_repo.count_jobs(org_id=current_org.org_id),
-            "enabled_organization_count": len(request.app.state.organization_repo.list_organization_records(enabled_only=True)),
+            "current_org_connector_count": repositories.connector_repo.count_connectors(org_id=current_org.org_id),
+            "current_org_job_count": repositories.job_repo.count_jobs(org_id=current_org.org_id),
+            "enabled_organization_count": len(repositories.organization_repo.list_organization_records(enabled_only=True)),
             "config_public": config.to_public_dict() if config else None,
             "config_validation_errors": validation_errors,
             "config_security_warnings": security_warnings,
@@ -378,7 +383,7 @@ class DashboardSupport:
             "enabled_rule_count": len(enabled_rules),
             "exception_rule_count": len(exception_rules),
             "open_conflicts_count": open_conflicts_count,
-            "user_count": request.app.state.user_repo.count_users(),
+            "user_count": repositories.user_repo.count_users(),
             "binding_count": len(bindings),
             "override_count": len(overrides),
             "preflight_summary": preflight_snapshot,
@@ -388,12 +393,12 @@ class DashboardSupport:
                 source_provider_name=self.request_support.source_provider_label(config.source_provider if config else "wecom"),
                 ui_mode=self.request_support.get_ui_mode(request),
             ),
-            "placement_strategy": request.app.state.settings_repo.get_value(
+            "placement_strategy": repositories.settings_repo.get_value(
                 "user_ou_placement_strategy",
                 "source_primary_department",
                 org_id=current_org.org_id,
             ),
             "web_runtime": web_runtime_settings,
             "web_runtime_warnings": web_runtime_warnings,
-            "sync_runner_error": request.app.state.sync_runner.last_error,
+            "sync_runner_error": runtime_state.sync_runner.last_error,
         }

@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from sync_app.services.typed_settings import DirectoryUiSettings
 from sync_app.storage.local_db import (
     DatabaseManager,
     GroupExclusionRuleRepository,
@@ -311,11 +312,12 @@ class DesktopLocalStrategyService:
         if not state.settings_repo or not state.rule_repo:
             return DesktopLocalStrategyValues()
 
+        directory_ui_settings = DirectoryUiSettings.load(state.settings_repo)
         return DesktopLocalStrategyValues(
-            group_display_separator=state.settings_repo.get_value("group_display_separator", "-") or "-",
-            group_recursive_enabled=state.settings_repo.get_bool("group_recursive_enabled", True),
-            managed_relation_cleanup_enabled=state.settings_repo.get_bool("managed_relation_cleanup_enabled", False),
-            schedule_execution_mode=state.settings_repo.get_value("schedule_execution_mode", "apply") or "apply",
+            group_display_separator=directory_ui_settings.group_display_separator,
+            group_recursive_enabled=directory_ui_settings.group_recursive_enabled,
+            managed_relation_cleanup_enabled=directory_ui_settings.managed_relation_cleanup_enabled,
+            schedule_execution_mode=directory_ui_settings.schedule_execution_mode,
             protected_rules=[
                 dict(row)
                 for row in state.rule_repo.list_rules(rule_type="protect", protection_level="hard")
@@ -330,19 +332,12 @@ class DesktopLocalStrategyService:
         if not state.settings_repo or not state.rule_repo:
             return
 
-        state.settings_repo.set_value("group_display_separator", values.group_display_separator, "string")
-        state.settings_repo.set_value(
-            "group_recursive_enabled",
-            str(bool(values.group_recursive_enabled)).lower(),
-            "bool",
-        )
-        state.settings_repo.set_value("group_recursive_enabled_user_override", "true", "bool")
-        state.settings_repo.set_value(
-            "managed_relation_cleanup_enabled",
-            str(bool(values.managed_relation_cleanup_enabled)).lower(),
-            "bool",
-        )
-        state.settings_repo.set_value("schedule_execution_mode", values.schedule_execution_mode, "string")
+        DirectoryUiSettings(
+            group_display_separator=values.group_display_separator,
+            group_recursive_enabled=bool(values.group_recursive_enabled),
+            managed_relation_cleanup_enabled=bool(values.managed_relation_cleanup_enabled),
+            schedule_execution_mode=values.schedule_execution_mode,
+        ).persist(state.settings_repo)
         state.rule_repo.replace_soft_excluded_rules(list(values.soft_excluded_rules))
 
     def build_summary(self, state: DesktopLocalStorageState) -> str:

@@ -6,6 +6,8 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from sync_app.services.notification_automation_center import build_notification_automation_center_context
+from sync_app.services.typed_settings import NotificationAutomationPolicySettings
+from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
 
 
 def register_automation_center_routes(
@@ -24,6 +26,8 @@ def register_automation_center_routes(
         if isinstance(user, RedirectResponse):
             return user
         current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        runtime_state = get_web_runtime_state(request)
         return render(
             request,
             "automation_center.html",
@@ -31,9 +35,9 @@ def register_automation_center_routes(
             title="Notification And Automation Center",
             current_org=current_org,
             **build_notification_automation_center_context(
-                request.app.state.db_manager,
+                repositories.db_manager,
                 current_org.org_id,
-                config_path=current_org.config_path or request.app.state.config_path,
+                config_path=current_org.config_path or runtime_state.config_path,
             ),
         )
 
@@ -60,69 +64,30 @@ def register_automation_center_routes(
             return csrf_error
 
         current_org = get_current_org(request)
-        settings_repo = request.app.state.settings_repo
-        normalized_mode = "dry_run" if str(schedule_execution_mode or "").strip().lower() == "dry_run" else "apply"
-        settings_repo.set_value(
-            "schedule_execution_mode",
-            normalized_mode,
-            "string",
-            org_id=current_org.org_id,
+        repositories = get_web_repositories(request)
+        settings_repo = repositories.settings_repo
+        policy_settings = NotificationAutomationPolicySettings.from_mapping(
+            {
+                "schedule_execution_mode": schedule_execution_mode,
+                "notify_dry_run_failure_enabled": to_bool(ops_notify_dry_run_failure_enabled, False),
+                "notify_conflict_backlog_enabled": to_bool(ops_notify_conflict_backlog_enabled, False),
+                "notify_conflict_backlog_threshold": ops_notify_conflict_backlog_threshold,
+                "notify_review_pending_enabled": to_bool(ops_notify_review_pending_enabled, False),
+                "notify_rule_governance_enabled": to_bool(ops_notify_rule_governance_enabled, False),
+                "scheduled_apply_gate_enabled": to_bool(ops_scheduled_apply_gate_enabled, False),
+                "scheduled_apply_max_dry_run_age_hours": ops_scheduled_apply_max_dry_run_age_hours,
+                "scheduled_apply_requires_zero_conflicts": to_bool(
+                    ops_scheduled_apply_requires_zero_conflicts,
+                    False,
+                ),
+                "scheduled_apply_requires_review_approval": to_bool(
+                    ops_scheduled_apply_requires_review_approval,
+                    False,
+                ),
+            }
         )
-        settings_repo.set_value(
-            "ops_notify_dry_run_failure_enabled",
-            str(to_bool(ops_notify_dry_run_failure_enabled, False)).lower(),
-            "bool",
-            org_id=current_org.org_id,
-        )
-        settings_repo.set_value(
-            "ops_notify_conflict_backlog_enabled",
-            str(to_bool(ops_notify_conflict_backlog_enabled, False)).lower(),
-            "bool",
-            org_id=current_org.org_id,
-        )
-        settings_repo.set_value(
-            "ops_notify_conflict_backlog_threshold",
-            str(max(int(ops_notify_conflict_backlog_threshold or 0), 1)),
-            "int",
-            org_id=current_org.org_id,
-        )
-        settings_repo.set_value(
-            "ops_notify_review_pending_enabled",
-            str(to_bool(ops_notify_review_pending_enabled, False)).lower(),
-            "bool",
-            org_id=current_org.org_id,
-        )
-        settings_repo.set_value(
-            "ops_notify_rule_governance_enabled",
-            str(to_bool(ops_notify_rule_governance_enabled, False)).lower(),
-            "bool",
-            org_id=current_org.org_id,
-        )
-        settings_repo.set_value(
-            "ops_scheduled_apply_gate_enabled",
-            str(to_bool(ops_scheduled_apply_gate_enabled, False)).lower(),
-            "bool",
-            org_id=current_org.org_id,
-        )
-        settings_repo.set_value(
-            "ops_scheduled_apply_max_dry_run_age_hours",
-            str(max(int(ops_scheduled_apply_max_dry_run_age_hours or 0), 1)),
-            "int",
-            org_id=current_org.org_id,
-        )
-        settings_repo.set_value(
-            "ops_scheduled_apply_requires_zero_conflicts",
-            str(to_bool(ops_scheduled_apply_requires_zero_conflicts, False)).lower(),
-            "bool",
-            org_id=current_org.org_id,
-        )
-        settings_repo.set_value(
-            "ops_scheduled_apply_requires_review_approval",
-            str(to_bool(ops_scheduled_apply_requires_review_approval, False)).lower(),
-            "bool",
-            org_id=current_org.org_id,
-        )
-        request.app.state.audit_repo.add_log(
+        policy_settings.persist(settings_repo, org_id=current_org.org_id)
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type="automation_center.policy_update",
@@ -132,22 +97,7 @@ def register_automation_center_routes(
             message="Updated notification and automation policies",
             payload={
                 "org_id": current_org.org_id,
-                "schedule_execution_mode": normalized_mode,
-                "ops_notify_dry_run_failure_enabled": to_bool(ops_notify_dry_run_failure_enabled, False),
-                "ops_notify_conflict_backlog_enabled": to_bool(ops_notify_conflict_backlog_enabled, False),
-                "ops_notify_conflict_backlog_threshold": max(int(ops_notify_conflict_backlog_threshold or 0), 1),
-                "ops_notify_review_pending_enabled": to_bool(ops_notify_review_pending_enabled, False),
-                "ops_notify_rule_governance_enabled": to_bool(ops_notify_rule_governance_enabled, False),
-                "ops_scheduled_apply_gate_enabled": to_bool(ops_scheduled_apply_gate_enabled, False),
-                "ops_scheduled_apply_max_dry_run_age_hours": max(int(ops_scheduled_apply_max_dry_run_age_hours or 0), 1),
-                "ops_scheduled_apply_requires_zero_conflicts": to_bool(
-                    ops_scheduled_apply_requires_zero_conflicts,
-                    False,
-                ),
-                "ops_scheduled_apply_requires_review_approval": to_bool(
-                    ops_scheduled_apply_requires_review_approval,
-                    False,
-                ),
+                **policy_settings.to_dict(),
             },
         )
         flash(request, "success", "Notification and automation policies saved.")

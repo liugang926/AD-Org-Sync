@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from sync_app.core.models import (
     ConfigReleaseSnapshotRecord,
     DataQualitySnapshotRecord,
+    IntegrationWebhookOutboxRecord,
     IntegrationWebhookSubscriptionRecord,
     SyncReplayRequestRecord,
     WebAuditLogRecord,
@@ -795,3 +797,300 @@ class IntegrationWebhookSubscriptionRepository(BaseRepository):
                     int(subscription_id),
                 ),
             )
+
+
+class IntegrationWebhookOutboxRepository(BaseRepository):
+    def enqueue_delivery(
+        self,
+        *,
+        org_id: Optional[str] = None,
+        subscription_id: Optional[int] = None,
+        event_type: str,
+        delivery_id: str,
+        target_url: str,
+        secret: str = "",
+        payload: Optional[Dict[str, Any]] = None,
+        max_attempts: int = 5,
+        next_attempt_at: Optional[str] = None,
+    ) -> IntegrationWebhookOutboxRecord:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        now = utcnow_iso()
+        normalized_payload = payload if isinstance(payload, dict) else {"raw": payload}
+        with self.db.transaction() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO integration_webhook_outbox (
+                  org_id, subscription_id, event_type, delivery_id, target_url, secret,
+                  payload_json, status, attempt_count, max_attempts, next_attempt_at,
+                  created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+                """,
+                (
+                    normalized_org_id,
+                    int(subscription_id) if subscription_id is not None else None,
+                    str(event_type or "").strip().lower(),
+                    str(delivery_id or "").strip(),
+                    str(target_url or "").strip(),
+                    str(secret or "").strip(),
+                    dumps_json(normalized_payload) or "{}",
+                    max(int(max_attempts or 0), 1),
+                    str(next_attempt_at or now).strip() or now,
+                    now,
+                    now,
+                ),
+            )
+            delivery_id_value = int(cursor.lastrowid)
+        record = self.get_delivery_record(delivery_id_value)
+        if record is None:
+            raise ValueError("webhook outbox delivery could not be loaded after insert")
+        return record
+
+    def get_delivery_record(self, delivery_id: int) -> Optional[IntegrationWebhookOutboxRecord]:
+        row = self._fetchone(
+            """
+            SELECT *
+            FROM integration_webhook_outbox
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (int(delivery_id),),
+        )
+        if not row:
+            return None
+        return IntegrationWebhookOutboxRecord.from_row(row)
+
+    def list_delivery_records(
+        self,
+        *,
+        org_id: Optional[str] = None,
+        statuses: Optional[list[str]] = None,
+        limit: int = 100,
+    ) -> list[IntegrationWebhookOutboxRecord]:
+        clauses = ["1 = 1"]
+        params: list[Any] = []
+        normalized_org_id = self._resolve_org_id(org_id)
+        if normalized_org_id:
+            clauses.append("org_id = ?")
+            params.append(normalized_org_id)
+        normalized_statuses = [
+            str(item or "").strip().lower()
+            for item in list(statuses or [])
+            if str(item or "").strip()
+        ]
+        if normalized_statuses:
+            placeholders = ", ".join("?" for _ in normalized_statuses)
+            clauses.append(f"status IN ({placeholders})")
+            params.extend(normalized_statuses)
+        rows = self._fetchall(
+            f"""
+            SELECT *
+            FROM integration_webhook_outbox
+            WHERE {' AND '.join(clauses)}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (*params, int(limit)),
+        )
+        return [IntegrationWebhookOutboxRecord.from_row(row) for row in rows]
+
+    def count_delivery_records(
+        self,
+        *,
+        org_id: Optional[str] = None,
+        statuses: Optional[list[str]] = None,
+    ) -> int:
+        clauses = ["1 = 1"]
+        params: list[Any] = []
+        normalized_org_id = self._resolve_org_id(org_id)
+        if normalized_org_id:
+            clauses.append("org_id = ?")
+            params.append(normalized_org_id)
+        normalized_statuses = [
+            str(item or "").strip().lower()
+            for item in list(statuses or [])
+            if str(item or "").strip()
+        ]
+        if normalized_statuses:
+            placeholders = ", ".join("?" for _ in normalized_statuses)
+            clauses.append(f"status IN ({placeholders})")
+            params.extend(normalized_statuses)
+        row = self._fetchone(
+            f"""
+            SELECT COUNT(1) AS count
+            FROM integration_webhook_outbox
+            WHERE {' AND '.join(clauses)}
+            """,
+            tuple(params),
+        )
+        return int(row["count"] or 0) if row else 0
+
+    def claim_delivery_records(
+        self,
+        *,
+        org_id: Optional[str] = None,
+        limit: int = 20,
+        lease_seconds: int = 60,
+        now_iso: Optional[str] = None,
+    ) -> list[IntegrationWebhookOutboxRecord]:
+        normalized_org_id = self._resolve_org_id(org_id)
+        now_text = str(now_iso or utcnow_iso()).strip()
+        try:
+            now_dt = datetime.fromisoformat(now_text.replace("Z", "+00:00"))
+        except ValueError:
+            now_dt = datetime.now(timezone.utc)
+            now_text = now_dt.isoformat(timespec="seconds")
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=timezone.utc)
+        lease_expires_at = (now_dt.astimezone(timezone.utc) + timedelta(seconds=max(int(lease_seconds or 0), 1))).isoformat(
+            timespec="seconds"
+        )
+
+        with self.db.transaction() as conn:
+            clauses = [
+                "attempt_count < max_attempts",
+                """(
+                    (status IN ('pending', 'retrying') AND (next_attempt_at = '' OR next_attempt_at <= ?))
+                    OR (status = 'dispatching' AND lease_expires_at <> '' AND lease_expires_at <= ?)
+                )""",
+            ]
+            params: list[Any] = [now_text, now_text]
+            if normalized_org_id:
+                clauses.append("org_id = ?")
+                params.append(normalized_org_id)
+            rows = conn.execute(
+                f"""
+                SELECT id
+                FROM integration_webhook_outbox
+                WHERE {' AND '.join(clauses)}
+                ORDER BY created_at ASC, id ASC
+                LIMIT ?
+                """,
+                (*params, int(limit)),
+            ).fetchall()
+            claimed_ids = [int(row["id"]) for row in rows if row["id"] is not None]
+            if not claimed_ids:
+                return []
+            placeholders = ", ".join("?" for _ in claimed_ids)
+            conn.execute(
+                f"""
+                UPDATE integration_webhook_outbox
+                SET status = 'dispatching',
+                    locked_at = ?,
+                    lease_expires_at = ?,
+                    updated_at = ?
+                WHERE id IN ({placeholders})
+                """,
+                (now_text, lease_expires_at, now_text, *claimed_ids),
+            )
+
+        claimed_records = [self.get_delivery_record(record_id) for record_id in claimed_ids]
+        return [record for record in claimed_records if record is not None]
+
+    def mark_delivery_success(
+        self,
+        delivery_id: int,
+        *,
+        last_status: str,
+        attempted_at: Optional[str] = None,
+    ) -> None:
+        timestamp = str(attempted_at or utcnow_iso()).strip()
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE integration_webhook_outbox
+                SET status = 'delivered',
+                    attempt_count = attempt_count + 1,
+                    next_attempt_at = '',
+                    last_attempt_at = ?,
+                    last_status = ?,
+                    last_error = '',
+                    locked_at = '',
+                    lease_expires_at = '',
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (timestamp, str(last_status or "").strip(), timestamp, int(delivery_id)),
+            )
+
+    def mark_delivery_retry(
+        self,
+        delivery_id: int,
+        *,
+        last_status: str,
+        last_error: str = "",
+        attempted_at: Optional[str] = None,
+        retry_delay_seconds: int = 60,
+    ) -> None:
+        record = self.get_delivery_record(int(delivery_id))
+        if record is None:
+            return
+        timestamp = str(attempted_at or utcnow_iso()).strip()
+        next_attempt_at = (
+            datetime.fromisoformat(timestamp.replace("Z", "+00:00")).astimezone(timezone.utc)
+            + timedelta(seconds=max(int(retry_delay_seconds or 0), 1))
+        ).isoformat(timespec="seconds")
+        next_attempt_count = int(record.attempt_count or 0) + 1
+        next_status = "failed" if next_attempt_count >= max(int(record.max_attempts or 0), 1) else "retrying"
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE integration_webhook_outbox
+                SET status = ?,
+                    attempt_count = ?,
+                    next_attempt_at = ?,
+                    last_attempt_at = ?,
+                    last_status = ?,
+                    last_error = ?,
+                    locked_at = '',
+                    lease_expires_at = '',
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_status,
+                    next_attempt_count,
+                    "" if next_status == "failed" else next_attempt_at,
+                    timestamp,
+                    str(last_status or "").strip(),
+                    str(last_error or "").strip(),
+                    timestamp,
+                    int(delivery_id),
+                ),
+            )
+
+    def requeue_delivery(
+        self,
+        delivery_id: int,
+        *,
+        org_id: Optional[str] = None,
+        failed_only: bool = False,
+        next_attempt_at: Optional[str] = None,
+    ) -> Optional[IntegrationWebhookOutboxRecord]:
+        record = self.get_delivery_record(int(delivery_id))
+        if record is None:
+            return None
+        normalized_org_id = self._resolve_org_id(org_id)
+        if normalized_org_id and (record.org_id or "default") != normalized_org_id:
+            return None
+        if failed_only and str(record.status or "").strip().lower() != "failed":
+            return None
+
+        timestamp = str(next_attempt_at or utcnow_iso()).strip()
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE integration_webhook_outbox
+                SET status = 'pending',
+                    max_attempts = CASE
+                        WHEN attempt_count >= max_attempts THEN attempt_count + 1
+                        ELSE max_attempts
+                    END,
+                    next_attempt_at = ?,
+                    locked_at = '',
+                    lease_expires_at = '',
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (timestamp, timestamp, int(delivery_id)),
+            )
+        return self.get_delivery_record(int(delivery_id))

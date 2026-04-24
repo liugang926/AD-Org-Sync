@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Callable
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from sync_app.core.conflict_recommendations import (
-    recommend_conflict_resolution,
-    recommendation_requires_confirmation,
-)
+from sync_app.web.app_state import get_web_services
 
 
 def register_conflict_routes(
@@ -47,10 +43,11 @@ def register_conflict_routes(
         status = str(remembered_filters["status"] or "open").strip().lower()
         job_id = str(remembered_filters["job_id"])
         page_number = parse_page_number(request.query_params.get("page_number"), 1)
+        services = get_web_services(request)
 
         status_filter = status if status in {"open", "resolved", "dismissed"} else None
         conflicts, page_data = fetch_page(
-            lambda *, limit, offset: request.app.state.conflict_repo.list_conflict_records_page(
+            lambda *, limit, offset: services.conflicts.list_conflicts_page(
                 limit=limit,
                 offset=offset,
                 job_id=job_id or None,
@@ -61,10 +58,7 @@ def register_conflict_routes(
             page=page_number,
             page_size=30,
         )
-        conflict_recommendations = {
-            item.id: recommend_conflict_resolution(item)
-            for item in conflicts
-        }
+        conflict_recommendations = services.conflicts.build_recommendations(conflicts)
         return render(
             request,
             "conflicts.html",
@@ -87,7 +81,8 @@ def register_conflict_routes(
             return user
 
         current_org = get_current_org(request)
-        conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
+        services = get_web_services(request)
+        conflict = services.conflicts.get_conflict_record(conflict_id, org_id=current_org.org_id)
         if not conflict:
             flash(request, "error", "Conflict record not found")
             return RedirectResponse(url="/conflicts", status_code=303)
@@ -130,7 +125,8 @@ def register_conflict_routes(
             return user
 
         current_org = get_current_org(request)
-        conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
+        services = get_web_services(request)
+        conflict = services.conflicts.get_conflict_record(conflict_id, org_id=current_org.org_id)
         if not conflict:
             flash(request, "error", "Conflict record not found")
             return RedirectResponse(url="/conflicts", status_code=303)
@@ -146,31 +142,17 @@ def register_conflict_routes(
             flash(request, "error", "Conflict is already processed")
             return RedirectResponse(url=fallback_url, status_code=303)
 
-        ok, normalized_ad_username, resolved_count = apply_conflict_manual_binding(
+        ok, normalized_ad_username, _resolved_count = services.conflicts.resolve_manual_binding(
             app=request.app,
             conflict=conflict,
-            ad_username=ad_username,
-            actor_username=user.username,
             org_id=current_org.org_id,
+            actor_username=user.username,
+            ad_username=ad_username,
+            apply_conflict_manual_binding=apply_conflict_manual_binding,
         )
         if not ok:
             flash(request, "error", normalized_ad_username)
             return RedirectResponse(url=fallback_url, status_code=303)
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="conflict.resolve_manual_binding",
-            target_type="sync_conflict",
-            target_id=str(conflict.id),
-            result="success",
-            message="Resolved conflict by creating manual binding",
-            payload={
-                "job_id": conflict.job_id,
-                "source_user_id": conflict.source_id,
-                "ad_username": normalized_ad_username,
-                "resolved_count": resolved_count,
-            },
-        )
         flash_t(
             request,
             "success",
@@ -195,7 +177,8 @@ def register_conflict_routes(
             return user
 
         current_org = get_current_org(request)
-        conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
+        services = get_web_services(request)
+        conflict = services.conflicts.get_conflict_record(conflict_id, org_id=current_org.org_id)
         if not conflict:
             flash(request, "error", "Conflict record not found")
             return RedirectResponse(url="/conflicts", status_code=303)
@@ -214,31 +197,17 @@ def register_conflict_routes(
             flash(request, "error", "Conflict does not have a source user to whitelist")
             return RedirectResponse(url=fallback_url, status_code=303)
 
-        ok, rule_notes, resolved_count = apply_conflict_skip_user_sync(
+        ok, rule_notes, _resolved_count = services.conflicts.resolve_skip_user_sync(
             app=request.app,
             conflict=conflict,
-            actor_username=user.username,
             org_id=current_org.org_id,
+            actor_username=user.username,
             notes=to_text(notes),
+            apply_conflict_skip_user_sync=apply_conflict_skip_user_sync,
         )
         if not ok:
             flash(request, "error", rule_notes)
             return RedirectResponse(url=fallback_url, status_code=303)
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="conflict.resolve_skip_user",
-            target_type="sync_conflict",
-            target_id=str(conflict.id),
-            result="success",
-            message="Resolved conflict by adding skip_user_sync exception",
-            payload={
-                "job_id": conflict.job_id,
-                "source_user_id": conflict.source_id,
-                "notes": rule_notes,
-                "resolved_count": resolved_count,
-            },
-        )
         flash_t(request, "success", "Added skip_user_sync for {source_id}", source_id=conflict.source_id)
         return RedirectResponse(url=fallback_url, status_code=303)
 
@@ -257,7 +226,8 @@ def register_conflict_routes(
             return user
 
         current_org = get_current_org(request)
-        conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
+        services = get_web_services(request)
+        conflict = services.conflicts.get_conflict_record(conflict_id, org_id=current_org.org_id)
         if not conflict:
             flash(request, "error", "Conflict record not found")
             return RedirectResponse(url="/conflicts", status_code=303)
@@ -273,33 +243,17 @@ def register_conflict_routes(
             flash(request, "error", "Conflict is already processed")
             return RedirectResponse(url=fallback_url, status_code=303)
 
-        ok, detail, resolved_count, recommendation = apply_conflict_recommendation(
+        ok, detail, _resolved_count, recommendation = services.conflicts.apply_recommendation(
             app=request.app,
             conflict=conflict,
-            actor_username=user.username,
             org_id=current_org.org_id,
+            actor_username=user.username,
             confirmation_reason=to_text(confirmation_reason),
+            apply_conflict_recommendation=apply_conflict_recommendation,
         )
         if not ok:
             flash(request, "error", detail)
             return RedirectResponse(url=fallback_url, status_code=303)
-
-        request.app.state.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="conflict.apply_recommendation",
-            target_type="sync_conflict",
-            target_id=str(conflict.id),
-            result="success",
-            message="Applied recommended conflict resolution",
-            payload={
-                "job_id": conflict.job_id,
-                "source_user_id": conflict.source_id,
-                "recommendation": recommendation,
-                "detail": detail,
-                "resolved_count": resolved_count,
-            },
-        )
         flash_t(
             request,
             "success",
@@ -323,7 +277,8 @@ def register_conflict_routes(
             return user
 
         current_org = get_current_org(request)
-        conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
+        services = get_web_services(request)
+        conflict = services.conflicts.get_conflict_record(conflict_id, org_id=current_org.org_id)
         if not conflict:
             flash(request, "error", "Conflict record not found")
             return RedirectResponse(url="/conflicts", status_code=303)
@@ -336,25 +291,11 @@ def register_conflict_routes(
         if csrf_error:
             return csrf_error
 
-        request.app.state.conflict_repo.update_conflict_status(
-            conflict.id,
-            status="dismissed",
-            resolution_payload={
-                "action": "dismissed",
-                "notes": to_text(notes),
-                "actor_username": user.username,
-            },
-            resolved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        )
-        request.app.state.audit_repo.add_log(
+        services.conflicts.dismiss_conflict(
+            conflict=conflict,
             org_id=current_org.org_id,
             actor_username=user.username,
-            action_type="conflict.dismiss",
-            target_type="sync_conflict",
-            target_id=str(conflict.id),
-            result="success",
-            message="Dismissed sync conflict",
-            payload={"job_id": conflict.job_id, "notes": to_text(notes)},
+            notes=to_text(notes),
         )
         flash(request, "success", "Conflict dismissed")
         return RedirectResponse(url=fallback_url, status_code=303)
@@ -373,7 +314,8 @@ def register_conflict_routes(
             return user
 
         current_org = get_current_org(request)
-        conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
+        services = get_web_services(request)
+        conflict = services.conflicts.get_conflict_record(conflict_id, org_id=current_org.org_id)
         if not conflict:
             flash(request, "error", "Conflict record not found")
             return RedirectResponse(url="/conflicts", status_code=303)
@@ -389,21 +331,10 @@ def register_conflict_routes(
             flash(request, "error", "Conflict is already open")
             return RedirectResponse(url=fallback_url, status_code=303)
 
-        request.app.state.conflict_repo.update_conflict_status(
-            conflict.id,
-            status="open",
-            resolution_payload=None,
-            resolved_at=None,
-        )
-        request.app.state.audit_repo.add_log(
+        services.conflicts.reopen_conflict(
+            conflict=conflict,
             org_id=current_org.org_id,
             actor_username=user.username,
-            action_type="conflict.reopen",
-            target_type="sync_conflict",
-            target_id=str(conflict.id),
-            result="success",
-            message="Reopened sync conflict",
-            payload={"job_id": conflict.job_id, "previous_status": conflict.status},
         )
         flash(request, "success", "Conflict reopened")
         return RedirectResponse(url=fallback_url, status_code=303)
@@ -434,6 +365,7 @@ def register_conflict_routes(
 
         normalized_action = to_text(action).lower()
         current_org = get_current_org(request)
+        services = get_web_services(request)
         raw_conflict_ids = [str(item or "").strip() for item in conflict_ids] if isinstance(conflict_ids, list) else []
         selected_conflict_ids = [int(item) for item in raw_conflict_ids if item.isdigit()]
         if normalized_action not in {"apply_recommendation", "skip_user_sync", "dismiss", "reopen"}:
@@ -442,96 +374,26 @@ def register_conflict_routes(
         if not selected_conflict_ids:
             flash(request, "error", "No conflicts selected")
             return RedirectResponse(url=fallback_url, status_code=303)
-        if normalized_action == "apply_recommendation" and not to_text(notes):
-            for conflict_id in selected_conflict_ids:
-                conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
-                if not conflict or conflict.status != "open":
-                    continue
-                if recommendation_requires_confirmation(recommend_conflict_resolution(conflict)):
-                    flash(request, "error", "Low-confidence recommendations require a confirmation reason for bulk apply")
-                    return RedirectResponse(url=fallback_url, status_code=303)
+        if (
+            normalized_action == "apply_recommendation"
+            and not to_text(notes)
+            and services.conflicts.bulk_apply_requires_confirmation(
+                org_id=current_org.org_id,
+                conflict_ids=selected_conflict_ids,
+            )
+        ):
+            flash(request, "error", "Low-confidence recommendations require a confirmation reason for bulk apply")
+            return RedirectResponse(url=fallback_url, status_code=303)
 
-        updated_count = 0
-        skipped_count = 0
-        for conflict_id in selected_conflict_ids:
-            conflict = request.app.state.conflict_repo.get_conflict_record(conflict_id, org_id=current_org.org_id)
-            if not conflict:
-                skipped_count += 1
-                continue
-
-            if normalized_action == "reopen":
-                if conflict.status == "open":
-                    skipped_count += 1
-                    continue
-                request.app.state.conflict_repo.update_conflict_status(
-                    conflict.id,
-                    status="open",
-                    resolution_payload=None,
-                    resolved_at=None,
-                )
-                updated_count += 1
-                continue
-
-            if conflict.status != "open":
-                skipped_count += 1
-                continue
-
-            if normalized_action == "dismiss":
-                request.app.state.conflict_repo.update_conflict_status(
-                    conflict.id,
-                    status="dismissed",
-                    resolution_payload={
-                        "action": "dismissed",
-                        "notes": to_text(notes),
-                        "actor_username": user.username,
-                        "bulk": True,
-                    },
-                    resolved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                )
-                updated_count += 1
-                continue
-
-            if normalized_action == "apply_recommendation":
-                ok, _detail, resolved_count, _recommendation = apply_conflict_recommendation(
-                    app=request.app,
-                    conflict=conflict,
-                    actor_username=user.username,
-                    org_id=current_org.org_id,
-                    confirmation_reason=to_text(notes),
-                )
-                if ok and resolved_count:
-                    updated_count += 1
-                else:
-                    skipped_count += 1
-                continue
-
-            if normalized_action == "skip_user_sync":
-                ok, _rule_notes, resolved_count = apply_conflict_skip_user_sync(
-                    app=request.app,
-                    conflict=conflict,
-                    actor_username=user.username,
-                    org_id=current_org.org_id,
-                    notes=to_text(notes) or f"bulk resolved from conflict {conflict.id}",
-                )
-                if ok and resolved_count:
-                    updated_count += 1
-                else:
-                    skipped_count += 1
-
-        request.app.state.audit_repo.add_log(
+        updated_count, skipped_count = services.conflicts.execute_bulk_action(
+            app=request.app,
             org_id=current_org.org_id,
             actor_username=user.username,
-            action_type="conflict.bulk_action",
-            target_type="sync_conflict",
-            target_id="bulk",
-            result="success" if updated_count else "warning",
-            message="Executed bulk conflict action",
-            payload={
-                "action": normalized_action,
-                "selected_count": len(selected_conflict_ids),
-                "updated_count": updated_count,
-                "skipped_count": skipped_count,
-            },
+            action=normalized_action,
+            selected_conflict_ids=selected_conflict_ids,
+            notes=to_text(notes),
+            apply_conflict_recommendation=apply_conflict_recommendation,
+            apply_conflict_skip_user_sync=apply_conflict_skip_user_sync,
         )
         flash(
             request,

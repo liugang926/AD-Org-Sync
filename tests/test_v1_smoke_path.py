@@ -23,7 +23,7 @@ from sync_app.storage.local_db import (
     SyncReplayRequestRepository,
     UserIdentityBindingRepository,
 )
-from tests.test_runtime_dry_run import FakeADSyncPolicy, FakeWeChatBot, FakeWeComProgrammableAPI
+from tests.helpers.runtime_fakes import FakeADSyncPolicy, FakeWeChatBot, FakeWeComProgrammableAPI
 
 
 class V1SmokePathTests(unittest.TestCase):

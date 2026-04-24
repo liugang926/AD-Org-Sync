@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import json
 import secrets
 from typing import Any, Callable, Optional
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+
+from sync_app.web.app_state import get_web_runtime_state, get_web_services
 
 CONFIG_SUBMISSION_FIELD_NAMES = (
     "source_provider",
@@ -72,20 +73,11 @@ def _build_config_submission_from_values(
 
 def _config_saved_message(
     request: Request,
-    *,
-    resolve_web_runtime_settings: Callable[..., dict[str, Any]],
-    web_runtime_requires_restart: Callable[..., bool],
 ) -> str:
-    persisted_web_runtime_settings = resolve_web_runtime_settings(request.app.state.settings_repo)
-    if web_runtime_requires_restart(
-        request.app.state.web_runtime_settings,
-        persisted_web_runtime_settings,
-    ):
-        return (
-            "Configuration saved. Restart the web process to apply deployment security changes, "
-            "then run the first dry run before apply."
-        )
-    return "Configuration saved. Run the first dry run before the first apply."
+    runtime_state = get_web_runtime_state(request)
+    return get_web_services(request).config.build_saved_message(
+        current_web_runtime_settings=runtime_state.web_runtime_settings,
+    )
 
 
 def _parse_optional_int(value: str | None) -> Optional[int]:
@@ -105,7 +97,6 @@ def register_config_routes(
     build_config_change_preview: Callable[..., dict[str, Any]],
     build_config_editable_override: Callable[..., dict[str, Any]],
     build_config_page_context: Callable[..., dict[str, Any]],
-    build_config_release_center_context: Callable[..., dict[str, Any]],
     build_source_unit_catalog: Callable[..., dict[str, Any]],
     build_target_ou_catalog: Callable[..., dict[str, Any]],
     build_config_submission: Callable[..., dict[str, Any]],
@@ -113,13 +104,9 @@ def register_config_routes(
     flash: Callable[..., None],
     flash_t: Callable[..., None],
     get_current_org: Callable[[Request], Any],
-    publish_config_release_snapshot: Callable[..., dict[str, Any]],
     reject_invalid_csrf: Callable[[Request, str, str], Any],
     render: Callable[..., Any],
-    rollback_config_release_snapshot: Callable[..., dict[str, Any]],
     require_capability: Callable[[Request, str], Any],
-    resolve_web_runtime_settings: Callable[..., dict[str, Any]],
-    web_runtime_requires_restart: Callable[..., bool],
 ) -> None:
     @app.get("/config", response_class=HTMLResponse)
     def config_page(request: Request):
@@ -141,8 +128,8 @@ def register_config_routes(
         return render(
             request,
             "config_release_center.html",
-            **build_config_release_center_context(
-                request,
+            **get_web_services(request).config.build_release_center_context(
+                current_org=get_current_org(request),
                 current_snapshot_id=_parse_optional_int(request.query_params.get("current_snapshot_id")),
                 baseline_snapshot_id=_parse_optional_int(request.query_params.get("baseline_snapshot_id")),
             ),
@@ -160,9 +147,10 @@ def register_config_routes(
         csrf_error = reject_invalid_csrf(request, csrf_token, "/config/releases")
         if csrf_error:
             return csrf_error
-        result = publish_config_release_snapshot(
-            request,
-            user=user,
+        current_org = get_current_org(request)
+        result = get_web_services(request).config.publish_release_snapshot(
+            org_id=current_org.org_id,
+            actor_username=user.username,
             snapshot_name=snapshot_name,
         )
         snapshot = result.get("snapshot")
@@ -173,21 +161,6 @@ def register_config_routes(
                 "Current configuration already matches the latest published snapshot.",
             )
             return RedirectResponse(url="/config/releases", status_code=303)
-        if snapshot is not None:
-            request.app.state.audit_repo.add_log(
-                org_id=getattr(snapshot, "org_id", ""),
-                actor_username=user.username,
-                action_type="config.release_publish",
-                target_type="config_release_snapshot",
-                target_id=str(getattr(snapshot, "id", "") or ""),
-                result="success",
-                message="Published configuration snapshot",
-                payload={
-                    "snapshot_name": getattr(snapshot, "snapshot_name", ""),
-                    "trigger_action": getattr(snapshot, "trigger_action", ""),
-                    "bundle_hash": getattr(snapshot, "bundle_hash", ""),
-                },
-            )
         flash_t(
             request,
             "success",
@@ -208,31 +181,16 @@ def register_config_routes(
         csrf_error = reject_invalid_csrf(request, csrf_token, "/config/releases")
         if csrf_error:
             return csrf_error
+        current_org = get_current_org(request)
         try:
-            result = rollback_config_release_snapshot(
-                request,
-                user=user,
+            get_web_services(request).config.rollback_release_snapshot(
+                org_id=current_org.org_id,
+                actor_username=user.username,
                 snapshot_id=snapshot_id,
             )
         except ValueError as exc:
             flash(request, "error", str(exc))
             return RedirectResponse(url="/config/releases", status_code=303)
-        target_snapshot = result.get("target_snapshot")
-        rollback_snapshot = result.get("rollback_snapshot")
-        request.app.state.audit_repo.add_log(
-            org_id=getattr(target_snapshot, "org_id", ""),
-            actor_username=user.username,
-            action_type="config.release_rollback",
-            target_type="config_release_snapshot",
-            target_id=str(snapshot_id),
-            result="success",
-            message="Rolled back configuration snapshot",
-            payload={
-                "target_snapshot_id": snapshot_id,
-                "rollback_snapshot_id": getattr(rollback_snapshot, "id", None),
-                "safety_snapshot_id": getattr(result.get("safety_snapshot"), "id", None),
-            },
-        )
         flash_t(
             request,
             "success",
@@ -247,18 +205,17 @@ def register_config_routes(
         if isinstance(user, RedirectResponse):
             return user
         current_org = get_current_org(request)
-        snapshot = request.app.state.config_release_snapshot_repo.get_snapshot_record(
-            snapshot_id,
+        download = get_web_services(request).config.build_release_download(
             org_id=current_org.org_id,
+            snapshot_id=snapshot_id,
         )
-        if not snapshot or not isinstance(snapshot.bundle, dict):
+        if download is None:
             flash(request, "error", "Configuration snapshot not found")
             return RedirectResponse(url="/config/releases", status_code=303)
-        filename = f"{snapshot.org_id}-config-release-{snapshot.id}.json"
         return Response(
-            content=json.dumps(snapshot.bundle, ensure_ascii=False, indent=2).encode("utf-8"),
-            media_type="application/json; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            content=download["content"],
+            media_type=download["media_type"],
+            headers={"Content-Disposition": f'attachment; filename="{download["filename"]}"'},
         )
 
     @app.post("/config/source-units/catalog")
@@ -432,11 +389,7 @@ def register_config_routes(
         flash(
             request,
             "success",
-            _config_saved_message(
-                request,
-                resolve_web_runtime_settings=resolve_web_runtime_settings,
-                web_runtime_requires_restart=web_runtime_requires_restart,
-            ),
+            _config_saved_message(request),
         )
         return RedirectResponse(url="/config", status_code=303)
 
@@ -501,10 +454,6 @@ def register_config_routes(
         flash(
             request,
             "success",
-            _config_saved_message(
-                request,
-                resolve_web_runtime_settings=resolve_web_runtime_settings,
-                web_runtime_requires_restart=web_runtime_requires_restart,
-            ),
+            _config_saved_message(request),
         )
         return RedirectResponse(url="/config", status_code=303)

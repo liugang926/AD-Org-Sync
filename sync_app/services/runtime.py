@@ -2,7 +2,6 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sync_app.clients.wechat_bot import WebhookNotificationClient
 from sync_app.core import logging_utils as sync_logging
 from sync_app.core.common import APP_VERSION, generate_job_id
 from sync_app.core.config import (
@@ -18,6 +17,7 @@ from sync_app.core.models import (
 )
 from sync_app.providers.source import build_source_provider, get_source_provider_display_name
 from sync_app.providers.target import build_target_provider
+from sync_app.services.external_integrations import OutboxWebhookNotificationClient as WebhookNotificationClient
 from sync_app.services.external_integrations import emit_job_lifecycle_events
 from sync_app.services.ad_sync import (
     ADSyncLDAPS,
@@ -90,6 +90,26 @@ _load_connector_specs = load_connector_specs
 _build_department_connector_map = build_department_connector_map
 _build_department_scope_root_map = build_department_scope_root_map
 build_custom_group_sam = build_custom_group_sam
+
+
+def _build_notification_client(
+    ctx: SyncContext,
+    *,
+    webhook_url: str,
+    source: str,
+):
+    try:
+        return WebhookNotificationClient(
+            db_manager=ctx.db_manager,
+            org_id=ctx.organization.org_id,
+            webhook_url=webhook_url,
+            source=source,
+            dispatch_inline=False,
+            dispatch_async=True,
+        )
+    except TypeError:
+        # Tests may patch the client with a simpler fake that only accepts webhook_url.
+        return WebhookNotificationClient(webhook_url)
 
 
 def _run_automatic_replay_stage(ctx: SyncContext) -> None:
@@ -179,7 +199,11 @@ def _prepare_sync_environment(ctx: SyncContext) -> None:
             logger.warning("security self-check warning: %s", warning)
 
     if ctx.execution_mode == 'apply' and config.webhook_url:
-        ctx.environment.bot = WebhookNotificationClient(config.webhook_url)
+        ctx.environment.bot = _build_notification_client(
+            ctx,
+            webhook_url=config.webhook_url,
+            source="sync.apply",
+        )
 
     ctx.environment.source_provider = build_source_provider(
         app_config=config,
@@ -265,7 +289,11 @@ def _prepare_sync_environment(ctx: SyncContext) -> None:
 def _notify_sync_cancelled(ctx: SyncContext, interrupted_error: InterruptedError) -> None:
     if ctx.execution_mode == 'apply' and ctx.config.webhook_url:
         try:
-            WebhookNotificationClient(ctx.config.webhook_url).send_message(
+            _build_notification_client(
+                ctx,
+                webhook_url=ctx.config.webhook_url,
+                source="sync.cancelled",
+            ).send_message(
                 f'## {ctx.environment.source_provider_name} to AD sync cancelled (LDAPS)\n\n'
                 f"> Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                 '> Result: canceled by user'
@@ -278,7 +306,11 @@ def _send_webhook_notification(ctx: SyncContext, message: str) -> None:
     if not ctx.config.webhook_url:
         return
     try:
-        WebhookNotificationClient(ctx.config.webhook_url).send_message(message)
+        _build_notification_client(
+            ctx,
+            webhook_url=ctx.config.webhook_url,
+            source="sync.operations",
+        ).send_message(message)
     except Exception:
         ctx.logger.error('failed to send webhook notification')
 
@@ -392,7 +424,12 @@ def _notify_sync_failed(ctx: SyncContext, sync_error: Exception) -> None:
 
 def _emit_external_job_events(ctx: SyncContext) -> None:
     try:
-        emit_job_lifecycle_events(ctx.db_manager, job_id=ctx.job_id)
+        emit_job_lifecycle_events(
+            ctx.db_manager,
+            job_id=ctx.job_id,
+            dispatch_inline=False,
+            dispatch_async=True,
+        )
     except Exception as exc:
         ctx.logger.warning("failed to emit external integration events for job %s: %s", ctx.job_id, exc)
 

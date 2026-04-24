@@ -5,6 +5,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sync_app.web import create_app
+from sync_app.web.app_state import (
+    get_web_app_state,
+    get_web_repositories,
+    get_web_runtime_state,
+    get_web_services,
+)
 from sync_app.web.routes_config import (
     CONFIG_SUBMISSION_FIELD_NAMES,
     _collect_config_submission_values,
@@ -64,6 +70,10 @@ class StructureGuardTests(unittest.TestCase):
         self.assertIs(app.state.web_app_state.repositories.organization_repo, app.state.organization_repo)
         self.assertIs(app.state.web_app_state.runtime.login_rate_limiter, app.state.login_rate_limiter)
         self.assertIs(app.state.web_app_state.runtime.sync_runner, app.state.sync_runner)
+        self.assertIs(get_web_app_state(app), app.state.web_app_state)
+        self.assertIs(get_web_repositories(app), app.state.web_app_state.repositories)
+        self.assertIs(get_web_runtime_state(app), app.state.web_app_state.runtime)
+        self.assertIs(get_web_services(app), app.state.web_app_state.services)
 
     def test_desktop_runtime_threads_live_in_dedicated_module(self):
         desktop_module = ast.parse(Path("sync_app/ui/desktop.py").read_text(encoding="utf-8"))
@@ -109,6 +119,323 @@ class StructureGuardTests(unittest.TestCase):
 
         self.assertIn("run_sync_request", dispatch_functions)
         self.assertIn("run_sync_request", imported_from_entry)
+
+    def test_route_hotspots_use_web_app_state_accessors_for_repo_lookup(self):
+        hotspot_expectations = {
+            Path("sync_app/web/routes_jobs.py"): ("get_web_repositories", "get_web_services"),
+            Path("sync_app/web/routes_conflicts.py"): ("get_web_services",),
+            Path("sync_app/web/routes_organizations.py"): ("get_web_repositories",),
+            Path("sync_app/web/routes_mappings.py"): ("get_web_repositories",),
+            Path("sync_app/web/routes_exceptions.py"): ("get_web_repositories",),
+            Path("sync_app/web/routes_advanced_sync.py"): ("get_web_repositories",),
+        }
+
+        for module_path, required_accessors in hotspot_expectations.items():
+            source = module_path.read_text(encoding="utf-8")
+            for accessor in required_accessors:
+                self.assertIn(accessor, source, msg=f"{module_path} should use {accessor}")
+            self.assertNotIn(
+                "request.app.state.job_repo",
+                source,
+                msg=f"{module_path} should not reach into app.state.job_repo directly",
+            )
+            self.assertNotIn(
+                "request.app.state.conflict_repo",
+                source,
+                msg=f"{module_path} should not reach into app.state.conflict_repo directly",
+            )
+            self.assertNotIn(
+                "request.app.state.organization_repo",
+                source,
+                msg=f"{module_path} should not reach into app.state.organization_repo directly",
+            )
+
+    def test_job_and_conflict_routes_use_web_service_accessors_for_domain_workflows(self):
+        route_expectations = {
+            Path("sync_app/web/routes_jobs.py"): {
+                "required": ("get_web_services",),
+                "forbidden": (
+                    "def build_job_comparison_sections(",
+                    "def build_job_center_summary(",
+                    "approve_job_review_action(",
+                    'action_type="job.review_approve"',
+                ),
+            },
+            Path("sync_app/web/routes_conflicts.py"): {
+                "required": ("get_web_services",),
+                "forbidden": (
+                    "recommend_conflict_resolution(",
+                    "recommendation_requires_confirmation(",
+                    "apply_conflict_manual_binding(",
+                    "apply_conflict_skip_user_sync(",
+                    "apply_conflict_recommendation(",
+                    'action_type="conflict.resolve_manual_binding"',
+                    'action_type="conflict.resolve_skip_user"',
+                    'action_type="conflict.apply_recommendation"',
+                    'action_type="conflict.bulk_action"',
+                ),
+            },
+        }
+
+        for module_path, expectations in route_expectations.items():
+            source = module_path.read_text(encoding="utf-8")
+            for required in expectations["required"]:
+                self.assertIn(required, source, msg=f"{module_path} should use {required}")
+            for forbidden in expectations["forbidden"]:
+                self.assertNotIn(
+                    forbidden,
+                    source,
+                    msg=f"{module_path} should move {forbidden} behind a service facade",
+                )
+
+    def test_foundation_routes_use_web_app_state_accessors_for_repo_lookup(self):
+        route_expectations = {
+            Path("sync_app/web/routes_public.py"): {
+                "required": ("get_web_repositories",),
+                "forbidden": (
+                    "request.app.state.db_manager",
+                    "request.app.state.organization_repo",
+                    "request.app.state.user_repo",
+                ),
+            },
+            Path("sync_app/web/routes_auth.py"): {
+                "required": ("get_web_repositories", "get_web_runtime_state"),
+                "forbidden": (
+                    "request.app.state.user_repo",
+                    "request.app.state.audit_repo",
+                    "request.app.state.login_rate_limiter",
+                ),
+            },
+            Path("sync_app/web/routes_admin.py"): {
+                "required": ("get_web_repositories",),
+                "forbidden": (
+                    "request.app.state.user_repo",
+                    "request.app.state.audit_repo",
+                ),
+            },
+        }
+
+        for module_path, expectations in route_expectations.items():
+            source = module_path.read_text(encoding="utf-8")
+            for required in expectations["required"]:
+                self.assertIn(required, source, msg=f"{module_path} should use {required}")
+            for forbidden in expectations["forbidden"]:
+                self.assertNotIn(
+                    forbidden,
+                    source,
+                    msg=f"{module_path} should not reach into {forbidden} directly",
+                )
+
+    def test_config_workflow_modules_use_web_app_state_accessors_for_repo_lookup(self):
+        module_expectations = {
+            Path("sync_app/web/config_submission.py"): {
+                "required": ("get_web_repositories", "get_web_runtime_state"),
+                "forbidden": (
+                    "request.app.state.org_config_repo",
+                    "request.app.state.settings_repo",
+                    "request.app.state.exclusion_repo",
+                    "request.app.state.config_path",
+                ),
+            },
+            Path("sync_app/web/config_persistence.py"): {
+                "required": ("get_web_repositories",),
+                "forbidden": (
+                    "request.app.state.org_config_repo",
+                    "request.app.state.settings_repo",
+                    "request.app.state.exclusion_repo",
+                    "request.app.state.audit_repo",
+                ),
+            },
+            Path("sync_app/web/routes_config.py"): {
+                "required": ("get_web_services", "get_web_runtime_state"),
+                "forbidden": (
+                    "get_web_repositories(",
+                    "request.app.state.settings_repo",
+                    "request.app.state.audit_repo",
+                    "request.app.state.config_release_snapshot_repo",
+                    "request.app.state.web_runtime_settings",
+                ),
+            },
+        }
+
+        for module_path, expectations in module_expectations.items():
+            source = module_path.read_text(encoding="utf-8")
+            for required in expectations["required"]:
+                self.assertIn(required, source, msg=f"{module_path} should use {required}")
+            for forbidden in expectations["forbidden"]:
+                self.assertNotIn(
+                    forbidden,
+                    source,
+                    msg=f"{module_path} should not reach into {forbidden} directly",
+                )
+
+    def test_operational_routes_use_web_app_state_accessors_for_repo_lookup(self):
+        module_expectations = {
+            Path("sync_app/web/routes_integrations.py"): {
+                "required": ("get_web_services", "get_web_runtime_state"),
+                "forbidden": (
+                    "request.app.state.db_manager",
+                    "request.app.state.settings_repo",
+                    "request.app.state.audit_repo",
+                    "request.app.state.integration_webhook_subscription_repo",
+                    "request.app.state.job_repo",
+                    "request.app.state.review_repo",
+                    "request.app.state.conflict_repo",
+                    "request.app.state.integration_outbox_worker",
+                ),
+            },
+            Path("sync_app/web/routes_automation_center.py"): {
+                "required": ("get_web_repositories", "get_web_runtime_state"),
+                "forbidden": (
+                    "request.app.state.db_manager",
+                    "request.app.state.config_path",
+                    "request.app.state.settings_repo",
+                    "request.app.state.audit_repo",
+                ),
+            },
+            Path("sync_app/web/routes_lifecycle.py"): {
+                "required": ("get_web_repositories",),
+                "forbidden": (
+                    "request.app.state.db_manager",
+                    "request.app.state.audit_repo",
+                ),
+            },
+            Path("sync_app/web/routes_data_quality.py"): {
+                "required": ("get_web_repositories",),
+                "forbidden": (
+                    "request.app.state.db_manager",
+                    "request.app.state.audit_repo",
+                    "request.app.state.data_quality_snapshot_repo",
+                ),
+            },
+        }
+
+        for module_path, expectations in module_expectations.items():
+            source = module_path.read_text(encoding="utf-8")
+            for required in expectations["required"]:
+                self.assertIn(required, source, msg=f"{module_path} should use {required}")
+            for forbidden in expectations["forbidden"]:
+                self.assertNotIn(
+                    forbidden,
+                    source,
+                    msg=f"{module_path} should not reach into {forbidden} directly",
+                )
+
+    def test_integration_routes_use_web_service_accessors_for_domain_workflows(self):
+        source = Path("sync_app/web/routes_integrations.py").read_text(encoding="utf-8")
+
+        self.assertIn("get_web_services", source)
+        for forbidden in (
+            "generate_integration_api_token(",
+            "validate_integration_subscription_payload(",
+            "retry_outbox_delivery(",
+            "retry_failed_outbox_deliveries(",
+            "serialize_job_record(",
+            "serialize_job_records(",
+            "serialize_conflict_record(",
+            "approve_job_review(",
+            'action_type="integration.token_rotate"',
+            'action_type="integration.token_clear"',
+            'action_type="integration.subscription_save"',
+            'action_type="integration.subscription_delete"',
+            'action_type="integration.delivery_retry"',
+            'action_type="integration.delivery_retry_bulk"',
+            'action_type="integration.review_approve"',
+        ):
+            self.assertNotIn(forbidden, source, msg=f"routes_integrations.py should keep {forbidden} in facade")
+
+    def test_config_routes_use_web_service_accessors_for_release_workflows(self):
+        source = Path("sync_app/web/routes_config.py").read_text(encoding="utf-8")
+
+        self.assertIn("get_web_services", source)
+        for forbidden in (
+            "build_config_release_center_context(",
+            "publish_config_release_snapshot(",
+            "rollback_config_release_snapshot(",
+            "config_release_snapshot_repo",
+            "resolve_web_runtime_settings(",
+            "web_runtime_requires_restart(",
+            'action_type="config.release_publish"',
+            'action_type="config.release_rollback"',
+            "json.dumps(snapshot.bundle",
+        ):
+            self.assertNotIn(forbidden, source, msg=f"routes_config.py should keep {forbidden} in facade")
+
+    def test_support_modules_use_web_app_state_accessors_for_repo_lookup(self):
+        module_expectations = {
+            Path("sync_app/web/sync_directory_support.py"): {
+                "required": ("get_web_repositories", "get_web_runtime_state"),
+                "forbidden": (
+                    "request.app.state.settings_repo",
+                    "request.app.state.connector_repo",
+                    "request.app.state.department_ou_mapping_repo",
+                    "request.app.state.exception_rule_repo",
+                    "request.app.state.org_config_repo",
+                    "request.app.state.user_binding_repo",
+                    "request.app.state.department_override_repo",
+                    "request.app.state.config_path",
+                ),
+            },
+            Path("sync_app/web/sync_conflict_support.py"): {
+                "required": ("get_web_repositories",),
+                "forbidden": (
+                    "request.app.state.mapping_rule_repo",
+                    "request.app.state.user_binding_repo",
+                    "request.app.state.settings_repo",
+                    "app.state.conflict_repo",
+                    "app.state.org_config_repo",
+                    "app.state.user_binding_repo",
+                    "app.state.exception_rule_repo",
+                ),
+            },
+            Path("sync_app/web/sync_support.py"): {
+                "required": ("get_web_repositories",),
+                "forbidden": (
+                    "app.state.settings_repo",
+                    "app.state.replay_request_repo",
+                ),
+            },
+        }
+
+        for module_path, expectations in module_expectations.items():
+            source = module_path.read_text(encoding="utf-8")
+            for required in expectations["required"]:
+                self.assertIn(required, source, msg=f"{module_path} should use {required}")
+            for forbidden in expectations["forbidden"]:
+                self.assertNotIn(
+                    forbidden,
+                    source,
+                    msg=f"{module_path} should not reach into {forbidden} directly",
+                )
+
+    def test_shared_request_and_config_support_use_web_app_state_accessors(self):
+        module_expectations = {
+            Path("sync_app/web/request_support.py"): {
+                "required": ("get_web_repositories", "get_web_runtime_state"),
+                "forbidden": (
+                    "request.app.state",
+                    "app.state.",
+                ),
+            },
+            Path("sync_app/web/config_support.py"): {
+                "required": ("get_web_repositories",),
+                "forbidden": (
+                    "request.app.state.db_manager",
+                    "app.state.db_manager",
+                ),
+            },
+        }
+
+        for module_path, expectations in module_expectations.items():
+            source = module_path.read_text(encoding="utf-8")
+            for required in expectations["required"]:
+                self.assertIn(required, source, msg=f"{module_path} should use {required}")
+            for forbidden in expectations["forbidden"]:
+                self.assertNotIn(
+                    forbidden,
+                    source,
+                    msg=f"{module_path} should not reach into {forbidden} directly",
+                )
 
 
 if __name__ == "__main__":
