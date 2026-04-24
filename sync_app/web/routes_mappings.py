@@ -6,6 +6,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from sync_app.storage.local_db import utcnow_iso
+from sync_app.web.app_state import get_web_repositories
 from sync_app.web.rule_governance import build_rule_governance_summary
 
 
@@ -48,8 +49,9 @@ def register_mapping_routes(
         status = str(remembered_filters["status"] or "all").strip().lower()
         binding_page = parse_page_number(request.query_params.get("binding_page"), 1)
         override_page = parse_page_number(request.query_params.get("override_page"), 1)
+        repositories = get_web_repositories(request)
         bindings, binding_page_data = fetch_page(
-            lambda *, limit, offset: request.app.state.user_binding_repo.list_binding_records_page(
+            lambda *, limit, offset: repositories.user_binding_repo.list_binding_records_page(
                 limit=limit,
                 offset=offset,
                 query=query,
@@ -60,7 +62,7 @@ def register_mapping_routes(
             page_size=20,
         )
         overrides, override_page_data = fetch_page(
-            lambda *, limit, offset: request.app.state.department_override_repo.list_override_records_page(
+            lambda *, limit, offset: repositories.department_override_repo.list_override_records_page(
                 limit=limit,
                 offset=offset,
                 query=query,
@@ -70,9 +72,9 @@ def register_mapping_routes(
             page_size=20,
         )
         rule_governance_summary = build_rule_governance_summary(
-            bindings=request.app.state.user_binding_repo.list_binding_records(org_id=current_org.org_id),
-            overrides=request.app.state.department_override_repo.list_override_records(org_id=current_org.org_id),
-            exception_rules=request.app.state.exception_rule_repo.list_rule_records(org_id=current_org.org_id),
+            bindings=repositories.user_binding_repo.list_binding_records(org_id=current_org.org_id),
+            overrides=repositories.department_override_repo.list_override_records(org_id=current_org.org_id),
+            exception_rules=repositories.exception_rule_repo.list_rule_records(org_id=current_org.org_id),
         )
         return render(
             request,
@@ -99,10 +101,11 @@ def register_mapping_routes(
         query = (request.query_params.get("q") or "").strip()
         status = (request.query_params.get("status") or "all").strip().lower()
         current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
 
         def iter_rows():
             for item in iter_all_pages(
-                lambda *, limit, offset: request.app.state.user_binding_repo.list_binding_records_page(
+                lambda *, limit, offset: repositories.user_binding_repo.list_binding_records_page(
                     limit=limit,
                     offset=offset,
                     query=query,
@@ -127,7 +130,7 @@ def register_mapping_routes(
                     item.last_hit_at or "",
                 ]
             for item in iter_all_pages(
-                lambda *, limit, offset: request.app.state.department_override_repo.list_override_records_page(
+                lambda *, limit, offset: repositories.department_override_repo.list_override_records_page(
                     limit=limit,
                     offset=offset,
                     query=query,
@@ -215,7 +218,8 @@ def register_mapping_routes(
 
         current_org = get_current_org(request)
         reviewed_at = utcnow_iso()
-        request.app.state.user_binding_repo.upsert_binding_for_source_user(
+        repositories = get_web_repositories(request)
+        repositories.user_binding_repo.upsert_binding_for_source_user(
             source_user_id,
             ad_username,
             org_id=current_org.org_id,
@@ -223,7 +227,7 @@ def register_mapping_routes(
             notes=notes.strip(),
             preserve_manual=False,
         )
-        request.app.state.user_binding_repo.update_governance_metadata_for_source_user(
+        repositories.user_binding_repo.update_governance_metadata_for_source_user(
             source_user_id,
             org_id=current_org.org_id,
             rule_owner=rule_owner,
@@ -231,7 +235,7 @@ def register_mapping_routes(
             next_review_at=normalized_next_review_at,
             last_reviewed_at=reviewed_at,
         )
-        request.app.state.audit_repo.add_log(
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type="mapping.bind_upsert",
@@ -274,6 +278,7 @@ def register_mapping_routes(
         conflicts: list[str] = []
         current_org = get_current_org(request)
         reviewed_at = utcnow_iso()
+        repositories = get_web_repositories(request)
         for row in rows:
             conflict_message = validate_binding_target(request, row["source_user_id"], row["ad_username"])
             if conflict_message:
@@ -284,7 +289,7 @@ def register_mapping_routes(
             except ValueError as exc:
                 conflicts.append(f"{row['source_user_id']}: {exc}")
                 continue
-            request.app.state.user_binding_repo.upsert_binding_for_source_user(
+            repositories.user_binding_repo.upsert_binding_for_source_user(
                 row["source_user_id"],
                 row["ad_username"],
                 org_id=current_org.org_id,
@@ -292,7 +297,7 @@ def register_mapping_routes(
                 notes=row["notes"],
                 preserve_manual=False,
             )
-            request.app.state.user_binding_repo.update_governance_metadata_for_source_user(
+            repositories.user_binding_repo.update_governance_metadata_for_source_user(
                 row["source_user_id"],
                 org_id=current_org.org_id,
                 rule_owner=row.get("rule_owner"),
@@ -302,7 +307,7 @@ def register_mapping_routes(
             )
             imported_count += 1
 
-        request.app.state.audit_repo.add_log(
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type="mapping.bind_import",
@@ -338,7 +343,8 @@ def register_mapping_routes(
             return csrf_error
 
         current_org = get_current_org(request)
-        binding = request.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+        repositories = get_web_repositories(request)
+        binding = repositories.user_binding_repo.get_binding_record_by_source_user_id(
             source_user_id,
             org_id=current_org.org_id,
         )
@@ -347,12 +353,12 @@ def register_mapping_routes(
             return RedirectResponse(url="/mappings", status_code=303)
 
         new_state = to_bool(enabled, binding.is_enabled)
-        request.app.state.user_binding_repo.set_enabled_for_source_user(
+        repositories.user_binding_repo.set_enabled_for_source_user(
             source_user_id,
             new_state,
             org_id=current_org.org_id,
         )
-        request.app.state.audit_repo.add_log(
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type="mapping.bind_toggle",
@@ -422,13 +428,14 @@ def register_mapping_routes(
 
         current_org = get_current_org(request)
         reviewed_at = utcnow_iso()
-        request.app.state.department_override_repo.upsert_override_for_source_user(
+        repositories = get_web_repositories(request)
+        repositories.department_override_repo.upsert_override_for_source_user(
             source_user_id,
             primary_department_id,
             org_id=current_org.org_id,
             notes=notes.strip(),
         )
-        request.app.state.department_override_repo.update_governance_metadata_for_source_user(
+        repositories.department_override_repo.update_governance_metadata_for_source_user(
             source_user_id,
             org_id=current_org.org_id,
             rule_owner=rule_owner,
@@ -436,7 +443,7 @@ def register_mapping_routes(
             next_review_at=normalized_next_review_at,
             last_reviewed_at=reviewed_at,
         )
-        request.app.state.audit_repo.add_log(
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type="mapping.department_override_upsert",
@@ -467,12 +474,14 @@ def register_mapping_routes(
         if csrf_error:
             return csrf_error
 
-        request.app.state.department_override_repo.delete_override_for_source_user(
+        repositories = get_web_repositories(request)
+        current_org = get_current_org(request)
+        repositories.department_override_repo.delete_override_for_source_user(
             source_user_id,
-            org_id=get_current_org(request).org_id,
+            org_id=current_org.org_id,
         )
-        request.app.state.audit_repo.add_log(
-            org_id=get_current_org(request).org_id,
+        repositories.audit_repo.add_log(
+            org_id=current_org.org_id,
             actor_username=user.username,
             action_type="mapping.department_override_delete",
             target_type="user_department_override",

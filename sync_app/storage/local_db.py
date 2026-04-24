@@ -576,6 +576,7 @@ from sync_app.storage.repositories.exclusions import GroupExclusionRuleRepositor
 from sync_app.storage.repositories.system import (
     ConfigReleaseSnapshotRepository,
     DataQualitySnapshotRepository,
+    IntegrationWebhookOutboxRepository,
     IntegrationWebhookSubscriptionRepository,
     SettingsRepository,
     SyncReplayRequestRepository,
@@ -593,4 +594,3 @@ from sync_app.storage.repositories.groups import (
 )
 from sync_app.storage.repositories.lifecycle import OffboardingQueueRepository, UserLifecycleQueueRepository
 from sync_app.storage.repositories.state import ObjectStateRepository
-

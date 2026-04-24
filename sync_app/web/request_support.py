@@ -9,6 +9,8 @@ from fastapi.templating import Jinja2Templates
 
 from sync_app.core.models import OrganizationRecord, WebAdminUserRecord
 from sync_app.providers.source import get_source_provider_display_name, normalize_source_provider
+from sync_app.services.typed_settings import WebSecuritySettings
+from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
 from sync_app.web.authz import has_capability, role_capabilities
 from sync_app.web.i18n import (
     SUPPORTED_UI_LANGUAGES,
@@ -94,30 +96,35 @@ class RequestSupport:
         username = str(request.session.get("username") or "").strip()
         if not username:
             return None
-        user = request.app.state.user_repo.get_user_record_by_username(username)
+        repositories = get_web_repositories(request)
+        user = repositories.user_repo.get_user_record_by_username(username)
         if not user or not user.is_enabled:
             request.session.clear()
             return None
         return user
 
     def get_current_org(self, request: Request) -> OrganizationRecord:
-        org_repo = request.app.state.organization_repo
+        repositories = get_web_repositories(request)
+        runtime_state = get_web_runtime_state(request)
+        org_repo = repositories.organization_repo
         selected_org_id = str(request.session.get("selected_org_id") or "").strip().lower()
         organization = org_repo.get_organization_record(selected_org_id) if selected_org_id else None
         if not organization or not organization.is_enabled:
             organization = org_repo.get_default_organization_record() or org_repo.ensure_default(
-                config_path=request.app.state.config_path
+                config_path=runtime_state.config_path
             )
             request.session["selected_org_id"] = organization.org_id
         return organization
 
     def get_org_config_path(self, request: Request) -> str:
         organization = self.get_current_org(request)
-        return organization.config_path or request.app.state.config_path
+        runtime_state = get_web_runtime_state(request)
+        return organization.config_path or runtime_state.config_path
 
     def list_org_connector_records(self, request: Request) -> list[Any]:
         organization = self.get_current_org(request)
-        return request.app.state.connector_repo.list_connector_records(org_id=organization.org_id)
+        repositories = get_web_repositories(request)
+        return repositories.connector_repo.list_connector_records(org_id=organization.org_id)
 
     def connector_has_database_overrides(self, record: Any) -> bool:
         return any(
@@ -145,21 +152,26 @@ class RequestSupport:
 
     def list_org_attribute_mapping_rules(self, request: Request) -> list[Any]:
         organization = self.get_current_org(request)
+        repositories = get_web_repositories(request)
         connector_ids = {record.connector_id for record in self.list_org_connector_records(request)}
-        rules = request.app.state.attribute_mapping_repo.list_rule_records(org_id=organization.org_id)
+        rules = repositories.attribute_mapping_repo.list_rule_records(org_id=organization.org_id)
         return [rule for rule in rules if not rule.connector_id or rule.connector_id in connector_ids]
 
     def get_org_setting_value(self, request: Request, key: str, default: Optional[str] = None) -> Optional[str]:
-        return request.app.state.settings_repo.get_value(key, default, org_id=self.get_current_org(request).org_id)
+        repositories = get_web_repositories(request)
+        return repositories.settings_repo.get_value(key, default, org_id=self.get_current_org(request).org_id)
 
     def get_org_setting_bool(self, request: Request, key: str, default: bool = False) -> bool:
-        return request.app.state.settings_repo.get_bool(key, default, org_id=self.get_current_org(request).org_id)
+        repositories = get_web_repositories(request)
+        return repositories.settings_repo.get_bool(key, default, org_id=self.get_current_org(request).org_id)
 
     def get_org_setting_int(self, request: Request, key: str, default: int = 0) -> int:
-        return request.app.state.settings_repo.get_int(key, default, org_id=self.get_current_org(request).org_id)
+        repositories = get_web_repositories(request)
+        return repositories.settings_repo.get_int(key, default, org_id=self.get_current_org(request).org_id)
 
     def get_org_setting_float(self, request: Request, key: str, default: float = 0.0) -> float:
-        return request.app.state.settings_repo.get_float(key, default, org_id=self.get_current_org(request).org_id)
+        repositories = get_web_repositories(request)
+        return repositories.settings_repo.get_float(key, default, org_id=self.get_current_org(request).org_id)
 
     def get_page_filter_session_key(self, page_name: str) -> str:
         return f"{self.session_filter_prefix}:{str(page_name or '').strip().lower()}"
@@ -207,13 +219,14 @@ class RequestSupport:
         return get_source_provider_display_name(normalized_value)
 
     def render(self, request: Request, template_name: str, **context: Any):
+        repositories = get_web_repositories(request)
         current_user = context.setdefault("current_user", self.get_current_user(request))
         current_org = context.setdefault("current_org", self.get_current_org(request) if current_user else None)
         csrf_token = ensure_csrf_token(request.session)
         current_role = current_user.role if current_user else None
         ui_language = self.get_ui_language(request)
         ui_mode = self.get_ui_mode(request)
-        brand_display_name_raw = request.app.state.settings_repo.get_value(
+        brand_display_name_raw = repositories.settings_repo.get_value(
             "brand_display_name",
             self.default_brand_display_name,
         )
@@ -222,11 +235,11 @@ class RequestSupport:
             if str(brand_display_name_raw or "").strip() == self.default_brand_display_name
             else str(brand_display_name_raw or "").strip()
         )
-        brand_mark_text = request.app.state.settings_repo.get_value(
+        brand_mark_text = repositories.settings_repo.get_value(
             "brand_mark_text",
             self.default_brand_mark_text,
         )
-        brand_attribution = request.app.state.settings_repo.get_value(
+        brand_attribution = repositories.settings_repo.get_value(
             "brand_attribution",
             self.default_brand_attribution,
         )
@@ -256,14 +269,14 @@ class RequestSupport:
         context.setdefault("brand_display_name", brand_display_name)
         context.setdefault("brand_mark_text", str(brand_mark_text or "").strip() or self.default_brand_mark_text)
         context.setdefault("brand_attribution", str(brand_attribution or "").strip() or self.default_brand_attribution)
-        context.setdefault("has_users", request.app.state.user_repo.has_any_user())
+        context.setdefault("has_users", repositories.user_repo.has_any_user())
         context.setdefault(
             "organizations",
-            request.app.state.organization_repo.list_organization_records() if current_user else [],
+            repositories.organization_repo.list_organization_records() if current_user else [],
         )
         context.setdefault(
             "enabled_organizations",
-            request.app.state.organization_repo.list_organization_records(enabled_only=True) if current_user else [],
+            repositories.organization_repo.list_organization_records(enabled_only=True) if current_user else [],
         )
         context.setdefault("placement_strategy_options", self.placement_strategies)
         context.setdefault(
@@ -290,7 +303,8 @@ class RequestSupport:
         return self.templates.TemplateResponse(request, template_name, context)
 
     def require_user(self, request: Request):
-        if not request.app.state.user_repo.has_any_user():
+        repositories = get_web_repositories(request)
+        if not repositories.user_repo.has_any_user():
             return RedirectResponse(url="/setup", status_code=303)
         user = self.get_current_user(request)
         if not user:
@@ -319,5 +333,6 @@ class RequestSupport:
         return "unknown"
 
     def validate_admin_password(self, request: Request, password: str) -> Optional[str]:
-        min_length = request.app.state.settings_repo.get_int("web_admin_password_min_length", 8)
+        repositories = get_web_repositories(request)
+        min_length = WebSecuritySettings.load(repositories.settings_repo).admin_password_min_length
         return validate_admin_password_strength(password, min_length=min_length)

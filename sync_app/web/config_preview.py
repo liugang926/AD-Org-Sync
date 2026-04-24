@@ -5,6 +5,7 @@ from typing import Any, Optional
 from fastapi import Request
 
 from sync_app.providers.source import get_source_provider_schema, list_source_provider_options, normalize_source_provider
+from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
 from sync_app.web.config_presentation import (
     build_config_preview_groups,
     build_source_provider_field_models,
@@ -27,7 +28,8 @@ def _is_successful_dry_run(job: Any) -> bool:
 
 
 def _build_config_rollout_status(request: Request, current_org: Any) -> dict[str, Any]:
-    recent_jobs = request.app.state.job_repo.list_recent_job_records(limit=20, org_id=current_org.org_id)
+    repositories = get_web_repositories(request)
+    recent_jobs = repositories.job_repo.list_recent_job_records(limit=20, org_id=current_org.org_id)
     latest_dry_run = next(
         (
             job
@@ -45,8 +47,8 @@ def _build_config_rollout_status(request: Request, current_org: Any) -> dict[str
         ),
         None,
     )
-    active_job = request.app.state.job_repo.get_active_job_record(org_id=current_org.org_id)
-    _open_conflicts, open_conflict_count = request.app.state.conflict_repo.list_conflict_records_page(
+    active_job = repositories.job_repo.get_active_job_record(org_id=current_org.org_id)
+    _open_conflicts, open_conflict_count = repositories.conflict_repo.list_conflict_records_page(
         limit=1,
         offset=0,
         status="open",
@@ -139,6 +141,8 @@ def _build_config_rollout_status(request: Request, current_org: Any) -> dict[str
 
 
 def build_config_change_preview(support: Any, request: Request, submission: dict[str, Any]) -> dict[str, Any]:
+    repositories = get_web_repositories(request)
+    runtime_state = get_web_runtime_state(request)
     current_org = support.request_support.get_current_org(request)
     current_state = support.build_current_config_state(request, current_org)
     proposed_state = {
@@ -187,7 +191,7 @@ def build_config_change_preview(support: Any, request: Request, submission: dict
             changed_count += len(group_changes)
 
     proposed_runtime_settings = resolve_web_runtime_settings(
-        request.app.state.settings_repo,
+        repositories.settings_repo,
         bind_host=str(submission["settings_values"]["web_bind_host"]),
         bind_port=int(submission["settings_values"]["web_bind_port"]),
         public_base_url=str(submission["settings_values"]["web_public_base_url"]),
@@ -199,7 +203,7 @@ def build_config_change_preview(support: Any, request: Request, submission: dict
         "groups": groups,
         "changed_count": changed_count,
         "restart_required": web_runtime_requires_restart(
-            request.app.state.web_runtime_settings,
+            runtime_state.web_runtime_settings,
             proposed_runtime_settings,
         ),
     }
@@ -207,7 +211,8 @@ def build_config_change_preview(support: Any, request: Request, submission: dict
 
 def build_config_editable_override(support: Any, request: Request, submission: dict[str, Any]) -> dict[str, Any]:
     current_org = support.request_support.get_current_org(request)
-    editable = request.app.state.org_config_repo.get_editable_config(
+    repositories = get_web_repositories(request)
+    editable = repositories.org_config_repo.get_editable_config(
         current_org.org_id,
         config_path=support.request_support.get_org_config_path(request),
     )
@@ -271,47 +276,48 @@ def build_config_page_context(
     preview_token: str = "",
 ) -> dict[str, Any]:
     current_org = support.request_support.get_current_org(request)
-    editable = editable_override or request.app.state.org_config_repo.get_editable_config(
+    repositories = get_web_repositories(request)
+    editable = editable_override or repositories.org_config_repo.get_editable_config(
         current_org.org_id,
         config_path=support.request_support.get_org_config_path(request),
     )
     if "protected_accounts" not in editable:
-        effective_config = request.app.state.org_config_repo.get_app_config(
+        effective_config = repositories.org_config_repo.get_app_config(
             current_org.org_id,
             config_path=support.request_support.get_org_config_path(request),
         )
         editable["protected_accounts"] = list(effective_config.exclude_accounts)
     editable.setdefault(
         "brand_display_name",
-        request.app.state.settings_repo.get_value("brand_display_name", support.default_brand_display_name),
+        repositories.settings_repo.get_value("brand_display_name", support.default_brand_display_name),
     )
     editable.setdefault(
         "brand_mark_text",
-        request.app.state.settings_repo.get_value("brand_mark_text", support.default_brand_mark_text),
+        repositories.settings_repo.get_value("brand_mark_text", support.default_brand_mark_text),
     )
     editable.setdefault(
         "brand_attribution",
-        request.app.state.settings_repo.get_value("brand_attribution", support.default_brand_attribution),
+        repositories.settings_repo.get_value("brand_attribution", support.default_brand_attribution),
     )
     editable.setdefault(
         "source_root_unit_ids",
-        request.app.state.settings_repo.get_value("source_root_unit_ids", "", org_id=current_org.org_id),
+        repositories.settings_repo.get_value("source_root_unit_ids", "", org_id=current_org.org_id),
     )
     editable.setdefault(
         "source_root_unit_display_text",
-        request.app.state.settings_repo.get_value("source_root_unit_display_text", "", org_id=current_org.org_id),
+        repositories.settings_repo.get_value("source_root_unit_display_text", "", org_id=current_org.org_id),
     )
     editable.setdefault(
         "directory_root_ou_path",
-        request.app.state.settings_repo.get_value("directory_root_ou_path", "", org_id=current_org.org_id),
+        repositories.settings_repo.get_value("directory_root_ou_path", "", org_id=current_org.org_id),
     )
     editable.setdefault(
         "disabled_users_ou_path",
-        request.app.state.settings_repo.get_value("disabled_users_ou_path", "Disabled Users", org_id=current_org.org_id),
+        repositories.settings_repo.get_value("disabled_users_ou_path", "Disabled Users", org_id=current_org.org_id),
     )
     editable.setdefault(
         "custom_group_ou_path",
-        request.app.state.settings_repo.get_value("custom_group_ou_path", "Managed Groups", org_id=current_org.org_id),
+        repositories.settings_repo.get_value("custom_group_ou_path", "Managed Groups", org_id=current_org.org_id),
     )
     current_source_provider = normalize_source_provider(editable.get("source_provider"))
     provider_schema = get_source_provider_schema(current_source_provider)
@@ -321,7 +327,7 @@ def build_config_page_context(
         support.request_support,
         support.request_support.get_ui_language(request),
     )
-    protected_rules = request.app.state.exclusion_repo.list_rules(
+    protected_rules = repositories.exclusion_repo.list_rules(
         rule_type="protect",
         protection_level="hard",
         org_id=current_org.org_id,

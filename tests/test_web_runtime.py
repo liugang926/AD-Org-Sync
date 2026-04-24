@@ -1,9 +1,14 @@
 import unittest
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
 
+from sync_app.services.external_integrations import emit_integration_event
 from sync_app.storage.local_db import DatabaseManager, SyncJobRepository, WebAuditLogRepository
+from sync_app.storage.repositories.system import IntegrationWebhookOutboxRepository, IntegrationWebhookSubscriptionRepository
 from sync_app.web.runtime import (
+    IntegrationOutboxWorker,
     LoginRateLimiter,
     WebSyncRunner,
     normalize_secure_cookie_mode,
@@ -127,6 +132,58 @@ class WebRuntimeTests(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertIn("job-running-001", message)
+
+    def test_integration_outbox_worker_flushes_pending_deliveries_on_interval(self):
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "web_outbox.db"
+            db_manager = DatabaseManager(db_path=str(db_path))
+            db_manager.initialize()
+            subscription_repo = IntegrationWebhookSubscriptionRepository(db_manager)
+            outbox_repo = IntegrationWebhookOutboxRepository(db_manager)
+            subscription_repo.upsert_subscription(
+                org_id="default",
+                event_type="job.completed",
+                target_url="https://example.invalid/hooks/worker",
+                secret="worker-secret",
+                is_enabled=True,
+            )
+            emit_integration_event(
+                db_manager,
+                org_id="default",
+                event_type="job.completed",
+                payload={"job": {"job_id": "job-worker-001"}},
+                dispatch_inline=False,
+                dispatch_async=False,
+            )
+
+            response = Mock()
+            response.ok = True
+            response.status_code = 200
+            response.reason = "OK"
+            response.text = ""
+            worker = IntegrationOutboxWorker(
+                db_path=str(db_path),
+                poll_seconds=0.05,
+                batch_limit=10,
+                max_batches=2,
+            )
+            try:
+                with patch("sync_app.services.external_integrations.requests.post", return_value=response):
+                    worker.start()
+                    deadline = time.monotonic() + 1.0
+                    while time.monotonic() < deadline:
+                        records = outbox_repo.list_delivery_records(org_id="default", limit=5)
+                        if records and records[0].status == "delivered":
+                            break
+                        time.sleep(0.05)
+            finally:
+                worker.stop()
+
+            records = outbox_repo.list_delivery_records(org_id="default", limit=5)
+            self.assertTrue(records)
+            self.assertEqual(records[0].status, "delivered")
+            self.assertEqual(records[0].attempt_count, 1)
+            self.assertEqual(worker.last_error, "")
 
 
 if __name__ == "__main__":

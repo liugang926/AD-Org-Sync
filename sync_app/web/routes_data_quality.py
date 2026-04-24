@@ -10,6 +10,7 @@ from sync_app.services.data_quality_center import (
     build_data_quality_export_rows,
     persist_data_quality_snapshot,
 )
+from sync_app.web.app_state import get_web_repositories
 
 
 def _parse_optional_int(value: str | None) -> Optional[int]:
@@ -39,6 +40,7 @@ def register_data_quality_routes(
         if isinstance(user, RedirectResponse):
             return user
         current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
         return render(
             request,
             "data_quality_center.html",
@@ -46,7 +48,7 @@ def register_data_quality_routes(
             title="Data Quality Center",
             current_org=current_org,
             **build_data_quality_center_context(
-                request.app.state.db_manager,
+                repositories.db_manager,
                 current_org.org_id,
                 snapshot_id=_parse_optional_int(request.query_params.get("snapshot_id")),
             ),
@@ -65,10 +67,11 @@ def register_data_quality_routes(
             return csrf_error
 
         current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
         try:
             snapshot = build_source_data_quality_snapshot(request)
             result = persist_data_quality_snapshot(
-                request.app.state.db_manager,
+                repositories.db_manager,
                 current_org.org_id,
                 created_by=user.username,
                 snapshot=snapshot,
@@ -82,7 +85,7 @@ def register_data_quality_routes(
 
         snapshot_record = result.get("snapshot")
         if snapshot_record is not None:
-            request.app.state.audit_repo.add_log(
+            repositories.audit_repo.add_log(
                 org_id=current_org.org_id,
                 actor_username=user.username,
                 action_type="data_quality_snapshot.run",
@@ -112,13 +115,14 @@ def register_data_quality_routes(
             return user
         current_org = get_current_org(request)
         snapshot_id = _parse_optional_int(request.query_params.get("snapshot_id"))
+        repositories = get_web_repositories(request)
         if snapshot_id is not None:
-            snapshot = request.app.state.data_quality_snapshot_repo.get_snapshot_record(
+            snapshot = repositories.data_quality_snapshot_repo.get_snapshot_record(
                 snapshot_id,
                 org_id=current_org.org_id,
             )
         else:
-            snapshot = request.app.state.data_quality_snapshot_repo.get_latest_snapshot_record(
+            snapshot = repositories.data_quality_snapshot_repo.get_latest_snapshot_record(
                 org_id=current_org.org_id,
             )
         if snapshot is None:

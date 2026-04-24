@@ -12,6 +12,7 @@ from sync_app.core.exception_rules import (
     normalize_exception_rule_type,
 )
 from sync_app.storage.local_db import utcnow_iso
+from sync_app.web.app_state import get_web_repositories
 from sync_app.web.rule_governance import build_rule_governance_summary
 
 
@@ -53,8 +54,9 @@ def register_exception_routes(
         requested_rule_type = str(remembered_filters["rule_type"] or "all").strip().lower()
         normalized_rule_type = normalize_exception_rule_type(requested_rule_type)
         page_number = parse_page_number(request.query_params.get("page_number"), 1)
+        repositories = get_web_repositories(request)
         rules, page_data = fetch_page(
-            lambda *, limit, offset: request.app.state.exception_rule_repo.list_rule_records_page(
+            lambda *, limit, offset: repositories.exception_rule_repo.list_rule_records_page(
                 limit=limit,
                 offset=offset,
                 query=query,
@@ -66,9 +68,9 @@ def register_exception_routes(
             page_size=25,
         )
         rule_governance_summary = build_rule_governance_summary(
-            bindings=request.app.state.user_binding_repo.list_binding_records(org_id=current_org.org_id),
-            overrides=request.app.state.department_override_repo.list_override_records(org_id=current_org.org_id),
-            exception_rules=request.app.state.exception_rule_repo.list_rule_records(org_id=current_org.org_id),
+            bindings=repositories.user_binding_repo.list_binding_records(org_id=current_org.org_id),
+            overrides=repositories.department_override_repo.list_override_records(org_id=current_org.org_id),
+            exception_rules=repositories.exception_rule_repo.list_rule_records(org_id=current_org.org_id),
         )
         return render(
             request,
@@ -144,7 +146,8 @@ def register_exception_routes(
         try:
             current_org = get_current_org(request)
             reviewed_at = utcnow_iso()
-            request.app.state.exception_rule_repo.upsert_rule(
+            repositories = get_web_repositories(request)
+            repositories.exception_rule_repo.upsert_rule(
                 rule_type=normalized_rule_type,
                 match_value=normalized_match_value,
                 org_id=current_org.org_id,
@@ -152,7 +155,7 @@ def register_exception_routes(
                 expires_at=normalized_expires_at,
                 is_once=to_bool(is_once, False),
             )
-            request.app.state.exception_rule_repo.update_governance_metadata(
+            repositories.exception_rule_repo.update_governance_metadata(
                 rule_type=normalized_rule_type,
                 match_value=normalized_match_value,
                 org_id=current_org.org_id,
@@ -178,7 +181,7 @@ def register_exception_routes(
             },
         )
 
-        request.app.state.audit_repo.add_log(
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type="exception_rule.upsert",
@@ -224,6 +227,7 @@ def register_exception_routes(
         import_errors: list[str] = []
         current_org = get_current_org(request)
         reviewed_at = utcnow_iso()
+        repositories = get_web_repositories(request)
         for row in rows:
             normalized_rule_type = normalize_exception_rule_type(row["rule_type"])
             rule_definition = get_exception_rule_definition(normalized_rule_type)
@@ -240,7 +244,7 @@ def register_exception_routes(
             try:
                 normalized_expires_at = normalize_optional_datetime_input(str(row["expires_at"]))
                 normalized_next_review_at = normalize_optional_datetime_input(str(row.get("next_review_at") or ""))
-                request.app.state.exception_rule_repo.upsert_rule(
+                repositories.exception_rule_repo.upsert_rule(
                     rule_type=normalized_rule_type,
                     match_value=str(row["match_value"]),
                     org_id=current_org.org_id,
@@ -249,7 +253,7 @@ def register_exception_routes(
                     expires_at=normalized_expires_at,
                     is_once=bool(row["is_once"]),
                 )
-                request.app.state.exception_rule_repo.update_governance_metadata(
+                repositories.exception_rule_repo.update_governance_metadata(
                     rule_type=normalized_rule_type,
                     match_value=str(row["match_value"]),
                     org_id=current_org.org_id,
@@ -274,7 +278,7 @@ def register_exception_routes(
                 payload={"imported_count": imported_count},
             )
 
-        request.app.state.audit_repo.add_log(
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type="exception_rule.import",
@@ -305,10 +309,11 @@ def register_exception_routes(
         status = (request.query_params.get("status") or "all").strip().lower()
         requested_rule_type = (request.query_params.get("rule_type") or "all").strip().lower()
         current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
 
         def iter_rows():
             for item in iter_all_pages(
-                lambda *, limit, offset: request.app.state.exception_rule_repo.list_rule_records_page(
+                lambda *, limit, offset: repositories.exception_rule_repo.list_rule_records_page(
                     limit=limit,
                     offset=offset,
                     query=query,
@@ -366,14 +371,15 @@ def register_exception_routes(
             return csrf_error
 
         current_org = get_current_org(request)
-        rule_record = request.app.state.exception_rule_repo.get_rule_record(rule_id, org_id=current_org.org_id)
+        repositories = get_web_repositories(request)
+        rule_record = repositories.exception_rule_repo.get_rule_record(rule_id, org_id=current_org.org_id)
         if not rule_record:
             flash(request, "error", "Exception rule not found")
             return RedirectResponse(url="/exceptions", status_code=303)
 
         new_state = to_bool(enabled, rule_record.is_enabled)
-        request.app.state.exception_rule_repo.set_enabled(rule_id, new_state, org_id=current_org.org_id)
-        request.app.state.audit_repo.add_log(
+        repositories.exception_rule_repo.set_enabled(rule_id, new_state, org_id=current_org.org_id)
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type="exception_rule.toggle",
@@ -408,13 +414,14 @@ def register_exception_routes(
             return csrf_error
 
         current_org = get_current_org(request)
-        rule_record = request.app.state.exception_rule_repo.get_rule_record(rule_id, org_id=current_org.org_id)
+        repositories = get_web_repositories(request)
+        rule_record = repositories.exception_rule_repo.get_rule_record(rule_id, org_id=current_org.org_id)
         if not rule_record:
             flash(request, "error", "Exception rule not found")
             return RedirectResponse(url="/exceptions", status_code=303)
 
-        request.app.state.exception_rule_repo.delete_rule(rule_id, org_id=current_org.org_id)
-        request.app.state.audit_repo.add_log(
+        repositories.exception_rule_repo.delete_rule(rule_id, org_id=current_org.org_id)
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type="exception_rule.delete",

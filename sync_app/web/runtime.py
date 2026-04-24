@@ -5,12 +5,18 @@ import threading
 import time
 from typing import Any, Optional
 
+from sync_app.services.external_integrations import flush_integration_outbox
+from sync_app.services.typed_settings import (
+    WebRuntimeSettings,
+    normalize_secure_cookie_mode as _normalize_secure_cookie_mode,
+)
 from sync_app.services.sync_dispatch import (
     claim_next_sync_job,
     enqueue_sync_job,
     run_claimed_sync_job,
 )
 from sync_app.storage.local_db import (
+    DatabaseManager,
     SettingsRepository,
     WebAuditLogRepository,
 )
@@ -18,7 +24,6 @@ from sync_app.storage.local_db import (
 LOGGER = logging.getLogger(__name__)
 
 LOCAL_WEB_BIND_HOSTS = {"127.0.0.1", "localhost", "::1"}
-SECURE_COOKIE_MODES = {"auto", "always", "never"}
 WEB_RUNTIME_RESTART_KEYS = (
     "bind_host",
     "bind_port",
@@ -28,21 +33,13 @@ WEB_RUNTIME_RESTART_KEYS = (
     "trust_proxy_headers",
     "forwarded_allow_ips",
 )
-
-
-def _to_text(value: Any, default: str = "") -> str:
-    if isinstance(value, str):
-        return value.strip()
-    return default
-
-
-def _clean_public_base_url(value: Optional[str]) -> str:
-    return str(value or "").strip().rstrip("/")
+DEFAULT_OUTBOX_POLL_SECONDS = 15.0
+DEFAULT_OUTBOX_BATCH_LIMIT = 20
+DEFAULT_OUTBOX_MAX_BATCHES = 5
 
 
 def normalize_secure_cookie_mode(value: Optional[str]) -> str:
-    normalized = str(value or "").strip().lower()
-    return normalized if normalized in SECURE_COOKIE_MODES else "auto"
+    return _normalize_secure_cookie_mode(value)
 
 
 def resolve_web_runtime_settings(
@@ -55,31 +52,21 @@ def resolve_web_runtime_settings(
     trust_proxy_headers: bool | None = None,
     forwarded_allow_ips: str | None = None,
 ) -> dict[str, Any]:
-    resolved_bind_host = _to_text(
-        bind_host,
-        settings_repo.get_value("web_bind_host", "127.0.0.1") or "127.0.0.1",
-    ) or "127.0.0.1"
-    resolved_bind_port = max(
-        int(bind_port or settings_repo.get_int("web_bind_port", 8000) or 8000),
-        1,
+    typed_settings = WebRuntimeSettings.load(
+        settings_repo,
+        bind_host=bind_host,
+        bind_port=bind_port,
+        public_base_url=public_base_url,
+        session_cookie_secure_mode=session_cookie_secure_mode,
+        trust_proxy_headers=trust_proxy_headers,
+        forwarded_allow_ips=forwarded_allow_ips,
     )
-    resolved_public_base_url = _clean_public_base_url(
-        public_base_url if public_base_url is not None else settings_repo.get_value("web_public_base_url", "")
-    )
-    resolved_secure_mode = normalize_secure_cookie_mode(
-        session_cookie_secure_mode
-        if session_cookie_secure_mode is not None
-        else settings_repo.get_value("web_session_cookie_secure_mode", "auto")
-    )
-    resolved_trust_proxy_headers = (
-        settings_repo.get_bool("web_trust_proxy_headers", False)
-        if trust_proxy_headers is None
-        else bool(trust_proxy_headers)
-    )
-    resolved_forwarded_allow_ips = _to_text(
-        forwarded_allow_ips,
-        settings_repo.get_value("web_forwarded_allow_ips", "127.0.0.1") or "127.0.0.1",
-    ) or "127.0.0.1"
+    resolved_bind_host = typed_settings.bind_host
+    resolved_bind_port = typed_settings.bind_port
+    resolved_public_base_url = typed_settings.public_base_url
+    resolved_secure_mode = typed_settings.session_cookie_secure_mode
+    resolved_trust_proxy_headers = typed_settings.trust_proxy_headers
+    resolved_forwarded_allow_ips = typed_settings.forwarded_allow_ips
     bind_is_local = resolved_bind_host.lower() in LOCAL_WEB_BIND_HOSTS
     public_url_is_https = resolved_public_base_url.lower().startswith("https://")
     session_cookie_secure = resolved_secure_mode == "always" or (
@@ -250,6 +237,67 @@ class WebSyncRunner:
             with self._lock:
                 self._current_job_id = ""
                 self._current_actor_username = ""
+
+
+class IntegrationOutboxWorker:
+    def __init__(
+        self,
+        *,
+        db_path: str,
+        poll_seconds: float = DEFAULT_OUTBOX_POLL_SECONDS,
+        batch_limit: int = DEFAULT_OUTBOX_BATCH_LIMIT,
+        max_batches: int = DEFAULT_OUTBOX_MAX_BATCHES,
+    ):
+        self.db_path = db_path
+        self.poll_seconds = max(float(poll_seconds or 0), 0.1)
+        self.batch_limit = max(int(batch_limit or 0), 1)
+        self.max_batches = max(int(max_batches or 0), 1)
+        self._lock = threading.Lock()
+        self._worker_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
+        self.last_error = ""
+        self.last_result: dict[str, Any] = {}
+
+    def start(self) -> None:
+        with self._lock:
+            if self._worker_thread and self._worker_thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._wake_event.set()
+            self._worker_thread = threading.Thread(
+                target=self._dispatch_loop,
+                daemon=True,
+                name="integration-outbox-worker",
+            )
+            self._worker_thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._wake_event.set()
+        thread = self._worker_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=2.0)
+
+    def wake(self) -> None:
+        self._wake_event.set()
+
+    def _dispatch_loop(self) -> None:
+        db_manager = DatabaseManager(db_path=self.db_path)
+        db_manager.initialize(create_startup_snapshot=False, verify_integrity=False)
+        while not self._stop_event.is_set():
+            self._wake_event.clear()
+            try:
+                self.last_result = flush_integration_outbox(
+                    db_manager,
+                    limit=self.batch_limit,
+                    max_batches=self.max_batches,
+                )
+                self.last_error = ""
+            except Exception as exc:
+                self.last_error = str(exc)
+                LOGGER.exception("integration outbox worker loop failed")
+            self._wake_event.wait(self.poll_seconds)
 
 
 class LoginRateLimiter:

@@ -1415,4 +1415,40 @@ MIGRATIONS = [
         ON integration_webhook_subscriptions (org_id, event_type, is_enabled, updated_at DESC, id DESC);
         """,
     ),
+    (
+        27,
+        "add integration webhook outbox",
+        """
+        CREATE TABLE IF NOT EXISTS integration_webhook_outbox (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL DEFAULT 'default',
+          subscription_id INTEGER,
+          event_type TEXT NOT NULL,
+          delivery_id TEXT NOT NULL,
+          target_url TEXT NOT NULL,
+          secret TEXT NOT NULL DEFAULT '',
+          payload_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          max_attempts INTEGER NOT NULL DEFAULT 5,
+          next_attempt_at TEXT NOT NULL DEFAULT '',
+          last_attempt_at TEXT NOT NULL DEFAULT '',
+          last_status TEXT NOT NULL DEFAULT '',
+          last_error TEXT NOT NULL DEFAULT '',
+          locked_at TEXT NOT NULL DEFAULT '',
+          lease_expires_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(subscription_id) REFERENCES integration_webhook_subscriptions(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_integration_webhook_outbox_ready
+        ON integration_webhook_outbox (
+          org_id, status, next_attempt_at, lease_expires_at, created_at ASC, id ASC
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_integration_webhook_outbox_subscription
+        ON integration_webhook_outbox (subscription_id, created_at DESC, id DESC);
+        """,
+    ),
 ]

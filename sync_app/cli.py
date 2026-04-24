@@ -23,6 +23,7 @@ from sync_app.core.conflict_recommendations import (
 from sync_app.core.models import SyncJobSummary
 from sync_app.services.config_bundle import export_organization_bundle, import_organization_bundle
 from sync_app.services.entry import main as run_sync
+from sync_app.services.typed_settings import WebSecuritySettings
 from sync_app.storage.local_db import (
     DatabaseManager,
     OrganizationConfigRepository,
@@ -367,9 +368,10 @@ def _handle_bootstrap_admin(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
+    security_settings = WebSecuritySettings.load(settings_repo)
     password_error = validate_admin_password_strength(
         password,
-        min_length=settings_repo.get_int("web_admin_password_min_length", 8),
+        min_length=security_settings.admin_password_min_length,
     )
     if password_error:
         print(password_error, file=sys.stderr)

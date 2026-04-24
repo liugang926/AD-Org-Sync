@@ -7,6 +7,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from sync_app.storage.local_db import ManagedGroupBindingRepository, ObjectStateRepository
+from sync_app.web.app_state import get_web_repositories
 
 
 def register_organization_routes(
@@ -45,10 +46,11 @@ def register_organization_routes(
         user = require_user(request)
         if isinstance(user, RedirectResponse):
             return user
+        repositories = get_web_repositories(request)
         csrf_error = reject_invalid_csrf(request, csrf_token, safe_redirect_target(return_url, "/dashboard"))
         if csrf_error:
             return csrf_error
-        organization = request.app.state.organization_repo.get_organization_record(org_id)
+        organization = repositories.organization_repo.get_organization_record(org_id)
         if not organization or not organization.is_enabled:
             flash(request, "error", "Organization not found or disabled")
             return RedirectResponse(url="/dashboard", status_code=303)
@@ -76,8 +78,9 @@ def register_organization_routes(
         if not normalized_org_id:
             flash(request, "error", "Organization ID is required")
             return RedirectResponse(url="/organizations", status_code=303)
+        repositories = get_web_repositories(request)
         try:
-            request.app.state.organization_repo.upsert_organization(
+            repositories.organization_repo.upsert_organization(
                 org_id=normalized_org_id,
                 name=name,
                 config_path=config_path_value,
@@ -87,9 +90,9 @@ def register_organization_routes(
         except Exception as exc:
             flash_t(request, "error", "Failed to save organization: {error}", error=str(exc))
             return RedirectResponse(url="/organizations", status_code=303)
-        request.app.state.org_config_repo.ensure_loaded(normalized_org_id, config_path=config_path_value)
-        organization = request.app.state.organization_repo.get_organization_record(normalized_org_id)
-        request.app.state.audit_repo.add_log(
+        repositories.org_config_repo.ensure_loaded(normalized_org_id, config_path=config_path_value)
+        organization = repositories.organization_repo.get_organization_record(normalized_org_id)
+        repositories.audit_repo.add_log(
             actor_username=user.username,
             action_type="organization.upsert",
             target_type="organization",
@@ -111,10 +114,11 @@ def register_organization_routes(
         user = require_capability(request, "organizations.manage")
         if isinstance(user, RedirectResponse):
             return user
+        repositories = get_web_repositories(request)
         csrf_error = reject_invalid_csrf(request, csrf_token, "/organizations")
         if csrf_error:
             return csrf_error
-        organization = request.app.state.organization_repo.get_organization_record(org_id)
+        organization = repositories.organization_repo.get_organization_record(org_id)
         if not organization or not organization.is_enabled:
             flash(request, "error", "Organization not found or disabled")
             return RedirectResponse(url="/organizations", status_code=303)
@@ -127,16 +131,17 @@ def register_organization_routes(
         user = require_capability(request, "organizations.manage")
         if isinstance(user, RedirectResponse):
             return user
-        organization = request.app.state.organization_repo.get_organization_record(org_id)
+        repositories = get_web_repositories(request)
+        organization = repositories.organization_repo.get_organization_record(org_id)
         if not organization:
             flash(request, "error", "Organization not found")
             return RedirectResponse(url="/organizations", status_code=303)
         try:
-            bundle = export_organization_bundle(request.app.state.db_manager, organization.org_id)
+            bundle = export_organization_bundle(repositories.db_manager, organization.org_id)
         except Exception as exc:
             flash_t(request, "error", "Failed to export organization bundle: {error}", error=str(exc))
             return RedirectResponse(url="/organizations", status_code=303)
-        request.app.state.audit_repo.add_log(
+        repositories.audit_repo.add_log(
             org_id=organization.org_id,
             actor_username=user.username,
             action_type="organization.bundle_export",
@@ -171,6 +176,7 @@ def register_organization_routes(
         if not bundle_payload:
             flash(request, "error", "Configuration bundle content is required")
             return RedirectResponse(url="/organizations", status_code=303)
+        repositories = get_web_repositories(request)
         try:
             bundle = json.loads(bundle_payload)
         except json.JSONDecodeError as exc:
@@ -178,7 +184,7 @@ def register_organization_routes(
             return RedirectResponse(url="/organizations", status_code=303)
         try:
             summary = import_organization_bundle(
-                request.app.state.db_manager,
+                repositories.db_manager,
                 bundle,
                 target_org_id=str(target_org_id or "").strip() or None,
                 replace_existing=to_bool(replace_existing, False),
@@ -186,7 +192,7 @@ def register_organization_routes(
         except Exception as exc:
             flash_t(request, "error", "Failed to import organization bundle: {error}", error=str(exc))
             return RedirectResponse(url="/organizations", status_code=303)
-        request.app.state.audit_repo.add_log(
+        repositories.audit_repo.add_log(
             org_id=summary["org_id"],
             actor_username=user.username,
             action_type="organization.bundle_import",
@@ -216,15 +222,16 @@ def register_organization_routes(
         user = require_capability(request, "organizations.manage")
         if isinstance(user, RedirectResponse):
             return user
+        repositories = get_web_repositories(request)
         csrf_error = reject_invalid_csrf(request, csrf_token, "/organizations")
         if csrf_error:
             return csrf_error
-        organization = request.app.state.organization_repo.get_organization_record(org_id)
+        organization = repositories.organization_repo.get_organization_record(org_id)
         if not organization:
             flash(request, "error", "Organization not found")
             return RedirectResponse(url="/organizations", status_code=303)
         try:
-            request.app.state.organization_repo.set_enabled(org_id, not organization.is_enabled)
+            repositories.organization_repo.set_enabled(org_id, not organization.is_enabled)
         except Exception as exc:
             flash_t(request, "error", "Failed to update organization: {error}", error=str(exc))
             return RedirectResponse(url="/organizations", status_code=303)
@@ -247,39 +254,40 @@ def register_organization_routes(
         user = require_capability(request, "organizations.manage")
         if isinstance(user, RedirectResponse):
             return user
+        repositories = get_web_repositories(request)
         csrf_error = reject_invalid_csrf(request, csrf_token, "/organizations")
         if csrf_error:
             return csrf_error
-        organization = request.app.state.organization_repo.get_organization_record(org_id)
+        organization = repositories.organization_repo.get_organization_record(org_id)
         if not organization:
             flash(request, "error", "Organization not found")
             return RedirectResponse(url="/organizations", status_code=303)
-        if request.app.state.job_repo.count_jobs(org_id=organization.org_id):
+        if repositories.job_repo.count_jobs(org_id=organization.org_id):
             flash(request, "error", "Organization has job history and cannot be deleted")
             return RedirectResponse(url="/organizations", status_code=303)
-        request.app.state.connector_repo.delete_connectors_for_org(organization.org_id)
-        request.app.state.exclusion_repo.delete_rules_for_org(organization.org_id)
-        ManagedGroupBindingRepository(request.app.state.db_manager).delete_bindings_for_org(organization.org_id)
-        ObjectStateRepository(request.app.state.db_manager).delete_states_for_org(organization.org_id)
-        request.app.state.attribute_mapping_repo.delete_rules_for_org(organization.org_id)
-        request.app.state.user_binding_repo.delete_bindings_for_org(organization.org_id)
-        request.app.state.department_override_repo.delete_overrides_for_org(organization.org_id)
-        request.app.state.exception_rule_repo.delete_rules_for_org(organization.org_id)
-        request.app.state.offboarding_repo.delete_records_for_org(organization.org_id)
-        request.app.state.lifecycle_repo.delete_records_for_org(organization.org_id)
-        request.app.state.custom_group_binding_repo.delete_bindings_for_org(organization.org_id)
-        request.app.state.replay_request_repo.delete_requests_for_org(organization.org_id)
-        request.app.state.audit_repo.delete_logs_for_org(organization.org_id)
-        request.app.state.org_config_repo.delete_config(organization.org_id)
-        request.app.state.settings_repo.delete_org_scoped_values(organization.org_id)
+        repositories.connector_repo.delete_connectors_for_org(organization.org_id)
+        repositories.exclusion_repo.delete_rules_for_org(organization.org_id)
+        ManagedGroupBindingRepository(repositories.db_manager).delete_bindings_for_org(organization.org_id)
+        ObjectStateRepository(repositories.db_manager).delete_states_for_org(organization.org_id)
+        repositories.attribute_mapping_repo.delete_rules_for_org(organization.org_id)
+        repositories.user_binding_repo.delete_bindings_for_org(organization.org_id)
+        repositories.department_override_repo.delete_overrides_for_org(organization.org_id)
+        repositories.exception_rule_repo.delete_rules_for_org(organization.org_id)
+        repositories.offboarding_repo.delete_records_for_org(organization.org_id)
+        repositories.lifecycle_repo.delete_records_for_org(organization.org_id)
+        repositories.custom_group_binding_repo.delete_bindings_for_org(organization.org_id)
+        repositories.replay_request_repo.delete_requests_for_org(organization.org_id)
+        repositories.audit_repo.delete_logs_for_org(organization.org_id)
+        repositories.org_config_repo.delete_config(organization.org_id)
+        repositories.settings_repo.delete_org_scoped_values(organization.org_id)
         try:
-            request.app.state.organization_repo.delete_organization(organization.org_id)
+            repositories.organization_repo.delete_organization(organization.org_id)
         except Exception as exc:
             flash_t(request, "error", "Failed to delete organization: {error}", error=str(exc))
             return RedirectResponse(url="/organizations", status_code=303)
         if request.session.get("selected_org_id") == organization.org_id:
             request.session["selected_org_id"] = "default"
-        request.app.state.audit_repo.add_log(
+        repositories.audit_repo.add_log(
             actor_username=user.username,
             action_type="organization.delete",
             target_type="organization",

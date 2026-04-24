@@ -4,8 +4,9 @@ import secrets
 from dataclasses import dataclass, fields
 from typing import Any, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
+from sync_app.services.typed_settings import WebSecuritySettings
 from sync_app.storage.local_db import (
     AttributeMappingRuleRepository,
     ConfigReleaseSnapshotRepository,
@@ -14,6 +15,7 @@ from sync_app.storage.local_db import (
     DatabaseManager,
     DepartmentOuMappingRepository,
     GroupExclusionRuleRepository,
+    IntegrationWebhookOutboxRepository,
     OffboardingQueueRepository,
     OrganizationConfigRepository,
     OrganizationRepository,
@@ -35,10 +37,12 @@ from sync_app.storage.local_db import (
     WebAuditLogRepository,
 )
 from sync_app.web.runtime import (
+    IntegrationOutboxWorker,
     LoginRateLimiter,
     WebSyncRunner,
     resolve_web_runtime_settings,
 )
+from sync_app.web.service_facades import WebServiceState, build_web_service_state
 
 
 @dataclass(slots=True)
@@ -66,6 +70,7 @@ class WebRepositoryState:
     audit_repo: WebAuditLogRepository
     config_release_snapshot_repo: ConfigReleaseSnapshotRepository
     data_quality_snapshot_repo: DataQualitySnapshotRepository
+    integration_webhook_outbox_repo: IntegrationWebhookOutboxRepository
     integration_webhook_subscription_repo: IntegrationWebhookSubscriptionRepository
     user_binding_repo: UserIdentityBindingRepository
     department_override_repo: UserDepartmentOverrideRepository
@@ -81,12 +86,14 @@ class WebRuntimeState:
     web_runtime_settings: dict[str, Any]
     startup_persisted_web_runtime_settings: dict[str, Any]
     sync_runner: WebSyncRunner
+    integration_outbox_worker: IntegrationOutboxWorker
 
 
 @dataclass(slots=True)
 class WebAppState:
     repositories: WebRepositoryState
     runtime: WebRuntimeState
+    services: WebServiceState
 
     def bind_to_app(self, app: FastAPI) -> None:
         app.state.web_app_state = self
@@ -95,6 +102,32 @@ class WebAppState:
                 if field_info.name in {"session_secret", "session_minutes"}:
                     continue
                 setattr(app.state, field_info.name, getattr(bundle, field_info.name))
+
+
+def _resolve_fastapi_app(target: FastAPI | Request) -> FastAPI:
+    if isinstance(target, FastAPI):
+        return target
+    return target.app
+
+
+def get_web_app_state(target: FastAPI | Request) -> WebAppState:
+    app = _resolve_fastapi_app(target)
+    state = getattr(app.state, "web_app_state", None)
+    if state is None:
+        raise RuntimeError("Web app state has not been initialized for this application.")
+    return state
+
+
+def get_web_repositories(target: FastAPI | Request) -> WebRepositoryState:
+    return get_web_app_state(target).repositories
+
+
+def get_web_runtime_state(target: FastAPI | Request) -> WebRuntimeState:
+    return get_web_app_state(target).runtime
+
+
+def get_web_services(target: FastAPI | Request) -> WebServiceState:
+    return get_web_app_state(target).services
 
 
 def initialize_web_app_state(
@@ -135,6 +168,7 @@ def initialize_web_app_state(
         audit_repo=WebAuditLogRepository(db_manager),
         config_release_snapshot_repo=ConfigReleaseSnapshotRepository(db_manager),
         data_quality_snapshot_repo=DataQualitySnapshotRepository(db_manager),
+        integration_webhook_outbox_repo=IntegrationWebhookOutboxRepository(db_manager),
         integration_webhook_subscription_repo=IntegrationWebhookSubscriptionRepository(db_manager),
         user_binding_repo=UserIdentityBindingRepository(db_manager),
         department_override_repo=UserDepartmentOverrideRepository(db_manager),
@@ -148,7 +182,8 @@ def initialize_web_app_state(
         session_secret = secrets.token_urlsafe(48)
         repositories.settings_repo.set_value("web_session_secret", session_secret, "string")
 
-    session_minutes = max(repositories.settings_repo.get_int("web_session_idle_minutes", 30), 1)
+    security_settings = WebSecuritySettings.load(repositories.settings_repo)
+    session_minutes = security_settings.session_idle_minutes
     startup_persisted_web_runtime_settings = resolve_web_runtime_settings(repositories.settings_repo)
     web_runtime_settings = resolve_web_runtime_settings(
         repositories.settings_repo,
@@ -165,9 +200,9 @@ def initialize_web_app_state(
         session_secret=session_secret,
         session_minutes=session_minutes,
         login_rate_limiter=LoginRateLimiter(
-            max_attempts=repositories.settings_repo.get_int("web_login_max_attempts", 5),
-            window_seconds=repositories.settings_repo.get_int("web_login_window_seconds", 300),
-            lockout_seconds=repositories.settings_repo.get_int("web_login_lockout_seconds", 300),
+            max_attempts=security_settings.login_max_attempts,
+            window_seconds=security_settings.login_window_seconds,
+            lockout_seconds=security_settings.login_lockout_seconds,
         ),
         session_cookie_secure=bool(web_runtime_settings["session_cookie_secure"]),
         web_runtime_settings=web_runtime_settings,
@@ -176,6 +211,21 @@ def initialize_web_app_state(
             db_path=db_manager.db_path,
             audit_repo=repositories.audit_repo,
         ),
+        integration_outbox_worker=IntegrationOutboxWorker(
+            db_path=db_manager.db_path,
+        ),
     )
 
-    return WebAppState(repositories=repositories, runtime=runtime)
+    services = build_web_service_state(
+        db_manager=db_manager,
+        settings_repo=repositories.settings_repo,
+        config_release_snapshot_repo=repositories.config_release_snapshot_repo,
+        subscription_repo=repositories.integration_webhook_subscription_repo,
+        job_repo=repositories.job_repo,
+        review_repo=repositories.review_repo,
+        planned_operation_repo=repositories.planned_operation_repo,
+        conflict_repo=repositories.conflict_repo,
+        audit_repo=repositories.audit_repo,
+    )
+
+    return WebAppState(repositories=repositories, runtime=runtime, services=services)

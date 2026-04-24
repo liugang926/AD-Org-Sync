@@ -30,6 +30,8 @@
   {{ ui.compact_stat(t("API Token"), (t("Configured") if api_token_configured else t("Not Configured"))) }}
   {{ ui.compact_stat(t("Subscriptions"), subscription_records|length) }}
   {{ ui.compact_stat(t("Active Subscriptions"), active_subscription_count) }}
+  {{ ui.compact_stat(t("Pending Deliveries"), pending_delivery_count) }}
+  {{ ui.compact_stat(t("Failed Deliveries"), failed_delivery_count) }}
   {{ ui.compact_stat(t("Open Conflicts"), open_conflict_count) }}
   {{ ui.compact_stat(t("Pending Reviews"), pending_review_count) }}
 </div>
@@ -153,6 +155,102 @@
   <div class="panel-note info">{{ t("No webhook subscriptions have been registered for this organization yet.") }}</div>
   {% endif %}
 {% endcall %}
+
+{% call ui.panel(t("Failed Delivery Recovery"), description=t("Dead-letter deliveries stay visible here until an administrator explicitly requeues them for another attempt.")) %}
+  <div class="page-stack tight">
+    {% if retryable_delivery_count %}
+    <div class="actions">
+      <form method="post" action="/integrations/deliveries/retry-failed">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {{ ui.button(t("Retry Failed Deliveries"), type="submit", icon="rotate-cw") }}
+      </form>
+    </div>
+    {% endif %}
+
+    {% if failed_delivery_records %}
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t("Delivery") }}</th>
+          <th>{{ t("Target URL") }}</th>
+          <th>{{ t("Failure") }}</th>
+          <th>{{ t("Attempts") }}</th>
+          <th>{{ t("Last Attempt") }}</th>
+          <th>{{ t("Actions") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in failed_delivery_records %}
+        <tr>
+          <td>
+            <strong>{{ item.event_type }}</strong>
+            {% if item.notification_source %}
+            <div class="muted">{{ item.notification_source }}</div>
+            {% endif %}
+          </td>
+          <td>{{ item.target_url }}</td>
+          <td>
+            {% if item.last_status %}
+            <div>{{ item.last_status }}</div>
+            {% endif %}
+            <div class="muted">{{ item.last_error or t("No error detail captured") }}</div>
+          </td>
+          <td>{{ item.attempt_count }}/{{ item.max_attempts }}</td>
+          <td>{{ item.last_attempt_at or "-" }}</td>
+          <td>
+            <form method="post" action="/integrations/deliveries/{{ item.id }}/retry">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              {{ ui.button(t("Retry Now"), type="submit", variant="secondary") }}
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="panel-note success">{{ t("No deliveries are currently stuck in failed state.") }}</div>
+    {% endif %}
+  </div>
+{% endcall %}
+
+{% if recent_delivery_records %}
+{% call ui.panel(t("Recent Delivery Activity"), description=t("Track the latest outbound webhook attempts across integration events and operational notifications.")) %}
+  <table>
+    <thead>
+      <tr>
+        <th>{{ t("Delivery") }}</th>
+        <th>{{ t("Status") }}</th>
+        <th>{{ t("Attempts") }}</th>
+        <th>{{ t("Target URL") }}</th>
+        <th>{{ t("Last Attempt") }}</th>
+        <th>{{ t("Next Attempt") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in recent_delivery_records %}
+      <tr>
+        <td>
+          <strong>{{ item.event_type }}</strong>
+          {% if item.notification_source %}
+          <div class="muted">{{ item.notification_source }}</div>
+          {% endif %}
+        </td>
+        <td>
+          {{ ui.badge(item.status, ("success" if item.status == "delivered" else ("warning" if item.status in ["pending", "retrying", "dispatching"] else "danger"))) }}
+          {% if item.last_status %}
+          <div class="muted">{{ item.last_status }}</div>
+          {% endif %}
+        </td>
+        <td>{{ item.attempt_count }}/{{ item.max_attempts }}</td>
+        <td>{{ item.target_url }}</td>
+        <td>{{ item.last_attempt_at or "-" }}</td>
+        <td>{{ item.next_attempt_at or "-" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endcall %}
+{% endif %}
 
 {% if recent_jobs %}
 {% call ui.panel(t("Recent Jobs"), description=t("Use these IDs when wiring external dashboards or approval callbacks.")) %}
