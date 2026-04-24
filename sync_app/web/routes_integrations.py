@@ -29,6 +29,13 @@ def register_integration_routes(
             response.headers["WWW-Authenticate"] = "Bearer"
         return response
 
+    def _parse_limit(value: str | None, *, default: int, maximum: int) -> int | JSONResponse:
+        try:
+            parsed = int(value or default)
+        except (TypeError, ValueError):
+            return _json_error("Query parameter 'limit' must be an integer.", status_code=400)
+        return max(min(parsed, maximum), 1)
+
     def _authorize_integration_request(request: Request, org_id: str) -> str | JSONResponse:
         auth_result = get_web_services(request).integrations.authorize_api_request(
             org_id=org_id,
@@ -218,7 +225,9 @@ def register_integration_routes(
         authorized_org_id = _authorize_integration_request(request, org_id)
         if isinstance(authorized_org_id, JSONResponse):
             return authorized_org_id
-        limit = max(min(int(request.query_params.get("limit") or 20), 100), 1)
+        limit = _parse_limit(request.query_params.get("limit"), default=20, maximum=100)
+        if isinstance(limit, JSONResponse):
+            return limit
         status_filter = str(request.query_params.get("status") or "").strip().upper()
         return JSONResponse(
             get_web_services(request).integrations.build_jobs_api_payload(
@@ -246,7 +255,9 @@ def register_integration_routes(
         authorized_org_id = _authorize_integration_request(request, org_id)
         if isinstance(authorized_org_id, JSONResponse):
             return authorized_org_id
-        limit = max(min(int(request.query_params.get("limit") or 50), 200), 1)
+        limit = _parse_limit(request.query_params.get("limit"), default=50, maximum=200)
+        if isinstance(limit, JSONResponse):
+            return limit
         status_filter = str(request.query_params.get("status") or "open").strip()
         job_id_filter = str(request.query_params.get("job_id") or "").strip() or None
         return JSONResponse(

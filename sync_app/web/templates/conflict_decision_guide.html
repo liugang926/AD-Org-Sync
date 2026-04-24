@@ -2,7 +2,7 @@
 {% import "components/ui.html" as ui %}
 
 {% block content %}
-<div class="page-stack">
+<div class="page-stack decision-wizard">
   <div class="hero-header">
     <div>
       <a href="{{ return_url }}" class="back-link">&larr; {{ t("Back to Conflict Queue") }}</a>
@@ -11,43 +11,83 @@
     </div>
     <div class="hero-meta">
       {{ ui.badge(t(conflict.conflict_type), "warning") }}
+      {% if decision_guide.decision.bind_now.status %}
+      {{ ui.badge(t(decision_guide.decision.bind_now.status|capitalize), decision_guide.decision.bind_now.status) }}
+      {% endif %}
     </div>
   </div>
 
-  <div class="grid cols-2">
-    {% call ui.panel(t("Overview")) %}
-      <div class="detail-grid">
-        <div class="detail-item">
-          <div class="label">{{ t("Source User") }}</div>
-          <div class="value">{{ decision_guide.source_user.name or decision_guide.source_user.userid or "-" }}</div>
-        </div>
-        <div class="detail-item">
-          <div class="label">{{ t("Source User ID") }}</div>
-          <div class="value cell-mono">{{ decision_guide.source_user.userid or conflict.source_id or "-" }}</div>
-        </div>
-        <div class="detail-item">
-          <div class="label">{{ t("Selected AD Account") }}</div>
-          <div class="value cell-mono">{{ decision_guide.selected_target_username or "-" }}</div>
-        </div>
-        <div class="detail-item">
-          <div class="label">{{ t("Job ID") }}</div>
-          <div class="value"><a href="/jobs/{{ conflict.job_id }}">{{ conflict.job_id }}</a></div>
-        </div>
-      </div>
+  <section class="decision-wizard__hero">
+    <div class="decision-wizard__copy">
+      <div class="decision-wizard__eyebrow">{{ t("Identity Decision") }}</div>
+      <h2>{{ decision_guide.decision.bind_now.label }}</h2>
+      <p>{{ decision_guide.decision.bind_now.summary }}</p>
       {% if decision_guide.recommendation %}
       <div class="panel-note info">
         <strong>{{ t("Recommendation") }}:</strong> {{ decision_guide.recommendation.label or "-" }}
         <div class="muted">{{ decision_guide.recommendation.reason or "" }}</div>
       </div>
       {% endif %}
-      {% if decision_guide.shared_source_user_ids %}
-      <div class="panel-note warning">
-        <strong>{{ t("Related Source Users") }}:</strong> {{ decision_guide.shared_source_user_ids|join(", ") }}
+    </div>
+    <div class="decision-wizard__target-card">
+      <span>{{ t("Selected AD Account") }}</span>
+      <strong class="cell-mono">{{ decision_guide.selected_target_username or "-" }}</strong>
+      <div class="dense-meta">
+        <div>{{ t("Source User") }}: <strong>{{ decision_guide.source_user.name or decision_guide.source_user.userid or "-" }}</strong></div>
+        <div>{{ t("Source User ID") }}: <strong class="cell-mono">{{ decision_guide.source_user.userid or conflict.source_id or "-" }}</strong></div>
+        <div>{{ t("Job ID") }}: <a href="/jobs/{{ conflict.job_id }}">{{ conflict.job_id }}</a></div>
       </div>
+      {% if can("mappings.write") and decision_guide.selected_target_username %}
+      <form method="post" action="/conflicts/{{ conflict.id }}/resolve-binding">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="ad_username" value="{{ decision_guide.selected_target_username }}">
+        <input type="hidden" name="return_query" value="{{ return_query or '' }}">
+        <input type="hidden" name="return_status" value="{{ return_status or 'open' }}">
+        <input type="hidden" name="return_job_id" value="{{ return_job_id or conflict.job_id }}">
+        <div class="actions">
+          {{ ui.button(t("Bind This AD Account"), type="submit", icon="link", confirm_text=t("Bind this source user to the selected AD account? Review the account state and field updates before continuing.")) }}
+        </div>
+      </form>
       {% endif %}
-    {% endcall %}
+    </div>
+  </section>
 
-    {% call ui.panel(t("Source Routing")) %}
+  <section class="decision-steps" aria-label="{{ t('Decision Steps') }}">
+    <div class="decision-step is-complete">
+      <span>1</span>
+      <strong>{{ t("Source Identity") }}</strong>
+      <small>{{ decision_guide.source_user.email or decision_guide.source_user.userid or "-" }}</small>
+    </div>
+    <div class="decision-step is-complete">
+      <span>2</span>
+      <strong>{{ t("Candidate AD Accounts") }}</strong>
+      <small>{{ decision_guide.candidate_options|length }} {{ t("candidates") }}</small>
+    </div>
+    <div class="decision-step {% if decision_guide.target_account.exists %}is-complete{% else %}is-warning{% endif %}">
+      <span>3</span>
+      <strong>{{ t("Target Account State") }}</strong>
+      <small>{{ t("Found") if decision_guide.target_account.exists else t("Not found") }}</small>
+    </div>
+    <div class="decision-step is-complete">
+      <span>4</span>
+      <strong>{{ t("Sync Impact") }}</strong>
+      <small>{{ decision_guide.field_updates|length }} {{ t("fields") }}</small>
+    </div>
+    <div class="decision-step {% if decision_guide.decision.bind_now.will_conflict_continue %}is-warning{% else %}is-complete{% endif %}">
+      <span>5</span>
+      <strong>{{ t("Decision") }}</strong>
+      <small>{{ t("Conflict clears") if not decision_guide.decision.bind_now.will_conflict_continue else t("Needs caution") }}</small>
+    </div>
+  </section>
+
+  {% if decision_guide.shared_source_user_ids %}
+  <div class="panel-note warning">
+    <strong>{{ t("Related Source Users") }}:</strong> {{ decision_guide.shared_source_user_ids|join(", ") }}
+  </div>
+  {% endif %}
+
+  <div class="grid cols-2 decision-wizard__section-grid">
+    {% call ui.panel(t("Source Routing"), description=t("This explains why the selected source user lands on this connector, username, and OU.")) %}
       {% if decision_guide.routing_error %}
       <div class="panel-note warning">{{ decision_guide.routing_error }}</div>
       {% endif %}
@@ -78,42 +118,20 @@
         </div>
       </div>
     {% endcall %}
-  </div>
 
-  {% if decision_guide.candidate_options %}
-  {% call ui.panel(t("Candidate Accounts")) %}
-    <div class="actions">
-      {% for candidate in decision_guide.candidate_options %}
-      {{ ui.button(candidate.username, href="/conflicts/" ~ conflict.id ~ "/decision-guide?ad_username=" ~ (candidate.username|urlencode) ~ "&return_query=" ~ ((return_query or '')|urlencode) ~ "&return_status=" ~ ((return_status or 'open')|urlencode) ~ "&return_job_id=" ~ ((return_job_id or conflict.job_id)|urlencode), variant=("secondary" if candidate.is_selected else "ghost"), size="small") }}
-      {% endfor %}
-    </div>
-    {% for candidate in decision_guide.candidate_options %}
-    <div class="panel-note{% if candidate.is_selected %} info{% endif %}">
-      <strong>{{ candidate.username }}</strong>
-      {% if candidate.is_recommended %}{{ ui.badge(t("Recommended"), "info") }}{% endif %}
-      {% if candidate.rule %}<div class="muted">{{ t("Rule") }}: {{ candidate.rule }}</div>{% endif %}
-      {% if candidate.explanation %}<div class="muted">{{ candidate.explanation }}</div>{% endif %}
-    </div>
-    {% endfor %}
-  {% endcall %}
-  {% endif %}
-
-  <div class="grid cols-2">
-    {% call ui.panel(t("Target AD Account")) %}
+    {% call ui.panel(t("Target AD Account"), description=t("Use this state to decide whether binding to the existing AD object is safe.")) %}
       {% if decision_guide.target_account.exists %}
+      <div class="account-state-strip">
+        {% if decision_guide.target_account.enabled is sameas true %}
+        {{ ui.badge(t("Enabled"), "success") }}
+        {% elif decision_guide.target_account.enabled is sameas false %}
+        {{ ui.badge(t("Disabled"), "warning") }}
+        {% else %}
+        {{ ui.badge(t("Unknown"), "info") }}
+        {% endif %}
+        <span>{{ t("Last Logon") }}: {{ decision_guide.target_account.last_logon or "-" }}</span>
+      </div>
       <div class="detail-grid">
-        <div class="detail-item">
-          <div class="label">{{ t("Account Status") }}</div>
-          <div class="value">
-            {% if decision_guide.target_account.enabled is sameas true %}
-            {{ ui.badge(t("Enabled"), "success") }}
-            {% elif decision_guide.target_account.enabled is sameas false %}
-            {{ ui.badge(t("Disabled"), "warning") }}
-            {% else %}
-            {{ ui.badge(t("Unknown"), "info") }}
-            {% endif %}
-          </div>
-        </div>
         <div class="detail-item">
           <div class="label">{{ t("Display Name") }}</div>
           <div class="value">{{ decision_guide.target_account.display_name or "-" }}</div>
@@ -125,10 +143,6 @@
         <div class="detail-item">
           <div class="label">{{ t("Title") }}</div>
           <div class="value">{{ decision_guide.target_account.title or "-" }}</div>
-        </div>
-        <div class="detail-item">
-          <div class="label">{{ t("Last Logon") }}</div>
-          <div class="value">{{ decision_guide.target_account.last_logon or "-" }}</div>
         </div>
         <div class="detail-item">
           <div class="label">{{ t("OU") }}</div>
@@ -153,11 +167,36 @@
       </div>
       {% endif %}
     {% endcall %}
+  </div>
 
-    {% call ui.panel(t("If You Bind This Account")) %}
+  {% if decision_guide.candidate_options %}
+  {% call ui.panel(t("Candidate AD Accounts"), description=t("Choose the account whose state and impact match the real employee identity.")) %}
+    <div class="candidate-grid">
+      {% for candidate in decision_guide.candidate_options %}
+      <article class="candidate-card {% if candidate.is_selected %}is-selected{% endif %}">
+        <div class="candidate-card__header">
+          <strong class="cell-mono">{{ candidate.username }}</strong>
+          <div class="actions flush-top">
+            {% if candidate.is_recommended %}{{ ui.badge(t("Recommended"), "info") }}{% endif %}
+            {% if candidate.is_selected %}{{ ui.badge(t("Selected"), "success") }}{% endif %}
+          </div>
+        </div>
+        {% if candidate.rule %}<div class="muted">{{ t("Rule") }}: {{ candidate.rule }}</div>{% endif %}
+        {% if candidate.explanation %}<p>{{ candidate.explanation }}</p>{% endif %}
+        {% if not candidate.is_selected %}
+        {{ ui.button(t("Review This Account"), href="/conflicts/" ~ conflict.id ~ "/decision-guide?ad_username=" ~ (candidate.username|urlencode) ~ "&return_query=" ~ ((return_query or '')|urlencode) ~ "&return_status=" ~ ((return_status or 'open')|urlencode) ~ "&return_job_id=" ~ ((return_job_id or conflict.job_id)|urlencode), variant="ghost", size="small") }}
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  {% endcall %}
+  {% endif %}
+
+  <div class="outcome-grid">
+    <section class="outcome-card outcome-card--{{ decision_guide.decision.bind_now.status }}">
       <div class="section-header">
         <div class="section-header__copy">
-          <h3 class="section-header__title">{{ decision_guide.decision.bind_now.label }}</h3>
+          <h3 class="section-header__title">{{ t("If You Bind This Account") }}</h3>
           <p class="section-header__description">{{ decision_guide.decision.bind_now.summary }}</p>
         </div>
         {{ ui.badge(t(decision_guide.decision.bind_now.status|capitalize), decision_guide.decision.bind_now.status) }}
@@ -179,12 +218,14 @@
       {% if decision_guide.field_updates %}
       <div class="stack-tight">
         <div class="cell-strong">{{ t("Expected AD Field Updates") }}</div>
-        {% for field in decision_guide.field_updates %}
-        <div class="panel-note info">
-          <strong>{{ field.name }}</strong>
-          <div class="muted">{{ field.source }}</div>
+        <div class="field-update-list">
+          {% for field in decision_guide.field_updates %}
+          <div class="field-update-item">
+            <strong>{{ field.name }}</strong>
+            <span>{{ field.source }}</span>
+          </div>
+          {% endfor %}
         </div>
-        {% endfor %}
       </div>
       {% endif %}
       {% if decision_guide.decision.bind_now.notes %}
@@ -194,46 +235,34 @@
         {% endfor %}
       </div>
       {% endif %}
-      {% if can("mappings.write") and decision_guide.selected_target_username %}
-      <form method="post" action="/conflicts/{{ conflict.id }}/resolve-binding">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="ad_username" value="{{ decision_guide.selected_target_username }}">
-        <input type="hidden" name="return_query" value="{{ return_query or '' }}">
-        <input type="hidden" name="return_status" value="{{ return_status or 'open' }}">
-        <input type="hidden" name="return_job_id" value="{{ return_job_id or conflict.job_id }}">
-        <div class="actions">
-          {{ ui.button(t("Bind This AD Account"), type="submit") }}
-        </div>
-      </form>
-      {% endif %}
-    {% endcall %}
-  </div>
+    </section>
 
-  {% call ui.panel(t("If You Do Not Bind")) %}
-    <div class="section-header">
-      <div class="section-header__copy">
-        <h3 class="section-header__title">{{ t("Current Conflict Outcome") }}</h3>
-        <p class="section-header__description">{{ decision_guide.decision.without_binding.summary }}</p>
+    <section class="outcome-card outcome-card--{{ decision_guide.decision.without_binding.status }}">
+      <div class="section-header">
+        <div class="section-header__copy">
+          <h3 class="section-header__title">{{ t("If You Do Not Bind") }}</h3>
+          <p class="section-header__description">{{ decision_guide.decision.without_binding.summary }}</p>
+        </div>
+        {{ ui.badge(t(decision_guide.decision.without_binding.status|capitalize), decision_guide.decision.without_binding.status) }}
       </div>
-      {{ ui.badge(t(decision_guide.decision.without_binding.status|capitalize), decision_guide.decision.without_binding.status) }}
-    </div>
-    <div class="detail-grid">
-      <div class="detail-item">
-        <div class="label">{{ t("Create New Account") }}</div>
-        <div class="value">{{ t("Yes") if decision_guide.decision.without_binding.will_create_new_account else t("No") }}</div>
+      <div class="detail-grid">
+        <div class="detail-item">
+          <div class="label">{{ t("Create New Account") }}</div>
+          <div class="value">{{ t("Yes") if decision_guide.decision.without_binding.will_create_new_account else t("No") }}</div>
+        </div>
+        <div class="detail-item">
+          <div class="label">{{ t("Conflict Continues") }}</div>
+          <div class="value">{{ t("Yes") if decision_guide.decision.without_binding.will_conflict_continue else t("No") }}</div>
+        </div>
       </div>
-      <div class="detail-item">
-        <div class="label">{{ t("Conflict Continues") }}</div>
-        <div class="value">{{ t("Yes") if decision_guide.decision.without_binding.will_conflict_continue else t("No") }}</div>
+      {% if decision_guide.decision.without_binding.notes %}
+      <div class="stack-tight">
+        {% for note in decision_guide.decision.without_binding.notes %}
+        <div class="panel-note warning">{{ note }}</div>
+        {% endfor %}
       </div>
-    </div>
-    {% if decision_guide.decision.without_binding.notes %}
-    <div class="stack-tight">
-      {% for note in decision_guide.decision.without_binding.notes %}
-      <div class="panel-note warning">{{ note }}</div>
-      {% endfor %}
-    </div>
-    {% endif %}
-  {% endcall %}
+      {% endif %}
+    </section>
+  </div>
 </div>
 {% endblock %}

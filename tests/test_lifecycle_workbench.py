@@ -223,6 +223,61 @@ class LifecycleWorkbenchTests(unittest.TestCase):
             datetime.fromisoformat(record.effective_at),
         )
 
+    def test_contractor_approve_reschedules_future_expiry_to_now_and_enqueues_replay(self):
+        with TemporaryDirectory() as temp_dir:
+            db_manager = self._build_db(temp_dir)
+            now = datetime.now(timezone.utc)
+            lifecycle_repo = UserLifecycleQueueRepository(db_manager)
+            replay_repo = SyncReplayRequestRepository(db_manager)
+            lifecycle_repo.upsert_pending(
+                lifecycle_type="contractor_expiry",
+                connector_id="default",
+                source_user_id="contract-approve",
+                ad_username="contract.approve",
+                effective_at=(now + timedelta(days=7)).isoformat(timespec="seconds"),
+                org_id="default",
+                reason="Admin approved early contract expiry",
+                employment_type="contractor",
+                sponsor_userid="sponsor.contract",
+            )
+            record = lifecycle_repo.get_record_for_source_user(
+                lifecycle_type="contractor_expiry",
+                connector_id="default",
+                source_user_id="contract-approve",
+                org_id="default",
+            )
+            self.assertIsNotNone(record)
+
+            result = apply_lifecycle_bulk_action(
+                db_manager,
+                "default",
+                actor_username="tester",
+                lifecycle_type="contractor_expiry",
+                action="approve",
+                record_ids=[record.id],
+            )
+            updated_record = lifecycle_repo.get_record_for_source_user(
+                lifecycle_type="contractor_expiry",
+                connector_id="default",
+                source_user_id="contract-approve",
+                org_id="default",
+            )
+            pending_replay_requests = replay_repo.list_request_records(
+                status="pending",
+                org_id="default",
+                limit=10,
+            )
+
+        self.assertEqual(result["processed_count"], 1)
+        self.assertEqual(result["replay_request_count"], 1)
+        self.assertIsNotNone(updated_record)
+        self.assertLessEqual(
+            datetime.fromisoformat(updated_record.effective_at),
+            datetime.now(timezone.utc) + timedelta(seconds=5),
+        )
+        self.assertEqual(updated_record.payload["previous_effective_at"], record.effective_at)
+        self.assertEqual(len(pending_replay_requests), 1)
+
     def test_replay_retry_supersedes_existing_request(self):
         with TemporaryDirectory() as temp_dir:
             db_manager = self._build_db(temp_dir)

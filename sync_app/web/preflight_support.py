@@ -14,7 +14,7 @@ from sync_app.core.config import (
 )
 from sync_app.core.models import AppConfig, OrganizationRecord
 from sync_app.providers.source import get_source_provider_schema
-from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
+from sync_app.web.app_state import get_web_repositories, get_web_runtime_state, get_web_services
 from sync_app.web.dashboard_state import (
     build_getting_started_data as build_getting_started_view_state,
     count_check_statuses,
@@ -335,6 +335,112 @@ class DashboardSupport:
             include_live=include_live,
         )
 
+    @staticmethod
+    def _build_control_tower_blockers(
+        *,
+        preflight_snapshot: dict[str, Any],
+        job_center_summary: dict[str, Any],
+        sync_runner_error: str | None,
+    ) -> list[dict[str, Any]]:
+        blockers: list[dict[str, Any]] = []
+        if sync_runner_error:
+            blockers.append(
+                {
+                    "level": "error",
+                    "title": "Background runner error",
+                    "detail": "Last background execution error: {error}",
+                    "detail_params": {"error": sync_runner_error},
+                    "action_url": "/jobs",
+                    "action_label": "Open Job Center",
+                }
+            )
+
+        for reason in list(job_center_summary.get("blocked_reasons") or [])[:4]:
+            next_url = str(job_center_summary.get("next_action_url") or "/jobs")
+            blockers.append(
+                {
+                    "level": str(job_center_summary.get("overall_status") or "warning"),
+                    "title": "Apply gate blocker",
+                    "detail": str(reason),
+                    "action_url": next_url,
+                    "action_label": str(job_center_summary.get("next_action_label") or "Review"),
+                }
+            )
+
+        existing_details = {str(item.get("detail") or "") for item in blockers}
+        for check in list(preflight_snapshot.get("checks") or []):
+            status = str(check.get("status") or "")
+            if status not in {"error", "warning"}:
+                continue
+            detail = str(check.get("detail") or "")
+            if detail in existing_details:
+                continue
+            blockers.append(
+                {
+                    "level": status,
+                    "title": str(check.get("label") or "Preflight check"),
+                    "title_params": dict(check.get("label_params") or {}),
+                    "detail": detail,
+                    "detail_params": dict(check.get("detail_params") or {}),
+                    "action_url": str(check.get("action_url") or "/dashboard"),
+                    "action_label": "Review",
+                }
+            )
+            existing_details.add(detail)
+            if len(blockers) >= 6:
+                break
+        return blockers
+
+    @staticmethod
+    def _build_control_tower_timeline(
+        *,
+        recent_jobs: list[Any],
+        active_job: Any | None,
+        preflight_snapshot: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        timeline: list[dict[str, Any]] = []
+        if active_job is not None:
+            timeline.append(
+                {
+                    "level": "info",
+                    "title": "Active synchronization job",
+                    "detail": str(getattr(active_job, "job_id", "") or "-"),
+                    "meta": str(getattr(active_job, "status", "") or ""),
+                    "href": f"/jobs/{getattr(active_job, 'job_id', '')}",
+                }
+            )
+
+        if preflight_snapshot.get("live_ran_at"):
+            timeline.append(
+                {
+                    "level": str(preflight_snapshot.get("overall_status") or "info"),
+                    "title": "Live preflight completed",
+                    "detail": str(preflight_snapshot.get("live_ran_at") or ""),
+                    "meta": str(preflight_snapshot.get("overall_status") or ""),
+                    "href": "/dashboard#preflight",
+                }
+            )
+
+        for job in recent_jobs[:5]:
+            mode = str(getattr(job, "execution_mode", "") or "")
+            status = str(getattr(job, "status", "") or "")
+            timeline.append(
+                {
+                    "level": (
+                        "success"
+                        if status.upper() == "COMPLETED"
+                        else ("error" if status.upper() == "FAILED" else "warning")
+                    ),
+                    "title": "Dry run completed" if mode == "dry_run" else "Apply run completed",
+                    "detail": str(getattr(job, "job_id", "") or "-"),
+                    "meta": status,
+                    "href": f"/jobs/{getattr(job, 'job_id', '')}",
+                }
+            )
+            if len(timeline) >= 6:
+                break
+        return timeline
+
     def build_dashboard_data(self, request: Request) -> dict[str, Any]:
         current_org = self.request_support.get_current_org(request)
         repositories = get_web_repositories(request)
@@ -368,10 +474,27 @@ class DashboardSupport:
                 security_warnings=security_warnings,
             ),
         )
+        services = get_web_services(request)
+        job_center_summary = services.jobs.build_job_center_summary(
+            org_id=current_org.org_id,
+            preflight_summary=preflight_snapshot,
+        )
         open_conflicts_count = int(preflight_snapshot.get("open_conflict_count") or 0)
+        control_tower_blockers = self._build_control_tower_blockers(
+            preflight_snapshot=preflight_snapshot,
+            job_center_summary=job_center_summary,
+            sync_runner_error=runtime_state.sync_runner.last_error,
+        )
         return {
             "active_job": active_job,
             "recent_jobs": recent_jobs,
+            "job_center_summary": job_center_summary,
+            "control_tower_blockers": control_tower_blockers,
+            "control_tower_timeline": self._build_control_tower_timeline(
+                recent_jobs=recent_jobs,
+                active_job=active_job,
+                preflight_snapshot=preflight_snapshot,
+            ),
             "current_org": current_org,
             "current_org_connector_count": repositories.connector_repo.count_connectors(org_id=current_org.org_id),
             "current_org_job_count": repositories.job_repo.count_jobs(org_id=current_org.org_id),

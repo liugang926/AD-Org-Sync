@@ -48,9 +48,72 @@
   }
 
   function initConfirmationPrompts() {
+    const dialog = document.querySelector("[data-confirm-dialog]");
+    const messageTarget = dialog?.querySelector("[data-confirm-message-target]");
+    const approveButton = dialog?.querySelector("[data-confirm-approve]");
+    const cancelButtons = dialog ? Array.from(dialog.querySelectorAll("[data-confirm-cancel]")) : [];
+    let pendingElement = null;
+
+    const closeDialog = () => {
+      if (!(dialog instanceof HTMLElement)) {
+        return;
+      }
+      dialog.hidden = true;
+      document.body?.classList.remove("confirm-dialog-open");
+      pendingElement = null;
+    };
+
+    const runConfirmedAction = () => {
+      const element = pendingElement;
+      closeDialog();
+      if (!(element instanceof HTMLElement)) {
+        return;
+      }
+      if (element.tagName === "A") {
+        const href = element.getAttribute("href");
+        if (href) {
+          window.location.href = href;
+        }
+        return;
+      }
+      if (element.tagName === "BUTTON" && element.getAttribute("type") === "submit") {
+        setLoading(element);
+        element.closest("form")?.requestSubmit(element);
+        return;
+      }
+      element.click();
+    };
+
+    if (approveButton instanceof HTMLElement) {
+      approveButton.addEventListener("click", runConfirmedAction);
+    }
+    cancelButtons.forEach((button) => {
+      button.addEventListener("click", closeDialog);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && dialog instanceof HTMLElement && !dialog.hidden) {
+        closeDialog();
+      }
+    });
+
     document.querySelectorAll("button[data-confirm], a[data-confirm]").forEach((element) => {
       element.addEventListener("click", (event) => {
         const message = element.getAttribute("data-confirm") || defaultConfirmMessage();
+        if (dialog instanceof HTMLElement && messageTarget instanceof HTMLElement) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          pendingElement = element;
+          messageTarget.textContent = message;
+          dialog.hidden = false;
+          document.body?.classList.add("confirm-dialog-open");
+          if (window.lucide) {
+            window.lucide.createIcons();
+          }
+          if (approveButton instanceof HTMLElement) {
+            approveButton.focus();
+          }
+          return;
+        }
         if (!window.confirm(message)) {
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -60,6 +123,24 @@
           setLoading(element);
         }
       });
+    });
+  }
+
+  function initSelectionSummaries() {
+    document.querySelectorAll("[data-selection-scope]").forEach((scope) => {
+      const update = () => {
+        const checkedCount = scope.querySelectorAll("input[type='checkbox']:checked").length;
+        scope.querySelectorAll("[data-selection-count]").forEach((target) => {
+          target.textContent = String(checkedCount);
+        });
+        scope.querySelectorAll("[data-selection-has-items]").forEach((target) => {
+          target.classList.toggle("is-active", checkedCount > 0);
+        });
+      };
+      scope.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
+        checkbox.addEventListener("change", update);
+      });
+      update();
     });
   }
 
@@ -214,6 +295,7 @@
     initIcons();
     initAutoSubmit();
     initConfirmationPrompts();
+    initSelectionSummaries();
     initFormLoading();
     initFlashMessages();
     initSidebarActiveState();

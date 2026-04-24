@@ -3,7 +3,8 @@
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Job Center"), t("Use this page to run the next dry run, inspect the latest results, and decide whether the organization is ready for apply."), eyebrow=t("Execution"), badge_text=(current_org.name if current_org else "-"), badge_level="info") %}
+  {% set apply_blocked = (job_center_summary.blocked_reasons|length > 0) or active_job %}
+  {% call ui.page_header(t("Run Review"), t("Review the latest dry run, understand what changed, and only apply when the safety gate is green."), eyebrow=t("Execution"), badge_text=(current_org.name if current_org else "-"), badge_level="info") %}
     <div class="surface-inline">
       {% if active_job %}
       {{ ui.badge(t("Active"), "info") }}
@@ -15,19 +16,79 @@
     </div>
   {% endcall %}
 
-  {% call ui.panel(t("Execution Readiness And Impact Preview"), description=t("This summary combines rollout preflight checks with the latest dry run so administrators can see whether apply is safe to continue.")) %}
-    <div class="surface-inline">
-      {{ ui.badge(t(job_center_summary.overall_label), job_center_summary.overall_status) }}
-      <span class="muted">{{ t("Next step") }}:</span>
-      <a href="{{ job_center_summary.next_action_url }}">{{ t(job_center_summary.next_action_label) }}</a>
+  <section class="run-review run-review--{{ job_center_summary.overall_status }}">
+    <div class="run-review__layout">
+      <div class="run-review__gate">
+        <div class="run-review__eyebrow">{{ t("Execution Readiness And Impact Preview") }}</div>
+        <h2>{{ t(job_center_summary.overall_label) }}</h2>
+        <p>
+          {% if job_center_summary.blocked_reasons %}
+          {{ t(job_center_summary.blocked_reasons[0]) }}
+          {% else %}
+          {{ t("The current dry run and preflight state are ready for the next controlled apply.") }}
+          {% endif %}
+        </p>
+        <div class="actions flush-top">
+          {% if can("jobs.run") %}
+          <form class="inline" method="post" action="/jobs/run">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="mode" value="dry_run">
+            {{ ui.button(t("Run Dry Run"), type="submit") }}
+          </form>
+          <form class="inline" method="post" action="/jobs/run">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="mode" value="apply">
+            {{ ui.button(t("Run Apply"), type="submit", variant="success", disabled=apply_blocked, confirm_text=t("Are you sure you want to perform this action?")) }}
+          </form>
+          {% endif %}
+          {{ ui.button(t(job_center_summary.next_action_label), href=job_center_summary.next_action_url, variant="secondary") }}
+        </div>
+      </div>
+
+      <div class="decision-rail">
+        <div class="decision-rail__label">{{ t("Apply Gate") }}</div>
+        {{ ui.badge(t(job_center_summary.overall_label), job_center_summary.overall_status) }}
+        <div class="decision-rail__meta">
+          <span>{{ t("Review Gate") }}</span>
+          {% if job_center_summary.review_required %}
+            {% if job_center_summary.review_record and job_center_summary.review_record.status == "approved" %}
+            <strong>{{ t("Approved") }}</strong>
+            {% else %}
+            <strong>{{ t("Pending") }}</strong>
+            {% endif %}
+          {% else %}
+          <strong>{{ t("Not Required") }}</strong>
+          {% endif %}
+        </div>
+      </div>
     </div>
 
-    <div class="compact-stats">
-      {{ ui.compact_stat(t("Preflight Success"), job_center_summary.preflight_summary.status_counts.success, detail=t("{warning} warnings / {error} errors", warning=job_center_summary.preflight_summary.status_counts.warning, error=job_center_summary.preflight_summary.status_counts.error)) }}
-      {{ ui.compact_stat(t("Open Conflicts"), job_center_summary.preflight_summary.open_conflict_count) }}
-      {{ ui.compact_stat(t("Planned Changes"), job_center_summary.impact_preview.planned_operation_count, detail=(job_center_summary.impact_preview.job_id or t("No dry run yet"))) }}
-      {{ ui.compact_stat(t("High-Risk Changes"), job_center_summary.impact_preview.high_risk_operation_count, detail=(t("Review required") if job_center_summary.review_required else t("No approval gate"))) }}
-      {{ ui.compact_stat(t("Dry Run Errors"), job_center_summary.impact_preview.error_count) }}
+    <div class="impact-grid">
+      <div class="impact-card">
+        <span>{{ t("Preflight Success") }}</span>
+        <strong>{{ job_center_summary.preflight_summary.status_counts.success }}</strong>
+        <small>{{ t("{warning} warnings / {error} errors", warning=job_center_summary.preflight_summary.status_counts.warning, error=job_center_summary.preflight_summary.status_counts.error) }}</small>
+      </div>
+      <div class="impact-card">
+        <span>{{ t("Open Conflicts") }}</span>
+        <strong>{{ job_center_summary.preflight_summary.open_conflict_count }}</strong>
+        <small>{{ t("Must be zero before unattended apply.") }}</small>
+      </div>
+      <div class="impact-card">
+        <span>{{ t("Planned Changes") }}</span>
+        <strong>{{ job_center_summary.impact_preview.planned_operation_count }}</strong>
+        <small>{{ job_center_summary.impact_preview.job_id or t("No dry run yet") }}</small>
+      </div>
+      <div class="impact-card">
+        <span>{{ t("High-Risk Changes") }}</span>
+        <strong>{{ job_center_summary.impact_preview.high_risk_operation_count }}</strong>
+        <small>{{ t("Review required") if job_center_summary.review_required else t("No approval gate") }}</small>
+      </div>
+      <div class="impact-card">
+        <span>{{ t("Dry Run Errors") }}</span>
+        <strong>{{ job_center_summary.impact_preview.error_count }}</strong>
+        <small>{{ t("Errors keep apply blocked.") }}</small>
+      </div>
     </div>
 
     <div class="detail-grid">
@@ -92,19 +153,19 @@
     </div>
 
     {% if job_center_summary.blocked_reasons %}
-    <div class="check-list">
+    <div class="blocker-list">
       {% for reason in job_center_summary.blocked_reasons %}
-      <div class="check-item">
-        <div class="check-item__header">
-          <h3 class="check-item__title">{{ t("Action Required") }}</h3>
-          {{ ui.badge(t(job_center_summary.overall_label), job_center_summary.overall_status) }}
+      <article class="blocker-item blocker-item--{{ job_center_summary.overall_status }}">
+        <div>
+          <div class="blocker-item__title">{{ t("Action Required") }}</div>
+          <p class="blocker-item__detail">{{ t(reason) }}</p>
         </div>
-        <p class="check-item__detail">{{ t(reason) }}</p>
-      </div>
+        <a href="{{ job_center_summary.next_action_url }}">{{ t(job_center_summary.next_action_label) }}</a>
+      </article>
       {% endfor %}
     </div>
     {% endif %}
-  {% endcall %}
+  </section>
 
   {% call ui.panel(t("Job Center"), description=t("Manually trigger a dry run or an apply sync. Only one synchronization job can run at a time. High-risk actions must first go through a dry run and review before apply execution is allowed.")) %}
     <div class="actions">
@@ -117,7 +178,7 @@
       <form class="inline" method="post" action="/jobs/run">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="mode" value="apply">
-        {{ ui.button(t("Run Apply"), type="submit", variant="success", confirm_text=t("Are you sure you want to perform this action?")) }}
+        {{ ui.button(t("Run Apply"), type="submit", variant="success", disabled=apply_blocked, confirm_text=t("Are you sure you want to perform this action?")) }}
       </form>
       {% endif %}
       {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
@@ -141,6 +202,12 @@
     {% if sync_runner_error %}
     <div class="panel-note error">
       {{ t("Last background execution error: {error}", error=sync_runner_error) }}
+    </div>
+    {% endif %}
+
+    {% if apply_blocked %}
+    <div class="panel-note warning">
+      {{ t("Apply is disabled until the gate is green. Use the next best action above to clear the current blocker.") }}
     </div>
     {% endif %}
   {% endcall %}

@@ -11,6 +11,32 @@
     {% endif %}
   {% endcall %}
 
+  <section class="release-pipeline">
+    <div>
+      <div class="decision-wizard__eyebrow">{{ t("Release Pipeline") }}</div>
+      <h2>{{ t("Promote configuration with snapshots, diffs, and rollback points.") }}</h2>
+      <p>{{ t("Treat every production configuration change as a release: publish the baseline, compare drift, and keep a tested rollback path.") }}</p>
+    </div>
+    <div class="release-pipeline__steps">
+      <div class="release-step is-complete">
+        <span>{{ t("Live") }}</span>
+        <strong>{{ current_org.name }}</strong>
+      </div>
+      <div class="release-step {% if latest_snapshot %}is-complete{% else %}is-warning{% endif %}">
+        <span>{{ t("Snapshot") }}</span>
+        <strong>{{ latest_snapshot_title or t("None") }}</strong>
+      </div>
+      <div class="release-step {% if comparison_diff.changed %}is-warning{% else %}is-complete{% endif %}">
+        <span>{{ t("Compare") }}</span>
+        <strong>{{ comparison_diff.changed_item_count }}</strong>
+      </div>
+      <div class="release-step">
+        <span>{{ t("Rollback") }}</span>
+        <strong>{{ t("Available") if snapshot_count else t("Not ready") }}</strong>
+      </div>
+    </div>
+  </section>
+
   {% call ui.helper_block(t("Promotion Path"), t("Release snapshots are scoped to the current organization. Use the organization bundle import and export flow when you want to promote settings between test and production organizations."), "info", t("Bundle Flow")) %}
     <div class="actions">
       {% if can("organizations.manage") %}

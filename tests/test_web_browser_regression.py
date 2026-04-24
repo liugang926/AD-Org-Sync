@@ -4,11 +4,21 @@ import threading
 import time
 import unittest
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import uvicorn
 
-from sync_app.storage.local_db import DatabaseManager, OrganizationRepository, WebAdminUserRepository
+from sync_app.storage.local_db import (
+    DatabaseManager,
+    OffboardingQueueRepository,
+    OrganizationRepository,
+    SyncConflictRepository,
+    SyncJobRepository,
+    SyncReplayRequestRepository,
+    UserLifecycleQueueRepository,
+    WebAdminUserRepository,
+)
 from sync_app.web.app import create_app
 from sync_app.web.security import hash_password
 
@@ -165,6 +175,11 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertNotEqual(self._style(".mode-switcher button.active", "color"), "rgb(255, 255, 255)")
         self.assertNotEqual(self._style(".language-switcher a.active", "color"), "rgb(255, 255, 255)")
         self.assertNotEqual(self._style(".header-signout", "border-top-color"), "rgba(0, 0, 0, 0)")
+        self.assertTrue(self.page.locator(".control-tower").is_visible())
+        self.assertTrue(self.page.locator(".control-gate-card").is_visible())
+        gate_box = self.page.locator(".control-gate-card").bounding_box()
+        self.assertIsNotNone(gate_box)
+        self.assertGreater(float(gate_box["x"]), 300.0)
         self._capture("dashboard-page.png")
 
     def test_config_page_renders_multi_provider_schema_controls(self):
@@ -282,8 +297,11 @@ class WebBrowserRegressionTests(unittest.TestCase):
     def test_jobs_empty_state_actions_remain_visually_consistent(self):
         self._login()
         self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
+        self.assertTrue(self.page.locator(".run-review").is_visible())
+        self.assertIn("execution readiness and impact preview", self.page.locator(".run-review").inner_text().lower())
         dry_run_button = self.page.locator("button:has-text('Run Dry Run')").first
         apply_button = self.page.locator("button:has-text('Run Apply')").first
+        self.assertTrue(apply_button.is_disabled())
         dry_run_box = dry_run_button.bounding_box()
         apply_box = apply_button.bounding_box()
         self.assertIsNotNone(dry_run_box)
@@ -300,6 +318,155 @@ class WebBrowserRegressionTests(unittest.TestCase):
         for height in heights[1:]:
             self.assertLessEqual(abs(first_height - float(height)), 6.0)
         self._capture("jobs-page.png")
+
+    def test_z_job_detail_prioritizes_run_review_summary(self):
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        job_repo = SyncJobRepository(manager)
+        job_repo.create_job(
+            "browser-job-detail-001",
+            trigger_type="browser_regression",
+            execution_mode="dry_run",
+            status="COMPLETED",
+            org_id="default",
+        )
+        job_repo.update_job(
+            "browser-job-detail-001",
+            planned_operation_count=7,
+            executed_operation_count=0,
+            error_count=0,
+            summary={
+                "planned_operation_count": 7,
+                "high_risk_operation_count": 2,
+                "conflict_count": 1,
+            },
+        )
+
+        self._login()
+        self.page.goto(f"{self.base_url}/jobs/browser-job-detail-001", wait_until="networkidle")
+        self.assertTrue(self.page.locator(".job-review-hero").is_visible())
+        hero_text = self.page.locator(".job-review-hero").inner_text()
+        self.assertIn("high risk", hero_text.lower())
+        self.assertIn("conflicts", hero_text.lower())
+        self.assertIn("browser-job-detail-001", hero_text)
+        self._capture("job-detail-page.png")
+
+    def test_z_conflict_queue_and_decision_wizard_use_decision_surfaces(self):
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        job_repo = SyncJobRepository(manager)
+        conflict_repo = SyncConflictRepository(manager)
+        job_repo.create_job(
+            "browser-conflict-001",
+            trigger_type="browser_regression",
+            execution_mode="dry_run",
+            status="COMPLETED",
+            org_id="default",
+        )
+        conflict_id = conflict_repo.add_conflict(
+            job_id="browser-conflict-001",
+            conflict_type="multiple_ad_candidates",
+            source_id="browser-alice",
+            target_key="identity_binding",
+            message="browser-alice matched multiple AD candidates",
+            resolution_hint="create manual binding",
+            details={
+                "userid": "browser-alice",
+                "candidates": [
+                    {"rule": "existing_ad_userid", "username": "browser-alice"},
+                    {"rule": "existing_ad_email_localpart", "username": "browser.alice"},
+                ],
+            },
+        )
+
+        self._login()
+        self.page.goto(f"{self.base_url}/conflicts?job_id=browser-conflict-001", wait_until="networkidle")
+        self.assertTrue(self.page.locator(".conflict-command-center").is_visible())
+        self.assertTrue(self.page.locator(".bulk-action-bar").is_visible())
+        self.assertGreaterEqual(self.page.locator(".conflict-card").count(), 1)
+        self.assertIn("Resolve identity ambiguity before Apply.", self.page.locator("body").inner_text())
+        self._capture("conflict-queue-page.png")
+
+        self.page.goto(f"{self.base_url}/conflicts/{conflict_id}/decision-guide", wait_until="networkidle")
+        self.assertTrue(self.page.locator(".decision-wizard").is_visible())
+        self.assertEqual(self.page.locator(".decision-step").count(), 5)
+        self.assertTrue(self.page.locator(".outcome-card").first.is_visible())
+        self.assertIn("If You Bind This Account", self.page.locator("body").inner_text())
+        self._capture("conflict-decision-page.png")
+
+    def test_z_lifecycle_workbench_uses_four_lane_board(self):
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        now = datetime.now(timezone.utc)
+        offboarding_repo = OffboardingQueueRepository(manager)
+        lifecycle_repo = UserLifecycleQueueRepository(manager)
+        replay_repo = SyncReplayRequestRepository(manager)
+        lifecycle_repo.upsert_pending(
+            lifecycle_type="future_onboarding",
+            connector_id="default",
+            source_user_id="browser-newhire",
+            ad_username="browser.newhire",
+            effective_at=(now + timedelta(days=3)).isoformat(timespec="seconds"),
+            org_id="default",
+            reason="future start date",
+            sponsor_userid="sponsor.browser",
+            manager_userids=["manager.browser"],
+        )
+        lifecycle_repo.upsert_pending(
+            lifecycle_type="contractor_expiry",
+            connector_id="default",
+            source_user_id="browser-contractor",
+            ad_username="browser.contractor",
+            effective_at=(now - timedelta(hours=3)).isoformat(timespec="seconds"),
+            org_id="default",
+            reason="contract expired",
+            employment_type="contractor",
+            sponsor_userid="sponsor.browser",
+        )
+        offboarding_repo.upsert_pending(
+            connector_id="default",
+            source_user_id="browser-offboard",
+            ad_username="browser.offboard",
+            due_at=(now - timedelta(hours=2)).isoformat(timespec="seconds"),
+            org_id="default",
+            reason="source account missing",
+            manager_userids=["manager.browser"],
+        )
+        replay_repo.enqueue_request(
+            request_type="browser_replay",
+            execution_mode="apply",
+            requested_by="browser",
+            target_scope="source_user",
+            target_id="browser-offboard",
+            trigger_reason="browser_regression",
+            org_id="default",
+        )
+
+        self._login()
+        self.page.goto(f"{self.base_url}/lifecycle", wait_until="networkidle")
+        self.assertTrue(self.page.locator(".lifecycle-command-center").is_visible())
+        self.assertEqual(self.page.locator(".lifecycle-lane").count(), 4)
+        self.assertIn("daily operations board", self.page.locator("body").inner_text().lower())
+        self.assertIn("browser-contractor", self.page.locator("body").inner_text())
+        self._capture("lifecycle-workbench-page.png")
+
+    def test_z_phase3_operating_pages_render_shells(self):
+        self._login()
+
+        self.page.goto(f"{self.base_url}/data-quality", wait_until="networkidle")
+        self.assertTrue(self.page.locator(".quality-ops-hero").is_visible())
+        self.assertIn("quality operations", self.page.locator("body").inner_text().lower())
+        self._capture("data-quality-page.png")
+
+        self.page.goto(f"{self.base_url}/config/releases", wait_until="networkidle")
+        self.assertTrue(self.page.locator(".release-pipeline").is_visible())
+        self.assertIn("release pipeline", self.page.locator("body").inner_text().lower())
+        self._capture("config-release-page.png")
+
+        self.page.goto(f"{self.base_url}/integrations", wait_until="networkidle")
+        self.assertTrue(self.page.locator(".integration-portal-hero").is_visible())
+        self.assertIn("integration portal", self.page.locator("body").inner_text().lower())
+        self._capture("integration-center-page.png")
 
     def test_mappings_page_uses_search_selectors_instead_of_manual_ids(self):
         self._login()

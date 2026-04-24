@@ -61,14 +61,14 @@ class WebJobService:
     def _is_successful_dry_run(cls, job: Any) -> bool:
         return (
             str(getattr(job, "execution_mode", "") or "").strip().lower() == "dry_run"
-            and cls._normalize_job_status(getattr(job, "status", "")) in {"COMPLETED", "COMPLETED_WITH_ERRORS"}
+            and cls._normalize_job_status(getattr(job, "status", "")) == "COMPLETED"
         )
 
     @classmethod
     def _is_successful_apply(cls, job: Any) -> bool:
         return (
             str(getattr(job, "execution_mode", "") or "").strip().lower() == "apply"
-            and cls._normalize_job_status(getattr(job, "status", "")) in {"COMPLETED", "COMPLETED_WITH_ERRORS"}
+            and cls._normalize_job_status(getattr(job, "status", "")) == "COMPLETED"
         )
 
     @staticmethod
