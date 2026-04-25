@@ -5,13 +5,14 @@
 The current production-ready target is:
 
 - Source side: provider-based source connector framework
-- Implemented live adapter in this build: WeCom
-- Planned source schemas already reserved: DingTalk, Feishu
-- Target side: Active Directory / LDAPS
+- Implemented live adapters in this build: WeCom, DingTalk
+- Planned source schemas / contexts already reserved: Feishu, HR master data
+- Target side: provider-based target connector framework with Active Directory / LDAPS
 - Control plane: FastAPI Web console + CLI
 - Local state: SQLite
+- Architecture style: modular monolith with explicit bounded-context entry points
 
-The codebase has already been refactored away from a simple `WeCom -> AD` utility into a multi-organization, policy-driven sync platform. Source-provider abstraction is in place so DingTalk, Feishu, and other future connectors can be added without rebuilding the core governance flow.
+The codebase has already been refactored away from a simple `WeCom -> AD` utility into a multi-organization, policy-driven sync platform. Source-provider and target-provider registries are in place so DingTalk, Feishu, HR systems, and future directory targets can be added without rebuilding the core governance flow.
 
 ## Current Capabilities
 
@@ -30,21 +31,41 @@ The codebase has already been refactored away from a simple `WeCom -> AD` utilit
 - Advanced group lifecycle management
 - Audit logs, operation logs, retention cleanup, and backup rotation
 - Web console, CLI, import/export bundle, and bilingual UI
+- SSPR bounded-context service skeleton for future employee self-service flows
 
 ## Architecture
 
 - `sync_app/web/`
   - FastAPI control plane, authentication, RBAC, UI rendering
+- `sync_app/web/services/`
+  - Web-facing application service facades for jobs, conflicts, config, and integrations
+- `sync_app/cli/`
+  - CLI parser, command handlers, and console entry point
 - `sync_app/services/`
   - Synchronization runtime, orchestration, reporting, config bundle handling
 - `sync_app/storage/`
   - SQLite repositories, migrations, retention, backup, audit persistence
+- `sync_app/storage/schema/`
+  - SQLite migrations, default settings, and protected-group defaults
 - `sync_app/providers/source/`
-  - Source directory provider abstraction and concrete provider implementations
+  - Source directory provider abstraction, registry, and concrete provider implementations
+- `sync_app/providers/target/`
+  - Target directory provider abstraction, registry, and AD / LDAPS adapter
+- `sync_app/modules/`
+  - Bounded-context product modules that stay outside the sync runtime, starting with SSPR
 - `sync_app/core/`
-  - Domain models, sync policies, conflict recommendation logic, validation
+  - Domain models, sync policies, conflict recommendation logic, rule governance
+- `sync_app/core/models/`
+  - Split domain model package for config, directory, jobs, conflicts, integrations, lifecycle, and Web admin records
 - `sync_app/clients/`
   - Source API clients and notification clients
+
+Layering rules are enforced by tests:
+
+- `core`, `services`, `storage`, `providers`, and `modules` must not import `sync_app.web`
+- `core` must not import provider implementations
+- new product capabilities enter through `sync_app/modules/<context>/`
+- new providers are registered through provider registries instead of being wired into `core`
 
 ## Product Direction
 
@@ -60,6 +81,8 @@ The current platform direction is:
   - AD / LDAPS connection and connector-level overrides
 - `Sync Governance`
   - mapping rules, exceptions, lifecycle queues, conflicts, approvals, throttling
+- `Bounded Context`
+  - optional product modules such as SSPR that reuse provider ports and audit services without entering the sync runtime
 
 This lets the product evolve toward:
 
@@ -67,6 +90,8 @@ This lets the product evolve toward:
 - DingTalk
 - Feishu
 - HR or master-data source systems
+- additional target directory providers
+- employee self-service capabilities such as SSPR
 
 without redesigning the synchronization control plane.
 
@@ -194,6 +219,14 @@ Current `v1` operational docs:
 - [V1 Go-Live Checklist](docs/runbooks/v1-go-live-checklist.md)
 - [Full Feature Execution Roadmap](docs/plan/full-feature-execution-roadmap.md)
 
+Architecture and extension docs:
+
+- [Bounded Context Entry Points](docs/architecture/bounded-context-entrypoints.md)
+- [Architecture Optimization Completion Plan](docs/plan/architecture-optimization-completion-plan.md)
+- [SSPR Bounded Context Execution Plan](docs/plan/sspr-bounded-context-execution-plan.md)
+- [Technical Optimization Roadmap](docs/plan/technical-optimization-roadmap.md)
+- [Architecture Decision Records](docs/adr/)
+
 ## Browser Regression
 
 The project now includes Playwright-backed browser regression coverage for login, dashboard header controls, config provider fields, and jobs empty-state actions.
@@ -264,6 +297,17 @@ Legacy compatibility:
 
 Those file paths are now treated as import / compatibility inputs, not the primary runtime source of truth.
 
+## Extending the Platform
+
+Use these entry points for new work:
+
+- Source provider: add an adapter under `sync_app/providers/source/<provider>/` or `sync_app/providers/source/<provider>.py`, then register it through `sync_app.providers.source.registry`.
+- Target provider: add an adapter under `sync_app/providers/target/`, then register it through `sync_app.providers.target.registry`.
+- Product module: add a bounded context under `sync_app/modules/<context>/`; Web routes and CLI handlers should call that module's service layer only.
+- SSPR: continue from `sync_app/modules/sspr/`; employee authentication and Web adapters should stay separate from administrator Web sessions and the sync runtime.
+
+Before adding a new feature, run the architecture guard tests to confirm the dependency direction remains clean.
+
 ## CLI Reference
 
 ```powershell
@@ -289,7 +333,8 @@ Those file paths are now treated as import / compatibility inputs, not the prima
 
 ```powershell
 .\.venv\Scripts\python.exe -m compileall sync_app tests
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pytest tests/test_architecture_boundaries.py tests/test_structure_guards.py
 ```
 
 ## Security Notes
@@ -309,5 +354,7 @@ The repository includes:
 - current web control plane
 - current SQLite-backed configuration and governance model
 - provider abstraction groundwork for future source systems
+- target provider abstraction and registry for future directory targets
+- bounded-context entry point for future SSPR and employee self-service modules
 - multi-organization runtime and UI support
 - safety and audit controls required for enterprise rollout

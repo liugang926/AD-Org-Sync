@@ -16,10 +16,14 @@ class SSPRService:
         binding_repo: Any,
         audit_repo: Any,
         target_provider_resolver: TargetProviderResolver,
+        session_store: Any | None = None,
+        require_verified_session: bool = False,
     ) -> None:
         self.binding_repo = binding_repo
         self.audit_repo = audit_repo
         self.target_provider_resolver = target_provider_resolver
+        self.session_store = session_store
+        self.require_verified_session = bool(require_verified_session)
 
     def reset_password(self, request: SSPRPasswordResetRequest) -> SSPRPasswordResetResult:
         org_id = _normalize_org_id(request.org_id)
@@ -42,6 +46,31 @@ class SSPRService:
                 source_user_id=source_user_id,
                 actor_username=actor_username,
             )
+        if self.require_verified_session:
+            if self.session_store is None:
+                return self._failure(
+                    request,
+                    status="invalid_request",
+                    message="verified session store is not configured",
+                    org_id=org_id,
+                    source_user_id=source_user_id,
+                    actor_username=actor_username,
+                )
+            session = self.session_store.validate_session(
+                request.verification_session_id,
+                org_id=org_id,
+                source_user_id=source_user_id,
+                request_ip=request.request_ip,
+            )
+            if session is None:
+                return self._failure(
+                    request,
+                    status="invalid_session",
+                    message="valid employee verification session is required",
+                    org_id=org_id,
+                    source_user_id=source_user_id,
+                    actor_username=actor_username,
+                )
 
         binding = self.binding_repo.get_binding_record_by_source_user_id(
             source_user_id,
@@ -188,6 +217,7 @@ class SSPRService:
             "source_user_id": binding.source_user_id if binding else source_user_id,
             "connector_id": binding.connector_id if binding else "",
             "request_ip": str(request.request_ip or ""),
+            "has_verification_session": bool(request.verification_session_id),
             "unlock_account": bool(request.unlock_account),
             "force_change_at_next_login": bool(request.force_change_at_next_login),
         }
