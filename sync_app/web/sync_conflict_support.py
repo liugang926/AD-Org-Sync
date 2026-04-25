@@ -67,6 +67,16 @@ class SyncConflictSupportMixin:
             )
 
         conflict_type = str(getattr(conflict, "conflict_type", "") or "").strip().lower()
+        if conflict_type == "existing_ad_identity_claim_review":
+            claim_candidate = details.get("candidate") if isinstance(details.get("candidate"), dict) else {}
+            add_candidate(
+                str(claim_candidate.get("username") or getattr(conflict, "target_key", "") or ""),
+                rule=str(claim_candidate.get("rule") or "existing_ad_identity_claim_review"),
+                explanation=str(
+                    claim_candidate.get("explanation")
+                    or "This existing AD account matched the first-sync identity claim policy and is waiting for review."
+                ),
+            )
         if conflict_type == "shared_ad_account":
             add_candidate(
                 str(getattr(conflict, "target_key", "") or details.get("ad_username") or ""),

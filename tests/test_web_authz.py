@@ -1910,6 +1910,56 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(conflict.status, "resolved")
         self.assertEqual((conflict.resolution_payload or {}).get("action"), "manual_binding")
 
+    def test_existing_ad_identity_claim_review_conflict_has_decision_actions(self):
+        self._login("superadmin")
+        self.app.state.job_repo.create_job(
+            "job-identity-claim-review",
+            trigger_type="unit_test",
+            execution_mode="dry_run",
+            status="COMPLETED",
+        )
+        conflict_id = self.app.state.conflict_repo.add_conflict(
+            job_id="job-identity-claim-review",
+            conflict_type="existing_ad_identity_claim_review",
+            source_id="alice",
+            target_key="alice",
+            message="alice matched existing AD account alice and requires identity claim review",
+            resolution_hint="approve manual binding",
+            details={
+                "userid": "alice",
+                "connector_id": "default",
+                "claim_policy": "review",
+                "candidate": {
+                    "rule": "existing_ad_userid",
+                    "username": "alice",
+                    "explanation": "Source user ID maps directly to an existing AD username",
+                },
+            },
+        )
+
+        response = self._route("/conflicts", "GET")(self._request("/conflicts"))
+        self.assertEqual(response.status_code, 200)
+        response_text = self._text(response)
+        self.assertIn("Approve existing AD account claim", response_text)
+        self.assertIn("Claim Candidate", response_text)
+        self.assertIn(f"/conflicts/{conflict_id}/decision-guide", response_text)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', response_text)
+        self.assertIsNotNone(match)
+
+        response = self._route("/conflicts/{conflict_id}/apply-recommendation", "POST")(
+            self._request("/conflicts/1/apply-recommendation", "POST"),
+            conflict_id=conflict_id,
+            csrf_token=match.group(1),
+            return_query="",
+            return_status="open",
+            return_job_id="job-identity-claim-review",
+        )
+        self.assertEqual(response.status_code, 303)
+        binding = self.app.state.user_binding_repo.get_binding_record_by_source_user_id("alice")
+        self.assertIsNotNone(binding)
+        self.assertEqual(binding.ad_username, "alice")
+        self.assertEqual(self.app.state.conflict_repo.get_conflict_record(conflict_id).status, "resolved")
+
     def test_low_confidence_recommendation_requires_confirmation_reason(self):
         self._login("superadmin")
         self.app.state.job_repo.create_job(
