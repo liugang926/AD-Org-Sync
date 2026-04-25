@@ -12,7 +12,6 @@ from fastapi.responses import RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from sync_app.core.common import APP_VERSION
-from sync_app.core.config import test_ldap_connection, test_source_connection, validate_config
 from sync_app.core.directory_protection import is_protected_ad_account_name
 from sync_app.core.conflict_recommendations import (
     recommend_conflict_resolution,
@@ -25,6 +24,7 @@ from sync_app.providers.source import (
 )
 from sync_app.providers.target import build_target_provider
 from sync_app.services.config_bundle import export_organization_bundle, import_organization_bundle
+from sync_app.services.config_validation import test_ldap_connection, test_source_connection, validate_config
 from sync_app.web.authz import normalize_role
 from sync_app.web.dashboard_state import (
     build_getting_started_data as build_getting_started_view_state,

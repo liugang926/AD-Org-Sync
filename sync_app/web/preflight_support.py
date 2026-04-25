@@ -5,15 +5,15 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, Request
 
-from sync_app.core.config import (
-    load_sync_config,
+from sync_app.core.config import load_sync_config
+from sync_app.core.models import AppConfig, OrganizationRecord
+from sync_app.providers.source import get_source_provider_schema
+from sync_app.services.config_validation import (
     run_config_security_self_check,
     test_ldap_connection,
     test_source_connection,
     validate_config,
 )
-from sync_app.core.models import AppConfig, OrganizationRecord
-from sync_app.providers.source import get_source_provider_schema
 from sync_app.web.app_state import get_web_repositories, get_web_runtime_state, get_web_services
 from sync_app.web.dashboard_state import (
     build_getting_started_data as build_getting_started_view_state,

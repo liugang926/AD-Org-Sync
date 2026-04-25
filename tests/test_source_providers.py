@@ -2,7 +2,6 @@ import unittest
 from unittest.mock import patch
 
 import sync_app.providers as provider_exports
-from sync_app.core.config import test_source_connection
 from sync_app.core.models import AppConfig, DepartmentNode, LDAPConfig, SourceConfig, WeComConfig
 from sync_app.providers.source import (
     build_source_provider,
@@ -11,6 +10,7 @@ from sync_app.providers.source import (
     list_source_provider_options,
     normalize_source_provider,
 )
+from sync_app.services.config_validation import test_source_connection
 
 
 class FakeWeComClient:

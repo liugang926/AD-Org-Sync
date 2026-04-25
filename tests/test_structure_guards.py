@@ -120,6 +120,40 @@ class StructureGuardTests(unittest.TestCase):
         self.assertIn("run_sync_request", dispatch_functions)
         self.assertIn("run_sync_request", imported_from_entry)
 
+    def test_services_layer_does_not_import_web_layer(self):
+        offenders = []
+        for module_path in Path("sync_app/services").glob("*.py"):
+            module = ast.parse(module_path.read_text(encoding="utf-8"))
+            for node in ast.walk(module):
+                if isinstance(node, ast.ImportFrom):
+                    imported_module = node.module or ""
+                    if imported_module == "sync_app.web" or imported_module.startswith("sync_app.web."):
+                        offenders.append(f"{module_path}:{node.lineno} imports {imported_module}")
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        imported_module = alias.name
+                        if imported_module == "sync_app.web" or imported_module.startswith("sync_app.web."):
+                            offenders.append(f"{module_path}:{node.lineno} imports {imported_module}")
+
+        self.assertEqual(offenders, [])
+
+    def test_core_layer_does_not_import_provider_layer(self):
+        offenders = []
+        for module_path in Path("sync_app/core").glob("*.py"):
+            module = ast.parse(module_path.read_text(encoding="utf-8"))
+            for node in ast.walk(module):
+                if isinstance(node, ast.ImportFrom):
+                    imported_module = node.module or ""
+                    if imported_module == "sync_app.providers" or imported_module.startswith("sync_app.providers."):
+                        offenders.append(f"{module_path}:{node.lineno} imports {imported_module}")
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        imported_module = alias.name
+                        if imported_module == "sync_app.providers" or imported_module.startswith("sync_app.providers."):
+                            offenders.append(f"{module_path}:{node.lineno} imports {imported_module}")
+
+        self.assertEqual(offenders, [])
+
     def test_route_hotspots_use_web_app_state_accessors_for_repo_lookup(self):
         hotspot_expectations = {
             Path("sync_app/web/routes_jobs.py"): ("get_web_repositories", "get_web_services"),
@@ -187,6 +221,143 @@ class StructureGuardTests(unittest.TestCase):
                     source,
                     msg=f"{module_path} should move {forbidden} behind a service facade",
                 )
+
+    def test_web_service_facades_live_in_dedicated_modules(self):
+        compatibility_module = ast.parse(Path("sync_app/web/service_facades.py").read_text(encoding="utf-8"))
+        compatibility_classes = {
+            node.name for node in compatibility_module.body if isinstance(node, ast.ClassDef)
+        }
+        self.assertEqual(compatibility_classes, set())
+
+        module_expectations = {
+            Path("sync_app/web/services/jobs.py"): "WebJobService",
+            Path("sync_app/web/services/conflicts.py"): "WebConflictService",
+            Path("sync_app/web/services/config.py"): "WebConfigService",
+            Path("sync_app/web/services/integrations.py"): "WebIntegrationService",
+            Path("sync_app/web/services/state.py"): "WebServiceState",
+        }
+        for module_path, expected_class in module_expectations.items():
+            module = ast.parse(module_path.read_text(encoding="utf-8"))
+            classes = {
+                node.name for node in module.body if isinstance(node, ast.ClassDef)
+            }
+            self.assertIn(expected_class, classes, msg=f"{module_path} should define {expected_class}")
+
+    def test_storage_schema_lives_in_dedicated_modules(self):
+        self.assertFalse(Path("sync_app/storage/schema.py").exists())
+
+        schema_dir = Path("sync_app/storage/schema")
+        module_expectations = {
+            schema_dir / "defaults.py": {"DEFAULT_APP_SETTINGS", "ORG_SCOPED_APP_SETTINGS"},
+            schema_dir / "protected_groups.py": {
+                "DEFAULT_HARD_PROTECTED_GROUPS",
+                "DEFAULT_SOFT_EXCLUDED_GROUPS",
+            },
+            schema_dir / "migrations.py": {"MIGRATIONS"},
+        }
+
+        for module_path, expected_names in module_expectations.items():
+            module = ast.parse(module_path.read_text(encoding="utf-8"))
+            assigned_names = {
+                target.id
+                for node in module.body
+                if isinstance(node, ast.Assign)
+                for target in node.targets
+                if isinstance(target, ast.Name)
+            }
+            self.assertTrue(
+                expected_names.issubset(assigned_names),
+                msg=f"{module_path} should define {sorted(expected_names)}",
+            )
+
+    def test_cli_commands_live_in_dedicated_package_modules(self):
+        self.assertFalse(Path("sync_app/cli.py").exists())
+
+        module_expectations = {
+            Path("sync_app/cli/parser.py"): {"build_parser"},
+            Path("sync_app/cli/main.py"): {"main", "windows_selector_loop_factory"},
+            Path("sync_app/cli/handlers/config.py"): {
+                "_handle_config_export",
+                "_handle_config_import",
+                "_handle_validate_config",
+            },
+            Path("sync_app/cli/handlers/conflicts.py"): {
+                "_handle_conflicts_list",
+                "_handle_conflicts_resolve_binding",
+                "_handle_conflicts_bulk",
+            },
+            Path("sync_app/cli/handlers/database.py"): {"_handle_db_backup", "_handle_db_check"},
+            Path("sync_app/cli/handlers/sync.py"): {"_handle_sync", "_handle_approve_plan"},
+            Path("sync_app/cli/handlers/web.py"): {
+                "_handle_bootstrap_admin",
+                "_handle_init_web",
+                "_handle_web",
+            },
+        }
+
+        for module_path, expected_functions in module_expectations.items():
+            module = ast.parse(module_path.read_text(encoding="utf-8"))
+            functions = {
+                node.name for node in module.body if isinstance(node, ast.FunctionDef)
+            }
+            self.assertTrue(
+                expected_functions.issubset(functions),
+                msg=f"{module_path} should define {sorted(expected_functions)}",
+            )
+
+    def test_core_models_live_in_dedicated_package_modules(self):
+        self.assertFalse(Path("sync_app/core/models.py").exists())
+
+        module_expectations = {
+            Path("sync_app/core/models/config.py"): {"AppConfig", "LDAPConfig", "SourceConnectorConfig"},
+            Path("sync_app/core/models/directory.py"): {
+                "DepartmentNode",
+                "DirectoryUserRecord",
+                "SourceDirectoryUser",
+            },
+            Path("sync_app/core/models/sync_job.py"): {
+                "SyncJobRecord",
+                "SyncJobSummary",
+                "SyncRunStats",
+            },
+            Path("sync_app/core/models/actions.py"): {
+                "DepartmentAction",
+                "ManagedGroupTarget",
+                "UserAction",
+            },
+            Path("sync_app/core/models/conflicts.py"): {
+                "SyncConflictRecord",
+                "SyncExceptionRuleRecord",
+                "UserIdentityBindingRecord",
+            },
+            Path("sync_app/core/models/config_records.py"): {
+                "AttributeMappingRuleRecord",
+                "OrganizationRecord",
+            },
+            Path("sync_app/core/models/integrations.py"): {
+                "IntegrationWebhookOutboxRecord",
+                "IntegrationWebhookSubscriptionRecord",
+                "SyncConnectorRecord",
+            },
+            Path("sync_app/core/models/lifecycle.py"): {
+                "OffboardingRecord",
+                "UserLifecycleRecord",
+            },
+            Path("sync_app/core/models/web_admin.py"): {
+                "WebAdminUserRecord",
+                "WebAuditLogRecord",
+            },
+        }
+
+        for module_path, expected_classes in module_expectations.items():
+            module = ast.parse(module_path.read_text(encoding="utf-8"))
+            classes = {
+                node.name for node in module.body if isinstance(node, ast.ClassDef)
+            }
+            self.assertTrue(
+                expected_classes.issubset(classes),
+                msg=f"{module_path} should define {sorted(expected_classes)}",
+            )
 
     def test_foundation_routes_use_web_app_state_accessors_for_repo_lookup(self):
         route_expectations = {

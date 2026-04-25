@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 from sync_app.providers.target.base import TargetDirectoryProvider
 from sync_app.services.ad_sync import ADSyncLDAPS
@@ -174,15 +174,3 @@ class ADLDAPSTargetProvider(TargetDirectoryProvider):
         close_fn = getattr(self.client, "close", None)
         if callable(close_fn):
             close_fn()
-
-
-def build_target_provider(
-    *,
-    provider_type: str | None = None,
-    client_factory: Callable[..., ADSyncLDAPS] | None = None,
-    **kwargs: Any,
-) -> TargetDirectoryProvider:
-    # Reserve provider_type for future target backends; the current build supports AD/LDAPS only.
-    _ = provider_type
-    factory = client_factory or ADSyncLDAPS
-    return ADLDAPSTargetProvider(factory(**kwargs))

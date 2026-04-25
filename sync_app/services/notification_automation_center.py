@@ -12,7 +12,7 @@ from sync_app.storage.repositories.jobs import SyncJobRepository
 from sync_app.storage.repositories.mappings import UserDepartmentOverrideRepository, UserIdentityBindingRepository
 from sync_app.storage.repositories.organizations import OrganizationConfigRepository
 from sync_app.storage.repositories.system import SettingsRepository
-from sync_app.web.rule_governance import build_rule_governance_summary
+from sync_app.core.rule_governance import build_rule_governance_summary
 
 GREEN_JOB_STATUSES = {"COMPLETED"}
 

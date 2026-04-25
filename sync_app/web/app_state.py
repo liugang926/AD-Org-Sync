@@ -42,7 +42,7 @@ from sync_app.web.runtime import (
     WebSyncRunner,
     resolve_web_runtime_settings,
 )
-from sync_app.web.service_facades import WebServiceState, build_web_service_state
+from sync_app.web.services import WebServiceState, build_web_service_state
 
 
 @dataclass(slots=True)
