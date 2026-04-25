@@ -4,13 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from sync_app.core import logging_utils as sync_logging
 from sync_app.core.common import APP_VERSION, generate_job_id
-from sync_app.core.config import (
-    load_sync_config,
-    run_config_security_self_check,
-    test_ldap_connection,
-    test_source_connection,
-    validate_config,
-)
+from sync_app.core.config import load_sync_config
 from sync_app.core.models import (
     DepartmentNode,
     SyncRunStats,
@@ -22,6 +16,12 @@ from sync_app.services.external_integrations import emit_job_lifecycle_events
 from sync_app.services.ad_sync import (
     ADSyncLDAPS,
     build_custom_group_sam,
+)
+from sync_app.services.config_validation import (
+    run_config_security_self_check,
+    test_ldap_connection,
+    test_source_connection,
+    validate_config,
 )
 from sync_app.services.notification_automation_center import (
     build_notification_automation_policy_settings,
@@ -53,7 +53,7 @@ from sync_app.services.runtime_services import (
     evaluate_group_policy as evaluate_group_policy_rule_set,
     has_exception_rule as has_exception_rule_match,
 )
-from sync_app.web.rule_governance import build_rule_governance_summary
+from sync_app.core.rule_governance import build_rule_governance_summary
 
 
 FIELD_OWNERSHIP_POLICY = {

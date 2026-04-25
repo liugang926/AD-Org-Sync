@@ -13,7 +13,7 @@ from sync_app.core.exception_rules import (
 )
 from sync_app.storage.local_db import utcnow_iso
 from sync_app.web.app_state import get_web_repositories
-from sync_app.web.rule_governance import build_rule_governance_summary
+from sync_app.core.rule_governance import build_rule_governance_summary
 
 
 def register_exception_routes(
