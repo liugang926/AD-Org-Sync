@@ -46,6 +46,12 @@ class FakeADSyncClient:
     def disable_user(self, username):
         return True
 
+    def reset_user_password(self, username, new_password, *, force_change_at_next_login=False):
+        return username == "alice" and bool(new_password)
+
+    def unlock_user(self, username):
+        return username == "alice"
+
 
 class TargetProviderTests(unittest.TestCase):
     def test_normalize_target_provider_defaults_to_ad_ldaps(self):
@@ -59,6 +65,8 @@ class TargetProviderTests(unittest.TestCase):
         self.assertEqual(provider.list_organizational_units()[0]["name"], "Managed Users")
         self.assertEqual(provider.get_all_enabled_users(), ["alice"])
         self.assertTrue(provider.disable_user("alice"))
+        self.assertTrue(provider.reset_user_password("alice", "Secret123!"))
+        self.assertTrue(provider.unlock_user("alice"))
 
     def test_build_target_provider_uses_ad_ldaps_adapter(self):
         provider = build_target_provider(

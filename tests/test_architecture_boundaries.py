@@ -59,6 +59,8 @@ def test_new_feature_entrypoint_conventions_are_documented():
     doc = doc_path.read_text(encoding="utf-8")
 
     assert Path("sync_app/modules/sspr").is_dir()
+    assert Path("sync_app/modules/sspr/domain.py").exists()
+    assert Path("sync_app/modules/sspr/service.py").exists()
     for required_term in (
         "sync_app/modules/<context>/",
         "sync_app/providers/source/<provider>/",
