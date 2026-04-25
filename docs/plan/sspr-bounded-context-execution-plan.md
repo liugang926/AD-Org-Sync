@@ -36,7 +36,7 @@ WeCom QR/OAuth plumbing build on these contracts in Phase 3.
 
 ## Phase 3: Web Adapter
 
-Current Web-adapter slice:
+Completed Web-adapter slice:
 
 1. Add public `/sspr` routes under Web as a thin adapter.
 2. Route handlers call `SSPRVerificationService` and `SSPRService`; they do not
@@ -57,6 +57,18 @@ Remaining provider-specific work:
 
 ## Phase 4: Operations
 
-1. Add settings for enablement, minimum password policy, and unlock behavior.
+Completed operations-settings slice:
+
+1. Add organization-scoped settings for enablement, minimum password policy,
+   default unlock behavior, and verification session TTL.
+2. Keep `/sspr` public but disabled by default until the organization enables
+   the module from `/config`.
+3. Enforce the configured minimum password length in `SSPRService` before the
+   target provider is called.
+4. Surface portal and provider callback URLs on the admin configuration page.
+
+Remaining operations work:
+
+1. Generate provider-specific QR/OAuth authorization URLs from SSPR settings.
 2. Add audit search labels for `sspr.password_reset`.
-3. Add admin-visible SSPR status and runbook notes.
+3. Add deployment runbook steps for source app callback URLs and permissions.

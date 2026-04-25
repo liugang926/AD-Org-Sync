@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import Request
 
 from sync_app.core.models import WebAdminUserRecord
-from sync_app.services.typed_settings import BrandingSettings, DirectoryUiSettings, WebRuntimeSettings
+from sync_app.services.typed_settings import BrandingSettings, DirectoryUiSettings, SSPRSettings, WebRuntimeSettings
 from sync_app.web.app_state import get_web_repositories
 
 
@@ -31,6 +31,10 @@ def apply_config_submission(
         org_id=current_org.org_id,
     )
     WebRuntimeSettings.from_mapping(submission["settings_values"]).persist(repositories.settings_repo)
+    SSPRSettings.from_mapping(submission["settings_values"]).persist(
+        repositories.settings_repo,
+        org_id=current_org.org_id,
+    )
     BrandingSettings.from_mapping(
         submission["settings_values"],
         default_display_name=support.default_brand_display_name,
@@ -68,6 +72,12 @@ def apply_config_submission(
             "web_session_cookie_secure_mode": submission["settings_values"]["web_session_cookie_secure_mode"],
             "web_trust_proxy_headers": bool(submission["settings_values"]["web_trust_proxy_headers"]),
             "web_forwarded_allow_ips": submission["settings_values"]["web_forwarded_allow_ips"],
+            "sspr_enabled": bool(submission["settings_values"]["sspr_enabled"]),
+            "sspr_min_password_length": int(submission["settings_values"]["sspr_min_password_length"]),
+            "sspr_unlock_account_default": bool(submission["settings_values"]["sspr_unlock_account_default"]),
+            "sspr_verification_session_ttl_seconds": int(
+                submission["settings_values"]["sspr_verification_session_ttl_seconds"]
+            ),
             "ldap_validate_cert": bool(submission["org_values"]["ldap_validate_cert"]),
             "force_change_password": bool(submission["org_values"]["force_change_password"]),
             "password_complexity": submission["org_values"]["password_complexity"],

@@ -5,6 +5,7 @@ from typing import Any, Optional
 from fastapi import Request
 
 from sync_app.providers.source import get_source_provider_schema, list_source_provider_options, normalize_source_provider
+from sync_app.services.typed_settings import SSPRSettings
 from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
 from sync_app.web.config_presentation import (
     build_config_preview_groups,
@@ -140,6 +141,39 @@ def _build_config_rollout_status(request: Request, current_org: Any) -> dict[str
     }
 
 
+def _url_with_public_base(public_base_url: str, path: str) -> str:
+    normalized_base_url = str(public_base_url or "").strip().rstrip("/")
+    normalized_path = "/" + str(path or "").strip().lstrip("/")
+    return f"{normalized_base_url}{normalized_path}" if normalized_base_url else normalized_path
+
+
+def _build_sspr_status_context(editable: dict[str, Any]) -> dict[str, Any]:
+    public_base_url = str(editable.get("web_public_base_url") or "").strip()
+    callback_items = [
+        {
+            "provider_id": "wecom",
+            "label": "WeCom",
+            "url": _url_with_public_base(public_base_url, "/sspr/callback/wecom"),
+        },
+        {
+            "provider_id": "dingtalk",
+            "label": "DingTalk",
+            "url": _url_with_public_base(public_base_url, "/sspr/callback/dingtalk"),
+        },
+    ]
+    enabled = bool(editable.get("sspr_enabled"))
+    return {
+        "enabled": enabled,
+        "badge_text": "Enabled" if enabled else "Disabled",
+        "badge_level": "success" if enabled else "warning",
+        "portal_url": _url_with_public_base(public_base_url, "/sspr"),
+        "callback_urls": callback_items,
+        "min_password_length": int(editable.get("sspr_min_password_length") or 12),
+        "unlock_account_default": bool(editable.get("sspr_unlock_account_default")),
+        "verification_session_ttl_seconds": int(editable.get("sspr_verification_session_ttl_seconds") or 600),
+    }
+
+
 def build_config_change_preview(support: Any, request: Request, submission: dict[str, Any]) -> dict[str, Any]:
     repositories = get_web_repositories(request)
     runtime_state = get_web_runtime_state(request)
@@ -252,6 +286,12 @@ def build_config_editable_override(support: Any, request: Request, submission: d
             "web_session_cookie_secure_mode": submission["settings_values"]["web_session_cookie_secure_mode"],
             "web_trust_proxy_headers": submission["settings_values"]["web_trust_proxy_headers"],
             "web_forwarded_allow_ips": submission["settings_values"]["web_forwarded_allow_ips"],
+            "sspr_enabled": submission["settings_values"]["sspr_enabled"],
+            "sspr_min_password_length": submission["settings_values"]["sspr_min_password_length"],
+            "sspr_unlock_account_default": submission["settings_values"]["sspr_unlock_account_default"],
+            "sspr_verification_session_ttl_seconds": submission["settings_values"][
+                "sspr_verification_session_ttl_seconds"
+            ],
             "brand_display_name": submission["settings_values"]["brand_display_name"],
             "brand_mark_text": submission["settings_values"]["brand_mark_text"],
             "brand_attribution": submission["settings_values"]["brand_attribution"],
@@ -319,6 +359,11 @@ def build_config_page_context(
         "custom_group_ou_path",
         repositories.settings_repo.get_value("custom_group_ou_path", "Managed Groups", org_id=current_org.org_id),
     )
+    sspr_settings = SSPRSettings.load(repositories.settings_repo, org_id=current_org.org_id)
+    editable.setdefault("sspr_enabled", sspr_settings.enabled)
+    editable.setdefault("sspr_min_password_length", sspr_settings.min_password_length)
+    editable.setdefault("sspr_unlock_account_default", sspr_settings.unlock_account_default)
+    editable.setdefault("sspr_verification_session_ttl_seconds", sspr_settings.verification_session_ttl_seconds)
     current_source_provider = normalize_source_provider(editable.get("source_provider"))
     provider_schema = get_source_provider_schema(current_source_provider)
     source_provider_name = support.request_support.source_provider_label(current_source_provider)
@@ -333,6 +378,7 @@ def build_config_page_context(
         org_id=current_org.org_id,
     )
     config_rollout_status = _build_config_rollout_status(request, current_org)
+    sspr_status = _build_sspr_status_context(editable)
     return {
         "page": "config",
         "title": f"{source_provider_name} Configuration",
@@ -349,5 +395,6 @@ def build_config_page_context(
         "config_change_preview": config_change_preview,
         "config_preview_token": preview_token,
         "config_rollout_status": config_rollout_status,
+        "sspr_status": sspr_status,
         "filters_are_remembered": True,
     }

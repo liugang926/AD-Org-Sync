@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 from starlette.requests import Request
 
-from sync_app.services.typed_settings import BrandingSettings, DirectoryUiSettings, WebRuntimeSettings
+from sync_app.services.typed_settings import BrandingSettings, DirectoryUiSettings, SSPRSettings, WebRuntimeSettings
 from sync_app.services.config_store import save_editable_config
 from sync_app.web import create_app
 from sync_app.web.security import hash_password
@@ -149,6 +149,7 @@ class WebAuthzBaseTestCase(unittest.TestCase):
             org_id=current_org.org_id,
         )
         web_runtime_settings = WebRuntimeSettings.load(self.app.state.settings_repo)
+        sspr_settings = SSPRSettings.load(self.app.state.settings_repo, org_id=current_org.org_id)
         branding_settings = BrandingSettings.load(
             self.app.state.settings_repo,
             default_display_name="AD Org Sync",
@@ -186,6 +187,10 @@ class WebAuthzBaseTestCase(unittest.TestCase):
             "web_session_cookie_secure_mode": web_runtime_settings.session_cookie_secure_mode,
             "web_trust_proxy_headers": "true" if web_runtime_settings.trust_proxy_headers else "false",
             "web_forwarded_allow_ips": web_runtime_settings.forwarded_allow_ips,
+            "sspr_enabled": "true" if sspr_settings.enabled else "false",
+            "sspr_min_password_length": sspr_settings.min_password_length,
+            "sspr_unlock_account_default": "true" if sspr_settings.unlock_account_default else "false",
+            "sspr_verification_session_ttl_seconds": sspr_settings.verification_session_ttl_seconds,
             "brand_display_name": branding_settings.brand_display_name,
             "brand_mark_text": branding_settings.brand_mark_text,
             "brand_attribution": branding_settings.brand_attribution,

@@ -3230,6 +3230,37 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             "Managed Groups/Regional",
         )
 
+    def test_config_page_persists_sspr_operations_settings(self):
+        self._login("superadmin")
+
+        response = self._route("/config", "GET")(self._request("/config"))
+        self.assertEqual(response.status_code, 200)
+        page_text = self._text(response)
+        self.assertIn("Self-Service Password Reset", page_text)
+        self.assertIn("/sspr/callback/wecom", page_text)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', page_text)
+        self.assertIsNotNone(match)
+
+        submit_response = self._route("/config", "POST")(
+            self._request("/config", "POST"),
+            csrf_token=match.group(1),
+            **self._build_config_form_payload(
+                sspr_enabled="true",
+                sspr_min_password_length=14,
+                sspr_unlock_account_default="true",
+                sspr_verification_session_ttl_seconds=900,
+            ),
+        )
+
+        self.assertEqual(submit_response.status_code, 303)
+        self.assertTrue(self.app.state.settings_repo.get_bool("sspr_enabled", False, org_id="default"))
+        self.assertEqual(self.app.state.settings_repo.get_int("sspr_min_password_length", 0, org_id="default"), 14)
+        self.assertTrue(self.app.state.settings_repo.get_bool("sspr_unlock_account_default", False, org_id="default"))
+        self.assertEqual(
+            self.app.state.settings_repo.get_int("sspr_verification_session_ttl_seconds", 0, org_id="default"),
+            900,
+        )
+
     def test_config_preview_redirects_when_nothing_changed(self):
         self._login("superadmin")
 
