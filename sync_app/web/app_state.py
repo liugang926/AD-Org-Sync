@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, Request
 
+from sync_app.modules.sspr import InMemorySSPRSessionStore, SSPRRateLimiter
 from sync_app.services.typed_settings import WebSecuritySettings
 from sync_app.storage.local_db import (
     AttributeMappingRuleRepository,
@@ -87,6 +88,8 @@ class WebRuntimeState:
     startup_persisted_web_runtime_settings: dict[str, Any]
     sync_runner: WebSyncRunner
     integration_outbox_worker: IntegrationOutboxWorker
+    sspr_session_store: InMemorySSPRSessionStore
+    sspr_rate_limiter: SSPRRateLimiter
 
 
 @dataclass(slots=True)
@@ -214,6 +217,8 @@ def initialize_web_app_state(
         integration_outbox_worker=IntegrationOutboxWorker(
             db_path=db_manager.db_path,
         ),
+        sspr_session_store=InMemorySSPRSessionStore(),
+        sspr_rate_limiter=SSPRRateLimiter(),
     )
 
     services = build_web_service_state(

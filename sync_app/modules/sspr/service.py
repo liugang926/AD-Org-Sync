@@ -143,6 +143,13 @@ class SSPRService:
                 actor_username=actor_username,
                 binding=binding,
             )
+        finally:
+            close_fn = getattr(target_provider, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
 
         if not reset_ok or not unlock_ok:
             return self._failure(

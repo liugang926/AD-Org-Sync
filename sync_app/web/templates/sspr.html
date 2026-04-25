@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% import "components/forms.html" as forms %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="login-hero sspr-hero">
+  <div class="login-mark sspr-mark">
+    <span class="login-mark__text">PW</span>
+  </div>
+  <h1 class="hero-title">{{ t("Employee Password Reset") }}</h1>
+  <p class="section-subtitle">{{ t("Verify your employee identity before changing your directory password.") }}</p>
+</div>
+
+<div class="sspr-layout">
+  <section class="card sspr-card">
+    <div class="sspr-card__header">
+      <div>
+        <h2>{{ t("Verify Identity") }}</h2>
+        <p>{{ t("Use your source directory identity to start a short-lived reset session.") }}</p>
+      </div>
+      {% if verified or completed %}
+      {{ ui.badge(t("Verified"), "success") }}
+      {% else %}
+      {{ ui.badge(t("Required"), "warning") }}
+      {% endif %}
+    </div>
+
+    <form method="post" action="/sspr/verify" class="stack-md">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="org_id" value="{{ org_id }}">
+      <input type="hidden" name="provider_id" value="{{ provider_id }}">
+
+      {{ forms.input(
+        "source_user_id",
+        t("Employee ID"),
+        value=source_user_id,
+        required=True,
+        placeholder=t("Enter your source user ID"),
+        autocomplete="username"
+      ) }}
+      {{ forms.input(
+        "verification_code",
+        t("Verification Code"),
+        placeholder=t("Enter the verification code"),
+        autocomplete="one-time-code",
+        help_text=t("For QR or OAuth verification, the provider callback will supply this value.")
+      ) }}
+
+      {{ ui.button(t("Verify Identity"), type="submit", block=True) }}
+    </form>
+  </section>
+
+  <section class="card sspr-card">
+    <div class="sspr-card__header">
+      <div>
+        <h2>{{ t("Reset Password") }}</h2>
+        <p>{{ t("Choose a new directory password after identity verification succeeds.") }}</p>
+      </div>
+      {% if completed %}
+      {{ ui.badge(t("Completed"), "success") }}
+      {% elif verification_session_id %}
+      {{ ui.badge(t("Ready to Reset"), "info") }}
+      {% else %}
+      {{ ui.badge(t("Locked"), "warning") }}
+      {% endif %}
+    </div>
+
+    <form method="post" action="/sspr/reset" class="stack-md">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="org_id" value="{{ org_id }}">
+      <input type="hidden" name="provider_id" value="{{ provider_id }}">
+      <input type="hidden" name="source_user_id" value="{{ source_user_id }}">
+      <input type="hidden" name="verification_session_id" value="{{ verification_session_id }}">
+
+      {{ forms.input(
+        "new_password",
+        t("New Password"),
+        type="password",
+        required=True,
+        disabled=not verification_session_id,
+        placeholder=t("Enter a new password"),
+        autocomplete="new-password"
+      ) }}
+      {{ forms.input(
+        "confirm_password",
+        t("Confirm New Password"),
+        type="password",
+        required=True,
+        disabled=not verification_session_id,
+        placeholder=t("Confirm the new password"),
+        autocomplete="new-password"
+      ) }}
+      {{ forms.checkbox(
+        "unlock_account",
+        t("Unlock account after reset"),
+        checked=False,
+        class_name="sspr-checkbox"
+      ) }}
+
+      {{ ui.button(
+        t("Reset Password"),
+        type="submit",
+        block=True,
+        disabled=not verification_session_id
+      ) }}
+    </form>
+  </section>
+</div>
+
+<div class="login-footer sspr-footer">
+  <div class="login-language">
+    {{ ui.topbar_segmented_links(
+      [
+        ("en", language_options.get("en", "English"), language_urls.get("en", "/sspr")),
+        ("zh-CN", language_options.get("zh-CN", "简体中文"), language_urls.get("zh-CN", "/sspr")),
+      ],
+      ui_language,
+      class_name="language-switcher login-language-switcher"
+    ) }}
+  </div>
+  <p>{{ brand_attribution }} &middot; {{ t("Version") }} {{ app_version }}</p>
+</div>
+{% endblock %}

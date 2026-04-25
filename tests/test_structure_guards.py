@@ -377,6 +377,15 @@ class StructureGuardTests(unittest.TestCase):
                     "request.app.state.login_rate_limiter",
                 ),
             },
+            Path("sync_app/web/routes_sspr.py"): {
+                "required": ("get_web_repositories", "get_web_runtime_state"),
+                "forbidden": (
+                    "request.app.state.user_binding_repo",
+                    "request.app.state.audit_repo",
+                    "request.app.state.sspr_session_store",
+                    "request.app.state.sspr_rate_limiter",
+                ),
+            },
             Path("sync_app/web/routes_admin.py"): {
                 "required": ("get_web_repositories",),
                 "forbidden": (
