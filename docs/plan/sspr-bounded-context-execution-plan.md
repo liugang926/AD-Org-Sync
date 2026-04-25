@@ -45,12 +45,15 @@ Current Web-adapter slice:
 4. Write verification and reset attempts to `WebAuditLogRepository`.
 5. Keep employee auth separate from administrator Web sessions by passing the
    SSPR verification session through the form flow.
+6. Add `/sspr/callback/{provider_id}` as the provider OAuth callback endpoint.
+7. Add WeCom and DingTalk source-provider verification adapters that turn an
+   OAuth code into a source identity for `SourceProviderSSPRVerifier`.
 
 Remaining provider-specific work:
 
-1. Wire WeCom QR/OAuth callbacks into `SourceProviderSSPRVerifier`.
-2. Add provider capability tests for the concrete WeCom/DingTalk verification
-   implementations once those adapters expose employee verification.
+1. Generate provider-specific QR/OAuth authorization URLs from SSPR settings.
+2. Add deployment runbook steps for provider callback URLs and source app
+   permissions.
 
 ## Phase 4: Operations
 

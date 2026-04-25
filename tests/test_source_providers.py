@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import sync_app.providers as provider_exports
 from sync_app.core.models import AppConfig, DepartmentNode, LDAPConfig, SourceConfig, WeComConfig
+from sync_app.modules.sspr import SSPRVerificationRequest
 from sync_app.providers.source import (
     build_source_provider,
     get_source_provider_display_name,
@@ -30,6 +31,11 @@ class FakeWeComClient:
 
     def get_user_detail(self, user_id: str):
         return {"userid": user_id, "name": "Alice Detail", "email": "alice.detail@example.com", "department": [1]}
+
+    def get_oauth_user_info(self, code: str):
+        if code != "oauth-ok":
+            return {}
+        return {"errcode": 0, "UserId": "alice", "name": "Alice OAuth"}
 
     def update_user(self, user_id: str, updates: dict):
         return True
@@ -75,6 +81,16 @@ class FakeDingTalkClient:
             "userid": user_id,
             "name": "Alice Ding Detail",
             "email": "alice.detail@example.com",
+            "department": [10],
+            "main_department": 10,
+        }
+
+    def get_oauth_user_info(self, code: str):
+        if code != "oauth-ok":
+            return {}
+        return {
+            "userid": "alice.dd",
+            "name": "Alice Ding OAuth",
             "department": [10],
             "main_department": 10,
         }
@@ -166,6 +182,29 @@ class SourceProviderTests(unittest.TestCase):
         finally:
             provider.close()
 
+    def test_wecom_provider_verifies_employee_identity_from_oauth_code(self):
+        config = AppConfig(
+            wecom=WeComConfig(corpid="corp-id", corpsecret="secret", agentid="10001"),
+            ldap=LDAPConfig(server="dc.example.com", domain="example.com", username="svc", password="secret"),
+            domain="example.com",
+            source_provider="wecom",
+        )
+        provider = build_source_provider(app_config=config, api_factory=FakeWeComClient)
+        try:
+            identity = provider.verify_employee_identity(
+                SSPRVerificationRequest(
+                    org_id="default",
+                    source_user_id="alice",
+                    provider_id="wecom",
+                    verification_code="oauth-ok",
+                )
+            )
+            self.assertEqual(identity["source_user_id"], "alice")
+            self.assertEqual(identity["provider_id"], "wecom")
+            self.assertEqual(identity["display_name"], "Alice OAuth")
+        finally:
+            provider.close()
+
     def test_build_source_provider_rejects_unknown_provider(self):
         with self.assertRaisesRegex(ValueError, "unsupported source provider"):
             build_source_provider(
@@ -198,6 +237,29 @@ class SourceProviderTests(unittest.TestCase):
             users = provider.list_department_users(10)
             self.assertEqual(users[0].userid, "alice.dd")
             self.assertEqual(users[0].declared_primary_department_id(), 10)
+        finally:
+            provider.close()
+
+    def test_dingtalk_provider_verifies_employee_identity_from_oauth_code(self):
+        config = AppConfig(
+            wecom=WeComConfig(corpid="ding-app-key", corpsecret="ding-app-secret"),
+            ldap=LDAPConfig(server="dc.example.com", domain="example.com", username="svc", password="secret"),
+            domain="example.com",
+            source_provider="dingtalk",
+        )
+        provider = build_source_provider(app_config=config, api_factory=FakeDingTalkClient)
+        try:
+            identity = provider.verify_employee_identity(
+                SSPRVerificationRequest(
+                    org_id="default",
+                    source_user_id="alice.dd",
+                    provider_id="dingtalk",
+                    verification_code="oauth-ok",
+                )
+            )
+            self.assertEqual(identity["source_user_id"], "alice.dd")
+            self.assertEqual(identity["provider_id"], "dingtalk")
+            self.assertEqual(identity["display_name"], "Alice Ding OAuth")
         finally:
             provider.close()
 

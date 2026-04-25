@@ -229,6 +229,9 @@ class SourceDirectoryProvider(ABC):
     def get_user_detail(self, user_id: str) -> dict[str, Any]:
         raise NotImplementedError
 
+    def verify_employee_identity(self, request: Any) -> dict[str, Any] | None:
+        raise NotImplementedError("source provider does not support SSPR employee verification")
+
     def search_users(self, query: str, *, limit: int = 20) -> list[SourceDirectoryUser]:
         normalized_query = str(query or "").strip().lower()
         if not normalized_query:

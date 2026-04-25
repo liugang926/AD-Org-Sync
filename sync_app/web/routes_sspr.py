@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import json
 from typing import Any, Callable
+from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
@@ -69,6 +72,34 @@ def register_sspr_routes(
 
         return SourceProviderSSPRVerifier(source_provider_resolver=source_provider_resolver)
 
+    def verify_employee(
+        request: Request,
+        *,
+        org_id: str,
+        source_user_id: str,
+        provider_id: str,
+        verification_code: str,
+        state: str = "",
+    ) -> tuple[SSPRVerificationRequest, SSPRVerificationResult]:
+        runtime_state = get_web_runtime_state(request)
+        org = _resolve_public_org(request, org_id)
+        verification_request = SSPRVerificationRequest(
+            org_id=org.org_id,
+            source_user_id=str(source_user_id or "").strip(),
+            provider_id=str(provider_id or "wecom").strip().lower() or "wecom",
+            verification_code=str(verification_code or "").strip(),
+            state=str(state or "").strip(),
+            request_ip=get_client_ip(request),
+            user_agent=str(request.headers.get("user-agent") or ""),
+        )
+        verification_service = SSPRVerificationService(
+            identity_verifier=build_source_verifier(),
+            session_store=runtime_state.sspr_session_store,
+            audit_repo=get_web_repositories(request).audit_repo,
+            rate_limiter=runtime_state.sspr_rate_limiter,
+        )
+        return verification_request, verification_service.verify_employee(verification_request)
+
     def target_provider_resolver(binding: Any):
         repositories = get_web_repositories(app)
         runtime_state = get_web_runtime_state(app)
@@ -112,6 +143,58 @@ def register_sspr_routes(
     def sspr_page(request: Request, org_id: str = ""):
         return render_sspr_page(request, org_id=org_id)
 
+    @app.get("/sspr/callback/{provider_id}", response_class=HTMLResponse)
+    def sspr_provider_callback(
+        request: Request,
+        provider_id: str,
+        code: str = "",
+        state: str = "",
+        org_id: str = "",
+        source_user_id: str = "",
+    ):
+        state_values = _decode_sspr_callback_state(state)
+        resolved_org_id = str(org_id or state_values.get("org_id") or "").strip()
+        resolved_source_user_id = str(source_user_id or state_values.get("source_user_id") or "").strip()
+        normalized_provider_id = str(provider_id or state_values.get("provider_id") or "wecom").strip().lower() or "wecom"
+        if not str(code or "").strip():
+            flash(request, "error", "Verification callback is missing the OAuth code.")
+            return render_sspr_page(
+                request,
+                org_id=resolved_org_id,
+                source_user_id=resolved_source_user_id,
+                provider_id=normalized_provider_id,
+            )
+        if not resolved_source_user_id:
+            flash(request, "error", "Verification callback is missing the employee ID.")
+            return render_sspr_page(request, org_id=resolved_org_id, provider_id=normalized_provider_id)
+
+        verification_request, result = verify_employee(
+            request,
+            org_id=resolved_org_id,
+            source_user_id=resolved_source_user_id,
+            provider_id=normalized_provider_id,
+            verification_code=code,
+            state=state,
+        )
+        if result.ok and result.session is not None:
+            flash(request, "success", "Employee identity verified. Choose a new password.")
+            return render_sspr_page(
+                request,
+                org_id=result.org_id,
+                source_user_id=result.source_user_id,
+                provider_id=verification_request.provider_id,
+                verification_session_id=result.session.session_id,
+                verified=True,
+            )
+
+        flash(request, "error", _verification_error_message(result))
+        return render_sspr_page(
+            request,
+            org_id=verification_request.org_id,
+            source_user_id=verification_request.source_user_id,
+            provider_id=verification_request.provider_id,
+        )
+
     @app.post("/sspr/verify", response_class=HTMLResponse)
     def sspr_verify(
         request: Request,
@@ -125,23 +208,14 @@ def register_sspr_routes(
         if csrf_error:
             return csrf_error
 
-        runtime_state = get_web_runtime_state(request)
         org = _resolve_public_org(request, org_id)
-        verification_request = SSPRVerificationRequest(
+        verification_request, result = verify_employee(
+            request,
             org_id=org.org_id,
-            source_user_id=str(source_user_id or "").strip(),
-            provider_id=str(provider_id or "wecom").strip().lower() or "wecom",
-            verification_code=str(verification_code or "").strip(),
-            request_ip=get_client_ip(request),
-            user_agent=str(request.headers.get("user-agent") or ""),
+            source_user_id=source_user_id,
+            provider_id=provider_id,
+            verification_code=verification_code,
         )
-        verification_service = SSPRVerificationService(
-            identity_verifier=build_source_verifier(),
-            session_store=runtime_state.sspr_session_store,
-            audit_repo=get_web_repositories(request).audit_repo,
-            rate_limiter=runtime_state.sspr_rate_limiter,
-        )
-        result = verification_service.verify_employee(verification_request)
         if result.ok and result.session is not None:
             flash(request, "success", "Employee identity verified. Choose a new password.")
             return render_sspr_page(
@@ -290,3 +364,31 @@ def _reset_error_message(status: str) -> str:
     if status == "unsupported":
         return "The target directory does not support self-service password reset yet."
     return "Password reset could not be completed."
+
+
+def _decode_sspr_callback_state(value: str) -> dict[str, str]:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return {}
+
+    query_values = {
+        str(key): str(item)
+        for key, item in parse_qsl(raw_value, keep_blank_values=False)
+        if str(key).strip()
+    }
+    if query_values:
+        return query_values
+
+    padded_value = raw_value + "=" * (-len(raw_value) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded_value.encode("utf-8")).decode("utf-8")
+        payload = json.loads(decoded)
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(key): str(item)
+        for key, item in payload.items()
+        if item not in (None, "")
+    }

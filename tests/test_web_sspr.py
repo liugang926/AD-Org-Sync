@@ -110,6 +110,30 @@ class WebSSPRTests(WebAuthzBaseTestCase):
         self.assertIn("sspr.verify", action_types)
         self.assertIn("sspr.password_reset", action_types)
 
+    def test_oauth_callback_can_complete_employee_verification(self):
+        self.session = {}
+        source_provider = FakeSourceProvider()
+
+        with patch("sync_app.web.app.build_source_provider", return_value=source_provider):
+            callback_response = self._route("/sspr/callback/{provider_id}", "GET")(
+                self._request(
+                    "/sspr/callback/wecom",
+                    query={
+                        "code": "ok",
+                        "state": "org_id=default&source_user_id=alice",
+                    },
+                ),
+                provider_id="wecom",
+                code="ok",
+                state="org_id=default&source_user_id=alice",
+            )
+
+        self.assertEqual(callback_response.status_code, 200)
+        body = self._text(callback_response)
+        self.assertIn("Employee identity verified", body)
+        self.assertTrue(self._extract_field(body, "verification_session_id"))
+        self.assertTrue(source_provider.closed)
+
     @staticmethod
     def _extract_field(body: str, field_name: str) -> str:
         match = re.search(rf'name="{re.escape(field_name)}" value="([^"]*)"', body)
