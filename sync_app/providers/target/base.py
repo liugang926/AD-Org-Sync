@@ -145,5 +145,17 @@ class TargetDirectoryProvider(ABC):
     def disable_user(self, username: str) -> bool:
         raise NotImplementedError
 
+    def reset_user_password(
+        self,
+        username: str,
+        new_password: str,
+        *,
+        force_change_at_next_login: bool = False,
+    ) -> bool:
+        raise NotImplementedError("target provider does not support password reset")
+
+    def unlock_user(self, username: str) -> bool:
+        raise NotImplementedError("target provider does not support account unlock")
+
     def close(self) -> None:
         return None
