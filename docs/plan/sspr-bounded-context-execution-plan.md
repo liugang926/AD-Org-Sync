@@ -21,12 +21,18 @@ Completed in the first slice:
 
 ## Phase 2: Employee Verification
 
-Next implementation slice:
+Current service-layer slice:
 
 1. Add employee-auth session model under `sync_app/modules/sspr/`.
-2. Support source-provider verification, initially WeCom QR/OAuth.
-3. Keep employee auth separate from administrator Web sessions.
-4. Rate-limit verification and reset attempts by source user and IP.
+2. Support source-provider verification through a module-local verifier adapter.
+3. Keep employee auth separate from administrator Web sessions by using SSPR
+   verification sessions.
+4. Rate-limit verification attempts by source user and IP.
+5. Allow password reset services to require a verified employee session before
+   touching target providers.
+
+The first implementation is intentionally service-only. Web routes and concrete
+WeCom QR/OAuth plumbing should build on these contracts in Phase 3.
 
 ## Phase 3: Web Adapter
 
@@ -35,6 +41,7 @@ Next implementation slice:
    directly.
 3. Render employee-only forms and success/failure states.
 4. Write all reset attempts to `WebAuditLogRepository`.
+5. Wire WeCom QR/OAuth callbacks into `SourceProviderSSPRVerifier`.
 
 ## Phase 4: Operations
 
