@@ -14,7 +14,7 @@ from sync_app.storage.repositories.organizations import OrganizationConfigReposi
 from sync_app.storage.repositories.system import SettingsRepository
 from sync_app.web.rule_governance import build_rule_governance_summary
 
-SUCCESSFUL_JOB_STATUSES = {"COMPLETED", "COMPLETED_WITH_ERRORS"}
+GREEN_JOB_STATUSES = {"COMPLETED"}
 
 
 def _normalize_job_status(value: str | None) -> str:
@@ -26,7 +26,7 @@ def _job_mode(job: Optional[SyncJobRecord]) -> str:
 
 
 def _is_successful_dry_run(job: Optional[SyncJobRecord]) -> bool:
-    return _job_mode(job) == "dry_run" and _normalize_job_status(getattr(job, "status", "")) in SUCCESSFUL_JOB_STATUSES
+    return _job_mode(job) == "dry_run" and _normalize_job_status(getattr(job, "status", "")) in GREEN_JOB_STATUSES
 
 
 def _is_apply_job(job: Optional[SyncJobRecord]) -> bool:

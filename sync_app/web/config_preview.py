@@ -23,7 +23,7 @@ def _normalize_job_status(value: str | None) -> str:
 def _is_successful_dry_run(job: Any) -> bool:
     return (
         str(getattr(job, "execution_mode", "") or "").strip().lower() == "dry_run"
-        and _normalize_job_status(getattr(job, "status", "")) in {"COMPLETED", "COMPLETED_WITH_ERRORS"}
+        and _normalize_job_status(getattr(job, "status", "")) == "COMPLETED"
     )
 
 

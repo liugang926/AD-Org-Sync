@@ -2,11 +2,25 @@
 {% import "components/ui.html" as ui %}
 
 {% block content %}
+<div class="page-stack">
 {% call ui.page_header(t("External Integration Center"), t("Expose job status, conflicts, approval callbacks, and outbound webhooks through one organization-scoped integration surface."), eyebrow=t("Operations"), badge_text=t("Organization Scope"), badge_level="info") %}
   {{ ui.button(t("Open Jobs"), href="/jobs", variant="ghost", icon="refresh-cw") }}
   {{ ui.button(t("Open Conflicts"), href="/conflicts", variant="ghost", icon="shield-alert") }}
   {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost", icon="waypoints") }}
 {% endcall %}
+
+<section class="integration-portal-hero">
+  <div>
+    <div class="decision-wizard__eyebrow">{{ t("Integration Portal") }}</div>
+    <h2>{{ t("Expose safe operational signals without handing out admin UI access.") }}</h2>
+    <p>{{ t("Use scoped API tokens, approval callbacks, webhook subscriptions, and delivery recovery to connect ITSM, HR, and approval systems.") }}</p>
+  </div>
+  <div class="integration-portal-hero__status">
+    <span>{{ t("API Readiness") }}</span>
+    <strong>{{ t("Ready") if api_token_configured else t("Needs Token") }}</strong>
+    <small>{{ active_subscription_count }} {{ t("active subscriptions") }} / {{ failed_delivery_count }} {{ t("failed deliveries") }}</small>
+  </div>
+</section>
 
 <div class="dense-two-col">
   {% call ui.helper_block(t("What This Center Adds"), t("Use this page when external systems need a stable way to read rollout state or approve a high-risk plan without logging into the admin UI."), "info") %}
@@ -277,7 +291,8 @@
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+</table>
 {% endcall %}
 {% endif %}
+</div>
 {% endblock %}

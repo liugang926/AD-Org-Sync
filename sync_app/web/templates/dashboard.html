@@ -3,30 +3,127 @@
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Dashboard"), t("Start from the current organization's rollout status. Most teams only need preflight, the first dry run, open conflicts, and the latest job results."), eyebrow=t("Operations"), badge_text=(current_org.name if current_org else "-"), badge_level="info") %}
+  {% call ui.page_header(t("Control Tower"), t("One operating surface for rollout safety, blockers, dry run freshness, and the next best action for the current organization."), eyebrow=t("Operations"), badge_text=(current_org.name if current_org else "-"), badge_level="info") %}
     <div class="surface-inline">
       {{ ui.badge(t("Basic") if ui_mode == "basic" else t("Advanced"), "info") }}
       <span class="muted">{{ t("Current organization") }}: {{ current_org.name if current_org else "-" }}</span>
     </div>
   {% endcall %}
 
-  <div class="compact-stats">
-    {{ ui.compact_stat(t("Open Conflicts"), open_conflicts_count or 0) }}
-    {{ ui.compact_stat(t("Recent Jobs"), recent_jobs|length, t("Latest task history")) }}
-    {{ ui.compact_stat(t("Exception Rules"), exception_rule_count or 0) }}
-    {{ ui.compact_stat(t("Bindings"), binding_count or 0) }}
-    {{ ui.compact_stat(t("Connectors"), current_org_connector_count, t("For this organization")) }}
-    {{ ui.compact_stat(t("Admin Users"), user_count) }}
+  <section class="control-tower control-tower--{{ job_center_summary.overall_status }}">
+    <div class="control-tower__layout">
+      <div class="control-tower__summary">
+        <div class="control-tower__eyebrow">{{ t("Apply Gate") }}</div>
+        <h2 class="control-tower__title">{{ t(job_center_summary.overall_label) }}</h2>
+        <p class="control-tower__description">
+          {% if job_center_summary.blocked_reasons %}
+          {{ t(job_center_summary.blocked_reasons[0]) }}
+          {% else %}
+          {{ t("The latest checks show no blocking item. Review the most recent dry run before applying changes.") }}
+          {% endif %}
+        </p>
+        <div class="control-tower__actions">
+          {{ ui.button(t(job_center_summary.next_action_label), href=job_center_summary.next_action_url, variant=("success" if job_center_summary.overall_status == "success" else "primary")) }}
+          {{ ui.button(t("Run Review"), href="/jobs", variant="secondary") }}
+          {% if can("config.read") %}
+          {{ ui.button(t("Review Config"), href="/config", variant="ghost") }}
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="control-gate-card">
+        <div class="control-gate-card__label">{{ t("Current Readiness") }}</div>
+        <div class="control-gate-card__status">
+          {{ ui.badge(t(job_center_summary.overall_label), job_center_summary.overall_status) }}
+        </div>
+        <div class="control-gate-card__next">
+          <span>{{ t("Next best action") }}</span>
+          <a href="{{ job_center_summary.next_action_url }}">{{ t(job_center_summary.next_action_label) }}</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="control-metrics">
+      <div class="control-metric">
+        <span>{{ t("Open Conflicts") }}</span>
+        <strong>{{ open_conflicts_count or 0 }}</strong>
+      </div>
+      <div class="control-metric">
+        <span>{{ t("Latest Dry Run") }}</span>
+        <strong>
+          {% if job_center_summary.latest_dry_run %}
+          <a href="/jobs/{{ job_center_summary.latest_dry_run.job_id }}">{{ job_center_summary.latest_dry_run.job_id }}</a>
+          {% else %}
+          -
+          {% endif %}
+        </strong>
+      </div>
+      <div class="control-metric">
+        <span>{{ t("Planned Changes") }}</span>
+        <strong>{{ job_center_summary.impact_preview.planned_operation_count }}</strong>
+      </div>
+      <div class="control-metric">
+        <span>{{ t("High-Risk Changes") }}</span>
+        <strong>{{ job_center_summary.impact_preview.high_risk_operation_count }}</strong>
+      </div>
+      <div class="control-metric">
+        <span>{{ t("Preflight Errors") }}</span>
+        <strong>{{ preflight_summary.status_counts.error }}</strong>
+      </div>
+    </div>
+  </section>
+
+  <div class="grid cols-2">
+    {% call ui.panel(t("Blocking Queue"), description=t("The highest-priority items that stop or weaken safe rollout."), class_name="toolbar-card") %}
+      <div class="list-stack">
+        {% for item in control_tower_blockers %}
+        {% set blocker_url = "/config" if item.action_url == "/advanced-sync" and not show_advanced_navigation else item.action_url %}
+        {% set blocker_allowed = blocker_url != "/config" or can("config.read") %}
+        <article class="blocker-item blocker-item--{{ item.level }}">
+          <div>
+            <div class="blocker-item__title">{{ t(item.title, **(item.title_params or {})) }}</div>
+            <p class="blocker-item__detail">{{ t(item.detail, **(item.detail_params or {})) }}</p>
+          </div>
+          {% if blocker_allowed %}
+          <a href="{{ blocker_url }}">{{ t(item.action_label) }}</a>
+          {% endif %}
+        </article>
+        {% else %}
+        <div class="panel-note success">{{ t("No blocking items are currently visible for this organization.") }}</div>
+        {% endfor %}
+      </div>
+    {% endcall %}
+
+    {% call ui.panel(t("Recent Timeline"), description=t("A short operating history for dry runs, apply runs, and live preflight checks."), class_name="toolbar-card") %}
+      <div class="timeline-list">
+        {% for item in control_tower_timeline %}
+        <a class="timeline-item timeline-item--{{ item.level }}" href="{{ item.href }}">
+          <span class="timeline-item__dot"></span>
+          <span class="timeline-item__body">
+            <strong>{{ t(item.title) }}</strong>
+            <span>{{ item.detail }}</span>
+          </span>
+          {% if item.meta %}<span class="timeline-item__meta">{{ t(item.meta) }}</span>{% endif %}
+        </a>
+        {% else %}
+        <div class="panel-note info">{{ t("No timeline events yet. Start with a live preflight or dry run.") }}</div>
+        {% endfor %}
+      </div>
+    {% endcall %}
   </div>
 
   <div class="dense-two-col">
-    {% call ui.panel(t("Start Here"), description=t("If the system is new, work through these actions in order."), class_name="toolbar-card") %}
+    {% call ui.panel(t("Rollout Path"), description=t("If the system is new, work through these actions in order."), class_name="toolbar-card") %}
       <div class="stack-tight">
         {% call ui.helper_block(t("Recommended Rollout Steps"), t("{done} of {total} steps are complete.", done=getting_started.completed_steps, total=getting_started.total_steps), "info") %}
           <ul class="helper-list">
-            <li><strong>{{ t("1.") }}</strong> {{ t("Verify organization config and connectivity.") }}</li>
-            <li><strong>{{ t("2.") }}</strong> {{ t("Run the first dry run and review planned changes.") }}</li>
-            <li><strong>{{ t("3.") }}</strong> {{ t("Resolve open conflicts before the first apply.") }}</li>
+            {% for step in getting_started.steps %}
+            <li>
+              <strong>{{ loop.index }}.</strong>
+              {{ t(step.title, **(step.detail_params or {})) }}
+              <span class="muted">/ {{ t(step.status|capitalize) }}</span>
+            </li>
+            {% endfor %}
           </ul>
         {% endcall %}
         <div class="actions">

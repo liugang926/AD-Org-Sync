@@ -492,6 +492,25 @@ def apply_lifecycle_bulk_action(
             if normalized_lifecycle_type == "future_onboarding":
                 unsupported_count += 1
                 continue
+            lifecycle_repo.upsert_pending(
+                lifecycle_type=record.lifecycle_type,
+                connector_id=record.connector_id,
+                source_user_id=record.source_user_id,
+                ad_username=record.ad_username,
+                effective_at=now.isoformat(timespec="seconds"),
+                org_id=normalized_org_id,
+                reason=record.reason,
+                employment_type=record.employment_type,
+                sponsor_userid=record.sponsor_userid,
+                manager_userids=record.manager_userids,
+                payload={
+                    **dict(record.payload or {}),
+                    "approved_by": actor_username,
+                    "approved_at": now.isoformat(timespec="seconds"),
+                    "previous_effective_at": record.effective_at,
+                },
+                last_job_id=record.last_job_id,
+            )
             hold_cleared_count += int(
                 _disable_active_exception_rule(
                     exception_repo,

@@ -472,6 +472,8 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
         self.assertIn("Lifecycle Workbench", body)
+        self.assertIn("Daily Operations Board", body)
+        self.assertIn("Clear the urgent lifecycle queue before the next Apply.", body)
         self.assertIn("Future Onboarding Queue", body)
         self.assertIn("Contractor Expiry Queue", body)
         self.assertIn("Offboarding Grace Queue", body)
@@ -1067,6 +1069,13 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             self.assertTrue(jobs_payload["ok"])
             self.assertEqual(jobs_payload["items"][0]["job_id"], "job-integration-001")
 
+            invalid_jobs_limit = client.get(
+                "/api/integrations/orgs/default/jobs?limit=abc",
+                headers=headers,
+            )
+            self.assertEqual(invalid_jobs_limit.status_code, 400)
+            self.assertIn("limit", invalid_jobs_limit.json()["error"])
+
             job_response = client.get("/api/integrations/orgs/default/jobs/job-integration-001", headers=headers)
             self.assertEqual(job_response.status_code, 200)
             self.assertTrue(job_response.json()["item"]["review_required"])
@@ -1077,6 +1086,13 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             )
             self.assertEqual(conflicts_response.status_code, 200)
             self.assertEqual(conflicts_response.json()["count"], 1)
+
+            invalid_conflicts_limit = client.get(
+                "/api/integrations/orgs/default/conflicts?limit=not-a-number",
+                headers=headers,
+            )
+            self.assertEqual(invalid_conflicts_limit.status_code, 400)
+            self.assertIn("limit", invalid_conflicts_limit.json()["error"])
 
             approve_response = client.post(
                 "/api/integrations/orgs/default/reviews/job-integration-001/approve",
@@ -1668,6 +1684,8 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         response_text = self._text(response)
         self.assertIn("alice matched multiple AD candidates", response_text)
+        self.assertIn("Resolve identity ambiguity before Apply.", response_text)
+        self.assertIn("Preview the action and provide a reason before changing identity state.", response_text)
         self.assertIn("Binding decides identity first. It does not create a duplicate account by itself.", response_text)
         self.assertIn(
             "The next sync run will treat the chosen AD account as the authoritative target for this source user.",
@@ -2047,6 +2065,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
         self.assertIn("Same-Account Decision Guide", body)
+        self.assertIn("Source Identity", body)
+        self.assertIn("Candidate AD Accounts", body)
+        self.assertIn("Target Account State", body)
+        self.assertIn("Sync Impact", body)
         self.assertIn("If You Bind This Account", body)
         self.assertIn("If You Do Not Bind", body)
         self.assertIn("Expected AD Field Updates", body)

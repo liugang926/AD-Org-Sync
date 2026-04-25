@@ -3,58 +3,61 @@
 
 {% block content %}
 <div class="page-stack">
-  <div class="hero-header">
-    <div>
-      <a href="/jobs" class="back-link">&larr; {{ t("Back to Job Center") }}</a>
-      <h2 class="hero-title">{{ t("Job Details") }}</h2>
-    </div>
-    <div class="hero-meta">
-      {{ t("ID") }}: <span class="cell-mono cell-strong">{{ job.job_id }}</span>
-    </div>
-  </div>
+  {% set status_level = 'success' if job.status == 'COMPLETED' else ('error' if job.status == 'FAILED' else 'warning') %}
+  {% set summary = job.summary or {} %}
+  <a href="/jobs" class="back-link">&larr; {{ t("Back to Run Review") }}</a>
 
-  <div class="grid cols-2">
-    {% call ui.panel(t("Overview")) %}
-      <div class="detail-grid">
-        <div class="detail-item">
-          <div class="label">{{ t("Mode") }}</div>
-          <div class="value">{{ ui.badge(t(job.execution_mode), 'info' if job.execution_mode == 'dry_run' else 'success') }}</div>
-        </div>
-        <div class="detail-item">
-          <div class="label">{{ t("Status") }}</div>
-          <div class="value">
-            {% set status_level = 'success' if job.status == 'success' else ('error' if job.status == 'failed' else 'warning') %}
-            {{ ui.badge(t(job.status), status_level) }}
-          </div>
-        </div>
-        <div class="detail-item">
-          <div class="label">{{ t("Started At") }}</div>
-          <div class="value">{{ job.started_at }}</div>
-        </div>
-        <div class="detail-item">
-          <div class="label">{{ t("Ended At") }}</div>
-          <div class="value">{{ job.ended_at or "-" }}</div>
-        </div>
+  <section class="job-review-hero job-review-hero--{{ status_level }}">
+    <div class="job-review-hero__main">
+      <div class="control-tower__eyebrow">{{ t("Run Detail") }}</div>
+      <h2>{{ t("Job Details") }}</h2>
+      <p>
+        {{ t("Review the execution result, risk profile, comparison baseline, and raw evidence for this synchronization run.") }}
+      </p>
+      <div class="hero-meta">
+        {{ t("ID") }}: <span class="cell-mono cell-strong">{{ job.job_id }}</span>
+        {{ ui.badge(t(job.execution_mode), 'info' if job.execution_mode == 'dry_run' else 'success') }}
+        {{ ui.badge(t(job.status), status_level) }}
       </div>
-    {% endcall %}
+    </div>
 
-    {% call ui.panel(t("Execution Stats")) %}
-      <div class="metric-grid">
-        <div class="metric-item">
-          <div class="label">{{ t("Planned") }}</div>
-          <div class="value">{{ job.planned_operation_count }}</div>
-        </div>
-        <div class="metric-item">
-          <div class="label">{{ t("Executed") }}</div>
-          <div class="value">{{ job.executed_operation_count }}</div>
-        </div>
-        <div class="metric-item">
-          <div class="label">{{ t("Errors") }}</div>
-          <div class="value {% if job.error_count > 0 %}danger{% endif %}">{{ job.error_count }}</div>
-        </div>
+    <div class="job-review-hero__facts">
+      <div class="dense-meta">
+        <div><strong>{{ t("Started At") }}</strong><br>{{ job.started_at }}</div>
+        <div><strong>{{ t("Ended At") }}</strong><br>{{ job.ended_at or "-" }}</div>
+        <div><strong>{{ t("Mode") }}</strong><br>{{ t(job.execution_mode) }}</div>
+        <div><strong>{{ t("Status") }}</strong><br>{{ t(job.status) }}</div>
       </div>
-    {% endcall %}
-  </div>
+    </div>
+
+    <div class="impact-grid">
+      <div class="impact-card">
+        <span>{{ t("Planned") }}</span>
+        <strong>{{ job.planned_operation_count }}</strong>
+        <small>{{ t("Target-state operations") }}</small>
+      </div>
+      <div class="impact-card">
+        <span>{{ t("Executed") }}</span>
+        <strong>{{ job.executed_operation_count }}</strong>
+        <small>{{ t("Operations written or attempted") }}</small>
+      </div>
+      <div class="impact-card">
+        <span>{{ t("Errors") }}</span>
+        <strong class="{% if job.error_count > 0 %}text-danger{% endif %}">{{ job.error_count }}</strong>
+        <small>{{ t("Execution or planning failures") }}</small>
+      </div>
+      <div class="impact-card">
+        <span>{{ t("High Risk") }}</span>
+        <strong>{{ summary.get("high_risk_operation_count", 0) }}</strong>
+        <small>{{ t("Requires explicit review if non-zero") }}</small>
+      </div>
+      <div class="impact-card">
+        <span>{{ t("Conflicts") }}</span>
+        <strong>{{ summary.get("conflict_count", 0) }}</strong>
+        <small>{{ t("Identity decisions to resolve") }}</small>
+      </div>
+    </div>
+  </section>
 
   {% if job.summary and (job.summary.get("error") or job.summary.get("error_traceback") or job.summary.get("log_file")) %}
   {% call ui.panel(t("Failure Diagnostics")) %}

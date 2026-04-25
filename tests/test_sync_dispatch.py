@@ -136,6 +136,35 @@ class SyncDispatchTests(unittest.TestCase):
             self.assertIn("No successful dry run", result.message)
             self.assertEqual(SyncJobRepository(db_manager).count_jobs(), 0)
 
+    def test_enqueue_sync_job_blocks_scheduled_apply_after_dry_run_with_errors(self):
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "dispatch-schedule-errors.db"
+            db_manager = DatabaseManager(db_path=str(db_path))
+            db_manager.initialize()
+            job_repo = SyncJobRepository(db_manager)
+            job_repo.create_job(
+                job_id="job-dry-run-with-errors",
+                trigger_type="unit_test",
+                execution_mode="dry_run",
+                status="COMPLETED_WITH_ERRORS",
+                org_id="default",
+                started_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+            )
+
+            result = enqueue_sync_job(
+                db_path=str(db_path),
+                execution_mode="apply",
+                trigger_type="schedule",
+                org_id="default",
+                config_path="config.ini",
+                requested_by="scheduler",
+            )
+
+            self.assertFalse(result.accepted)
+            self.assertIsNone(result.job)
+            self.assertIn("Latest dry run did not complete successfully", result.message)
+            self.assertEqual(SyncJobRepository(db_manager).count_jobs(), 1)
+
     def test_enqueue_sync_job_allows_scheduled_apply_after_successful_dry_run(self):
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "dispatch-schedule-ready.db"

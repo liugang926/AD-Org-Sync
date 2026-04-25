@@ -56,6 +56,41 @@
     {{ ui.button(t("Open Release Center"), href="/config/releases", variant="secondary", icon="history") }}
   {% endcall %}
 
+  <section class="config-wizard-shell">
+    <div class="config-wizard-shell__copy">
+      <div class="decision-wizard__eyebrow">{{ t("Config Wizard") }}</div>
+      <h2>{{ t("Prepare the organization for a safe dry run.") }}</h2>
+      <p>{{ t("Work through source credentials, target directory, account policy, safety gates, and release review before production apply.") }}</p>
+    </div>
+    <div class="config-step-rail">
+      <div class="config-step is-active">
+        <span>1</span>
+        <strong>{{ t("Source") }}</strong>
+        <small>{{ t(source_provider_name) }}</small>
+      </div>
+      <div class="config-step">
+        <span>2</span>
+        <strong>{{ t("Target AD") }}</strong>
+        <small>{{ editable.ldap_domain or t("Not configured") }}</small>
+      </div>
+      <div class="config-step">
+        <span>3</span>
+        <strong>{{ t("Account Policy") }}</strong>
+        <small>{{ t("Password and naming") }}</small>
+      </div>
+      <div class="config-step {% if config_rollout_status.open_conflict_count > 0 %}is-warning{% endif %}">
+        <span>4</span>
+        <strong>{{ t("Safety") }}</strong>
+        <small>{{ t(config_rollout_status.badge_text) }}</small>
+      </div>
+      <div class="config-step {% if has_unpublished_changes|default(false) %}is-warning{% endif %}">
+        <span>5</span>
+        <strong>{{ t("Release") }}</strong>
+        <small>{{ t("Snapshot before rollout") }}</small>
+      </div>
+    </div>
+  </section>
+
   <div class="dense-two-col">
     {% call ui.helper_block(t("Shared Page, Provider-Specific Fields"), t("Only the source connector card changes with the selected provider. LDAP, password policy, runtime, and web deployment settings remain shared for every provider."), "info") %}
       <ul class="helper-list">

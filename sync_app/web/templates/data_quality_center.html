@@ -15,6 +15,19 @@
     {{ ui.button(t("Open Jobs"), href="/jobs", variant="ghost", icon="refresh-cw") }}
   {% endcall %}
 
+  <section class="quality-ops-hero">
+    <div>
+      <div class="decision-wizard__eyebrow">{{ t("Quality Operations") }}</div>
+      <h2>{{ t("Turn source-data cleanup into a visible operating loop.") }}</h2>
+      <p>{{ t("Track missing identifiers, duplicate attributes, department anomalies, and naming risks before they become unsafe account changes.") }}</p>
+    </div>
+    <div class="quality-ops-hero__focus">
+      <span>{{ t("Repair Backlog") }}</span>
+      <strong>{{ selected_repair_item_count or 0 }}</strong>
+      <small>{{ t("Selected snapshot") }}: {{ selected_snapshot_title or t("None") }}</small>
+    </div>
+  </section>
+
   <div class="compact-stats">
     {{ ui.compact_stat(t("Snapshots"), snapshot_count) }}
     {{ ui.compact_stat(t("Total Users"), selected_summary.total_users or 0) }}
