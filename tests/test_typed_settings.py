@@ -7,6 +7,7 @@ from sync_app.services.typed_settings import (
     BrandingSettings,
     DirectoryUiSettings,
     NotificationAutomationPolicySettings,
+    SSPRSettings,
     WebRuntimeSettings,
     WebSecuritySettings,
 )
@@ -127,6 +128,26 @@ class TypedSettingsTests(unittest.TestCase):
         self.assertEqual(loaded_branding_settings.brand_mark_text, "DH")
         self.assertEqual(loaded_branding_settings.brand_attribution, "Internal IT")
 
+    def test_sspr_settings_roundtrip_and_minimums(self):
+        temp_dir, settings_repo = self._create_settings_repo()
+        self.addCleanup(temp_dir.cleanup)
+
+        sspr_settings = SSPRSettings.from_mapping(
+            {
+                "sspr_enabled": "true",
+                "sspr_min_password_length": "0",
+                "sspr_unlock_account_default": True,
+                "sspr_verification_session_ttl_seconds": "1",
+            }
+        )
+        sspr_settings.persist(settings_repo, org_id="Default")
+
+        loaded_settings = SSPRSettings.load(settings_repo, org_id="default")
+        self.assertTrue(loaded_settings.enabled)
+        self.assertEqual(loaded_settings.min_password_length, 1)
+        self.assertTrue(loaded_settings.unlock_account_default)
+        self.assertEqual(loaded_settings.verification_session_ttl_seconds, 60)
+
     def test_advanced_sync_policy_settings_roundtrip(self):
         temp_dir, settings_repo = self._create_settings_repo()
         self.addCleanup(temp_dir.cleanup)
@@ -153,6 +174,7 @@ class TypedSettingsTests(unittest.TestCase):
                 "disable_circuit_breaker_percent": 3.5,
                 "disable_circuit_breaker_min_count": 12,
                 "disable_circuit_breaker_requires_approval": False,
+                "first_sync_identity_claim_mode": "review",
                 "managed_group_type": "mail_enabled_security",
                 "managed_group_mail_domain": "groups.example.com",
                 "custom_group_ou_path": "Managed Groups/APAC",
@@ -168,6 +190,7 @@ class TypedSettingsTests(unittest.TestCase):
         self.assertEqual(loaded_settings.disable_circuit_breaker_percent, 3.5)
         self.assertEqual(loaded_settings.disable_circuit_breaker_min_count, 12)
         self.assertFalse(loaded_settings.disable_circuit_breaker_requires_approval)
+        self.assertEqual(loaded_settings.first_sync_identity_claim_mode, "review")
         self.assertEqual(loaded_settings.managed_group_type, "mail_enabled_security")
         self.assertEqual(loaded_settings.custom_group_ou_path, "Managed Groups/APAC")
 

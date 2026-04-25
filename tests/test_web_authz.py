@@ -269,6 +269,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("Source Data Quality Snapshot", body)
         self.assertIn("Username Strategy Previewer", body)
         self.assertIn("Identity Route Explainer", body)
+        self.assertIn("First Sync Identity Claim", body)
         self.assertIn("Department To AD OU Mapping", body)
         self.assertIn("Same-Name Collision Policy", body)
         self.assertNotIn('name="advanced_connector_routing_enabled" value="1" checked', body)
@@ -299,6 +300,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             disable_circuit_breaker_percent=3.5,
             disable_circuit_breaker_min_count=2,
             disable_circuit_breaker_requires_approval="1",
+            first_sync_identity_claim_mode="review",
             managed_group_type="distribution",
             managed_group_mail_domain="groups.example.com",
             custom_group_ou_path="Managed Groups/Regional",
@@ -333,6 +335,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(
             self.app.state.settings_repo.get_value("managed_group_type", "", org_id="default"),
             "distribution",
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("first_sync_identity_claim_mode", "", org_id="default"),
+            "review",
         )
 
         response = self._route("/advanced-sync/connectors", "POST")(
@@ -3228,6 +3234,37 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(
             self.app.state.settings_repo.get_value("custom_group_ou_path", "", org_id="default"),
             "Managed Groups/Regional",
+        )
+
+    def test_config_page_persists_sspr_operations_settings(self):
+        self._login("superadmin")
+
+        response = self._route("/config", "GET")(self._request("/config"))
+        self.assertEqual(response.status_code, 200)
+        page_text = self._text(response)
+        self.assertIn("Self-Service Password Reset", page_text)
+        self.assertIn("/sspr/callback/wecom", page_text)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', page_text)
+        self.assertIsNotNone(match)
+
+        submit_response = self._route("/config", "POST")(
+            self._request("/config", "POST"),
+            csrf_token=match.group(1),
+            **self._build_config_form_payload(
+                sspr_enabled="true",
+                sspr_min_password_length=14,
+                sspr_unlock_account_default="true",
+                sspr_verification_session_ttl_seconds=900,
+            ),
+        )
+
+        self.assertEqual(submit_response.status_code, 303)
+        self.assertTrue(self.app.state.settings_repo.get_bool("sspr_enabled", False, org_id="default"))
+        self.assertEqual(self.app.state.settings_repo.get_int("sspr_min_password_length", 0, org_id="default"), 14)
+        self.assertTrue(self.app.state.settings_repo.get_bool("sspr_unlock_account_default", False, org_id="default"))
+        self.assertEqual(
+            self.app.state.settings_repo.get_int("sspr_verification_session_ttl_seconds", 0, org_id="default"),
+            900,
         )
 
     def test_config_preview_redirects_when_nothing_changed(self):

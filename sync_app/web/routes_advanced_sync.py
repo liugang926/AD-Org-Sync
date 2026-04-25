@@ -106,6 +106,10 @@ def register_advanced_sync_routes(
                 ("subtree", "Map subtree"),
                 ("exact", "Map exact department only"),
             ],
+            first_sync_identity_claim_mode_options=[
+                ("auto_safe", "Auto-claim safe existing AD matches"),
+                ("review", "Review existing AD matches first"),
+            ],
         )
 
     @app.post("/advanced-sync/username-preview")
@@ -194,6 +198,7 @@ def register_advanced_sync_routes(
         disable_circuit_breaker_percent: float = Form(5.0),
         disable_circuit_breaker_min_count: int = Form(10),
         disable_circuit_breaker_requires_approval: Optional[str] = Form(None),
+        first_sync_identity_claim_mode: str = Form("auto_safe"),
         managed_group_type: str = Form("security"),
         managed_group_mail_domain: str = Form(""),
         custom_group_ou_path: str = Form("Managed Groups"),
@@ -232,6 +237,7 @@ def register_advanced_sync_routes(
                     disable_circuit_breaker_requires_approval,
                     False,
                 ),
+                "first_sync_identity_claim_mode": first_sync_identity_claim_mode,
                 "managed_group_type": managed_group_type,
                 "managed_group_mail_domain": managed_group_mail_domain,
                 "custom_group_ou_path": custom_group_ou_path,

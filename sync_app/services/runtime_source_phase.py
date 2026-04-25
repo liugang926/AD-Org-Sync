@@ -387,6 +387,51 @@ def resolve_identity_bindings_phase(
 
         if existing_candidates:
             selected_candidate = next(iter(unique_existing_usernames.values()))
+            claim_mode = str(
+                getattr(ctx.policy_settings, 'first_sync_identity_claim_mode', 'auto_safe') or 'auto_safe'
+            ).strip().lower()
+            if claim_mode == 'review':
+                conflict_message = (
+                    f"Source user {userid} matched existing AD account "
+                    f"{selected_candidate['username']} and requires identity claim review"
+                )
+                conflict_details = {
+                    'userid': userid,
+                    'connector_id': connector_id,
+                    'candidate': selected_candidate,
+                    'claim_policy': claim_mode,
+                }
+                ctx.hooks.record_conflict(
+                    conflict_type='existing_ad_identity_claim_review',
+                    source_id=userid,
+                    target_key=selected_candidate['username'],
+                    message=conflict_message,
+                    resolution_hint=(
+                        'Approve a manual identity binding, or switch the first-sync identity claim policy '
+                        'to auto-claim safe existing AD matches'
+                    ),
+                    details=conflict_details,
+                )
+                ctx.hooks.record_event(
+                    'WARNING',
+                    'user_binding_claim_review',
+                    conflict_message,
+                    stage_name='plan',
+                    payload=conflict_details,
+                )
+                ctx.hooks.record_operation(
+                    stage_name='plan',
+                    object_type='user_binding',
+                    operation_type='resolve_identity_binding',
+                    status='conflict',
+                    message=conflict_message,
+                    source_id=userid,
+                    target_id=selected_candidate['username'],
+                    rule_source='first_sync_identity_claim_policy',
+                    reason_code='identity_claim_review_required',
+                    details=conflict_details,
+                )
+                continue
             resolution = {
                 'source': selected_candidate['rule'],
                 'ad_username': selected_candidate['username'],
@@ -395,6 +440,7 @@ def resolve_identity_bindings_phase(
                 'explanation': selected_candidate['explanation'],
                 'binding_record_source': selected_candidate['rule'],
                 'is_manual': False,
+                'claim_policy': claim_mode,
             }
         else:
             primary_managed_username = next(

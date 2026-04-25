@@ -11,6 +11,7 @@ from sync_app.core.config import load_sync_config
 from sync_app.core.models import AppConfig, OrganizationRecord
 from sync_app.core.sync_policies import normalize_group_type
 from sync_app.services.state import SyncStateManager
+from sync_app.services.typed_settings import normalize_first_sync_identity_claim_mode
 from sync_app.storage.local_db import (
     AttributeMappingRuleRepository,
     CustomManagedGroupBindingRepository,
@@ -101,6 +102,7 @@ class RuntimePolicySettings:
     disable_breaker_percent: float
     disable_breaker_min_count: int
     disable_breaker_requires_approval: bool
+    first_sync_identity_claim_mode: str
     global_group_type: str
     global_group_mail_domain: str
     global_custom_group_ou_path: str
@@ -240,6 +242,9 @@ def _build_policy_settings(
         disable_breaker_percent=max(get_org_setting_float("disable_circuit_breaker_percent", 5.0), 0.0),
         disable_breaker_min_count=max(get_org_setting_int("disable_circuit_breaker_min_count", 10), 0),
         disable_breaker_requires_approval=get_org_setting_bool("disable_circuit_breaker_requires_approval", True),
+        first_sync_identity_claim_mode=normalize_first_sync_identity_claim_mode(
+            get_org_setting_value("first_sync_identity_claim_mode", "auto_safe")
+        ),
         global_group_type=normalize_group_type(get_org_setting_value("managed_group_type", "security")),
         global_group_mail_domain=get_org_setting_value("managed_group_mail_domain", "") or "",
         global_custom_group_ou_path=get_org_setting_value("custom_group_ou_path", "Managed Groups") or "Managed Groups",
@@ -292,6 +297,7 @@ def _build_config_hash(
             "offboarding_grace_days": policy_settings.offboarding_grace_days,
             "disable_circuit_breaker_percent": policy_settings.disable_breaker_percent,
             "disable_circuit_breaker_min_count": policy_settings.disable_breaker_min_count,
+            "first_sync_identity_claim_mode": policy_settings.first_sync_identity_claim_mode,
             "managed_group_type": policy_settings.global_group_type,
             "managed_group_mail_domain": policy_settings.global_group_mail_domain,
             "custom_group_ou_path": policy_settings.global_custom_group_ou_path,

@@ -22,6 +22,7 @@ The codebase has already been refactored away from a simple `WeCom -> AD` utilit
 - Department to OU synchronization
 - User provisioning, update, reactivation, and disable workflows
 - Identity binding and department override rules
+- First-sync identity claim policy for safe existing AD account takeover or review-first binding
 - Exception rules and protected account/group policies
 - Conflict queue with manual resolution and recommendations
 - High-risk approval flow with dry-run to apply gating
@@ -31,7 +32,7 @@ The codebase has already been refactored away from a simple `WeCom -> AD` utilit
 - Advanced group lifecycle management
 - Audit logs, operation logs, retention cleanup, and backup rotation
 - Web console, CLI, import/export bundle, and bilingual UI
-- SSPR bounded-context service skeleton for future employee self-service flows
+- SSPR bounded-context service foundation, public Web adapter, organization-scoped operations settings, and source-provider OAuth launch
 
 ## Architecture
 
@@ -123,6 +124,7 @@ python -m venv .venv
 After installation:
 
 - Web console: `http://127.0.0.1:8010`
+- Employee SSPR portal: `http://127.0.0.1:8010/sspr` (disabled by default until enabled from `/config`)
 - Health probe: `http://127.0.0.1:8010/healthz`
 - Readiness probe: `http://127.0.0.1:8010/readyz`
 - Service management: `.\manage_web_service.ps1 -Action status`
@@ -277,6 +279,7 @@ The UI supports:
 - Protected AD groups are excluded by default
 - High-risk apply can be forced through dry-run approval
 - Bulk disable circuit breaker can block suspicious mass disable plans
+- Existing AD account claims can be auto-bound only when the match is unique and unprotected, or queued for review
 - Session security, CSRF, role-based access control, and password policy are enforced in the Web plane
 - On Windows, database-backed connector secrets are encrypted at rest with DPAPI when available
 - Audit logs, operation logs, conflict logs, review records, and retention cleanup are built in
@@ -304,7 +307,8 @@ Use these entry points for new work:
 - Source provider: add an adapter under `sync_app/providers/source/<provider>/` or `sync_app/providers/source/<provider>.py`, then register it through `sync_app.providers.source.registry`.
 - Target provider: add an adapter under `sync_app/providers/target/`, then register it through `sync_app.providers.target.registry`.
 - Product module: add a bounded context under `sync_app/modules/<context>/`; Web routes and CLI handlers should call that module's service layer only.
-- SSPR: continue from `sync_app/modules/sspr/`; employee authentication and Web adapters should stay separate from administrator Web sessions and the sync runtime.
+- SSPR: continue from `sync_app/modules/sspr/`; `/sspr` and `/sspr/callback/{provider_id}` are only Web adapters, while employee verification sessions stay separate from administrator Web sessions and the sync runtime.
+- SSPR operations: enable per organization from `/config`, set `sspr_min_password_length`, choose the default unlock behavior, and register provider callbacks such as `/sspr/callback/wecom` or `/sspr/callback/dingtalk`; the employee portal can launch WeCom or DingTalk OAuth through `/sspr/oauth/start`.
 
 Before adding a new feature, run the architecture guard tests to confirm the dependency direction remains clean.
 
