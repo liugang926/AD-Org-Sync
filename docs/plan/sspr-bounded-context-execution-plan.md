@@ -21,7 +21,7 @@ Completed in the first slice:
 
 ## Phase 2: Employee Verification
 
-Current service-layer slice:
+Completed service-layer slice:
 
 1. Add employee-auth session model under `sync_app/modules/sspr/`.
 2. Support source-provider verification through a module-local verifier adapter.
@@ -32,16 +32,25 @@ Current service-layer slice:
    touching target providers.
 
 The first implementation is intentionally service-only. Web routes and concrete
-WeCom QR/OAuth plumbing should build on these contracts in Phase 3.
+WeCom QR/OAuth plumbing build on these contracts in Phase 3.
 
 ## Phase 3: Web Adapter
 
-1. Add SSPR routes under Web as a thin adapter.
-2. Route handlers call `SSPRService`; they must not call target providers
-   directly.
-3. Render employee-only forms and success/failure states.
-4. Write all reset attempts to `WebAuditLogRepository`.
-5. Wire WeCom QR/OAuth callbacks into `SourceProviderSSPRVerifier`.
+Current Web-adapter slice:
+
+1. Add public `/sspr` routes under Web as a thin adapter.
+2. Route handlers call `SSPRVerificationService` and `SSPRService`; they do not
+   call target providers directly.
+3. Render employee-only verification/reset forms and success/failure states.
+4. Write verification and reset attempts to `WebAuditLogRepository`.
+5. Keep employee auth separate from administrator Web sessions by passing the
+   SSPR verification session through the form flow.
+
+Remaining provider-specific work:
+
+1. Wire WeCom QR/OAuth callbacks into `SourceProviderSSPRVerifier`.
+2. Add provider capability tests for the concrete WeCom/DingTalk verification
+   implementations once those adapters expose employee verification.
 
 ## Phase 4: Operations
 

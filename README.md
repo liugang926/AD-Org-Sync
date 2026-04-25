@@ -31,7 +31,7 @@ The codebase has already been refactored away from a simple `WeCom -> AD` utilit
 - Advanced group lifecycle management
 - Audit logs, operation logs, retention cleanup, and backup rotation
 - Web console, CLI, import/export bundle, and bilingual UI
-- SSPR bounded-context service skeleton for future employee self-service flows
+- SSPR bounded-context service foundation and public Web adapter for employee self-service flows
 
 ## Architecture
 
@@ -123,6 +123,7 @@ python -m venv .venv
 After installation:
 
 - Web console: `http://127.0.0.1:8010`
+- Employee SSPR portal: `http://127.0.0.1:8010/sspr`
 - Health probe: `http://127.0.0.1:8010/healthz`
 - Readiness probe: `http://127.0.0.1:8010/readyz`
 - Service management: `.\manage_web_service.ps1 -Action status`
@@ -304,7 +305,7 @@ Use these entry points for new work:
 - Source provider: add an adapter under `sync_app/providers/source/<provider>/` or `sync_app/providers/source/<provider>.py`, then register it through `sync_app.providers.source.registry`.
 - Target provider: add an adapter under `sync_app/providers/target/`, then register it through `sync_app.providers.target.registry`.
 - Product module: add a bounded context under `sync_app/modules/<context>/`; Web routes and CLI handlers should call that module's service layer only.
-- SSPR: continue from `sync_app/modules/sspr/`; employee authentication and Web adapters should stay separate from administrator Web sessions and the sync runtime.
+- SSPR: continue from `sync_app/modules/sspr/`; `/sspr` is only the Web adapter, while employee verification sessions stay separate from administrator Web sessions and the sync runtime.
 
 Before adding a new feature, run the architecture guard tests to confirm the dependency direction remains clean.
 

@@ -58,6 +58,7 @@ from sync_app.web.routes_mappings import register_mapping_routes
 from sync_app.web.routes_metadata import register_metadata_routes
 from sync_app.web.routes_organizations import register_organization_routes
 from sync_app.web.routes_public import register_public_routes
+from sync_app.web.routes_sspr import register_sspr_routes
 from sync_app.web.runtime import resolve_web_runtime_settings, web_runtime_requires_restart
 from sync_app.web.sync_support import SyncSupport
 from sync_app.web.security import (
@@ -115,10 +116,12 @@ PUBLIC_AUTH_PATHS = {
     "/logout",
     "/readyz",
     "/setup",
+    "/sspr",
 }
 PUBLIC_AUTH_PREFIXES = (
     "/static/",
     "/api/integrations/",
+    "/sspr/",
 )
 
 def _safe_redirect_target(value: str | None, default: str) -> str:
@@ -335,6 +338,18 @@ def create_app(
         rotate_csrf_token=rotate_csrf_token,
         validate_admin_password=request_support.validate_admin_password,
         verify_password=verify_password,
+    )
+
+    register_sspr_routes(
+        app,
+        build_source_provider_fn=lambda *args, **kwargs: build_source_provider(*args, **kwargs),
+        build_target_provider_fn=lambda *args, **kwargs: build_target_provider(*args, **kwargs),
+        flash=request_support.flash,
+        get_client_ip=request_support.get_client_ip,
+        logger=LOGGER,
+        reject_invalid_csrf=request_support.reject_invalid_csrf,
+        render=request_support.render,
+        to_bool=_to_bool,
     )
 
     register_dashboard_routes(

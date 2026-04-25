@@ -1012,6 +1012,49 @@ tr:hover td { background: #fcfdfe; transition: background 0.2s ease; }
   margin: 0 auto;
 }
 
+.sspr-hero {
+  margin-bottom: 28px;
+}
+
+.sspr-mark {
+  background: linear-gradient(135deg, #0f766e 0%, #2563eb 100%);
+  box-shadow: 0 12px 32px rgba(15, 118, 110, 0.24);
+}
+
+.sspr-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  width: min(920px, calc(100vw - 40px));
+  margin: 0 auto;
+}
+
+.sspr-card {
+  display: grid;
+  gap: 24px;
+}
+
+.sspr-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sspr-card__header h2 {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.sspr-card__header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .login-form-section {
   margin-bottom: 24px;
 }
@@ -3071,6 +3114,8 @@ button.small {
   }
   .card { padding: 24px; }
   .subcard { padding: 18px; }
+  .sspr-layout { grid-template-columns: 1fr; }
+  .sspr-card__header { flex-direction: column; }
   .form-grid { grid-template-columns: 1fr; }
   .cell-truncate { max-width: 220px; }
   .inline-form-field {

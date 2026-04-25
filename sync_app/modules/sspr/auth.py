@@ -24,13 +24,21 @@ class SourceProviderSSPRVerifier:
 
     def verify(self, request: SSPRVerificationRequest) -> SSPRVerifiedIdentity | None:
         provider = self.source_provider_resolver(request)
-        verify_fn = getattr(provider, "verify_employee_identity", None)
-        if not callable(verify_fn):
-            verify_fn = getattr(provider, "verify_sspr_identity", None)
-        if not callable(verify_fn):
-            raise NotImplementedError("source provider does not support SSPR employee verification")
-        raw_identity = verify_fn(request)
-        return _coerce_verified_identity(raw_identity, request)
+        try:
+            verify_fn = getattr(provider, "verify_employee_identity", None)
+            if not callable(verify_fn):
+                verify_fn = getattr(provider, "verify_sspr_identity", None)
+            if not callable(verify_fn):
+                raise NotImplementedError("source provider does not support SSPR employee verification")
+            raw_identity = verify_fn(request)
+            return _coerce_verified_identity(raw_identity, request)
+        finally:
+            close_fn = getattr(provider, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
 
 
 class InMemorySSPRSessionStore:
@@ -263,4 +271,3 @@ def _coerce_verified_identity(
 
 def _normalize_org_id(value: str | None) -> str:
     return str(value or "").strip().lower() or "default"
-
