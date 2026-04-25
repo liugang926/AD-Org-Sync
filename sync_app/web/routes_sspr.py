@@ -6,7 +6,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from sync_app.modules.sspr import (
     SourceProviderSSPRVerifier,
@@ -18,6 +18,7 @@ from sync_app.modules.sspr import (
 )
 from sync_app.services.typed_settings import SSPRSettings
 from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
+from sync_app.web.sspr_oauth import SSPROAuthLaunch, build_sspr_oauth_launch
 
 
 ProviderFactory = Callable[..., Any]
@@ -43,6 +44,55 @@ def register_sspr_routes(
         )
         return org, settings
 
+    def load_org_app_config(request: Request, org: Any):
+        runtime_state = get_web_runtime_state(request)
+        return get_web_repositories(request).org_config_repo.get_app_config(
+            org.org_id,
+            config_path=org.config_path or runtime_state.config_path,
+        )
+
+    def build_callback_url(request: Request, provider_id: str) -> str:
+        normalized_provider_id = str(provider_id or "wecom").strip().lower() or "wecom"
+        public_base_url = str(get_web_runtime_state(request).web_runtime_settings.get("public_base_url") or "").strip()
+        callback_path = f"/sspr/callback/{normalized_provider_id}"
+        if public_base_url:
+            return f"{public_base_url.rstrip('/')}{callback_path}"
+        return str(request.url_for("sspr_provider_callback", provider_id=normalized_provider_id))
+
+    def build_oauth_launch(
+        request: Request,
+        *,
+        org: Any,
+        provider_id: str,
+        source_user_id: str,
+    ) -> SSPROAuthLaunch:
+        config = load_org_app_config(request, org)
+        normalized_provider_id = str(config.source_provider or provider_id or "wecom").strip().lower() or "wecom"
+        return build_sspr_oauth_launch(
+            provider_id=normalized_provider_id,
+            client_id=config.source_connector.corpid,
+            callback_url=build_callback_url(request, normalized_provider_id),
+            org_id=org.org_id,
+            source_user_id=source_user_id,
+        )
+
+    def build_oauth_page_state(request: Request, *, org: Any, provider_id: str) -> SSPROAuthLaunch:
+        launch = build_oauth_launch(
+            request,
+            org=org,
+            provider_id=provider_id,
+            source_user_id="__pending_employee_id__",
+        )
+        if launch.error == "Employee ID is required.":
+            return SSPROAuthLaunch(
+                provider_id=launch.provider_id,
+                provider_label=launch.provider_label,
+                authorization_url="",
+                callback_url=launch.callback_url,
+                error="",
+            )
+        return launch
+
     def render_sspr_page(
         request: Request,
         *,
@@ -54,6 +104,9 @@ def register_sspr_routes(
         completed: bool = False,
     ):
         org, sspr_settings = load_sspr_settings(request, org_id)
+        config = load_org_app_config(request, org)
+        normalized_provider_id = str(provider_id or config.source_provider or "wecom").strip().lower() or "wecom"
+        oauth_launch = build_oauth_page_state(request, org=org, provider_id=normalized_provider_id)
         return render(
             request,
             "sspr.html",
@@ -62,7 +115,7 @@ def register_sspr_routes(
             lightweight_shell=True,
             org_id=org.org_id,
             source_user_id=str(source_user_id or "").strip(),
-            provider_id=str(provider_id or "wecom").strip().lower() or "wecom",
+            provider_id=normalized_provider_id,
             verification_session_id=str(verification_session_id or "").strip(),
             verified=bool(verified),
             completed=bool(completed),
@@ -70,6 +123,10 @@ def register_sspr_routes(
             sspr_min_password_length=sspr_settings.min_password_length,
             sspr_unlock_account_default=sspr_settings.unlock_account_default,
             sspr_verification_session_ttl_seconds=sspr_settings.verification_session_ttl_seconds,
+            sspr_oauth_provider_label=oauth_launch.provider_label,
+            sspr_oauth_callback_url=oauth_launch.callback_url,
+            sspr_oauth_ready=sspr_settings.enabled and not oauth_launch.error,
+            sspr_oauth_error=oauth_launch.error,
         )
 
     def build_source_verifier() -> SourceProviderSSPRVerifier:
@@ -161,6 +218,45 @@ def register_sspr_routes(
     @app.get("/sspr", response_class=HTMLResponse)
     def sspr_page(request: Request, org_id: str = ""):
         return render_sspr_page(request, org_id=org_id)
+
+    @app.post("/sspr/oauth/start")
+    def sspr_oauth_start(
+        request: Request,
+        csrf_token: str = Form(""),
+        org_id: str = Form(""),
+        source_user_id: str = Form(""),
+        provider_id: str = Form("wecom"),
+    ):
+        csrf_error = reject_invalid_csrf(request, csrf_token, "/sspr")
+        if csrf_error:
+            return csrf_error
+
+        org, sspr_settings = load_sspr_settings(request, org_id)
+        normalized_source_user_id = str(source_user_id or "").strip()
+        if not sspr_settings.enabled:
+            flash(request, "error", "Self-service password reset is not enabled for this organization.")
+            return render_sspr_page(
+                request,
+                org_id=org.org_id,
+                source_user_id=normalized_source_user_id,
+                provider_id=provider_id,
+            )
+
+        oauth_launch = build_oauth_launch(
+            request,
+            org=org,
+            provider_id=provider_id,
+            source_user_id=normalized_source_user_id,
+        )
+        if not oauth_launch.available:
+            flash(request, "error", oauth_launch.error or "Provider OAuth verification is not available.")
+            return render_sspr_page(
+                request,
+                org_id=org.org_id,
+                source_user_id=normalized_source_user_id,
+                provider_id=oauth_launch.provider_id,
+            )
+        return RedirectResponse(url=oauth_launch.authorization_url, status_code=303)
 
     @app.get("/sspr/callback/{provider_id}", response_class=HTMLResponse)
     def sspr_provider_callback(

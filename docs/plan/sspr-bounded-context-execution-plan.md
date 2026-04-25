@@ -51,8 +51,7 @@ Completed Web-adapter slice:
 
 Remaining provider-specific work:
 
-1. Generate provider-specific QR/OAuth authorization URLs from SSPR settings.
-2. Add deployment runbook steps for provider callback URLs and source app
+1. Add deployment runbook steps for provider callback URLs and source app
    permissions.
 
 ## Phase 4: Operations
@@ -69,6 +68,16 @@ Completed operations-settings slice:
 
 Remaining operations work:
 
-1. Generate provider-specific QR/OAuth authorization URLs from SSPR settings.
-2. Add audit search labels for `sspr.password_reset`.
-3. Add deployment runbook steps for source app callback URLs and permissions.
+1. Add audit search labels for `sspr.password_reset`.
+2. Add deployment runbook steps for source app callback URLs and permissions.
+
+## Phase 5: Provider OAuth Launch
+
+Completed provider-launch slice:
+
+1. Add `/sspr/oauth/start` as a public, CSRF-protected Web adapter endpoint.
+2. Generate WeCom and DingTalk authorization URLs from the selected
+   organization's source connector and Web public base URL.
+3. Encode `org_id`, `source_user_id`, and `provider_id` into the existing SSPR
+   callback state format.
+4. Keep the existing manual verification-code flow as a fallback.

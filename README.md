@@ -31,7 +31,7 @@ The codebase has already been refactored away from a simple `WeCom -> AD` utilit
 - Advanced group lifecycle management
 - Audit logs, operation logs, retention cleanup, and backup rotation
 - Web console, CLI, import/export bundle, and bilingual UI
-- SSPR bounded-context service foundation, public Web adapter, and organization-scoped operations settings
+- SSPR bounded-context service foundation, public Web adapter, organization-scoped operations settings, and source-provider OAuth launch
 
 ## Architecture
 
@@ -306,7 +306,7 @@ Use these entry points for new work:
 - Target provider: add an adapter under `sync_app/providers/target/`, then register it through `sync_app.providers.target.registry`.
 - Product module: add a bounded context under `sync_app/modules/<context>/`; Web routes and CLI handlers should call that module's service layer only.
 - SSPR: continue from `sync_app/modules/sspr/`; `/sspr` and `/sspr/callback/{provider_id}` are only Web adapters, while employee verification sessions stay separate from administrator Web sessions and the sync runtime.
-- SSPR operations: enable per organization from `/config`, set `sspr_min_password_length`, choose the default unlock behavior, and register provider callbacks such as `/sspr/callback/wecom` or `/sspr/callback/dingtalk`.
+- SSPR operations: enable per organization from `/config`, set `sspr_min_password_length`, choose the default unlock behavior, and register provider callbacks such as `/sspr/callback/wecom` or `/sspr/callback/dingtalk`; the employee portal can launch WeCom or DingTalk OAuth through `/sspr/oauth/start`.
 
 Before adding a new feature, run the architecture guard tests to confirm the dependency direction remains clean.
 

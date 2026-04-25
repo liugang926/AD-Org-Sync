@@ -1,9 +1,11 @@
 import re
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
 
 from tests.helpers.web_authz_case import WebAuthzBaseTestCase
+from sync_app.web.routes_sspr import _decode_sspr_callback_state
 
 
 class FakeSourceProvider:
@@ -157,6 +159,38 @@ class WebSSPRTests(WebAuthzBaseTestCase):
         self.assertIn("Employee identity verified", body)
         self.assertTrue(self._extract_field(body, "verification_session_id"))
         self.assertTrue(source_provider.closed)
+
+    def test_oauth_start_redirects_to_source_authorization_url(self):
+        self._enable_sspr()
+        self.app.state.web_runtime_settings["public_base_url"] = "https://sync.example.com"
+        self.session = {}
+        page = self._route("/sspr", "GET")(self._request("/sspr"))
+        csrf_token = self._extract_field(self._text(page), "csrf_token")
+
+        response = self._route("/sspr/oauth/start", "POST")(
+            self._request("/sspr/oauth/start", "POST"),
+            csrf_token=csrf_token,
+            org_id="default",
+            source_user_id="alice",
+            provider_id="wecom",
+        )
+
+        self.assertEqual(response.status_code, 303)
+        location = response.headers["location"]
+        parsed = urlparse(location)
+        query = parse_qs(parsed.query)
+        self.assertEqual(parsed.scheme, "https")
+        self.assertEqual(parsed.netloc, "open.weixin.qq.com")
+        self.assertEqual(parsed.path, "/connect/oauth2/authorize")
+        self.assertEqual(parsed.fragment, "wechat_redirect")
+        self.assertEqual(query["appid"], ["corp-001"])
+        self.assertEqual(query["redirect_uri"], ["https://sync.example.com/sspr/callback/wecom"])
+        self.assertEqual(query["response_type"], ["code"])
+        self.assertEqual(query["scope"], ["snsapi_base"])
+        state_values = _decode_sspr_callback_state(query["state"][0])
+        self.assertEqual(state_values["org_id"], "default")
+        self.assertEqual(state_values["source_user_id"], "alice")
+        self.assertEqual(state_values["provider_id"], "wecom")
 
     def test_reset_rejects_password_shorter_than_sspr_policy(self):
         self._enable_sspr(min_password_length=14)
