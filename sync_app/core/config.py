@@ -1,18 +1,11 @@
 import configparser
 import logging
-import os
 import ssl
 from typing import List, Tuple
 
 from sync_app.core.directory_protection import merge_protected_ad_accounts
 from sync_app.core.models import AccountConfig, AppConfig, LDAPConfig, SourceConnectorConfig
 from sync_app.infra.ldap_compat import ALL, NTLM, SIMPLE, Connection, Server, Tls, ensure_ldap3_available
-from sync_app.providers.source import (
-    build_source_provider,
-    get_source_provider_display_name,
-    get_source_provider_schema,
-)
-from sync_app.providers.source.base import normalize_source_provider
 
 
 def _get_optional_str(parser: configparser.ConfigParser, section: str, option: str) -> str | None:
@@ -31,6 +24,11 @@ def _get_config_value(
         if parser.has_option(section, option):
             return parser.get(section, option, fallback=fallback)
     return fallback
+
+
+def _normalize_source_provider(value: str | None, *, default: str = "wecom") -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized or default
 
 
 def build_tls_config(*, validate_cert: bool, ca_cert_path: str = ""):
@@ -71,7 +69,7 @@ def load_sync_config(config_path: str = "config.ini") -> AppConfig:
             ca_cert_path=config_parser.get("LDAP", "CACertPath", fallback="").strip(),
         ),
         domain=domain_name,
-        source_provider=normalize_source_provider(config_parser.get("Source", "Provider", fallback="wecom")),
+        source_provider=_normalize_source_provider(config_parser.get("Source", "Provider", fallback="wecom")),
         account=AccountConfig(
             default_password=config_parser.get("Account", "DefaultPassword", fallback="").strip(),
             force_change_password=config_parser.getboolean("Account", "ForceChangePassword", fallback=True),
@@ -102,89 +100,17 @@ def load_sync_config(config_path: str = "config.ini") -> AppConfig:
 
 
 def validate_config(config: AppConfig) -> Tuple[bool, List[str]]:
-    errors: List[str] = []
-    logger = logging.getLogger(__name__)
-    source_provider = normalize_source_provider(getattr(config, "source_provider", "wecom"))
-    provider_schema = get_source_provider_schema(source_provider)
-    source_values = {
-        "corpid": str(config.source_connector.corpid or "").strip(),
-        "agentid": str(config.source_connector.agentid or "").strip(),
-        "corpsecret": str(config.source_connector.corpsecret or "").strip(),
-        "webhook_url": str(config.webhook_url or "").strip(),
-    }
+    from sync_app.services.config_validation import validate_config as _validate_config
 
-    if not provider_schema.implemented:
-        errors.append(
-            provider_schema.implementation_status
-            or f"Source provider '{get_source_provider_display_name(source_provider)}' is not implemented in this build"
-        )
-    for field in provider_schema.connection_fields:
-        if field.required and not source_values.get(field.name):
-            errors.append(f"{provider_schema.display_name} {field.label} is not configured")
-
-    ldap_config = config.ldap
-    if not ldap_config.server:
-        errors.append("LDAP server is not configured")
-    if not ldap_config.domain:
-        errors.append("LDAP domain is not configured")
-    if not ldap_config.username:
-        errors.append("LDAP username is not configured")
-    if not ldap_config.password:
-        errors.append("LDAP password is not configured")
-    if ldap_config.use_ssl and ldap_config.validate_cert and ldap_config.ca_cert_path and not os.path.exists(ldap_config.ca_cert_path):
-        errors.append(f"LDAP CA certificate file does not exist: {ldap_config.ca_cert_path}")
-
-    port = ldap_config.port
-    if port and (port < 1 or port > 65535):
-        errors.append(f"LDAP port is invalid: {port}")
-
-    if not config.account.default_password:
-        errors.append("Default password is not configured")
-
-    if errors:
-        logger.error("config validation failed with %s error(s)", len(errors))
-        for error in errors:
-            logger.error("  - %s", error)
-        return False, errors
-
-    logger.info("config validation passed")
-    return True, []
+    return _validate_config(config)
 
 
 def run_config_security_self_check(config: AppConfig) -> List[str]:
-    warnings: List[str] = []
-    source_provider = normalize_source_provider(getattr(config, "source_provider", "wecom"))
-    provider_schema = get_source_provider_schema(source_provider)
+    from sync_app.services.config_validation import (
+        run_config_security_self_check as _run_config_security_self_check,
+    )
 
-    if not config.ldap.use_ssl:
-        warnings.append("LDAP is not using SSL/TLS.")
-    elif not config.ldap.validate_cert:
-        warnings.append("LDAPS certificate validation is disabled.")
-
-    default_password = config.account.default_password.strip()
-    insecure_passwords = {"notting8899", "changeme123!", "password123!", "admin123!"}
-    if default_password and default_password.lower() in insecure_passwords:
-        warnings.append("Default password is still a sample or weak password. Replace it immediately.")
-    elif default_password and len(default_password) < 12:
-        warnings.append("Default password is shorter than 12 characters. Increase its strength.")
-
-    if default_password and not config.account.force_change_password:
-        warnings.append("New users are not forced to change password at first sign-in.")
-
-    webhook_url = str(config.webhook_url or "").strip()
-    if webhook_url and source_provider == "wecom" and "key=" not in webhook_url:
-        notification_label = (
-            provider_schema.notification_fields[0].label
-            if provider_schema.notification_fields
-            else "Notification Webhook"
-        )
-        warnings.append(f"{notification_label} format is invalid")
-
-    if webhook_url and not webhook_url.startswith("https://"):
-        provider_name = get_source_provider_display_name(source_provider)
-        warnings.append(f"{provider_name} webhook is not using HTTPS.")
-
-    return warnings
+    return _run_config_security_self_check(config)
 
 
 def test_source_connection(
@@ -194,37 +120,20 @@ def test_source_connection(
     *,
     source_provider: str = "wecom",
 ) -> Tuple[bool, str]:
-    logger = logging.getLogger(__name__)
-    provider_client = None
-    normalized_provider = normalize_source_provider(source_provider)
-    provider_label = get_source_provider_display_name(normalized_provider)
-    try:
-        provider_client = build_source_provider(
-            source_connector_config=SourceConnectorConfig(corpid=corpid, corpsecret=corpsecret, agentid=agentid),
-            provider_type=normalized_provider,
-            logger=logger,
-        )
-        departments = provider_client.list_departments()
-        auth_type = "self-built app" if agentid else "generic"
-        message = f"{provider_label} connection succeeded ({auth_type}), departments: {len(departments)}"
-        logger.info(message)
-        return True, message
-    except Exception as exc:
-        message = f"{provider_label} connection failed: {exc}"
-        logger.error(message)
-        return False, message
-    finally:
-        if provider_client is not None:
-            provider_client.close()
+    from sync_app.services.config_validation import test_source_connection as _test_source_connection
 
-
-def test_wecom_connection(corpid: str, corpsecret: str, agentid: str = None) -> Tuple[bool, str]:
-    return test_source_connection(
+    return _test_source_connection(
         corpid,
         corpsecret,
         agentid,
-        source_provider="wecom",
+        source_provider=source_provider,
     )
+
+
+def test_wecom_connection(corpid: str, corpsecret: str, agentid: str = None) -> Tuple[bool, str]:
+    from sync_app.services.config_validation import test_wecom_connection as _test_wecom_connection
+
+    return _test_wecom_connection(corpid, corpsecret, agentid)
 
 
 # These are runtime diagnostics/helpers, not pytest test cases.

@@ -813,16 +813,71 @@ class ADSyncLDAPS:
             changes[attribute_name] = [(MODIFY_REPLACE, [normalized_value])]
         return changes
 
-    def _set_user_password(self, user_dn: str, password: str):
+    def _set_user_password(self, user_dn: str, password: str) -> bool:
         """设置用户密码"""
         try:
             # AD密码需要用特定格式编码
             password_value = f'"{password}"'.encode('utf-16-le')
-            self.connection.modify(user_dn, {
+            if self.connection.modify(user_dn, {
                 'unicodePwd': [(MODIFY_REPLACE, [password_value])]
-            })
+            }):
+                return True
+            self.logger.error(f"设置密码失败: {self.connection.result}")
+            return False
         except Exception as e:
             self.logger.error(f"设置密码失败: {str(e)}")
+            return False
+
+    def reset_user_password(
+        self,
+        username: str,
+        new_password: str,
+        *,
+        force_change_at_next_login: bool = False,
+    ) -> bool:
+        try:
+            if self._is_protected_account(username):
+                self.logger.warning(f"refusing to reset protected AD account password: {username}")
+                return False
+            if not new_password or not self._validate_password_complexity(new_password):
+                self.logger.warning(f"refusing weak password reset for AD user: {username}")
+                return False
+            user = self.get_user(username)
+            if not user:
+                self.logger.error(f"user not found in AD while resetting password: {username}")
+                return False
+            user_dn = user["dn"]
+            if not self._set_user_password(user_dn, new_password):
+                return False
+            if force_change_at_next_login and not self.connection.modify(
+                user_dn,
+                {"pwdLastSet": [(MODIFY_REPLACE, [0])]},
+            ):
+                self.logger.error(f"failed to force next-login password change for {username}: {self.connection.result}")
+                return False
+            self.logger.info(f"reset AD user password: {username}")
+            return True
+        except Exception as exc:
+            self.logger.error(f"failed to reset AD user password {username}: {exc}")
+            return False
+
+    def unlock_user(self, username: str) -> bool:
+        try:
+            if self._is_protected_account(username):
+                self.logger.warning(f"refusing to unlock protected AD account: {username}")
+                return False
+            user = self.get_user(username)
+            if not user:
+                self.logger.error(f"user not found in AD while unlocking account: {username}")
+                return False
+            if not self.connection.modify(user["dn"], {"lockoutTime": [(MODIFY_REPLACE, [0])]}):
+                self.logger.error(f"failed to unlock AD user {username}: {self.connection.result}")
+                return False
+            self.logger.info(f"unlocked AD user: {username}")
+            return True
+        except Exception as exc:
+            self.logger.error(f"failed to unlock AD user {username}: {exc}")
+            return False
     
     def _validate_password_complexity(self, password: str) -> bool:
         """验证密码复杂度"""
