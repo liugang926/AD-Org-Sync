@@ -382,6 +382,27 @@
           </div>
         {% endcall %}
 
+        {% call ui.panel(t("Employee Self-Service"), t("Organization Scope"), "info", t("Control the public employee password reset portal for this organization.")) %}
+          <div class="form-grid">
+            {{ forms.select("sspr_enabled", t("Self-Service Password Reset"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.sspr_enabled|lower) }}
+            {{ forms.input("sspr_min_password_length", t("SSPR Minimum Password Length"), editable.sspr_min_password_length, type="number", min_value="1") }}
+            {{ forms.select("sspr_unlock_account_default", t("Unlock Account By Default"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.sspr_unlock_account_default|lower) }}
+            {{ forms.input("sspr_verification_session_ttl_seconds", t("Verification Session TTL (sec)"), editable.sspr_verification_session_ttl_seconds, type="number", min_value="60", step="60") }}
+          </div>
+          <div class="helper-block">
+            <div class="helper-block__header">
+              <div class="helper-block__title">{{ t("SSPR Status") }}</div>
+              {{ ui.badge(t(sspr_status.badge_text), sspr_status.badge_level) }}
+            </div>
+            <ul class="helper-list">
+              <li><strong>{{ t("Portal URL") }}</strong>: <code>{{ sspr_status.portal_url }}</code></li>
+              {% for callback in sspr_status.callback_urls %}
+              <li><strong>{{ callback.label }}</strong>: <code>{{ callback.url }}</code></li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endcall %}
+
         {% call ui.panel(t("Directory Safety"), t("Organization Scope"), "warning", t("System-protected accounts are always skipped for binding, create, update, reactivation, and disable actions.")) %}
           <div class="form-group">
             <label for="protected_accounts_display">{{ t("Protected Accounts (Read-only)") }}</label>

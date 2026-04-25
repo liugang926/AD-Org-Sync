@@ -123,6 +123,31 @@ class SSPRModuleTests(unittest.TestCase):
         self.assertEqual(audit_repo.logs[0]["result"], "failure")
         self.assertEqual(audit_repo.logs[0]["target_type"], "source_user")
 
+    def test_password_reset_enforces_minimum_password_length(self):
+        target = FakeTargetProvider()
+        audit_repo = FakeAuditRepository()
+        service = SSPRService(
+            binding_repo=FakeBindingRepository(self._binding()),
+            audit_repo=audit_repo,
+            target_provider_resolver=lambda _binding: target,
+            min_password_length=12,
+        )
+
+        result = service.reset_password(
+            SSPRPasswordResetRequest(
+                org_id="default",
+                source_user_id="alice",
+                actor_username="alice",
+                new_password="short",
+            )
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status, "invalid_request")
+        self.assertEqual(target.reset_calls, [])
+        self.assertIn("at least 12 characters", result.message)
+        self.assertEqual(audit_repo.logs[0]["result"], "failure")
+
     def test_password_reset_reports_unsupported_target_capability(self):
         audit_repo = FakeAuditRepository()
         service = SSPRService(

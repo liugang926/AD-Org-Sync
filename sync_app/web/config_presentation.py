@@ -146,6 +146,15 @@ def build_config_preview_groups(provider_schema: Any) -> tuple[tuple[str, tuple[
                 ),
             ),
             (
+                "Employee Self-Service",
+                (
+                    ("sspr_enabled", "Self-Service Password Reset", "bool"),
+                    ("sspr_min_password_length", "SSPR Minimum Password Length", "number"),
+                    ("sspr_unlock_account_default", "Unlock Account By Default", "bool"),
+                    ("sspr_verification_session_ttl_seconds", "Verification Session TTL (sec)", "number"),
+                ),
+            ),
+            (
                 "Sync Scope And OU Mapping",
                 (
                     ("source_root_unit_ids", "Source Root Unit IDs Filter", "source_root_units"),

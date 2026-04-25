@@ -194,6 +194,79 @@ class WebSecuritySettings:
 
 
 @dataclass(frozen=True, slots=True)
+class SSPRSettings:
+    enabled: bool = False
+    min_password_length: int = 12
+    unlock_account_default: bool = False
+    verification_session_ttl_seconds: int = 600
+
+    @classmethod
+    def load(cls, settings_repo: Any, *, org_id: str) -> "SSPRSettings":
+        normalized_org_id = normalize_org_id(org_id, fallback="default") or "default"
+        return cls(
+            enabled=settings_repo.get_bool("sspr_enabled", False, org_id=normalized_org_id),
+            min_password_length=_coerce_int(
+                settings_repo.get_int("sspr_min_password_length", 12, org_id=normalized_org_id),
+                12,
+                minimum=1,
+            ),
+            unlock_account_default=settings_repo.get_bool(
+                "sspr_unlock_account_default",
+                False,
+                org_id=normalized_org_id,
+            ),
+            verification_session_ttl_seconds=_coerce_int(
+                settings_repo.get_int(
+                    "sspr_verification_session_ttl_seconds",
+                    600,
+                    org_id=normalized_org_id,
+                ),
+                600,
+                minimum=60,
+            ),
+        )
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> "SSPRSettings":
+        data = dict(values or {})
+        return cls(
+            enabled=_coerce_bool(data.get("sspr_enabled"), False),
+            min_password_length=_coerce_int(data.get("sspr_min_password_length"), 12, minimum=1),
+            unlock_account_default=_coerce_bool(data.get("sspr_unlock_account_default"), False),
+            verification_session_ttl_seconds=_coerce_int(
+                data.get("sspr_verification_session_ttl_seconds"),
+                600,
+                minimum=60,
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(asdict(self))
+
+    def persist(self, settings_repo: Any, *, org_id: str) -> None:
+        normalized_org_id = normalize_org_id(org_id, fallback="default") or "default"
+        settings_repo.set_value("sspr_enabled", _bool_setting(self.enabled), "bool", org_id=normalized_org_id)
+        settings_repo.set_value(
+            "sspr_min_password_length",
+            str(self.min_password_length),
+            "int",
+            org_id=normalized_org_id,
+        )
+        settings_repo.set_value(
+            "sspr_unlock_account_default",
+            _bool_setting(self.unlock_account_default),
+            "bool",
+            org_id=normalized_org_id,
+        )
+        settings_repo.set_value(
+            "sspr_verification_session_ttl_seconds",
+            str(self.verification_session_ttl_seconds),
+            "int",
+            org_id=normalized_org_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class BrandingSettings:
     brand_display_name: str = "AD Org Sync"
     brand_mark_text: str = "AD"

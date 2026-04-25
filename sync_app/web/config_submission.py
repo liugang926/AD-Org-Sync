@@ -5,7 +5,7 @@ from typing import Any, Optional
 from fastapi import Request
 
 from sync_app.core.models import AppConfig, OrganizationRecord, WebAdminUserRecord
-from sync_app.services.typed_settings import BrandingSettings, DirectoryUiSettings, WebRuntimeSettings
+from sync_app.services.typed_settings import BrandingSettings, DirectoryUiSettings, SSPRSettings, WebRuntimeSettings
 from sync_app.web.config_domain import (
     build_current_config_state_from_sources,
     build_preview_app_config_from_values,
@@ -34,6 +34,10 @@ def build_current_config_state(support: Any, request: Request, current_org: Orga
         org_id=current_org.org_id,
     )
     web_runtime_settings = WebRuntimeSettings.load(repositories.settings_repo)
+    sspr_settings = SSPRSettings.load(
+        repositories.settings_repo,
+        org_id=current_org.org_id,
+    )
     branding_settings = BrandingSettings.load(
         repositories.settings_repo,
         default_display_name=support.default_brand_display_name,
@@ -51,6 +55,10 @@ def build_current_config_state(support: Any, request: Request, current_org: Orga
         "web_session_cookie_secure_mode": web_runtime_settings.session_cookie_secure_mode,
         "web_trust_proxy_headers": web_runtime_settings.trust_proxy_headers,
         "web_forwarded_allow_ips": web_runtime_settings.forwarded_allow_ips,
+        "sspr_enabled": sspr_settings.enabled,
+        "sspr_min_password_length": sspr_settings.min_password_length,
+        "sspr_unlock_account_default": sspr_settings.unlock_account_default,
+        "sspr_verification_session_ttl_seconds": sspr_settings.verification_session_ttl_seconds,
         "brand_display_name": branding_settings.brand_display_name,
         "brand_mark_text": branding_settings.brand_mark_text,
         "brand_attribution": branding_settings.brand_attribution,
@@ -109,6 +117,10 @@ def build_config_submission(
     web_session_cookie_secure_mode: str = "auto",
     web_trust_proxy_headers: Optional[str] = None,
     web_forwarded_allow_ips: str = "127.0.0.1",
+    sspr_enabled: Optional[str] = None,
+    sspr_min_password_length: int = 12,
+    sspr_unlock_account_default: Optional[str] = None,
+    sspr_verification_session_ttl_seconds: int = 600,
     brand_display_name: str = "",
     brand_mark_text: str = "",
     brand_attribution: str = "",
@@ -166,6 +178,10 @@ def build_config_submission(
         web_session_cookie_secure_mode=web_session_cookie_secure_mode,
         web_trust_proxy_headers=web_trust_proxy_headers,
         web_forwarded_allow_ips=web_forwarded_allow_ips,
+        sspr_enabled=sspr_enabled,
+        sspr_min_password_length=sspr_min_password_length,
+        sspr_unlock_account_default=sspr_unlock_account_default,
+        sspr_verification_session_ttl_seconds=sspr_verification_session_ttl_seconds,
         brand_display_name=brand_display_name,
         brand_mark_text=brand_mark_text,
         brand_attribution=brand_attribution,

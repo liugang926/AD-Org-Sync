@@ -16,6 +16,7 @@ from sync_app.modules.sspr import (
     SSPRVerificationResult,
     SSPRVerificationService,
 )
+from sync_app.services.typed_settings import SSPRSettings
 from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
 
 
@@ -34,6 +35,14 @@ def register_sspr_routes(
     render: Callable[..., Any],
     to_bool: Callable[[str | None, bool], bool],
 ) -> None:
+    def load_sspr_settings(request: Request, org_id: str) -> tuple[Any, SSPRSettings]:
+        org = _resolve_public_org(request, org_id)
+        settings = SSPRSettings.load(
+            get_web_repositories(request).settings_repo,
+            org_id=org.org_id,
+        )
+        return org, settings
+
     def render_sspr_page(
         request: Request,
         *,
@@ -44,7 +53,7 @@ def register_sspr_routes(
         verified: bool = False,
         completed: bool = False,
     ):
-        org = _resolve_public_org(request, org_id)
+        org, sspr_settings = load_sspr_settings(request, org_id)
         return render(
             request,
             "sspr.html",
@@ -57,6 +66,10 @@ def register_sspr_routes(
             verification_session_id=str(verification_session_id or "").strip(),
             verified=bool(verified),
             completed=bool(completed),
+            sspr_enabled=sspr_settings.enabled,
+            sspr_min_password_length=sspr_settings.min_password_length,
+            sspr_unlock_account_default=sspr_settings.unlock_account_default,
+            sspr_verification_session_ttl_seconds=sspr_settings.verification_session_ttl_seconds,
         )
 
     def build_source_verifier() -> SourceProviderSSPRVerifier:
@@ -80,9 +93,14 @@ def register_sspr_routes(
         provider_id: str,
         verification_code: str,
         state: str = "",
+        sspr_settings: SSPRSettings | None = None,
     ) -> tuple[SSPRVerificationRequest, SSPRVerificationResult]:
         runtime_state = get_web_runtime_state(request)
         org = _resolve_public_org(request, org_id)
+        effective_settings = sspr_settings or SSPRSettings.load(
+            get_web_repositories(request).settings_repo,
+            org_id=org.org_id,
+        )
         verification_request = SSPRVerificationRequest(
             org_id=org.org_id,
             source_user_id=str(source_user_id or "").strip(),
@@ -97,6 +115,7 @@ def register_sspr_routes(
             session_store=runtime_state.sspr_session_store,
             audit_repo=get_web_repositories(request).audit_repo,
             rate_limiter=runtime_state.sspr_rate_limiter,
+            session_ttl_seconds=effective_settings.verification_session_ttl_seconds,
         )
         return verification_request, verification_service.verify_employee(verification_request)
 
@@ -156,25 +175,35 @@ def register_sspr_routes(
         resolved_org_id = str(org_id or state_values.get("org_id") or "").strip()
         resolved_source_user_id = str(source_user_id or state_values.get("source_user_id") or "").strip()
         normalized_provider_id = str(provider_id or state_values.get("provider_id") or "wecom").strip().lower() or "wecom"
+        org, sspr_settings = load_sspr_settings(request, resolved_org_id)
+        if not sspr_settings.enabled:
+            flash(request, "error", "Self-service password reset is not enabled for this organization.")
+            return render_sspr_page(
+                request,
+                org_id=org.org_id,
+                source_user_id=resolved_source_user_id,
+                provider_id=normalized_provider_id,
+            )
         if not str(code or "").strip():
             flash(request, "error", "Verification callback is missing the OAuth code.")
             return render_sspr_page(
                 request,
-                org_id=resolved_org_id,
+                org_id=org.org_id,
                 source_user_id=resolved_source_user_id,
                 provider_id=normalized_provider_id,
             )
         if not resolved_source_user_id:
             flash(request, "error", "Verification callback is missing the employee ID.")
-            return render_sspr_page(request, org_id=resolved_org_id, provider_id=normalized_provider_id)
+            return render_sspr_page(request, org_id=org.org_id, provider_id=normalized_provider_id)
 
         verification_request, result = verify_employee(
             request,
-            org_id=resolved_org_id,
+            org_id=org.org_id,
             source_user_id=resolved_source_user_id,
             provider_id=normalized_provider_id,
             verification_code=code,
             state=state,
+            sspr_settings=sspr_settings,
         )
         if result.ok and result.session is not None:
             flash(request, "success", "Employee identity verified. Choose a new password.")
@@ -208,13 +237,22 @@ def register_sspr_routes(
         if csrf_error:
             return csrf_error
 
-        org = _resolve_public_org(request, org_id)
+        org, sspr_settings = load_sspr_settings(request, org_id)
+        if not sspr_settings.enabled:
+            flash(request, "error", "Self-service password reset is not enabled for this organization.")
+            return render_sspr_page(
+                request,
+                org_id=org.org_id,
+                source_user_id=source_user_id,
+                provider_id=provider_id,
+            )
         verification_request, result = verify_employee(
             request,
             org_id=org.org_id,
             source_user_id=source_user_id,
             provider_id=provider_id,
             verification_code=verification_code,
+            sspr_settings=sspr_settings,
         )
         if result.ok and result.session is not None:
             flash(request, "success", "Employee identity verified. Choose a new password.")
@@ -246,11 +284,21 @@ def register_sspr_routes(
         new_password: str = Form(""),
         confirm_password: str = Form(""),
         unlock_account: str | None = Form(None),
+        unlock_account_present: str | None = Form(None),
     ):
         csrf_error = reject_invalid_csrf(request, csrf_token, "/sspr")
         if csrf_error:
             return csrf_error
 
+        org, sspr_settings = load_sspr_settings(request, org_id)
+        if not sspr_settings.enabled:
+            flash(request, "error", "Self-service password reset is not enabled for this organization.")
+            return render_sspr_page(
+                request,
+                org_id=org.org_id,
+                source_user_id=source_user_id,
+                provider_id=provider_id,
+            )
         normalized_source_user_id = str(source_user_id or "").strip()
         normalized_session_id = str(verification_session_id or "").strip()
         if not normalized_session_id:
@@ -278,7 +326,6 @@ def register_sspr_routes(
             )
 
         runtime_state = get_web_runtime_state(request)
-        org = _resolve_public_org(request, org_id)
         repositories = get_web_repositories(request)
         reset_service = SSPRService(
             binding_repo=repositories.user_binding_repo,
@@ -286,6 +333,16 @@ def register_sspr_routes(
             target_provider_resolver=target_provider_resolver,
             session_store=runtime_state.sspr_session_store,
             require_verified_session=True,
+            min_password_length=sspr_settings.min_password_length,
+        )
+        normalized_unlock_account = None if _is_fastapi_form_default(unlock_account) else unlock_account
+        normalized_unlock_account_present = (
+            None if _is_fastapi_form_default(unlock_account_present) else unlock_account_present
+        )
+        reset_unlock_account = (
+            sspr_settings.unlock_account_default
+            if normalized_unlock_account is None and normalized_unlock_account_present is None
+            else to_bool(normalized_unlock_account, False)
         )
         result = reset_service.reset_password(
             SSPRPasswordResetRequest(
@@ -295,7 +352,7 @@ def register_sspr_routes(
                 new_password=new_password,
                 request_ip=get_client_ip(request),
                 verification_session_id=normalized_session_id,
-                unlock_account=to_bool(unlock_account, False),
+                unlock_account=reset_unlock_account,
                 force_change_at_next_login=False,
             )
         )
@@ -310,7 +367,7 @@ def register_sspr_routes(
                 completed=True,
             )
 
-        flash(request, "error", _reset_error_message(result.status))
+        flash(request, "error", _reset_error_message(result.status, result.message))
         return render_sspr_page(
             request,
             org_id=org.org_id,
@@ -354,9 +411,9 @@ def _verification_error_message(result: SSPRVerificationResult) -> str:
     return "Employee verification failed."
 
 
-def _reset_error_message(status: str) -> str:
+def _reset_error_message(status: str, message: str = "") -> str:
     if status == "invalid_request":
-        return "Reset request is incomplete."
+        return str(message or "").strip() or "Reset request is incomplete."
     if status == "invalid_session":
         return "Verification session expired. Verify your identity again."
     if status == "not_found":
@@ -364,6 +421,11 @@ def _reset_error_message(status: str) -> str:
     if status == "unsupported":
         return "The target directory does not support self-service password reset yet."
     return "Password reset could not be completed."
+
+
+def _is_fastapi_form_default(value: Any) -> bool:
+    value_type = type(value)
+    return value_type.__module__ == "fastapi.params" and value_type.__name__ == "Form"
 
 
 def _decode_sspr_callback_state(value: str) -> dict[str, str]:

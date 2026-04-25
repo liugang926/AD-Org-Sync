@@ -43,6 +43,27 @@ class FakeTargetProvider:
 
 
 class WebSSPRTests(WebAuthzBaseTestCase):
+    def _enable_sspr(self, *, min_password_length=12, unlock_account_default=False, ttl_seconds=600):
+        self.app.state.settings_repo.set_value("sspr_enabled", "true", "bool", org_id="default")
+        self.app.state.settings_repo.set_value(
+            "sspr_min_password_length",
+            str(min_password_length),
+            "int",
+            org_id="default",
+        )
+        self.app.state.settings_repo.set_value(
+            "sspr_unlock_account_default",
+            "true" if unlock_account_default else "false",
+            "bool",
+            org_id="default",
+        )
+        self.app.state.settings_repo.set_value(
+            "sspr_verification_session_ttl_seconds",
+            str(ttl_seconds),
+            "int",
+            org_id="default",
+        )
+
     def test_sspr_page_is_public_without_admin_session(self):
         self.session = {}
 
@@ -51,9 +72,11 @@ class WebSSPRTests(WebAuthzBaseTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Employee Password Reset", response.text)
+        self.assertIn("Self-service password reset is not enabled", response.text)
         self.assertNotIn('href="/dashboard"', response.text)
 
     def test_verified_employee_can_reset_bound_ad_password(self):
+        self._enable_sspr()
         self.app.state.user_binding_repo.upsert_binding(
             "alice",
             "alice.ad",
@@ -111,6 +134,7 @@ class WebSSPRTests(WebAuthzBaseTestCase):
         self.assertIn("sspr.password_reset", action_types)
 
     def test_oauth_callback_can_complete_employee_verification(self):
+        self._enable_sspr()
         self.session = {}
         source_provider = FakeSourceProvider()
 
@@ -133,6 +157,92 @@ class WebSSPRTests(WebAuthzBaseTestCase):
         self.assertIn("Employee identity verified", body)
         self.assertTrue(self._extract_field(body, "verification_session_id"))
         self.assertTrue(source_provider.closed)
+
+    def test_reset_rejects_password_shorter_than_sspr_policy(self):
+        self._enable_sspr(min_password_length=14)
+        self.app.state.user_binding_repo.upsert_binding(
+            "alice",
+            "alice.ad",
+            org_id="default",
+            source_display_name="Alice",
+            source="manual",
+        )
+        self.session = {}
+        page = self._route("/sspr", "GET")(self._request("/sspr"))
+        csrf_token = self._extract_field(self._text(page), "csrf_token")
+        target_provider = FakeTargetProvider()
+        source_provider = FakeSourceProvider()
+
+        with (
+            patch("sync_app.web.app.build_source_provider", return_value=source_provider),
+            patch("sync_app.web.app.build_target_provider", return_value=target_provider),
+        ):
+            verify_response = self._route("/sspr/verify", "POST")(
+                self._request("/sspr/verify", "POST"),
+                csrf_token=csrf_token,
+                org_id="default",
+                source_user_id="alice",
+                provider_id="wecom",
+                verification_code="ok",
+            )
+            verification_session_id = self._extract_field(self._text(verify_response), "verification_session_id")
+            reset_response = self._route("/sspr/reset", "POST")(
+                self._request("/sspr/reset", "POST"),
+                csrf_token=csrf_token,
+                org_id="default",
+                source_user_id="alice",
+                provider_id="wecom",
+                verification_session_id=verification_session_id,
+                new_password="TooShort1!",
+                confirm_password="TooShort1!",
+            )
+
+        self.assertEqual(reset_response.status_code, 200)
+        self.assertIn("at least 14 characters", self._text(reset_response))
+        self.assertEqual(target_provider.reset_calls, [])
+
+    def test_unlock_account_default_applies_when_form_omits_unlock_choice(self):
+        self._enable_sspr(unlock_account_default=True)
+        self.app.state.user_binding_repo.upsert_binding(
+            "alice",
+            "alice.ad",
+            org_id="default",
+            source_display_name="Alice",
+            source="manual",
+        )
+        self.session = {}
+        page = self._route("/sspr", "GET")(self._request("/sspr"))
+        csrf_token = self._extract_field(self._text(page), "csrf_token")
+        target_provider = FakeTargetProvider()
+        source_provider = FakeSourceProvider()
+
+        with (
+            patch("sync_app.web.app.build_source_provider", return_value=source_provider),
+            patch("sync_app.web.app.build_target_provider", return_value=target_provider),
+        ):
+            verify_response = self._route("/sspr/verify", "POST")(
+                self._request("/sspr/verify", "POST"),
+                csrf_token=csrf_token,
+                org_id="default",
+                source_user_id="alice",
+                provider_id="wecom",
+                verification_code="ok",
+            )
+            verification_session_id = self._extract_field(self._text(verify_response), "verification_session_id")
+            reset_response = self._route("/sspr/reset", "POST")(
+                self._request("/sspr/reset", "POST"),
+                csrf_token=csrf_token,
+                org_id="default",
+                source_user_id="alice",
+                provider_id="wecom",
+                verification_session_id=verification_session_id,
+                new_password="NewSecret123!",
+                confirm_password="NewSecret123!",
+            )
+
+        self.assertEqual(reset_response.status_code, 200)
+        self.assertIn("Password reset completed", self._text(reset_response))
+        self.assertEqual(target_provider.unlock_calls, ["alice.ad"])
 
     @staticmethod
     def _extract_field(body: str, field_name: str) -> str:

@@ -22,7 +22,9 @@ CLI handlers, or sync runtime internals.
 
 SSPR belongs under `sync_app/modules/sspr/`. It should expose a service API for
 password reset and account unlock workflows, reuse target provider ports for
-directory writes, and write Web audit events through application services.
+directory writes, and write Web audit events through application services. Web
+adapters may load organization-scoped `SSPRSettings`, but module services must
+remain independent of Web sessions and route state.
 
 ### HR Source System
 

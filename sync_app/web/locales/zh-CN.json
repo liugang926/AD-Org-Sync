@@ -1070,5 +1070,16 @@
   "Verification callback is missing the employee ID.": "验证回调缺少员工 ID。",
   "Verification callback is missing the OAuth code.": "验证回调缺少 OAuth code。",
   "Verify your employee identity before changing your directory password.": "修改目录密码前，需要先验证员工身份。",
-  "Verify your employee identity before resetting the password.": "重置密码前请先验证员工身份。"
+  "Verify your employee identity before resetting the password.": "重置密码前请先验证员工身份。",
+  "Control the public employee password reset portal for this organization.": "控制当前组织的员工公开自助密码重置入口。",
+  "Employee Self-Service": "员工自助服务",
+  "Minimum length: {min_password_length} characters": "最小长度：{min_password_length} 个字符",
+  "Portal URL": "门户地址",
+  "Self-Service Password Reset": "自助密码重置",
+  "Self-service password reset is not enabled for this organization.": "当前组织尚未启用自助密码重置。",
+  "SSPR Minimum Password Length": "SSPR 最小密码长度",
+  "SSPR Status": "SSPR 状态",
+  "Unlock Account By Default": "默认解锁账号",
+  "Verification Session TTL (sec)": "验证会话有效期（秒）",
+  "new password must be at least {min_password_length} characters": "新密码长度至少为 {min_password_length} 个字符"
 }

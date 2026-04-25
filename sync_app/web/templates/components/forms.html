@@ -64,11 +64,11 @@
 </div>
 {% endmacro %}
 
-{% macro checkbox(name, label, value='1', checked=False, help_text='', class_name='', id='') %}
+{% macro checkbox(name, label, value='1', checked=False, help_text='', class_name='', id='', disabled=False, attrs='') %}
 {% set field_id = id or name %}
 <div class="form-group {{ class_name }}" id="group-{{ field_id }}">
   <label class="checkbox-field" for="{{ field_id }}">
-    <input id="{{ field_id }}" type="checkbox" name="{{ name }}" value="{{ value }}" {% if checked %}checked{% endif %} class="checkbox-field__input">
+    <input id="{{ field_id }}" type="checkbox" name="{{ name }}" value="{{ value }}" {% if checked %}checked{% endif %} {% if disabled %}disabled{% endif %} class="checkbox-field__input" {{ attrs|safe }}>
     {{ label }}
   </label>
   {% if help_text %}

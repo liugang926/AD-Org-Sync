@@ -18,12 +18,14 @@ class SSPRService:
         target_provider_resolver: TargetProviderResolver,
         session_store: Any | None = None,
         require_verified_session: bool = False,
+        min_password_length: int = 1,
     ) -> None:
         self.binding_repo = binding_repo
         self.audit_repo = audit_repo
         self.target_provider_resolver = target_provider_resolver
         self.session_store = session_store
         self.require_verified_session = bool(require_verified_session)
+        self.min_password_length = max(int(min_password_length or 1), 1)
 
     def reset_password(self, request: SSPRPasswordResetRequest) -> SSPRPasswordResetResult:
         org_id = _normalize_org_id(request.org_id)
@@ -42,6 +44,15 @@ class SSPRService:
                 request,
                 status="invalid_request",
                 message="new password is required",
+                org_id=org_id,
+                source_user_id=source_user_id,
+                actor_username=actor_username,
+            )
+        if len(str(request.new_password or "")) < self.min_password_length:
+            return self._failure(
+                request,
+                status="invalid_request",
+                message=f"new password must be at least {self.min_password_length} characters",
                 org_id=org_id,
                 source_user_id=source_user_id,
                 actor_username=actor_username,
@@ -227,6 +238,7 @@ class SSPRService:
             "has_verification_session": bool(request.verification_session_id),
             "unlock_account": bool(request.unlock_account),
             "force_change_at_next_login": bool(request.force_change_at_next_login),
+            "min_password_length": self.min_password_length,
         }
         return int(
             self.audit_repo.add_log(

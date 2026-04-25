@@ -18,12 +18,17 @@
         <h2>{{ t("Verify Identity") }}</h2>
         <p>{{ t("Use your source directory identity to start a short-lived reset session.") }}</p>
       </div>
-      {% if verified or completed %}
+      {% if not sspr_enabled %}
+      {{ ui.badge(t("Disabled"), "warning") }}
+      {% elif verified or completed %}
       {{ ui.badge(t("Verified"), "success") }}
       {% else %}
       {{ ui.badge(t("Required"), "warning") }}
       {% endif %}
     </div>
+    {% if not sspr_enabled %}
+    <div class="panel-note warning">{{ t("Self-service password reset is not enabled for this organization.") }}</div>
+    {% endif %}
 
     <form method="post" action="/sspr/verify" class="stack-md">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -35,18 +40,20 @@
         t("Employee ID"),
         value=source_user_id,
         required=True,
+        disabled=not sspr_enabled,
         placeholder=t("Enter your source user ID"),
         autocomplete="username"
       ) }}
       {{ forms.input(
         "verification_code",
         t("Verification Code"),
+        disabled=not sspr_enabled,
         placeholder=t("Enter the verification code"),
         autocomplete="one-time-code",
         help_text=t("For QR or OAuth verification, the provider callback will supply this value.")
       ) }}
 
-      {{ ui.button(t("Verify Identity"), type="submit", block=True) }}
+      {{ ui.button(t("Verify Identity"), type="submit", block=True, disabled=not sspr_enabled) }}
     </form>
   </section>
 
@@ -56,7 +63,9 @@
         <h2>{{ t("Reset Password") }}</h2>
         <p>{{ t("Choose a new directory password after identity verification succeeds.") }}</p>
       </div>
-      {% if completed %}
+      {% if not sspr_enabled %}
+      {{ ui.badge(t("Disabled"), "warning") }}
+      {% elif completed %}
       {{ ui.badge(t("Completed"), "success") }}
       {% elif verification_session_id %}
       {{ ui.badge(t("Ready to Reset"), "info") }}
@@ -77,23 +86,27 @@
         t("New Password"),
         type="password",
         required=True,
-        disabled=not verification_session_id,
+        disabled=(not sspr_enabled or not verification_session_id),
         placeholder=t("Enter a new password"),
-        autocomplete="new-password"
+        autocomplete="new-password",
+        attrs='minlength="' ~ sspr_min_password_length ~ '"',
+        help_text=t("Minimum length: {min_password_length} characters", min_password_length=sspr_min_password_length)
       ) }}
       {{ forms.input(
         "confirm_password",
         t("Confirm New Password"),
         type="password",
         required=True,
-        disabled=not verification_session_id,
+        disabled=(not sspr_enabled or not verification_session_id),
         placeholder=t("Confirm the new password"),
         autocomplete="new-password"
       ) }}
+      <input type="hidden" name="unlock_account_present" value="1">
       {{ forms.checkbox(
         "unlock_account",
         t("Unlock account after reset"),
-        checked=False,
+        checked=sspr_unlock_account_default,
+        disabled=(not sspr_enabled or not verification_session_id),
         class_name="sspr-checkbox"
       ) }}
 
@@ -101,7 +114,7 @@
         t("Reset Password"),
         type="submit",
         block=True,
-        disabled=not verification_session_id
+        disabled=(not sspr_enabled or not verification_session_id)
       ) }}
     </form>
   </section>
