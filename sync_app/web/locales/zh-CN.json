@@ -1081,5 +1081,10 @@
   "SSPR Status": "SSPR 状态",
   "Unlock Account By Default": "默认解锁账号",
   "Verification Session TTL (sec)": "验证会话有效期（秒）",
-  "new password must be at least {min_password_length} characters": "新密码长度至少为 {min_password_length} 个字符"
+  "new password must be at least {min_password_length} characters": "新密码长度至少为 {min_password_length} 个字符",
+  "Provider OAuth verification is not available.": "当前源系统暂不支持 OAuth 验证。",
+  "Provider OAuth verification is not available for this source provider yet.": "当前源系统暂不支持 OAuth 验证。",
+  "Source provider client ID is not configured.": "源系统 Client ID 尚未配置。",
+  "SSPR callback URL is not configured.": "SSPR 回调地址尚未配置。",
+  "Verify With {provider}": "使用 {provider} 验证"
 }

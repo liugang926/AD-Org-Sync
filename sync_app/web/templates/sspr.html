@@ -53,6 +53,17 @@
         help_text=t("For QR or OAuth verification, the provider callback will supply this value.")
       ) }}
 
+      {% if sspr_oauth_error %}
+      <div class="panel-note warning">{{ t(sspr_oauth_error) }}</div>
+      {% endif %}
+      {{ ui.button(
+        t("Verify With {provider}", provider=sspr_oauth_provider_label),
+        type="submit",
+        block=True,
+        variant="secondary",
+        disabled=(not sspr_enabled or not sspr_oauth_ready),
+        attrs='formaction="/sspr/oauth/start"'
+      ) }}
       {{ ui.button(t("Verify Identity"), type="submit", block=True, disabled=not sspr_enabled) }}
     </form>
   </section>
