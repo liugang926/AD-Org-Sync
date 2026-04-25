@@ -579,6 +579,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             "bool",
             org_id="default",
         )
+        self.app.state.settings_repo.set_value(
+            "first_sync_identity_claim_mode",
+            "review",
+            "string",
+            org_id="default",
+        )
         self.app.state.connector_repo.upsert_connector(
             connector_id="asia",
             org_id="default",
@@ -644,6 +650,17 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(explanation["target_department"]["department_id"], 3)
         self.assertEqual(explanation["target_ou_path"], "Managed Users/Asia/China")
         self.assertEqual(explanation["username_preview"]["primary_candidate"]["username"], "smitha")
+        self.assertEqual(explanation["identity_claim_policy"]["mode"], "review")
+        self.assertEqual(
+            explanation["identity_claim_policy"]["existing_match_behavior"],
+            "queue_existing_match_for_review",
+        )
+        self.assertTrue(
+            any(
+                item["username"] == "asmith" and item["rule"] == "existing_ad_userid"
+                for item in explanation["identity_claim_policy"]["claim_candidates"]
+            )
+        )
 
     def test_advanced_sync_data_quality_snapshot_surfaces_naming_and_source_data_gaps(self):
         self._login("superadmin")

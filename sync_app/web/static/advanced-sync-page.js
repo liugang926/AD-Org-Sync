@@ -200,6 +200,32 @@
     const connectorText = connectorCandidates.length
       ? connectorCandidates.map((item) => `${item.name || item.connector_id} [${item.connector_id}]`).join(", ")
       : "-";
+    const claimPolicy = explanation?.identity_claim_policy || {};
+    const claimCandidates = Array.isArray(claimPolicy?.claim_candidates) ? claimPolicy.claim_candidates : [];
+    const claimCandidateList = claimCandidates.length
+      ? `
+        <div class="check-list">
+          ${claimCandidates
+            .map(
+              (candidate) => `
+                <div class="check-item">
+                  <div class="check-item__header">
+                    <h3 class="check-item__title"><code>${escapeHtml(candidate.username || "")}</code></h3>
+                    ${badge("Existing AD Claim Candidate", "info")}
+                  </div>
+                  <p class="check-item__detail">${escapeHtml(candidate.explanation || "")}</p>
+                  <div class="muted">Rule: ${escapeHtml(candidate.rule || "-")}</div>
+                </div>
+              `,
+            )
+            .join("")}
+        </div>
+      `
+      : `
+        <div class="panel-note info">
+          No existing-AD claim candidates were generated from the current source identity.
+        </div>
+      `;
 
     return `
       <div class="stack-tight">
@@ -225,6 +251,17 @@
               : "-",
           )}
           ${detailItem("Target OU Path", `<code>${escapeHtml(explanation?.target_ou_path || "-")}</code>`)}
+        </div>
+        <div>
+          <div class="muted">First Sync Identity Claim</div>
+          <div class="panel-note ${claimPolicy?.mode === "review" ? "warning" : "info"}">
+            ${escapeHtml(claimPolicy?.label || "Auto-claim safe existing AD matches")}
+          </div>
+          <div class="detail-grid">
+            ${detailItem("Existing Match Behavior", `<code>${escapeHtml(claimPolicy?.existing_match_behavior || "-")}</code>`)}
+            ${detailItem("Claim Candidate Count", escapeHtml(String(claimPolicy?.claim_candidate_count ?? claimCandidates.length)))}
+          </div>
+          ${claimCandidateList}
         </div>
         <div>
           <div class="muted">Department Routing</div>
