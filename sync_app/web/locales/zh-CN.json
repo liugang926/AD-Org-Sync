@@ -1067,6 +1067,8 @@
   "Verification session expired. Verify your identity again.": "验证会话已过期，请重新验证身份。",
   "Verified": "已验证",
   "Verify Identity": "验证身份",
+  "Verification callback is missing the employee ID.": "验证回调缺少员工 ID。",
+  "Verification callback is missing the OAuth code.": "验证回调缺少 OAuth code。",
   "Verify your employee identity before changing your directory password.": "修改目录密码前，需要先验证员工身份。",
   "Verify your employee identity before resetting the password.": "重置密码前请先验证员工身份。"
 }

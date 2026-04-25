@@ -305,7 +305,7 @@ Use these entry points for new work:
 - Source provider: add an adapter under `sync_app/providers/source/<provider>/` or `sync_app/providers/source/<provider>.py`, then register it through `sync_app.providers.source.registry`.
 - Target provider: add an adapter under `sync_app/providers/target/`, then register it through `sync_app.providers.target.registry`.
 - Product module: add a bounded context under `sync_app/modules/<context>/`; Web routes and CLI handlers should call that module's service layer only.
-- SSPR: continue from `sync_app/modules/sspr/`; `/sspr` is only the Web adapter, while employee verification sessions stay separate from administrator Web sessions and the sync runtime.
+- SSPR: continue from `sync_app/modules/sspr/`; `/sspr` and `/sspr/callback/{provider_id}` are only Web adapters, while employee verification sessions stay separate from administrator Web sessions and the sync runtime.
 
 Before adding a new feature, run the architecture guard tests to confirm the dependency direction remains clean.
 

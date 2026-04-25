@@ -132,6 +132,24 @@ class WeComAPI:
             return {}
         return result
 
+    def get_oauth_user_info(self, code: str) -> Dict:
+        normalized_code = str(code or "").strip()
+        if not normalized_code:
+            return {}
+        url = (
+            "https://qyapi.weixin.qq.com/cgi-bin/auth/getuserinfo"
+            f"?access_token={self.access_token}&code={normalized_code}"
+        )
+        result = self._request("GET", url)
+        if result.get("errcode") != 0:
+            self.logger.error(
+                "failed to get WeCom OAuth user info: errcode=%s, errmsg=%s",
+                result.get("errcode"),
+                result.get("errmsg"),
+            )
+            return {}
+        return result
+
     def update_user(self, userid: str, updates: Dict) -> bool:
         payload = {"userid": userid}
         payload.update({key: value for key, value in dict(updates or {}).items() if value not in (None, "")})

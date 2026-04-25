@@ -351,6 +351,46 @@ class DingTalkAPI:
             return {}
         return self._normalize_user(dict(result), department_id=None)
 
+    def get_oauth_user_info(self, code: str) -> Dict[str, Any]:
+        normalized_code = str(code or "").strip()
+        if not normalized_code:
+            return {}
+        token_payload = {
+            "clientId": self.app_key,
+            "clientSecret": self.app_secret,
+            "code": normalized_code,
+            "grantType": "authorization_code",
+        }
+        token_response = self.session.post(
+            "https://api.dingtalk.com/v1.0/oauth2/userAccessToken",
+            json=token_payload,
+            timeout=self.timeout,
+        )
+        token_response.raise_for_status()
+        token_result = token_response.json()
+        user_access_token = str(
+            token_result.get("accessToken")
+            or token_result.get("access_token")
+            or ""
+        ).strip()
+        if not user_access_token:
+            self.logger.error(
+                "failed to get DingTalk OAuth user access token: code=%s, message=%s",
+                token_result.get("code"),
+                token_result.get("message") or token_result.get("errmsg"),
+            )
+            return {}
+        user_response = self.session.get(
+            "https://api.dingtalk.com/v1.0/contact/users/me",
+            headers={"x-acs-dingtalk-access-token": user_access_token},
+            timeout=self.timeout,
+        )
+        user_response.raise_for_status()
+        result = user_response.json()
+        if not isinstance(result, dict):
+            return {}
+        return self._normalize_user(result, department_id=None)
+
     def update_user(self, userid: str, updates: Dict[str, Any]) -> bool:
         payload = {"userid": userid}
         payload.update({key: value for key, value in dict(updates or {}).items() if value not in (None, "")})

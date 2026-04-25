@@ -41,6 +41,25 @@ class WeComSourceProvider(SourceDirectoryProvider):
     def get_user_detail(self, user_id: str) -> dict[str, Any]:
         return dict(self._api.get_user_detail(user_id) or {})
 
+    def verify_employee_identity(self, request: Any) -> dict[str, Any] | None:
+        oauth_code = str(getattr(request, "verification_code", "") or "").strip()
+        if not oauth_code:
+            return None
+        get_oauth_user_info = getattr(self._api, "get_oauth_user_info", None)
+        if not callable(get_oauth_user_info):
+            raise NotImplementedError("WeCom API client does not support SSPR employee verification")
+        payload = dict(get_oauth_user_info(oauth_code) or {})
+        source_user_id = _extract_wecom_user_id(payload)
+        if not source_user_id:
+            return None
+        return {
+            "org_id": str(getattr(request, "org_id", "") or "default"),
+            "source_user_id": source_user_id,
+            "provider_id": self.provider_id,
+            "display_name": str(payload.get("name") or payload.get("Name") or source_user_id),
+            "raw_claims": payload,
+        }
+
     def update_user(self, user_id: str, updates: dict[str, Any]) -> bool:
         return bool(self._api.update_user(user_id, updates))
 
@@ -63,3 +82,11 @@ class WeComSourceProvider(SourceDirectoryProvider):
         close_method = getattr(self._api, "close", None)
         if callable(close_method):
             close_method()
+
+
+def _extract_wecom_user_id(payload: dict[str, Any]) -> str:
+    for key in ("UserId", "userid", "userId", "user_id", "open_userid", "OpenUserId"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return ""
