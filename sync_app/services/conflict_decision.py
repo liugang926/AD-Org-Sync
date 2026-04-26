@@ -114,6 +114,11 @@ def build_binding_decision_summary(
             bind_now["notes"].append(
                 "Choosing one concrete AD account should clear this user's candidate ambiguity on the next sync run."
             )
+        elif normalized_conflict_type == "existing_ad_identity_claim_review":
+            bind_now["notes"].append(
+                "Approving this claim writes a manual binding, so the next sync can update the existing AD account "
+                "instead of creating a duplicate managed account."
+            )
         else:
             bind_now["notes"].append(
                 "This binding should let the next sync proceed with one stable AD identity for the source user."
@@ -143,6 +148,19 @@ def build_binding_decision_summary(
             "will_conflict_continue": True,
             "notes": [
                 "A unique AD identity still needs to be chosen for each affected source user.",
+            ],
+        }
+    elif normalized_conflict_type == "existing_ad_identity_claim_review":
+        without_binding = {
+            "status": "warning",
+            "summary": (
+                "If you do not approve the claim, the existing AD account stays unbound and the review-mode policy "
+                "should keep this user in the conflict queue on the next sync run."
+            ),
+            "will_create_new_account": False,
+            "will_conflict_continue": True,
+            "notes": [
+                "Switching the policy back to auto-safe would allow unique, unprotected existing-account claims to bind automatically.",
             ],
         }
     else:

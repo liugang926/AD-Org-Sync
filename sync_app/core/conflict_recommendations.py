@@ -104,6 +104,31 @@ def recommend_conflict_resolution(conflict: Any) -> Optional[dict[str, Any]]:
             "ad_username": candidate_username,
         })
 
+    if conflict_type == "existing_ad_identity_claim_review":
+        candidate = details.get("candidate") if isinstance(details.get("candidate"), dict) else {}
+        candidate_username = str(candidate.get("username") or target_key or "").strip()
+        candidate_rule = str(candidate.get("rule") or "").strip()
+        if not candidate_username:
+            return _finalize_recommendation({
+                "action": "skip_user_sync",
+                "label": "Add skip_user_sync",
+                "reason": f"No reviewable AD account is available for {source_id}; skip this user until identity is clarified.",
+                "confidence": "medium",
+            })
+        if candidate_rule == "existing_ad_userid":
+            reason = f"Bind {source_id} to {candidate_username} because it matches the source user ID directly."
+            confidence = "high"
+        else:
+            reason = f"Bind {source_id} to {candidate_username} after review because it is the configured existing AD match."
+            confidence = "medium"
+        return _finalize_recommendation({
+            "action": "manual_binding",
+            "label": "Approve existing AD account claim",
+            "reason": reason,
+            "confidence": confidence,
+            "ad_username": candidate_username,
+        })
+
     if conflict_type == "shared_ad_account":
         related_userids = list(details.get("source_user_ids") or details.get("wecom_userids") or [])
         reason = (

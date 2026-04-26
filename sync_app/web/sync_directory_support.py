@@ -25,6 +25,7 @@ from sync_app.services.runtime_identity import (
     build_identity_candidates,
     resolve_target_department,
 )
+from sync_app.services.typed_settings import normalize_first_sync_identity_claim_mode
 from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
 
 
@@ -619,6 +620,22 @@ class SyncDirectorySupportMixin:
                 if selected_connector_spec
                 else None
             )
+            identity_claim_mode = normalize_first_sync_identity_claim_mode(
+                repositories.settings_repo.get_value(
+                    "first_sync_identity_claim_mode",
+                    "auto_safe",
+                    org_id=current_org.org_id,
+                )
+            )
+            identity_claim_candidates = [
+                {
+                    "username": str(candidate.get("username") or ""),
+                    "rule": str(candidate.get("rule") or ""),
+                    "explanation": str(candidate.get("explanation") or ""),
+                }
+                for candidate in list((preview or {}).get("candidates") or [])
+                if candidate.get("allow_existing_match")
+            ]
             return {
                 "user": {
                     "userid": source_user.userid,
@@ -676,6 +693,21 @@ class SyncDirectorySupportMixin:
                 ),
                 "target_ou_path": "/".join(target_ou_segments),
                 "username_preview": preview,
+                "identity_claim_policy": {
+                    "mode": identity_claim_mode,
+                    "label": (
+                        "Auto-claim safe existing AD matches"
+                        if identity_claim_mode == "auto_safe"
+                        else "Review existing AD matches first"
+                    ),
+                    "existing_match_behavior": (
+                        "auto_bind_unique_unprotected_match"
+                        if identity_claim_mode == "auto_safe"
+                        else "queue_existing_match_for_review"
+                    ),
+                    "claim_candidate_count": len(identity_claim_candidates),
+                    "claim_candidates": identity_claim_candidates,
+                },
             }
         finally:
             self._close_directory_resource(source_provider)

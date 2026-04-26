@@ -8,6 +8,7 @@ from sync_app.storage.local_db import normalize_org_id
 
 SECURE_COOKIE_MODES = {"auto", "always", "never"}
 SCHEDULE_EXECUTION_MODES = {"apply", "dry_run"}
+FIRST_SYNC_IDENTITY_CLAIM_MODES = {"auto_safe", "review"}
 
 
 def normalize_secure_cookie_mode(value: Any) -> str:
@@ -18,6 +19,11 @@ def normalize_secure_cookie_mode(value: Any) -> str:
 def normalize_schedule_execution_mode(value: Any) -> str:
     normalized = str(value or "").strip().lower()
     return normalized if normalized in SCHEDULE_EXECUTION_MODES else "apply"
+
+
+def normalize_first_sync_identity_claim_mode(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in FIRST_SYNC_IDENTITY_CLAIM_MODES else "auto_safe"
 
 
 def _clean_public_base_url(value: Any) -> str:
@@ -191,6 +197,79 @@ class WebSecuritySettings:
 
     def to_dict(self) -> dict[str, Any]:
         return dict(asdict(self))
+
+
+@dataclass(frozen=True, slots=True)
+class SSPRSettings:
+    enabled: bool = False
+    min_password_length: int = 12
+    unlock_account_default: bool = False
+    verification_session_ttl_seconds: int = 600
+
+    @classmethod
+    def load(cls, settings_repo: Any, *, org_id: str) -> "SSPRSettings":
+        normalized_org_id = normalize_org_id(org_id, fallback="default") or "default"
+        return cls(
+            enabled=settings_repo.get_bool("sspr_enabled", False, org_id=normalized_org_id),
+            min_password_length=_coerce_int(
+                settings_repo.get_int("sspr_min_password_length", 12, org_id=normalized_org_id),
+                12,
+                minimum=1,
+            ),
+            unlock_account_default=settings_repo.get_bool(
+                "sspr_unlock_account_default",
+                False,
+                org_id=normalized_org_id,
+            ),
+            verification_session_ttl_seconds=_coerce_int(
+                settings_repo.get_int(
+                    "sspr_verification_session_ttl_seconds",
+                    600,
+                    org_id=normalized_org_id,
+                ),
+                600,
+                minimum=60,
+            ),
+        )
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> "SSPRSettings":
+        data = dict(values or {})
+        return cls(
+            enabled=_coerce_bool(data.get("sspr_enabled"), False),
+            min_password_length=_coerce_int(data.get("sspr_min_password_length"), 12, minimum=1),
+            unlock_account_default=_coerce_bool(data.get("sspr_unlock_account_default"), False),
+            verification_session_ttl_seconds=_coerce_int(
+                data.get("sspr_verification_session_ttl_seconds"),
+                600,
+                minimum=60,
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(asdict(self))
+
+    def persist(self, settings_repo: Any, *, org_id: str) -> None:
+        normalized_org_id = normalize_org_id(org_id, fallback="default") or "default"
+        settings_repo.set_value("sspr_enabled", _bool_setting(self.enabled), "bool", org_id=normalized_org_id)
+        settings_repo.set_value(
+            "sspr_min_password_length",
+            str(self.min_password_length),
+            "int",
+            org_id=normalized_org_id,
+        )
+        settings_repo.set_value(
+            "sspr_unlock_account_default",
+            _bool_setting(self.unlock_account_default),
+            "bool",
+            org_id=normalized_org_id,
+        )
+        settings_repo.set_value(
+            "sspr_verification_session_ttl_seconds",
+            str(self.verification_session_ttl_seconds),
+            "int",
+            org_id=normalized_org_id,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -551,6 +630,7 @@ class AdvancedSyncPolicySettings:
     disable_circuit_breaker_percent: float = 5.0
     disable_circuit_breaker_min_count: int = 10
     disable_circuit_breaker_requires_approval: bool = True
+    first_sync_identity_claim_mode: str = "auto_safe"
     managed_group_type: str = "security"
     managed_group_mail_domain: str = ""
     custom_group_ou_path: str = "Managed Groups"
@@ -654,6 +734,9 @@ class AdvancedSyncPolicySettings:
                 True,
                 org_id=normalized_org_id,
             ),
+            first_sync_identity_claim_mode=normalize_first_sync_identity_claim_mode(
+                settings_repo.get_value("first_sync_identity_claim_mode", "auto_safe", org_id=normalized_org_id)
+            ),
             managed_group_type=_normalize_managed_group_type(
                 settings_repo.get_value("managed_group_type", "security", org_id=normalized_org_id)
             ),
@@ -707,6 +790,9 @@ class AdvancedSyncPolicySettings:
             disable_circuit_breaker_requires_approval=_coerce_bool(
                 data.get("disable_circuit_breaker_requires_approval"),
                 True,
+            ),
+            first_sync_identity_claim_mode=normalize_first_sync_identity_claim_mode(
+                data.get("first_sync_identity_claim_mode")
             ),
             managed_group_type=_normalize_managed_group_type(data.get("managed_group_type")),
             managed_group_mail_domain=_clean_text(data.get("managed_group_mail_domain"), ""),
@@ -786,6 +872,12 @@ class AdvancedSyncPolicySettings:
             "disable_circuit_breaker_requires_approval",
             _bool_setting(self.disable_circuit_breaker_requires_approval),
             "bool",
+            org_id=normalized_org_id,
+        )
+        settings_repo.set_value(
+            "first_sync_identity_claim_mode",
+            self.first_sync_identity_claim_mode,
+            "string",
             org_id=normalized_org_id,
         )
         settings_repo.set_value("managed_group_type", self.managed_group_type, "string", org_id=normalized_org_id)

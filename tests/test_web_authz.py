@@ -269,6 +269,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("Source Data Quality Snapshot", body)
         self.assertIn("Username Strategy Previewer", body)
         self.assertIn("Identity Route Explainer", body)
+        self.assertIn("First Sync Identity Claim", body)
         self.assertIn("Department To AD OU Mapping", body)
         self.assertIn("Same-Name Collision Policy", body)
         self.assertNotIn('name="advanced_connector_routing_enabled" value="1" checked', body)
@@ -299,6 +300,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             disable_circuit_breaker_percent=3.5,
             disable_circuit_breaker_min_count=2,
             disable_circuit_breaker_requires_approval="1",
+            first_sync_identity_claim_mode="review",
             managed_group_type="distribution",
             managed_group_mail_domain="groups.example.com",
             custom_group_ou_path="Managed Groups/Regional",
@@ -333,6 +335,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(
             self.app.state.settings_repo.get_value("managed_group_type", "", org_id="default"),
             "distribution",
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("first_sync_identity_claim_mode", "", org_id="default"),
+            "review",
         )
 
         response = self._route("/advanced-sync/connectors", "POST")(
@@ -573,6 +579,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             "bool",
             org_id="default",
         )
+        self.app.state.settings_repo.set_value(
+            "first_sync_identity_claim_mode",
+            "review",
+            "string",
+            org_id="default",
+        )
         self.app.state.connector_repo.upsert_connector(
             connector_id="asia",
             org_id="default",
@@ -638,6 +650,17 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(explanation["target_department"]["department_id"], 3)
         self.assertEqual(explanation["target_ou_path"], "Managed Users/Asia/China")
         self.assertEqual(explanation["username_preview"]["primary_candidate"]["username"], "smitha")
+        self.assertEqual(explanation["identity_claim_policy"]["mode"], "review")
+        self.assertEqual(
+            explanation["identity_claim_policy"]["existing_match_behavior"],
+            "queue_existing_match_for_review",
+        )
+        self.assertTrue(
+            any(
+                item["username"] == "asmith" and item["rule"] == "existing_ad_userid"
+                for item in explanation["identity_claim_policy"]["claim_candidates"]
+            )
+        )
 
     def test_advanced_sync_data_quality_snapshot_surfaces_naming_and_source_data_gaps(self):
         self._login("superadmin")
@@ -1903,6 +1926,56 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIsNotNone(conflict)
         self.assertEqual(conflict.status, "resolved")
         self.assertEqual((conflict.resolution_payload or {}).get("action"), "manual_binding")
+
+    def test_existing_ad_identity_claim_review_conflict_has_decision_actions(self):
+        self._login("superadmin")
+        self.app.state.job_repo.create_job(
+            "job-identity-claim-review",
+            trigger_type="unit_test",
+            execution_mode="dry_run",
+            status="COMPLETED",
+        )
+        conflict_id = self.app.state.conflict_repo.add_conflict(
+            job_id="job-identity-claim-review",
+            conflict_type="existing_ad_identity_claim_review",
+            source_id="alice",
+            target_key="alice",
+            message="alice matched existing AD account alice and requires identity claim review",
+            resolution_hint="approve manual binding",
+            details={
+                "userid": "alice",
+                "connector_id": "default",
+                "claim_policy": "review",
+                "candidate": {
+                    "rule": "existing_ad_userid",
+                    "username": "alice",
+                    "explanation": "Source user ID maps directly to an existing AD username",
+                },
+            },
+        )
+
+        response = self._route("/conflicts", "GET")(self._request("/conflicts"))
+        self.assertEqual(response.status_code, 200)
+        response_text = self._text(response)
+        self.assertIn("Approve existing AD account claim", response_text)
+        self.assertIn("Claim Candidate", response_text)
+        self.assertIn(f"/conflicts/{conflict_id}/decision-guide", response_text)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', response_text)
+        self.assertIsNotNone(match)
+
+        response = self._route("/conflicts/{conflict_id}/apply-recommendation", "POST")(
+            self._request("/conflicts/1/apply-recommendation", "POST"),
+            conflict_id=conflict_id,
+            csrf_token=match.group(1),
+            return_query="",
+            return_status="open",
+            return_job_id="job-identity-claim-review",
+        )
+        self.assertEqual(response.status_code, 303)
+        binding = self.app.state.user_binding_repo.get_binding_record_by_source_user_id("alice")
+        self.assertIsNotNone(binding)
+        self.assertEqual(binding.ad_username, "alice")
+        self.assertEqual(self.app.state.conflict_repo.get_conflict_record(conflict_id).status, "resolved")
 
     def test_low_confidence_recommendation_requires_confirmation_reason(self):
         self._login("superadmin")
@@ -3228,6 +3301,37 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(
             self.app.state.settings_repo.get_value("custom_group_ou_path", "", org_id="default"),
             "Managed Groups/Regional",
+        )
+
+    def test_config_page_persists_sspr_operations_settings(self):
+        self._login("superadmin")
+
+        response = self._route("/config", "GET")(self._request("/config"))
+        self.assertEqual(response.status_code, 200)
+        page_text = self._text(response)
+        self.assertIn("Self-Service Password Reset", page_text)
+        self.assertIn("/sspr/callback/wecom", page_text)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', page_text)
+        self.assertIsNotNone(match)
+
+        submit_response = self._route("/config", "POST")(
+            self._request("/config", "POST"),
+            csrf_token=match.group(1),
+            **self._build_config_form_payload(
+                sspr_enabled="true",
+                sspr_min_password_length=14,
+                sspr_unlock_account_default="true",
+                sspr_verification_session_ttl_seconds=900,
+            ),
+        )
+
+        self.assertEqual(submit_response.status_code, 303)
+        self.assertTrue(self.app.state.settings_repo.get_bool("sspr_enabled", False, org_id="default"))
+        self.assertEqual(self.app.state.settings_repo.get_int("sspr_min_password_length", 0, org_id="default"), 14)
+        self.assertTrue(self.app.state.settings_repo.get_bool("sspr_unlock_account_default", False, org_id="default"))
+        self.assertEqual(
+            self.app.state.settings_repo.get_int("sspr_verification_session_ttl_seconds", 0, org_id="default"),
+            900,
         )
 
     def test_config_preview_redirects_when_nothing_changed(self):

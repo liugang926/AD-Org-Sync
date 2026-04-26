@@ -615,6 +615,86 @@ class RunSyncDryRunTests(unittest.TestCase):
         binding = UserIdentityBindingRepository(manager).get_binding_record_by_source_user_id("alice")
         self.assertIsNone(binding)
 
+    def test_run_sync_job_queues_existing_ad_identity_claim_when_policy_requires_review(self):
+        config = AppConfig(
+            wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),
+            ldap=LDAPConfig(
+                server="ldap.example.com",
+                domain="example.com",
+                username="EXAMPLE\\administrator",
+                password="password",
+                use_ssl=True,
+                port=636,
+            ),
+            domain="example.com",
+            account=AccountConfig(default_password="VeryStrong123!456"),
+            config_path="ignored.ini",
+        )
+
+        test_dir = os.path.join(os.getcwd(), "test_artifacts")
+        os.makedirs(test_dir, exist_ok=True)
+        db_path = os.path.join(test_dir, "runtime_identity_claim_review_test.db")
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+
+        manager = DatabaseManager(db_path=db_path)
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        OrganizationRepository(manager).ensure_default(config_path="ignored.ini")
+        SettingsRepository(manager).set_value(
+            "first_sync_identity_claim_mode",
+            "review",
+            "string",
+            org_id="default",
+        )
+
+        FakeADSyncPolicy.reset()
+        FakeADSyncPolicy.existing_users_by_domain = {
+            "example.com": {
+                "alice": DirectoryUserRecord(
+                    username="alice",
+                    dn="CN=alice,OU=HQ,DC=example,DC=com",
+                    display_name="Alice Existing",
+                    email="alice@example.com",
+                )
+            }
+        }
+        FakeADSyncPolicy.enabled_users_by_domain = {"example.com": ["alice"]}
+
+        with patch.object(runtime, "load_sync_config", return_value=config), \
+            patch.object(runtime, "validate_config", return_value=(True, [])), \
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")), \
+            patch.object(runtime, "run_config_security_self_check", return_value=[]), \
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComAPI), \
+            patch.object(runtime, "ADSyncLDAPS", FakeADSyncPolicy), \
+            patch.object(runtime.sync_logging, "setup_logging", return_value=logging.getLogger("test-runtime")), \
+            patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"), \
+            patch.object(runtime, "_generate_skip_detail_report", return_value="skip-details.csv"):
+            result = runtime.run_sync_job(
+                execution_mode="dry_run",
+                trigger_type="unit_test",
+                db_path=db_path,
+                config_path="ignored.ini",
+            )
+
+        self.assertEqual(result["error_count"], 0)
+        self.assertEqual(result["conflict_count"], 1)
+
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        conflicts = SyncConflictRepository(manager).list_conflicts_for_job(result["job_id"])
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0].conflict_type, "existing_ad_identity_claim_review")
+
+        binding = UserIdentityBindingRepository(manager).get_binding_record_by_source_user_id("alice")
+        self.assertIsNone(binding)
+        operation_records = SyncOperationLogRepository(manager).list_records_for_job(result["job_id"], limit=100)
+        self.assertTrue(
+            any(item.reason_code == "identity_claim_review_required" for item in operation_records)
+        )
+
     def test_run_sync_job_respects_skip_user_group_membership_exception(self):
         config = AppConfig(
             wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),

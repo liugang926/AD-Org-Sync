@@ -151,6 +151,13 @@
           </div>
           {% endif %}
 
+          {% if item.details and item.details.get("candidate") %}
+          <div class="candidate-mini-list">
+            <span>{{ t("Claim Candidate") }}</span>
+            <strong class="cell-mono">{{ item.details.get("candidate", {}).get("username") or item.target_key or "-" }}</strong>
+          </div>
+          {% endif %}
+
           {% if item.details and item.details.get("candidates") %}
           <div class="candidate-mini-list">
             <span>{{ t("Candidates") }}</span>
@@ -163,7 +170,7 @@
 
         <div class="conflict-card__actions">
           {{ ui.button(t("Open Job Detail"), href="/jobs/" ~ item.job_id, variant="ghost", size="small") }}
-          {% if item.conflict_type in ["multiple_ad_candidates", "shared_ad_account"] %}
+          {% if item.conflict_type in ["multiple_ad_candidates", "shared_ad_account", "existing_ad_identity_claim_review"] %}
           {{ ui.button(t("Open Decision Guide"), href="/conflicts/" ~ item.id ~ "/decision-guide?return_query=" ~ ((conflict_query or '')|urlencode) ~ "&return_status=" ~ ((conflict_status or 'open')|urlencode) ~ "&return_job_id=" ~ ((conflict_job_id or item.job_id)|urlencode), variant="secondary", size="small", icon="route") }}
           {% endif %}
           {% if item.source_id and show_advanced_navigation %}

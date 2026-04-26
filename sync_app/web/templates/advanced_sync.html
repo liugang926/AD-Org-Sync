@@ -169,6 +169,15 @@
       {% call ui.detail_toggle(t("Safety And Group Delivery"), t("Use these controls to limit blast radius and shape how managed groups are created."), open=False) %}
         <div class="form-grid">
           <div class="form-group">
+            <label for="first_sync_identity_claim_mode">{{ t("First Sync Identity Claim") }}</label>
+            <select id="first_sync_identity_claim_mode" name="first_sync_identity_claim_mode">
+              {% for value, label in first_sync_identity_claim_mode_options %}
+              <option value="{{ value }}" {% if policy_settings.first_sync_identity_claim_mode == value %}selected{% endif %}>{{ t(label) }}</option>
+              {% endfor %}
+            </select>
+            <div class="muted">{{ t("Controls whether one safe existing AD match is bound and updated automatically, or sent to conflict review first.") }}</div>
+          </div>
+          <div class="form-group">
             <label for="managed_group_type">{{ t("Managed Group Type") }}</label>
             <select id="managed_group_type" name="managed_group_type">
               {% for value, label in group_type_options %}
