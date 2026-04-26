@@ -4044,6 +4044,23 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("Identity Overrides", advanced_text)
         self.assertIn('href="/organizations"', advanced_text)
 
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', advanced_text)
+        self.assertIsNotNone(csrf_match)
+        back_to_basic = self._route("/ui-mode", "POST")(
+            self._request("/ui-mode", "POST"),
+            csrf_token=csrf_match.group(1),
+            ui_mode="basic",
+            return_url="/advanced-sync",
+        )
+        self.assertEqual(back_to_basic.status_code, 303)
+        self.assertEqual(back_to_basic.headers["location"], "/config")
+        self.assertEqual(self.session.get("ui_mode"), "basic")
+
+        basic_config = self._route("/config", "GET")(self._request("/config"))
+        basic_config_text = self._text(basic_config)
+        self.assertNotIn('href="/advanced-sync"', basic_config_text)
+        self.assertNotIn('href="/automation-center"', basic_config_text)
+
     def test_preflight_run_persists_live_results_on_dashboard(self):
         self._login("superadmin")
         dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))

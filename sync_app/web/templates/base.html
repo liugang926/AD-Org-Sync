@@ -11,9 +11,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% if title %}{{ title }} | {% endif %}{{ brand_display_name }}</title>
   <link rel="icon" href="/favicon.ico" sizes="any">
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/app.css?v={{ app_version }}">
   {% if load_tom_select_assets %}
-  <link href="/static/vendor/tom-select.default.min.css" rel="stylesheet">
+  <link href="/static/vendor/tom-select.default.min.css?v={{ app_version }}" rel="stylesheet">
   {% endif %}
 </head>
 <body class="{% if not current_user %}login-page{% endif %}" data-confirm-message="{{ t('Are you sure you want to perform this action?') }}">
@@ -193,19 +193,19 @@
   {% endif %}
 
   {% if not is_lightweight_shell %}
-  <script src="/static/vendor/lucide.min.js" defer></script>
+  <script src="/static/vendor/lucide.min.js?v={{ app_version }}" defer></script>
   {% if load_tom_select_assets %}
-  <script src="/static/vendor/tom-select.complete.min.js" defer></script>
+  <script src="/static/vendor/tom-select.complete.min.js?v={{ app_version }}" defer></script>
   {% endif %}
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v={{ app_version }}" defer></script>
   {% if load_advanced_sync_page_script %}
-  <script src="/static/advanced-sync-page.js" defer></script>
+  <script src="/static/advanced-sync-page.js?v={{ app_version }}" defer></script>
   {% endif %}
   {% if load_config_page_script %}
-  <script src="/static/config-page.js" defer></script>
+  <script src="/static/config-page.js?v={{ app_version }}" defer></script>
   {% endif %}
   {% if load_mappings_page_script %}
-  <script src="/static/mappings-page.js" defer></script>
+  <script src="/static/mappings-page.js?v={{ app_version }}" defer></script>
   {% endif %}
   {% endif %}
 </body>

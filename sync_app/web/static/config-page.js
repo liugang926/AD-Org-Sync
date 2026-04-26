@@ -121,6 +121,79 @@
     applySourceProviderUi();
   }
 
+  function initConfigSectionNavigation() {
+    const workbench = document.querySelector("[data-config-section-workbench]");
+    if (!workbench) {
+      return;
+    }
+
+    const tabs = Array.from(workbench.querySelectorAll("[data-config-section-target]"));
+    const panels = Array.from(workbench.querySelectorAll("[data-config-section-panel]"));
+    if (!tabs.length || !panels.length) {
+      return;
+    }
+
+    const panelBySection = new Map(
+      panels.map((panel) => [String(panel.dataset.configSectionPanel || "").trim(), panel]),
+    );
+    const defaultSection = String(tabs[0]?.dataset.configSectionTarget || panels[0]?.dataset.configSectionPanel || "").trim();
+
+    const resolveSectionFromHash = () => {
+      const rawHash = decodeURIComponent(String(window.location.hash || "").replace(/^#/, "")).trim();
+      if (!rawHash) {
+        return "";
+      }
+      const directSection = rawHash.replace(/^config-section-/, "");
+      if (panelBySection.has(directSection)) {
+        return directSection;
+      }
+      const targetNode = document.getElementById(rawHash);
+      const targetPanel = targetNode?.closest("[data-config-section-panel]");
+      return String(targetPanel?.dataset.configSectionPanel || "").trim();
+    };
+
+    const showSection = (section, updateHash = false) => {
+      const nextSection = panelBySection.has(section) ? section : defaultSection;
+      panels.forEach((panel) => {
+        const isActive = panel.dataset.configSectionPanel === nextSection;
+        panel.hidden = !isActive;
+        panel.classList.toggle("is-active", isActive);
+      });
+      tabs.forEach((tab) => {
+        const isActive = tab.dataset.configSectionTarget === nextSection;
+        tab.classList.toggle("is-active", isActive);
+        tab.setAttribute("aria-selected", String(isActive));
+      });
+      if (updateHash) {
+        const nextHash = `#config-section-${nextSection}`;
+        if (window.location.hash !== nextHash) {
+          window.history.replaceState(null, "", nextHash);
+        }
+      }
+    };
+
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        showSection(String(tab.dataset.configSectionTarget || "").trim(), true);
+      });
+    });
+    workbench.closest("form")?.addEventListener(
+      "invalid",
+      (event) => {
+        const invalidPanel = event.target?.closest?.("[data-config-section-panel]");
+        const invalidSection = String(invalidPanel?.dataset.configSectionPanel || "").trim();
+        if (invalidSection && invalidPanel.hidden) {
+          showSection(invalidSection, true);
+        }
+      },
+      true,
+    );
+    window.addEventListener("hashchange", () => {
+      showSection(resolveSectionFromHash());
+    });
+    showSection(resolveSectionFromHash() || defaultSection);
+  }
+
   function initConfigCatalogBrowsers() {
     const configForm =
       document.querySelector("form[data-config-form]") ||
@@ -792,6 +865,7 @@
 
   ADOrgSync.initConfigPage = () => {
     initSourceProviderUi();
+    initConfigSectionNavigation();
     initConfigCatalogBrowsers();
   };
 })();

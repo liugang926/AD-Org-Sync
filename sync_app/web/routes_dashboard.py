@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 def register_dashboard_routes(
     app: FastAPI,
     *,
+    advanced_nav_pages: set[str],
     build_dashboard_data: Callable[[Request], dict[str, Any]],
     build_getting_started_view_state: Callable[..., Any],
     build_preflight_snapshot: Callable[..., dict[str, Any]],
@@ -26,6 +27,16 @@ def register_dashboard_routes(
     safe_redirect_target: Callable[[str | None, str], str],
     source_provider_label: Callable[[str], str],
 ) -> None:
+    def _advanced_page_from_url(url: str) -> str:
+        path = str(url or "").split("?", 1)[0].strip("/")
+        return path.split("/", 1)[0].strip()
+
+    def _basic_mode_return_url(url: str) -> str:
+        page = _advanced_page_from_url(url)
+        if page not in advanced_nav_pages:
+            return url
+        return "/config" if page == "advanced-sync" else "/dashboard"
+
     @app.get("/dashboard", response_class=HTMLResponse)
     def dashboard(request: Request):
         user = require_capability(request, "dashboard.read")
@@ -114,5 +125,8 @@ def register_dashboard_routes(
         csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
         if csrf_error:
             return csrf_error
-        request.session["ui_mode"] = normalize_ui_mode(ui_mode)
+        next_ui_mode = normalize_ui_mode(ui_mode)
+        request.session["ui_mode"] = next_ui_mode
+        if next_ui_mode == "basic":
+            fallback_url = _basic_mode_return_url(fallback_url)
         return RedirectResponse(url=fallback_url, status_code=303)
