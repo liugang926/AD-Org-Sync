@@ -339,6 +339,7 @@ def create_app(
 
     register_dashboard_routes(
         app,
+        advanced_nav_pages=ADVANCED_NAV_PAGES,
         build_dashboard_data=dashboard_support.build_dashboard_data,
         build_getting_started_view_state=build_getting_started_view_state,
         build_preflight_snapshot=dashboard_support.build_preflight_snapshot,

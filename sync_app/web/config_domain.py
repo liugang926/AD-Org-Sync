@@ -8,6 +8,14 @@ from sync_app.storage.config_codec import normalize_org_config_values as _normal
 from sync_app.web.runtime import normalize_secure_cookie_mode
 
 
+def _coerce_int(value: Any, default: int, *, minimum: int = 1) -> int:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        normalized = int(default)
+    return max(normalized, int(minimum))
+
+
 def build_current_config_state_from_sources(
     current_org_values: dict[str, Any],
     *,
@@ -54,6 +62,10 @@ def normalize_config_submission_values(
     web_session_cookie_secure_mode: str = "auto",
     web_trust_proxy_headers: Optional[str] = None,
     web_forwarded_allow_ips: str = "127.0.0.1",
+    sspr_enabled: Optional[str] = None,
+    sspr_min_password_length: int = 12,
+    sspr_unlock_account_default: Optional[str] = None,
+    sspr_verification_session_ttl_seconds: int = 600,
     brand_display_name: str = "",
     brand_mark_text: str = "",
     brand_attribution: str = "",
@@ -114,6 +126,14 @@ def normalize_config_submission_values(
         "web_session_cookie_secure_mode": normalize_secure_cookie_mode(web_session_cookie_secure_mode),
         "web_trust_proxy_headers": to_bool(web_trust_proxy_headers, False),
         "web_forwarded_allow_ips": web_forwarded_allow_ips.strip() or "127.0.0.1",
+        "sspr_enabled": to_bool(sspr_enabled, False),
+        "sspr_min_password_length": _coerce_int(sspr_min_password_length, 12, minimum=1),
+        "sspr_unlock_account_default": to_bool(sspr_unlock_account_default, False),
+        "sspr_verification_session_ttl_seconds": _coerce_int(
+            sspr_verification_session_ttl_seconds,
+            600,
+            minimum=60,
+        ),
         "brand_display_name": str(brand_display_name or "").strip() or default_brand_display_name,
         "brand_mark_text": str(brand_mark_text or "").strip() or default_brand_mark_text,
         "brand_attribution": str(brand_attribution or "").strip() or default_brand_attribution,

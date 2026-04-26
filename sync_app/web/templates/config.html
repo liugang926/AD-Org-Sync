@@ -43,142 +43,82 @@
 {% endmacro %}
 
 {% block content %}
-<div class="page-stack">
+<div class="page-stack config-page-compact">
   {% set provider_page_title %}<span data-config-provider-page-title>{{ t("{provider} Connector Configuration", provider=t(source_provider_name)) }}</span>{% endset %}
-  {% set provider_page_summary %}<span data-config-provider-page-summary>{{ t("This organization currently uses {provider} as its source provider. This is the shared organization settings page, so LDAP, password policy, runtime, and web deployment sections remain consistent across providers.", provider=t(source_provider_name)) }}</span>{% endset %}
+  {% set provider_page_summary %}<span data-config-provider-page-summary>{{ t("Configure {provider} and shared organization settings one section at a time.", provider=t(source_provider_name)) }}</span>{% endset %}
   {% call ui.page_header(provider_page_title|safe, provider_page_summary|safe, eyebrow=t("Setup"), badge_text=t("Organization Scope"), badge_level="info") %}
-    <div class="surface-inline">
-      <span data-config-provider-badge>{{ ui.badge(t(source_provider_name), "info") }}</span>
-      <span class="muted">{{ t("Shared page, provider-specific fields") }}</span>
-      <span class="muted">{{ t("Current organization") }}:</span>
-      <strong>{{ current_org.name if current_org else t("Default Organization") }}</strong>
-    </div>
     {{ ui.button(t("Open Release Center"), href="/config/releases", variant="secondary", icon="history") }}
   {% endcall %}
 
-  <section class="config-wizard-shell">
-    <div class="config-wizard-shell__copy">
-      <div class="decision-wizard__eyebrow">{{ t("Config Wizard") }}</div>
-      <h2>{{ t("Prepare the organization for a safe dry run.") }}</h2>
-      <p>{{ t("Work through source credentials, target directory, account policy, safety gates, and release review before production apply.") }}</p>
+  <section class="config-brief">
+    <div class="config-brief__main">
+      <div class="config-brief__eyebrow">{{ t("Shared Page, Provider-Specific Fields") }}</div>
+      <h2>{{ t(config_rollout_status.title) }}</h2>
+      <p>
+        <strong>{{ t("Current provider") }}</strong>:
+        <span data-config-provider-current>{{ t(source_provider_name) }}</span>
+        <span class="config-brief__separator" aria-hidden="true">/</span>
+        <strong>{{ t("Organization Settings") }}</strong>
+        <span class="muted">{{ t("Global Settings") }}: {{ t("Web Deployment") }}</span>
+      </p>
     </div>
-    <div class="config-step-rail">
-      <div class="config-step is-active">
-        <span>1</span>
-        <strong>{{ t("Source") }}</strong>
-        <small>{{ t(source_provider_name) }}</small>
-      </div>
-      <div class="config-step">
-        <span>2</span>
-        <strong>{{ t("Target AD") }}</strong>
-        <small>{{ editable.ldap_domain or t("Not configured") }}</small>
-      </div>
-      <div class="config-step">
-        <span>3</span>
-        <strong>{{ t("Account Policy") }}</strong>
-        <small>{{ t("Password and naming") }}</small>
-      </div>
-      <div class="config-step {% if config_rollout_status.open_conflict_count > 0 %}is-warning{% endif %}">
-        <span>4</span>
-        <strong>{{ t("Safety") }}</strong>
-        <small>{{ t(config_rollout_status.badge_text) }}</small>
-      </div>
-      <div class="config-step {% if has_unpublished_changes|default(false) %}is-warning{% endif %}">
-        <span>5</span>
-        <strong>{{ t("Release") }}</strong>
-        <small>{{ t("Snapshot before rollout") }}</small>
-      </div>
+    <div class="config-brief__status">
+      {{ ui.badge(t(config_rollout_status.badge_text), config_rollout_status.badge_level) }}
+      <span>{{ t("Open Conflicts") }}: <strong>{{ config_rollout_status.open_conflict_count }}</strong></span>
+      <span>{{ t("Latest Dry Run") }}: <strong>{{ config_rollout_status.latest_dry_run.job_id if config_rollout_status.latest_dry_run else "-" }}</strong></span>
     </div>
   </section>
 
-  <div class="dense-two-col">
-    {% call ui.helper_block(t("Shared Page, Provider-Specific Fields"), t("Only the source connector card changes with the selected provider. LDAP, password policy, runtime, and web deployment settings remain shared for every provider."), "info") %}
-      <ul class="helper-list">
-        <li><strong>{{ t("Current provider") }}</strong>: <span data-config-provider-current>{{ t(source_provider_name) }}</span></li>
-        <li>{{ t("Switch providers only when this organization should sync from a different upstream platform.") }}</li>
-        <li>{{ t("Provider-specific labels and placeholders update immediately when you switch the source provider.") }}</li>
-      </ul>
-    {% endcall %}
-
-    {% call ui.helper_block(t("Fill These First"), t("If you only want the minimum setup cost, complete these fields and leave the advanced sections collapsed."), "info") %}
-      <ul class="helper-list">
-        <li><strong>{{ t("Source Connector") }}</strong>: <span data-config-provider-guidance>{{ t("Select the source provider and complete the credentials required by {provider}.", provider=t(source_provider_name)) }}</span></li>
-        <li><strong>{{ t("LDAP") }}</strong>: {{ t("LDAP Server, LDAP Domain, LDAP Username, and LDAP Password") }}</li>
-        <li><strong>{{ t("Password") }}</strong>: {{ t("Default Password before the first apply run") }}</li>
-        <li><strong>{{ t("OU Filter And Root Mapping") }}</strong>: {{ t("Fill the source root unit IDs and the target AD root OU path or DN before the first apply.") }}</li>
-      </ul>
-    {% endcall %}
-  </div>
-
-  {% call ui.helper_block(t("Organization Settings"), t("Most of this page belongs to the selected organization and does not change other tenants."), "warning") %}
-    <ul class="helper-list">
-      <li><strong>{{ t("Organization Settings") }}</strong>: {{ t("Use this page to define the current organization's source systems and default sync behavior.") }}</li>
-      <li><strong>{{ t("Global Settings") }}</strong>: {{ t("Web Deployment settings affect the whole server.") }}</li>
-      <li>{{ t("Use Advanced Sync only when the default single-organization flow no longer fits.") }}</li>
-    </ul>
-  {% endcall %}
-
-  {% call ui.panel(t(config_rollout_status.title), description=(t("Configuration was just saved. Trigger the first dry run next so you can review matches, planned changes, and conflicts before apply.") if flash and flash.level == "success" and config_rollout_status.phase == "first_dry_run" else t(config_rollout_status.description)), class_name="toolbar-card") %}
-    <div class="surface-inline">
-      {{ ui.badge(t(config_rollout_status.badge_text), config_rollout_status.badge_level) }}
-      {% if config_rollout_status.active_job %}
-      <span class="muted">{{ t("Active job") }}:</span>
-      <a href="/jobs/{{ config_rollout_status.active_job.job_id }}">{{ config_rollout_status.active_job.job_id }}</a>
-      {% elif config_rollout_status.latest_successful_dry_run %}
-      <span class="muted">{{ t("Latest successful dry run") }}:</span>
-      <a href="/jobs/{{ config_rollout_status.latest_successful_dry_run.job_id }}">{{ config_rollout_status.latest_successful_dry_run.job_id }}</a>
-      {% else %}
-      <span class="muted">{{ t("No successful dry run recorded yet for this organization.") }}</span>
-      {% endif %}
+  <section class="config-action-row">
+    <div class="config-action-row__copy">
+      <strong>{{ t("Fill These First") }}</strong>
+      <span data-config-provider-guidance>{{ t("Select the source provider and complete the credentials required by {provider}.", provider=t(source_provider_name)) }}</span>
+      <span>{{ t("LDAP Server, LDAP Domain, LDAP Username, and LDAP Password") }}</span>
+      <span>{{ t("Default Password before the first apply run") }}</span>
+      <span>{{ t("Fill the source root unit IDs and the target AD root OU path or DN before the first apply.") }}</span>
     </div>
-
-    <div class="compact-stats">
-      {{ ui.compact_stat(t("Open Conflicts"), config_rollout_status.open_conflict_count) }}
-      {{ ui.compact_stat(t("Latest Dry Run"), (config_rollout_status.latest_dry_run.job_id if config_rollout_status.latest_dry_run else "-"), detail=(t(config_rollout_status.latest_dry_run.status) if config_rollout_status.latest_dry_run else t("Not started"))) }}
-      {{ ui.compact_stat(t("Latest Apply"), (config_rollout_status.latest_apply.job_id if config_rollout_status.latest_apply else "-"), detail=(t(config_rollout_status.latest_apply.status) if config_rollout_status.latest_apply else t("Not started"))) }}
-    </div>
-
-    <div class="actions">
+    <div class="config-action-row__actions">
       {% if config_rollout_status.show_run_dry_run and can("jobs.run") %}
       <form class="inline" method="post" action="/jobs/run">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="mode" value="dry_run">
-        {{ ui.button(t("Run First Dry Run"), type="submit", variant="secondary", icon="play") }}
+        {{ ui.button(t("Run First Dry Run"), type="submit", variant="secondary", size="sm", icon="play") }}
       </form>
       {% endif %}
-      {{ ui.button(t(config_rollout_status.primary_action_label), href=config_rollout_status.primary_action_url, variant=("ghost" if config_rollout_status.show_run_dry_run else "secondary"), icon="arrow-right") }}
-      {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost", icon="refresh-cw") }}
+      {{ ui.button(t(config_rollout_status.primary_action_label), href=config_rollout_status.primary_action_url, variant="ghost", size="sm", icon="arrow-right") }}
+      {% if config_rollout_status.primary_action_url != "/jobs" %}
+      {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost", size="sm", icon="refresh-cw") }}
+      {% endif %}
       {% if config_rollout_status.open_conflict_count > 0 %}
-      {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost", icon="shield-alert") }}
+      {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost", size="sm", icon="shield-alert") }}
       {% endif %}
     </div>
-  {% endcall %}
+  </section>
 
-  <div class="dense-two-col">
+  <section class="config-shortcuts">
     {% if can("mappings.read") %}
-    {% call ui.helper_block(t("Need Manual Identity Binding Or Per-User Placement?"), t("Use Identity Overrides when one source user must bind to a specific AD account or land in a different primary department than the default placement strategy."), "info", t("Recommended")) %}
-      <ul class="helper-list">
-        <li>{{ t("Manual source-user to AD bindings are configured on the Identity Overrides page, not inside the base connection form below.") }}</li>
-        <li>{{ t("Per-user primary department overrides also live there, so base placement strategy and exception handling stay separate.") }}</li>
-      </ul>
-      <div class="actions">
-        {{ ui.button(t("Open Identity Overrides"), href="/mappings#mapping-create", variant="secondary", icon="layers") }}
-        {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost", icon="shield-alert") }}
+    <div class="config-shortcut">
+      <div>
+        <strong>{{ t("Need Manual Identity Binding Or Per-User Placement?") }}</strong>
+        <span>{{ t("Manual source-user to AD bindings are configured on the Identity Overrides page, not inside the base connection form below.") }}</span>
       </div>
-    {% endcall %}
+      <div class="config-shortcut__actions">
+        {{ ui.button(t("Open Identity Overrides"), href="/mappings#mapping-create", variant="ghost", size="sm", icon="layers") }}
+        {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost", size="sm", icon="shield-alert") }}
+      </div>
+    </div>
     {% endif %}
-
-    {% call ui.helper_block(t("Need Account Creation Rules Or Department Routing?"), t("Open Advanced Sync when you need connector-level account naming, duplicate handling, source-branch routing, or explicit source-department to AD OU mapping."), "info", t("Advanced")) %}
-      <ul class="helper-list">
-        <li>{{ t("Connector-level new-user creation rules stay in Advanced Sync so they do not get mixed into the base organization connection form.") }}</li>
-        <li>{{ t("Attribute mapping, department-to-OU routing, and multi-connector policies are managed there as one advanced layer.") }}</li>
-      </ul>
-      <div class="actions">
-        {{ ui.button(t("Open Account Creation Rules"), href="/advanced-sync#account-creation-rules", variant="secondary", icon="settings-2") }}
-        {{ ui.button(t("Open Department Routing"), href="/advanced-sync#department-ou-routing", variant="ghost", icon="waypoints") }}
+    <div class="config-shortcut">
+      <div>
+        <strong>{{ t("Need Account Creation Rules Or Department Routing?") }}</strong>
+        <span>{{ t("Open Advanced Sync when you need connector-level account naming, duplicate handling, source-branch routing, or explicit source-department to AD OU mapping.") }}</span>
       </div>
-    {% endcall %}
-  </div>
+      <div class="config-shortcut__actions">
+        {{ ui.button(t("Open Account Creation Rules"), href="/advanced-sync#account-creation-rules", variant="ghost", size="sm", icon="settings-2") }}
+        {{ ui.button(t("Open Department Routing"), href="/advanced-sync#department-ou-routing", variant="ghost", size="sm", icon="waypoints") }}
+      </div>
+    </div>
+  </section>
 
   {% if config_change_preview %}
   {% call ui.panel(t("Pending Changes"), t("Preview"), "warning", t("Review the differences below before saving. Confirm to apply them, or keep editing the form underneath."), class_name="card-flat") %}
@@ -253,206 +193,273 @@
   >
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-    {% call ui.panel(t("Required To Start"), t("Recommended"), "info", t("Complete these fields before the first live connectivity test or dry run.")) %}
-      <div class="dense-two-col">
-        <section class="subcard stack-tight">
-          <div class="section-header">
-            <div class="section-header__copy">
-              <h3 class="section-header__title" data-config-provider-card-title>{{ t("{provider} Source Connector", provider=t(source_provider_name)) }}</h3>
-              <p class="section-header__description" data-config-provider-card-description>{{ t("Enter the credentials required by {provider}. Notification delivery is optional.", provider=t(source_provider_name)) }}</p>
-            </div>
-          </div>
-          <div class="form-grid">
-            {{ forms.select("source_provider", t("Source Provider"), source_provider_options, selected_value=editable.source_provider, help_text=t(source_provider_schema.implementation_status or source_provider_schema.description or ""), class_name="field-span-full") }}
-            {% for field in source_connection_fields %}
-            {% set field_attrs = 'data-source-provider-field="' ~ field.name ~ '"' %}
-            {% if field.secret and field.configured %}
-            {% set field_attrs = field_attrs ~ ' data-provider-secret-configured="true" data-provider-secret-configured-provider="' ~ editable.source_provider ~ '"' %}
-            {% endif %}
-            {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=(field.required and not field.configured), class_name=field.class_name, autocomplete=field.autocomplete, attrs=field_attrs) }}
-            {% endfor %}
-          </div>
-        </section>
+    <section class="config-form-workbench" data-config-section-workbench>
+      <nav class="config-section-nav" aria-label="{{ t('Configuration sections') }}" data-config-section-nav>
+        {% call ui.button(type="button", variant="ghost", icon="plug", class_name="config-section-tab is-active", attrs='data-config-section-target="source" aria-controls="config-section-source" aria-selected="true"') %}
+          <strong>{{ t("Source System") }}</strong><small>{{ t("Provider and credentials") }}</small>
+        {% endcall %}
+        {% call ui.button(type="button", variant="ghost", icon="network", class_name="config-section-tab", attrs='data-config-section-target="target" aria-controls="config-section-target" aria-selected="false"') %}
+          <strong>{{ t("Target AD") }}</strong><small>{{ t("LDAP and OU roots") }}</small>
+        {% endcall %}
+        {% call ui.button(type="button", variant="ghost", icon="shield-check", class_name="config-section-tab", attrs='data-config-section-target="security" aria-controls="config-section-security" aria-selected="false"') %}
+          <strong>{{ t("Account Security") }}</strong><small>{{ t("Passwords and SSPR") }}</small>
+        {% endcall %}
+        {% call ui.button(type="button", variant="ghost", icon="workflow", class_name="config-section-tab", attrs='data-config-section-target="runtime" aria-controls="config-section-runtime" aria-selected="false"') %}
+          <strong>{{ t("Runtime Rules") }}</strong><small>{{ t("Schedule and groups") }}</small>
+        {% endcall %}
+        {% call ui.button(type="button", variant="ghost", icon="server-cog", class_name="config-section-tab", attrs='data-config-section-target="web" aria-controls="config-section-web" aria-selected="false"') %}
+          <strong>{{ t("Web Deployment") }}</strong><small>{{ t("Server-wide settings") }}</small>
+        {% endcall %}
+      </nav>
 
-      <section class="subcard stack-tight">
-        <div class="section-header">
-          <div class="section-header__copy">
-            <h3 class="section-header__title">{{ t("Directory Connection") }}</h3>
-            <p class="section-header__description">{{ t("Required for AD user, OU, and group operations.") }}</p>
-            </div>
-          </div>
-          <div class="form-grid">
-            {{ forms.input("ldap_server", t("LDAP Server"), editable.ldap_server, placeholder="ldap.example.com") }}
-            {{ forms.input("ldap_domain", t("LDAP Domain"), editable.ldap_domain, placeholder="example.com") }}
-            {{ forms.input("ldap_username", t("LDAP Username"), editable.ldap_username) }}
-            {{ forms.input("ldap_password", t("LDAP Password"), type="password", placeholder=("********" if editable.ldap_password_configured else t("Enter LDAP password")), help_text=(t("Leave blank to keep current") if editable.ldap_password_configured else "")) }}
-            {{ forms.input("default_password", t("Default Password"), type="password", placeholder=("********" if editable.default_password_configured else t("Enter default password")), help_text=(t("Leave blank to keep current") if editable.default_password_configured else ""), class_name="field-span-full") }}
-          </div>
-        </section>
-      </div>
-      {% if source_notification_fields %}
-      <section class="subcard stack-tight">
-        <div class="section-header">
-          <div class="section-header__copy">
-            <h3 class="section-header__title">{{ t("Optional Notifications") }}</h3>
-            <p class="section-header__description">{{ t("Webhook delivery is only used for operational notifications. It does not block preflight, dry run, or apply.") }}</p>
-          </div>
-        </div>
-        <div class="form-grid">
-          {% for field in source_notification_fields %}
-          {% set field_attrs = 'data-source-provider-field="' ~ field.name ~ '"' %}
-          {% if field.secret and field.configured %}
-          {% set field_attrs = field_attrs ~ ' data-provider-secret-configured="true" data-provider-secret-configured-provider="' ~ editable.source_provider ~ '"' %}
-          {% endif %}
-          {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=field.required, class_name=field.class_name, autocomplete=field.autocomplete, attrs=field_attrs) }}
-          {% endfor %}
-        </div>
-      </section>
-      {% endif %}
-
-      <section class="subcard stack-tight">
-        <div class="section-header">
-          <div class="section-header__copy">
-            <h3 class="section-header__title">{{ t("OU Filter And Root Mapping") }}</h3>
-            <p class="section-header__description">{{ t("Use these defaults to keep the single-organization sync inside the expected source branches and target AD OU roots.") }}</p>
-          </div>
-        </div>
-        <div class="form-grid">
-          {% set source_toggle_attrs = 'data-config-open-source-browser data-open-label="' ~ t("Browse Source Unit Tree") ~ '" data-close-label="' ~ t("Hide Source Unit Tree") ~ '"' %}
-          {% set source_refresh_attrs = 'data-config-load-source-units aria-label="' ~ t("Refresh Source Unit Tree") ~ '" title="' ~ t("Refresh Source Unit Tree") ~ '"' %}
-          {% set source_close_attrs = 'data-config-close-source-browser aria-label="' ~ t("Close Picker") ~ '" title="' ~ t("Close Picker") ~ '"' %}
-          {% call forms.picker("source_root_unit_ids", t("Source Root Unit IDs Filter"), editable.source_root_unit_ids, display_value=(editable.source_root_unit_display_text or editable.source_root_unit_ids or t("No source root units selected yet.")), placeholder=t("No source root units selected yet."), help_text=t("Select one or more source roots. Leave empty to keep the base flow open to every department."), class_name="field-span-full") %}
-            <input type="hidden" name="source_root_unit_display_text" id="source_root_unit_display_text" value="{{ editable.source_root_unit_display_text or '' }}">
-            <div class="picker-inline-frame">
-              <div class="picker-field__control-row">
-                <div class="picker-field__control-copy">
-                  <span class="picker-field__eyebrow">{{ t("Multi-select") }}</span>
-                  <span class="picker-field__hint">{{ t("Limit the base flow to one or more source roots.") }}</span>
-                </div>
-                <div class="picker-field__actions">
-                  {{ ui.button(t("Browse Source Unit Tree"), type="button", variant="secondary", size="sm", icon="search", class_name="picker-trigger-button", attrs=source_toggle_attrs) }}
-                  {{ ui.button(t("Clear Selection"), type="button", variant="ghost", size="sm", class_name="picker-clear-button", attrs='data-picker-clear data-picker-clear-field="source_root_unit_ids" hidden') }}
+      <div class="config-section-panels" data-config-section-panels>
+        <section id="config-section-source" class="config-section-panel" data-config-section-panel="source">
+          {% call ui.panel(t("Source System"), t("Required"), "info", t("Select the upstream provider and complete its connection credentials before loading source units.")) %}
+            <section class="subcard stack-tight">
+              <div class="section-header">
+                <div class="section-header__copy">
+                  <h3 class="section-header__title" data-config-provider-card-title>{{ t("{provider} Source Connector", provider=t(source_provider_name)) }}</h3>
+                  <p class="section-header__description" data-config-provider-card-description>{{ t("Enter the credentials required by {provider}. Notification delivery is optional.", provider=t(source_provider_name)) }}</p>
                 </div>
               </div>
-              <section class="picker-inline-panel" data-config-source-browser hidden>
-                <div class="picker-toolbar">
-                  <div class="picker-toolbar__copy">
-                    <div class="picker-toolbar__title">{{ t("Source Unit Tree Preview") }}</div>
-                    <div class="picker-toolbar__description">{{ t("Choose source root unit IDs such as WeCom root department IDs or DingTalk root department IDs from the tree below. Leave empty to sync every department.") }}</div>
-                  </div>
-                  <div class="picker-toolbar__actions">
-                    <label class="picker-browser-search">
-                      <i class="picker-browser-search__icon icon icon-xs" data-lucide="search"></i>
-                      <input type="search" placeholder="{{ t('Search by name, ID, or path') }}" data-config-source-filter>
-                    </label>
-                    {{ ui.button("", type="button", variant="ghost", size="sm", icon="refresh-cw", class_name="picker-icon-action", attrs=source_refresh_attrs) }}
-                    {{ ui.button("", type="button", variant="ghost", size="sm", icon="x", class_name="picker-icon-action", attrs=source_close_attrs) }}
-                  </div>
+              <div class="form-grid">
+                {{ forms.select("source_provider", t("Source Provider"), source_provider_options, selected_value=editable.source_provider, help_text=t(source_provider_schema.implementation_status or source_provider_schema.description or ""), class_name="field-span-full") }}
+                {% for field in source_connection_fields %}
+                {% set field_attrs = 'data-source-provider-field="' ~ field.name ~ '"' %}
+                {% if field.secret and field.configured %}
+                {% set field_attrs = field_attrs ~ ' data-provider-secret-configured="true" data-provider-secret-configured-provider="' ~ editable.source_provider ~ '"' %}
+                {% endif %}
+                {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=(field.required and not field.configured), class_name=field.class_name, autocomplete=field.autocomplete, attrs=field_attrs) }}
+                {% endfor %}
+              </div>
+            </section>
+
+            {% if source_notification_fields %}
+            <section class="subcard stack-tight">
+              <div class="section-header">
+                <div class="section-header__copy">
+                  <h3 class="section-header__title">{{ t("Optional Notifications") }}</h3>
+                  <p class="section-header__description">{{ t("Webhook delivery is only used for operational notifications. It does not block preflight, dry run, or apply.") }}</p>
                 </div>
-                <div class="picker-browser-meta">
-                  <p class="config-browser__status muted" data-config-source-status>{{ t("After filling the source connector fields, click to load the source department tree with names and IDs.") }}</p>
-                  <div class="picker-browser-results" data-config-source-results></div>
+              </div>
+              <div class="form-grid">
+                {% for field in source_notification_fields %}
+                {% set field_attrs = 'data-source-provider-field="' ~ field.name ~ '"' %}
+                {% if field.secret and field.configured %}
+                {% set field_attrs = field_attrs ~ ' data-provider-secret-configured="true" data-provider-secret-configured-provider="' ~ editable.source_provider ~ '"' %}
+                {% endif %}
+                {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=field.required, class_name=field.class_name, autocomplete=field.autocomplete, attrs=field_attrs) }}
+                {% endfor %}
+              </div>
+            </section>
+            {% endif %}
+
+            <section class="subcard stack-tight">
+              <div class="section-header">
+                <div class="section-header__copy">
+                  <h3 class="section-header__title">{{ t("Source Scope") }}</h3>
+                  <p class="section-header__description">{{ t("Limit the base flow to one or more source roots, or leave it empty to include every department.") }}</p>
                 </div>
-                <div class="config-browser__list" data-config-source-list></div>
-              </section>
-            </div>
+              </div>
+              <div class="form-grid">
+                {% set source_toggle_attrs = 'data-config-open-source-browser data-open-label="' ~ t("Browse Source Unit Tree") ~ '" data-close-label="' ~ t("Hide Source Unit Tree") ~ '"' %}
+                {% set source_refresh_attrs = 'data-config-load-source-units aria-label="' ~ t("Refresh Source Unit Tree") ~ '" title="' ~ t("Refresh Source Unit Tree") ~ '"' %}
+                {% set source_close_attrs = 'data-config-close-source-browser aria-label="' ~ t("Close Picker") ~ '" title="' ~ t("Close Picker") ~ '"' %}
+                {% call forms.picker("source_root_unit_ids", t("Source Root Unit IDs Filter"), editable.source_root_unit_ids, display_value=(editable.source_root_unit_display_text or editable.source_root_unit_ids or t("No source root units selected yet.")), placeholder=t("No source root units selected yet."), help_text=t("Select one or more source roots. Leave empty to keep the base flow open to every department."), class_name="field-span-full") %}
+                  <input type="hidden" name="source_root_unit_display_text" id="source_root_unit_display_text" value="{{ editable.source_root_unit_display_text or '' }}">
+                  <div class="picker-inline-frame">
+                    <div class="picker-field__control-row">
+                      <div class="picker-field__control-copy">
+                        <span class="picker-field__eyebrow">{{ t("Multi-select") }}</span>
+                        <span class="picker-field__hint">{{ t("Limit the base flow to one or more source roots.") }}</span>
+                      </div>
+                      <div class="picker-field__actions">
+                        {{ ui.button(t("Browse Source Unit Tree"), type="button", variant="secondary", size="sm", icon="search", class_name="picker-trigger-button", attrs=source_toggle_attrs) }}
+                        {{ ui.button(t("Clear Selection"), type="button", variant="ghost", size="sm", class_name="picker-clear-button", attrs='data-picker-clear data-picker-clear-field="source_root_unit_ids" hidden') }}
+                      </div>
+                    </div>
+                    <section class="picker-inline-panel" data-config-source-browser hidden>
+                      <div class="picker-toolbar">
+                        <div class="picker-toolbar__copy">
+                          <div class="picker-toolbar__title">{{ t("Source Unit Tree Preview") }}</div>
+                          <div class="picker-toolbar__description">{{ t("Choose source root unit IDs such as WeCom root department IDs or DingTalk root department IDs from the tree below. Leave empty to sync every department.") }}</div>
+                        </div>
+                        <div class="picker-toolbar__actions">
+                          <label class="picker-browser-search">
+                            <i class="picker-browser-search__icon icon icon-xs" data-lucide="search"></i>
+                            <input type="search" placeholder="{{ t('Search by name, ID, or path') }}" data-config-source-filter>
+                          </label>
+                          {{ ui.button("", type="button", variant="ghost", size="sm", icon="refresh-cw", class_name="picker-icon-action", attrs=source_refresh_attrs) }}
+                          {{ ui.button("", type="button", variant="ghost", size="sm", icon="x", class_name="picker-icon-action", attrs=source_close_attrs) }}
+                        </div>
+                      </div>
+                      <div class="picker-browser-meta">
+                        <p class="config-browser__status muted" data-config-source-status>{{ t("After filling the source connector fields, click to load the source department tree with names and IDs.") }}</p>
+                        <div class="picker-browser-results" data-config-source-results></div>
+                      </div>
+                      <div class="config-browser__list" data-config-source-list></div>
+                    </section>
+                  </div>
+                {% endcall %}
+              </div>
+            </section>
           {% endcall %}
-          {{ target_ou_picker("directory_root_ou_path", "Target AD Root OU Path / DN", editable.directory_root_ou_path, "No target root OU selected yet.", "Choose the target AD root OU path or DN from the AD OU tree below. Example: Managed Users/China or OU=China,OU=Managed Users,DC=example,DC=com", "Select Target Root OU", "Target AD Root OU Path / DN", "Choose the target AD root OU path or DN from the AD OU tree below. Example: Managed Users/China or OU=China,OU=Managed Users,DC=example,DC=com", "field-span-full") }}
-          {{ target_ou_picker("disabled_users_ou_path", "Disabled Users OU Path / DN", editable.disabled_users_ou_path, "No disabled users OU selected yet.", "Choose the target OU used for disabled users. Nested OU path or DN is supported.", "Select Disabled Users OU", "Disabled Users OU Path / DN", "Choose the target OU used for disabled users. Nested OU path or DN is supported.") }}
-          {{ target_ou_picker("custom_group_ou_path", "Custom Group OU Path / DN", editable.custom_group_ou_path, "No custom group OU selected yet.", "Choose the target OU used for managed custom groups. Nested OU path or DN is supported.", "Select Custom Group OU", "Custom Group OU Path / DN", "Choose the target OU used for managed custom groups. Nested OU path or DN is supported.") }}
-        </div>
-      </section>
-    {% endcall %}
+        </section>
 
-    {% call ui.detail_toggle(t("Security And Account Policy"), t("Recommended after the base connection works"), open=True) %}
-      <div class="page-stack tight">
-        {% call ui.panel(t("Connection Settings"), t("Organization Scope"), "info") %}
-          <div class="form-grid">
-            {{ forms.input("ldap_port", t("LDAP Port"), editable.ldap_port, type="number") }}
-            {{ forms.select("ldap_use_ssl", t("Use SSL"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.ldap_use_ssl|lower) }}
-            {{ forms.select("ldap_validate_cert", t("Certificate Validation"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.ldap_validate_cert|lower) }}
-            {{ forms.input("ldap_ca_cert_path", t("CA Certificate Path"), editable.ldap_ca_cert_path, help_text=t("Optional. Leave blank to use system trust store."), class_name="field-span-full") }}
-          </div>
-        {% endcall %}
+        <section id="config-section-target" class="config-section-panel" data-config-section-panel="target" hidden>
+          {% call ui.panel(t("Target AD"), t("Required"), "info", t("Configure the AD connection and the OU roots used by the base sync flow.")) %}
+            <section class="subcard stack-tight">
+              <div class="section-header">
+                <div class="section-header__copy">
+                  <h3 class="section-header__title">{{ t("Directory Connection") }}</h3>
+                  <p class="section-header__description">{{ t("Required for AD user, OU, and group operations.") }}</p>
+                </div>
+              </div>
+              <div class="form-grid">
+                {{ forms.input("ldap_server", t("LDAP Server"), editable.ldap_server, placeholder="ldap.example.com") }}
+                {{ forms.input("ldap_domain", t("LDAP Domain"), editable.ldap_domain, placeholder="example.com") }}
+                {{ forms.input("ldap_username", t("LDAP Username"), editable.ldap_username) }}
+                {{ forms.input("ldap_password", t("LDAP Password"), type="password", placeholder=("********" if editable.ldap_password_configured else t("Enter LDAP password")), help_text=(t("Leave blank to keep current") if editable.ldap_password_configured else "")) }}
+              </div>
+            </section>
 
-        {% call ui.panel(t("Account Policy"), t("Organization Scope"), "info") %}
-          <div class="form-grid">
-            {{ forms.select("force_change_password", t("Force Password Change"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.force_change_password|lower) }}
-            {{ forms.select("password_complexity", t("Password Complexity"), [("strong", t("Strong")), ("medium", t("Medium")), ("basic", t("Basic"))], selected_value=editable.password_complexity) }}
-          </div>
-        {% endcall %}
+            <section class="subcard stack-tight">
+              <div class="section-header">
+                <div class="section-header__copy">
+                  <h3 class="section-header__title">{{ t("Connection Settings") }}</h3>
+                  <p class="section-header__description">{{ t("Tune LDAP transport only after the main connection fields are known.") }}</p>
+                </div>
+              </div>
+              <div class="form-grid">
+                {{ forms.input("ldap_port", t("LDAP Port"), editable.ldap_port, type="number") }}
+                {{ forms.select("ldap_use_ssl", t("Use SSL"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.ldap_use_ssl|lower) }}
+                {{ forms.select("ldap_validate_cert", t("Certificate Validation"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.ldap_validate_cert|lower) }}
+                {{ forms.input("ldap_ca_cert_path", t("CA Certificate Path"), editable.ldap_ca_cert_path, help_text=t("Optional. Leave blank to use system trust store."), class_name="field-span-full") }}
+              </div>
+            </section>
 
-        {% call ui.panel(t("Directory Safety"), t("Organization Scope"), "warning", t("System-protected accounts are always skipped for binding, create, update, reactivation, and disable actions.")) %}
-          <div class="form-group">
-            <label for="protected_accounts_display">{{ t("Protected Accounts (Read-only)") }}</label>
-            <textarea id="protected_accounts_display" rows="5" readonly>{{ editable.protected_accounts|join('\n') }}</textarea>
-            <div class="help-text">{{ t("These built-in and explicitly excluded AD accounts are never managed by synchronization.") }}</div>
-          </div>
-        {% endcall %}
-      </div>
-    {% endcall %}
+            <section class="subcard stack-tight">
+              <div class="section-header">
+                <div class="section-header__copy">
+                  <h3 class="section-header__title">{{ t("OU Filter And Root Mapping") }}</h3>
+                  <p class="section-header__description">{{ t("Use these defaults to keep the single-organization sync inside the expected target AD OU roots.") }}</p>
+                </div>
+              </div>
+              <div class="form-grid">
+                {{ target_ou_picker("directory_root_ou_path", "Target AD Root OU Path / DN", editable.directory_root_ou_path, "No target root OU selected yet.", "Choose the target AD root OU path or DN from the AD OU tree below. Example: Managed Users/China or OU=China,OU=Managed Users,DC=example,DC=com", "Select Target Root OU", "Target AD Root OU Path / DN", "Choose the target AD root OU path or DN from the AD OU tree below. Example: Managed Users/China or OU=China,OU=Managed Users,DC=example,DC=com", "field-span-full") }}
+                {{ target_ou_picker("disabled_users_ou_path", "Disabled Users OU Path / DN", editable.disabled_users_ou_path, "No disabled users OU selected yet.", "Choose the target OU used for disabled users. Nested OU path or DN is supported.", "Select Disabled Users OU", "Disabled Users OU Path / DN", "Choose the target OU used for disabled users. Nested OU path or DN is supported.") }}
+                {{ target_ou_picker("custom_group_ou_path", "Custom Group OU Path / DN", editable.custom_group_ou_path, "No custom group OU selected yet.", "Choose the target OU used for managed custom groups. Nested OU path or DN is supported.", "Select Custom Group OU", "Custom Group OU Path / DN", "Choose the target OU used for managed custom groups. Nested OU path or DN is supported.") }}
+              </div>
+            </section>
+          {% endcall %}
+        </section>
 
-    {% call ui.detail_toggle(t("Runtime And Group Behavior"), t("Useful after the first dry run"), open=False) %}
-      <div class="page-stack tight">
-        {% call ui.panel(t("Runtime Policy"), t("Organization Scope"), "info") %}
-          <div class="form-grid">
-            {{ forms.input("schedule_time", t("Daily Schedule Time"), editable.schedule_time, placeholder="HH:mm") }}
-            {{ forms.input("retry_interval", t("Retry Interval (min)"), editable.retry_interval, type="number") }}
-            {{ forms.input("max_retries", t("Max Retries"), editable.max_retries, type="number") }}
-            {{ forms.select("schedule_execution_mode", t("Scheduled Mode"), [("apply", t("Apply")), ("dry_run", t("Dry Run"))], selected_value=editable.schedule_execution_mode) }}
-            {{ forms.select("user_ou_placement_strategy", t("OU Placement Strategy"), translated_placement_strategy_options.items(), selected_value=editable.user_ou_placement_strategy) }}
-            {{ forms.select("group_display_separator", t("Group Separator"), [("-", "-"), ("_", "_"), (" ", t("Space"))], selected_value=editable.group_display_separator) }}
-            {{ forms.select("group_recursive_enabled", t("Recursive Group Sync"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.group_recursive_enabled|lower) }}
-            {{ forms.select("managed_relation_cleanup_enabled", t("Relation Cleanup"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.managed_relation_cleanup_enabled|lower) }}
-          </div>
-        {% endcall %}
-
-        {% call ui.panel(t("Group Rules"), t("Organization Scope"), "info") %}
+        <section id="config-section-security" class="config-section-panel" data-config-section-panel="security" hidden>
           <div class="page-stack tight">
-            {{ forms.textarea("soft_excluded_groups", t("Soft Excluded Groups"), editable.soft_excluded_groups, help_text=t("One group per line. Use this only when a managed group should be ignored."), rows=6) }}
-            {% call ui.table_shell() %}
-              <table>
-                <thead>
-                  <tr><th>{{ t("Protected Group") }}</th><th>{{ t("Match") }}</th><th>{{ t("Source") }}</th></tr>
-                </thead>
-                <tbody>
-                  {% for rule in protected_rules %}
-                  <tr>
-                    <td>{{ rule.display_name or rule.match_value }}</td>
-                    <td>{{ ui.badge(t(rule.match_type), 'info') }}</td>
-                    <td>{{ rule.source }}</td>
-                  </tr>
-                  {% else %}
-                  <tr><td class="table-empty" colspan="3">{{ t("No protected rules.") }}</td></tr>
+            {% call ui.panel(t("Account Policy"), t("Organization Scope"), "info", t("Define default credentials and account reset behavior before the first apply run.")) %}
+              <div class="form-grid">
+                {{ forms.input("default_password", t("Default Password"), type="password", placeholder=("********" if editable.default_password_configured else t("Enter default password")), help_text=(t("Leave blank to keep current") if editable.default_password_configured else ""), class_name="field-span-full") }}
+                {{ forms.select("force_change_password", t("Force Password Change"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.force_change_password|lower) }}
+                {{ forms.select("password_complexity", t("Password Complexity"), [("strong", t("Strong")), ("medium", t("Medium")), ("basic", t("Basic"))], selected_value=editable.password_complexity) }}
+              </div>
+            {% endcall %}
+
+            {% call ui.panel(t("Employee Self-Service"), t("Organization Scope"), "info", t("Control the public employee password reset portal for this organization.")) %}
+              <div class="form-grid">
+                {{ forms.select("sspr_enabled", t("Self-Service Password Reset"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.sspr_enabled|lower) }}
+                {{ forms.input("sspr_min_password_length", t("SSPR Minimum Password Length"), editable.sspr_min_password_length, type="number", min_value="1") }}
+                {{ forms.select("sspr_unlock_account_default", t("Unlock Account By Default"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.sspr_unlock_account_default|lower) }}
+                {{ forms.input("sspr_verification_session_ttl_seconds", t("Verification Session TTL (sec)"), editable.sspr_verification_session_ttl_seconds, type="number", min_value="60", step="60") }}
+              </div>
+              <div class="helper-block">
+                <div class="helper-block__header">
+                  <div class="helper-block__title">{{ t("SSPR Status") }}</div>
+                  {{ ui.badge(t(sspr_status.badge_text), sspr_status.badge_level) }}
+                </div>
+                <ul class="helper-list">
+                  <li><strong>{{ t("Portal URL") }}</strong>: <code>{{ sspr_status.portal_url }}</code></li>
+                  {% for callback in sspr_status.callback_urls %}
+                  <li><strong>{{ callback.label }}</strong>: <code>{{ callback.url }}</code></li>
                   {% endfor %}
-                </tbody>
-              </table>
+                </ul>
+              </div>
+            {% endcall %}
+
+            {% call ui.panel(t("Directory Safety"), t("Organization Scope"), "warning", t("System-protected accounts are always skipped for binding, create, update, reactivation, and disable actions.")) %}
+              <div class="form-group">
+                <label for="protected_accounts_display">{{ t("Protected Accounts (Read-only)") }}</label>
+                <textarea id="protected_accounts_display" rows="5" readonly>{{ editable.protected_accounts|join('\n') }}</textarea>
+                <div class="help-text">{{ t("These built-in and explicitly excluded AD accounts are never managed by synchronization.") }}</div>
+              </div>
             {% endcall %}
           </div>
-        {% endcall %}
-      </div>
-    {% endcall %}
+        </section>
 
-    {% call ui.detail_toggle(t("Web Deployment"), t("Global settings for this server"), open=False) %}
-      {% call ui.panel(t("Web Deployment"), t("Global Scope"), "warning", t("These settings affect the whole server, regardless of which organization is selected.")) %}
-        <p class="section-subtitle">{{ t("Changes take effect after restarting the service.") }}</p>
-        <div class="form-grid">
-          {{ forms.input("web_bind_host", t("Bind Host"), editable.web_bind_host) }}
-          {{ forms.input("web_bind_port", t("Bind Port"), editable.web_bind_port, type="number") }}
-          {{ forms.input("web_public_base_url", t("Public Base URL"), editable.web_public_base_url, placeholder="https://sync.example.com", class_name="field-span-full") }}
-          {{ forms.select("web_session_cookie_secure_mode", t("Secure Cookie Policy"), [("auto", "auto"), ("always", "always"), ("never", "never")], selected_value=editable.web_session_cookie_secure_mode) }}
-          {{ forms.select("web_trust_proxy_headers", t("Trust Proxy Headers"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.web_trust_proxy_headers|lower) }}
-          {{ forms.input("web_forwarded_allow_ips", t("Forwarded Allow IPs"), editable.web_forwarded_allow_ips, placeholder="127.0.0.1, 10.0.0.0/24", class_name="field-span-full") }}
-        </div>
-      {% endcall %}
-      {% call ui.panel(t("Branding"), t("Global Scope"), "info", t("Use these values to control the product title, short mark, and footer attribution shown across login and in-product pages.")) %}
-        <div class="form-grid">
-          {{ forms.input("brand_display_name", t("Brand Display Name"), editable.brand_display_name, help_text=t("Controls the browser title, sidebar label, and login page heading."), class_name="field-span-full") }}
-          {{ forms.input("brand_mark_text", t("Brand Mark Text"), editable.brand_mark_text, help_text=t("Short text shown inside the brand mark on the login page and sidebar.")) }}
-          {{ forms.input("brand_attribution", t("Footer Attribution"), editable.brand_attribution, help_text=t("Footer text shown on the login page and in the in-product sidebar."), class_name="field-span-full") }}
-        </div>
-      {% endcall %}
-    {% endcall %}
+        <section id="config-section-runtime" class="config-section-panel" data-config-section-panel="runtime" hidden>
+          <div class="page-stack tight">
+            {% call ui.panel(t("Runtime Policy"), t("Organization Scope"), "info", t("Set scheduled execution, placement strategy, and managed relation cleanup.")) %}
+              <div class="form-grid">
+                {{ forms.input("schedule_time", t("Daily Schedule Time"), editable.schedule_time, placeholder="HH:mm") }}
+                {{ forms.input("retry_interval", t("Retry Interval (min)"), editable.retry_interval, type="number") }}
+                {{ forms.input("max_retries", t("Max Retries"), editable.max_retries, type="number") }}
+                {{ forms.select("schedule_execution_mode", t("Scheduled Mode"), [("apply", t("Apply")), ("dry_run", t("Dry Run"))], selected_value=editable.schedule_execution_mode) }}
+                {{ forms.select("user_ou_placement_strategy", t("OU Placement Strategy"), translated_placement_strategy_options.items(), selected_value=editable.user_ou_placement_strategy) }}
+                {{ forms.select("group_display_separator", t("Group Separator"), [("-", "-"), ("_", "_"), (" ", t("Space"))], selected_value=editable.group_display_separator) }}
+                {{ forms.select("group_recursive_enabled", t("Recursive Group Sync"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.group_recursive_enabled|lower) }}
+                {{ forms.select("managed_relation_cleanup_enabled", t("Relation Cleanup"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.managed_relation_cleanup_enabled|lower) }}
+              </div>
+            {% endcall %}
+
+            {% call ui.panel(t("Group Rules"), t("Organization Scope"), "info") %}
+              <div class="page-stack tight">
+                {{ forms.textarea("soft_excluded_groups", t("Soft Excluded Groups"), editable.soft_excluded_groups, help_text=t("One group per line. Use this only when a managed group should be ignored."), rows=6) }}
+                {% call ui.table_shell() %}
+                  <table>
+                    <thead>
+                      <tr><th>{{ t("Protected Group") }}</th><th>{{ t("Match") }}</th><th>{{ t("Source") }}</th></tr>
+                    </thead>
+                    <tbody>
+                      {% for rule in protected_rules %}
+                      <tr>
+                        <td>{{ rule.display_name or rule.match_value }}</td>
+                        <td>{{ ui.badge(t(rule.match_type), 'info') }}</td>
+                        <td>{{ rule.source }}</td>
+                      </tr>
+                      {% else %}
+                      <tr><td class="table-empty" colspan="3">{{ t("No protected rules.") }}</td></tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                {% endcall %}
+              </div>
+            {% endcall %}
+          </div>
+        </section>
+
+        <section id="config-section-web" class="config-section-panel" data-config-section-panel="web" hidden>
+          <div class="page-stack tight">
+            {% call ui.panel(t("Web Deployment"), t("Global Scope"), "warning", t("These settings affect the whole server, regardless of which organization is selected.")) %}
+              <p class="section-subtitle">{{ t("Changes take effect after restarting the service.") }}</p>
+              <div class="form-grid">
+                {{ forms.input("web_bind_host", t("Bind Host"), editable.web_bind_host) }}
+                {{ forms.input("web_bind_port", t("Bind Port"), editable.web_bind_port, type="number") }}
+                {{ forms.input("web_public_base_url", t("Public Base URL"), editable.web_public_base_url, placeholder="https://sync.example.com", class_name="field-span-full") }}
+                {{ forms.select("web_session_cookie_secure_mode", t("Secure Cookie Policy"), [("auto", "auto"), ("always", "always"), ("never", "never")], selected_value=editable.web_session_cookie_secure_mode) }}
+                {{ forms.select("web_trust_proxy_headers", t("Trust Proxy Headers"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.web_trust_proxy_headers|lower) }}
+                {{ forms.input("web_forwarded_allow_ips", t("Forwarded Allow IPs"), editable.web_forwarded_allow_ips, placeholder="127.0.0.1, 10.0.0.0/24", class_name="field-span-full") }}
+              </div>
+            {% endcall %}
+            {% call ui.panel(t("Branding"), t("Global Scope"), "info", t("Use these values to control the product title, short mark, and footer attribution shown across login and in-product pages.")) %}
+              <div class="form-grid">
+                {{ forms.input("brand_display_name", t("Brand Display Name"), editable.brand_display_name, help_text=t("Controls the browser title, sidebar label, and login page heading."), class_name="field-span-full") }}
+                {{ forms.input("brand_mark_text", t("Brand Mark Text"), editable.brand_mark_text, help_text=t("Short text shown inside the brand mark on the login page and sidebar.")) }}
+                {{ forms.input("brand_attribution", t("Footer Attribution"), editable.brand_attribution, help_text=t("Footer text shown on the login page and in the in-product sidebar."), class_name="field-span-full") }}
+              </div>
+            {% endcall %}
+          </div>
+        </section>
+      </div>
+    </section>
 
     <div class="sticky-submit-bar">
       <div class="actions flush-top">

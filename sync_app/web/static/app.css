@@ -334,7 +334,7 @@ header {
 
 .panel__description {
   margin: 8px 0 0;
-  color: var(--text-muted);
+  color: var(--text-muted) !important;
   font-size: 14px;
 }
 
@@ -363,7 +363,7 @@ header {
 }
 
 .stat-card__value {
-  color: var(--text);
+  color: var(--text) !important;
   font-size: 32px;
   font-weight: 800;
   line-height: 1;
@@ -476,7 +476,7 @@ header {
 
 .header-trailing .language-switcher a:hover {
   background: #fff;
-  color: var(--primary);
+  color: var(--primary) !important;
 }
 
 input, select, textarea {
@@ -1744,6 +1744,272 @@ body.confirm-dialog-open {
   font-size: 12px;
 }
 
+.config-brief,
+.config-action-row,
+.config-shortcuts {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: var(--shadow-sm);
+}
+
+.config-page-compact .page-header {
+  margin-bottom: 18px;
+}
+
+.page-stack.config-page-compact {
+  gap: 16px;
+}
+
+.config-page-compact .page-header__eyebrow {
+  margin-bottom: 6px;
+}
+
+.config-page-compact .page-header__layout {
+  gap: 18px;
+}
+
+.config-page-compact .page-header__title {
+  font-size: 30px;
+  line-height: 1.15;
+}
+
+.config-page-compact .page-header__summary {
+  max-width: 720px;
+  margin-top: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.config-page-compact .page-header__meta {
+  gap: 10px;
+}
+
+.config-brief {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  padding: 18px 20px;
+}
+
+.config-brief__main {
+  min-width: 0;
+}
+
+.config-brief__eyebrow {
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.config-brief h2 {
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.config-brief p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.config-brief__separator {
+  color: var(--border-strong);
+}
+
+.config-brief__status {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 420px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.config-brief__status > span {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  white-space: nowrap;
+}
+
+.config-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 16px;
+}
+
+.config-action-row__copy {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.config-action-row__copy strong {
+  color: var(--text);
+}
+
+.config-action-row__copy span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+}
+
+.config-action-row__actions,
+.config-shortcut__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.config-shortcuts {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+}
+
+.config-shortcut {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 16px;
+}
+
+.config-shortcut + .config-shortcut {
+  border-top: 1px solid var(--border);
+}
+
+.config-shortcut > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.config-shortcut strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.config-shortcut span {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.config-form-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.config-section-nav {
+  position: sticky;
+  top: 76px;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow-sm);
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+.config-section-tab {
+  display: grid;
+  grid-template-columns: auto minmax(0, auto);
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted) !important;
+  text-align: center;
+  cursor: pointer;
+  scroll-snap-align: start;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.config-section-tab:hover {
+  border-color: var(--border);
+  background: var(--surface-muted);
+  color: var(--text) !important;
+  box-shadow: none;
+  transform: none;
+}
+
+.config-section-tab.is-active {
+  border-color: rgba(37, 99, 235, 0.28);
+  background: #ffffff;
+  color: var(--primary) !important;
+  box-shadow: inset 0 -2px 0 var(--primary);
+}
+
+.config-section-tab span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.config-section-tab strong {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.config-section-tab small {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.config-section-panels {
+  min-width: 0;
+}
+
+.config-section-panel {
+  min-width: 0;
+}
+
+.config-section-panel[hidden] {
+  display: none !important;
+}
+
 .decision-steps {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -2971,8 +3237,17 @@ button.small {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .bulk-action-bar__controls,
-  .conflict-card__resolution-grid {
+  .conflict-card__resolution-grid,
+  .config-form-workbench {
     grid-template-columns: 1fr;
+  }
+  .config-section-nav {
+    position: static;
+    grid-template-columns: repeat(5, minmax(140px, 1fr));
+    overflow-x: auto;
+  }
+  .config-section-tab {
+    min-width: 140px;
   }
   .hero-header,
   .section-header,
@@ -3078,6 +3353,13 @@ button.small {
     justify-content: space-between;
   }
   .dense-two-col { grid-template-columns: 1fr; }
+  .config-section-nav {
+    grid-template-columns: repeat(5, minmax(128px, 1fr));
+    overflow-x: auto;
+  }
+  .config-section-tab {
+    min-width: 128px;
+  }
   .decision-steps,
   .conflict-command-center__stats,
   .candidate-grid,

@@ -69,7 +69,7 @@ def build_source_provider_ui_catalog(request_support: Any, ui_language: str) -> 
             ),
             "pageSummary": request_support.translate_text(
                 ui_language,
-                "This organization currently uses {provider} as its source provider. This is the shared organization settings page, so LDAP, password policy, runtime, and web deployment sections remain consistent across providers.",
+                "Configure {provider} and shared organization settings one section at a time.",
                 provider=localized_provider_name,
             ),
             "connectorTitle": request_support.translate_text(
