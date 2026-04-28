@@ -142,10 +142,10 @@
         <tbody>
           {% for issue in selected_issues %}
           <tr>
-            <td>{{ issue.label or "-" }}</td>
+            <td>{{ t(issue.label) if issue.label else "-" }}</td>
             <td>{{ ui.badge(t(issue.severity|capitalize), ("error" if issue.severity == "error" else "warning")) }}</td>
             <td>{{ issue.count or 0 }}</td>
-            <td>{{ issue.action or "-" }}</td>
+            <td>{{ t(issue.action) if issue.action else "-" }}</td>
           </tr>
           {% else %}
           <tr><td colspan="4" class="table-empty">{{ t("No issues captured for this snapshot.") }}</td></tr>
@@ -169,10 +169,10 @@
         <tbody>
           {% for item in high_risk_items %}
           <tr>
-            <td>{{ ui.badge(item.label or "-", ("error" if item.severity == "error" else "warning")) }}</td>
-            <td>{{ item.title or "-" }}</td>
+            <td>{{ ui.badge((t(item.label) if item.label else "-"), ("error" if item.severity == "error" else "warning")) }}</td>
+            <td>{{ t(item.title) if item.title else "-" }}</td>
             <td>{{ item.connector_name or item.connector_id or "-" }}</td>
-            <td>{{ item.detail or "-" }}</td>
+            <td>{{ t(item.detail) if item.detail else "-" }}</td>
           </tr>
           {% else %}
           <tr><td colspan="4" class="table-empty">{{ t("No high-risk users are listed for this snapshot.") }}</td></tr>
@@ -201,10 +201,10 @@
         <tbody>
           {% for item in selected_repair_items_preview %}
           <tr>
-            <td>{{ item.label or "-" }}</td>
-            <td>{{ item.title or "-" }}</td>
+            <td>{{ t(item.label) if item.label else "-" }}</td>
+            <td>{{ t(item.title) if item.title else "-" }}</td>
             <td>{{ item.source_user_id or (item.source_user_ids|join(", ") if item.source_user_ids else "-") }}</td>
-            <td>{{ item.detail or "-" }}</td>
+            <td>{{ t(item.detail) if item.detail else "-" }}</td>
           </tr>
           {% else %}
           <tr><td colspan="4" class="table-empty">{{ t("No repair rows were captured for this snapshot.") }}</td></tr>

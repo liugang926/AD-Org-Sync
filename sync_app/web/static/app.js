@@ -245,6 +245,7 @@
       if (element.tomselect) {
         return;
       }
+      const tomSelectLabels = document.body?.dataset || {};
 
       new TomSelect(element, {
         create: true,
@@ -252,7 +253,10 @@
         labelField: "name",
         searchField: ["name", "id"],
         preload: true,
-        plugins: ["remove_button", "clear_button"],
+        plugins: {
+          remove_button: { title: tomSelectLabels.removeItemLabel || "Remove item" },
+          clear_button: { title: tomSelectLabels.clearAllLabel || "Clear all" },
+        },
         load(_query, callback) {
           fetch(url, { credentials: "same-origin" })
             .then((response) => response.json())
@@ -282,9 +286,13 @@
       if (element.tomselect) {
         return;
       }
+      const tomSelectLabels = document.body?.dataset || {};
       new TomSelect(element, {
         create: true,
-        plugins: ["remove_button", "clear_button"],
+        plugins: {
+          remove_button: { title: tomSelectLabels.removeItemLabel || "Remove item" },
+          clear_button: { title: tomSelectLabels.clearAllLabel || "Clear all" },
+        },
         persist: false,
         createOnBlur: true,
       });

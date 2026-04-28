@@ -30,7 +30,7 @@
   {{ ui.compact_stat(t("Open Conflicts"), open_conflict_count) }}
   {{ ui.compact_stat(t("Pending Reviews"), pending_review_count) }}
   {{ ui.compact_stat(t("Rule Reminders"), rule_governance_issue_count) }}
-  {{ ui.compact_stat(t("Schedule Mode"), notification_channel.schedule_execution_mode|replace('_', ' ')|title) }}
+  {{ ui.compact_stat(t("Schedule Mode"), t(notification_channel.schedule_execution_mode|replace('_', ' ')|title)) }}
   {{ ui.compact_stat(t("Scheduled Apply"), (t("Dry Run Only") if scheduled_apply_guard.mode != "apply" else (t("Ready") if scheduled_apply_guard.allowed else t("Blocked")))) }}
 </div>
 
@@ -52,7 +52,7 @@
         <div class="stack-row">
           <div>
             <strong>{{ t(signal.label) }}</strong>
-            <div class="muted">{{ signal.description }}</div>
+            <div class="muted">{{ t(signal.description) }}</div>
           </div>
           {{ ui.badge(t(signal.status|capitalize), signal.status) }}
         </div>
@@ -60,7 +60,7 @@
           <div><strong>{{ t("Current Value") }}:</strong> {{ signal.value }}</div>
           <div><strong>{{ t("Policy") }}:</strong> {{ t("Enabled") if signal.enabled else t("Disabled") }}</div>
         </div>
-        <div class="muted">{{ signal.action }}</div>
+        <div class="muted">{{ t(signal.action) }}</div>
       </article>
       {% endfor %}
     </div>
@@ -70,7 +70,7 @@
     <div class="page-stack tight">
       <div class="stack-row">
         <div>
-          <strong>{{ scheduled_apply_guard.summary }}</strong>
+          <strong>{{ t(scheduled_apply_guard.summary) }}</strong>
           <div class="muted">{{ t("Latest successful dry run") }}:
             {% if scheduled_apply_guard.latest_successful_dry_run %}
             <a href="/jobs/{{ scheduled_apply_guard.latest_successful_dry_run.job_id }}">{{ scheduled_apply_guard.latest_successful_dry_run.job_id }}</a>
