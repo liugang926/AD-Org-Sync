@@ -2,6 +2,7 @@
 {% import "components/ui.html" as ui %}
 
 {% block content %}
+<div class="advanced-sync-page page-stack tight">
 {% call ui.page_header(t("Advanced Sync"), t("Turn these capabilities on only when the default single-organization flow no longer fits. Most deployments can ignore this page until after the first successful dry run."), eyebrow=t("Optional"), badge_text=t("Organization Scope"), badge_level="warning") %}
   {% if current_org %}
   <div class="surface-inline">
@@ -943,6 +944,7 @@
     </table>
     {% endcall %}
   {% endcall %}
+</div>
 </div>
 
 <script id="advanced-sync-i18n" type="application/json">{{ advanced_sync_client_i18n | tojson }}</script>
