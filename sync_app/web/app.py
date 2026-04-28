@@ -367,6 +367,7 @@ def create_app(
         flash=request_support.flash,
         flash_t=request_support.flash_t,
         get_current_org=request_support.get_current_org,
+        get_ui_language=request_support.get_ui_language,
         list_org_attribute_mapping_rules=request_support.list_org_attribute_mapping_rules,
         list_org_connector_records=request_support.list_org_connector_records,
         normalize_mapping_direction=normalize_mapping_direction,
@@ -375,6 +376,7 @@ def create_app(
         require_capability=request_support.require_capability,
         split_csv_values=_split_csv_values,
         to_bool=_to_bool,
+        translate_text=request_support.translate_text,
     )
 
     register_automation_center_routes(

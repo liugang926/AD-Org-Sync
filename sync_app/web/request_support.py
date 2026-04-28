@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlencode
 
@@ -37,6 +38,7 @@ class RequestSupport:
     ) -> None:
         self.templates = templates
         self.app_version = app_version
+        self.static_asset_version = self._build_static_asset_version(app_version)
         self.default_brand_display_name = default_brand_display_name
         self.default_brand_mark_text = default_brand_mark_text
         self.default_brand_attribution = default_brand_attribution
@@ -44,6 +46,22 @@ class RequestSupport:
         self.placement_strategies = placement_strategies
         self.advanced_nav_pages = advanced_nav_pages
         self.session_filter_prefix = session_filter_prefix
+
+    @staticmethod
+    def _build_static_asset_version(app_version: str) -> str:
+        static_dir = Path(__file__).resolve().parent / "static"
+        latest_mtime = max(
+            (
+                path.stat().st_mtime_ns
+                for pattern in ("*.css", "*.js", "vendor/*.css", "vendor/*.js")
+                for path in static_dir.glob(pattern)
+                if path.is_file()
+            ),
+            default=0,
+        )
+        if latest_mtime <= 0:
+            return app_version
+        return f"{app_version}-{latest_mtime:x}"
 
     def flash(self, request: Request, level: str, message: str) -> None:
         request.session["_flash"] = {"level": level, "message": message}
@@ -266,6 +284,7 @@ class RequestSupport:
         context.setdefault("request", request)
         context.setdefault("flash", localized_flash)
         context.setdefault("app_version", self.app_version)
+        context.setdefault("static_asset_version", self.static_asset_version)
         context.setdefault("brand_display_name", brand_display_name)
         context.setdefault("brand_mark_text", str(brand_mark_text or "").strip() or self.default_brand_mark_text)
         context.setdefault("brand_attribution", str(brand_attribution or "").strip() or self.default_brand_attribution)
