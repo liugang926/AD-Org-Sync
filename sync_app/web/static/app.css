@@ -832,8 +832,8 @@ tr:hover td { background: #fcfdfe; transition: background 0.2s ease; }
   display: inline-flex;
   align-items: center;
   gap: 12px;
-  min-height: 48px;
-  padding: 6px 16px;
+  min-height: 42px;
+  padding: 5px 14px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
@@ -889,7 +889,7 @@ tr:hover td { background: #fcfdfe; transition: background 0.2s ease; }
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px;
+  padding: 3px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: linear-gradient(180deg, #eef4fb 0%, #e7edf6 100%);
@@ -900,9 +900,9 @@ tr:hover td { background: #fcfdfe; transition: background 0.2s ease; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
+  min-height: 34px;
   min-width: 0;
-  padding: 0 18px;
+  padding: 0 14px;
   border: 0;
   border-radius: 999px;
   background: transparent;
@@ -3702,11 +3702,17 @@ button.small {
   .topbar-cluster {
     width: 100%;
     justify-content: flex-start;
+    gap: 10px;
   }
   .topbar-divider { display: none; }
-  .topbar-chip,
-  .topbar-segmented {
+  .topbar-chip {
     width: 100%;
+  }
+  .topbar-segmented,
+  .mode-switcher,
+  .language-switcher {
+    width: auto;
+    flex: 0 0 auto;
   }
   .topbar-chip {
     justify-content: space-between;
