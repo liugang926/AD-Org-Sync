@@ -147,7 +147,9 @@
       <div class="detail-toggle__description">{{ description }}</div>
       {% endif %}
     </div>
-    <span class="detail-toggle__label">Toggle</span>
+    <span class="detail-toggle__label" aria-hidden="true">
+      <i data-lucide="chevron-down" class="icon icon-sm"></i>
+    </span>
   </summary>
   <div class="detail-toggle__body">
     {{ caller() }}
