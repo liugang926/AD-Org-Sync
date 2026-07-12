@@ -58,6 +58,12 @@ class IntegrationWebhookOutboxRecord(MappingLikeModel):
     last_error: str = ""
     locked_at: str = ""
     lease_expires_at: str = ""
+    idempotency_key: str = ""
+    lease_token: str = ""
+    dead_lettered_at: str = ""
+    replay_count: int = 0
+    last_replayed_at: str = ""
+    last_replayed_by: str = ""
     created_at: str = ""
     updated_at: str = ""
 
@@ -87,6 +93,12 @@ class IntegrationWebhookOutboxRecord(MappingLikeModel):
             last_error=str(row["last_error"] or ""),
             locked_at=str(row["locked_at"] or ""),
             lease_expires_at=str(row["lease_expires_at"] or ""),
+            idempotency_key=str(row["idempotency_key"] or "") if "idempotency_key" in row.keys() else "",
+            lease_token=str(row["lease_token"] or "") if "lease_token" in row.keys() else "",
+            dead_lettered_at=str(row["dead_lettered_at"] or "") if "dead_lettered_at" in row.keys() else "",
+            replay_count=int(row["replay_count"] or 0) if "replay_count" in row.keys() else 0,
+            last_replayed_at=str(row["last_replayed_at"] or "") if "last_replayed_at" in row.keys() else "",
+            last_replayed_by=str(row["last_replayed_by"] or "") if "last_replayed_by" in row.keys() else "",
             created_at=str(row["created_at"] or ""),
             updated_at=str(row["updated_at"] or ""),
         )

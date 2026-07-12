@@ -2,6 +2,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from sync_app.core.models import AccountConfig, AppConfig, LDAPConfig, WeComConfig
 from sync_app.storage.local_db import (
@@ -13,6 +14,7 @@ from sync_app.storage.local_db import (
     UserIdentityBindingRepository,
     WebAdminUserRepository,
     WebAuditLogRepository,
+    workspace_fallback_db_path,
 )
 from sync_app.services.config_store import save_editable_config
 from sync_app.storage.secret_store import can_use_dpapi, is_encrypted_secret
@@ -20,6 +22,38 @@ from sync_app.web.security import hash_password, verify_password
 
 
 class WebStorageTests(unittest.TestCase):
+    def test_workspace_fallback_path_calculation_has_no_filesystem_side_effect(self):
+        with patch("sync_app.storage.local_db.os.makedirs") as make_dirs:
+            fallback_path = workspace_fallback_db_path("TestApp")
+
+        make_dirs.assert_not_called()
+        self.assertTrue(fallback_path.endswith(os.path.join(".appdata", "TestApp", "app.db")))
+
+    def test_explicit_database_path_does_not_import_workspace_legacy_database(self):
+        test_root = Path(os.getcwd()) / "test_artifacts"
+        test_root.mkdir(exist_ok=True)
+        db_path = test_root / "web_storage_explicit_path.db"
+        try:
+            for suffix in ("", "-wal", "-shm"):
+                candidate = Path(str(db_path) + suffix)
+                if candidate.exists():
+                    candidate.unlink()
+
+            manager = DatabaseManager(db_path=str(db_path))
+            result = manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+
+            self.assertTrue(result["created_new_database"])
+            self.assertIsNone(result["migration_source_path"])
+            self.assertFalse(WebAdminUserRepository(manager).has_any_user())
+        finally:
+            for suffix in ("", "-wal", "-shm"):
+                candidate = Path(str(db_path) + suffix)
+                if candidate.exists():
+                    try:
+                        candidate.unlink()
+                    except PermissionError:
+                        pass
+
     def test_web_admin_password_min_length_defaults_to_eight_and_upgrades_legacy_default(self):
         test_root = Path(os.getcwd()) / "test_artifacts"
         test_root.mkdir(exist_ok=True)

@@ -27,6 +27,8 @@ class SyncConflictSupportMixin:
             *,
             rule: str = "",
             explanation: str = "",
+            explanation_code: str = "",
+            explanation_params: Optional[dict[str, Any]] = None,
             is_recommended: bool = False,
         ) -> None:
             normalized_username = str(username or "").strip()
@@ -38,7 +40,24 @@ class SyncConflictSupportMixin:
                 candidates_by_username[key] = {
                     "username": normalized_username,
                     "rule": str(rule or ""),
+                    "rule_code": (
+                        f"conflicts.candidate.rule.{rule}"
+                        if str(rule or "")
+                        in {
+                            "recommended_action",
+                            "existing_ad_userid",
+                            "existing_ad_email_localpart",
+                            "derived_default_userid",
+                            "manual_binding",
+                            "existing_binding",
+                            "existing_ad_identity_claim_review",
+                            "shared_ad_account",
+                        }
+                        else ""
+                    ),
                     "explanation": str(explanation or ""),
+                    "explanation_code": str(explanation_code or ""),
+                    "explanation_params": dict(explanation_params or {}),
                     "is_recommended": bool(is_recommended),
                 }
                 return
@@ -46,6 +65,9 @@ class SyncConflictSupportMixin:
                 existing["rule"] = str(rule)
             if explanation and not existing["explanation"]:
                 existing["explanation"] = str(explanation)
+            if explanation_code and not existing["explanation_code"]:
+                existing["explanation_code"] = str(explanation_code)
+                existing["explanation_params"] = dict(explanation_params or {})
             if is_recommended:
                 existing["is_recommended"] = True
 
@@ -54,6 +76,8 @@ class SyncConflictSupportMixin:
                 str(recommendation.get("ad_username") or ""),
                 rule="recommended_action",
                 explanation=str(recommendation.get("reason") or ""),
+                explanation_code=str(recommendation.get("reason_code") or ""),
+                explanation_params=dict(recommendation.get("reason_params") or {}),
                 is_recommended=True,
             )
 
@@ -64,24 +88,45 @@ class SyncConflictSupportMixin:
                 str(candidate.get("username") or ""),
                 rule=str(candidate.get("rule") or ""),
                 explanation=str(candidate.get("explanation") or ""),
+                explanation_code=str(candidate.get("explanation_code") or ""),
+                explanation_params=dict(candidate.get("explanation_params") or {}),
             )
 
-        conflict_type = str(getattr(conflict, "conflict_type", "") or "").strip().lower()
+        conflict_type = (
+            str(getattr(conflict, "conflict_type", "") or "").strip().lower()
+        )
         if conflict_type == "existing_ad_identity_claim_review":
-            claim_candidate = details.get("candidate") if isinstance(details.get("candidate"), dict) else {}
+            claim_candidate_payload = details.get("candidate")
+            claim_candidate: dict[str, Any] = (
+                claim_candidate_payload
+                if isinstance(claim_candidate_payload, dict)
+                else {}
+            )
             add_candidate(
-                str(claim_candidate.get("username") or getattr(conflict, "target_key", "") or ""),
-                rule=str(claim_candidate.get("rule") or "existing_ad_identity_claim_review"),
+                str(
+                    claim_candidate.get("username")
+                    or getattr(conflict, "target_key", "")
+                    or ""
+                ),
+                rule=str(
+                    claim_candidate.get("rule") or "existing_ad_identity_claim_review"
+                ),
                 explanation=str(
                     claim_candidate.get("explanation")
                     or "This existing AD account matched the first-sync identity claim policy and is waiting for review."
                 ),
+                explanation_code="conflicts.candidate.explanation.existing_claim_review",
             )
         if conflict_type == "shared_ad_account":
             add_candidate(
-                str(getattr(conflict, "target_key", "") or details.get("ad_username") or ""),
+                str(
+                    getattr(conflict, "target_key", "")
+                    or details.get("ad_username")
+                    or ""
+                ),
                 rule="shared_ad_account",
                 explanation="This AD account is currently shared by multiple source users.",
+                explanation_code="conflicts.candidate.explanation.shared_account",
             )
 
         return sorted(
@@ -92,7 +137,9 @@ class SyncConflictSupportMixin:
             ),
         )
 
-    def _load_target_account_summary(self, request: Request, ad_username: str) -> dict[str, Any]:
+    def _load_target_account_summary(
+        self, request: Request, ad_username: str
+    ) -> dict[str, Any]:
         normalized_ad_username = str(ad_username or "").strip()
         if not normalized_ad_username:
             return {
@@ -116,24 +163,33 @@ class SyncConflictSupportMixin:
             _config, target_provider = self._get_target_provider(request)
             try:
                 if hasattr(target_provider, "get_users_batch"):
-                    batch_records = dict(target_provider.get_users_batch([normalized_ad_username]) or {})
+                    batch_records = dict(
+                        target_provider.get_users_batch([normalized_ad_username]) or {}
+                    )
                     batch_record = next(
                         (
                             item
                             for key, item in batch_records.items()
-                            if str(key or "").strip().lower() == normalized_ad_username.lower()
+                            if str(key or "").strip().lower()
+                            == normalized_ad_username.lower()
                         ),
                         None,
                     )
                 if hasattr(target_provider, "get_user_details"):
-                    user_details = dict(target_provider.get_user_details(normalized_ad_username) or {})
+                    user_details = dict(
+                        target_provider.get_user_details(normalized_ad_username) or {}
+                    )
                 is_user_active = getattr(target_provider, "is_user_active", None)
                 if callable(is_user_active):
                     enabled = bool(is_user_active(normalized_ad_username))
             finally:
                 self._close_directory_resource(target_provider)
         except Exception as exc:
-            self.logger.warning("failed to load target account summary for %s: %s", normalized_ad_username, exc)
+            self.logger.warning(
+                "failed to load target account summary for %s: %s",
+                normalized_ad_username,
+                exc,
+            )
 
         exists = bool(user_details) or batch_record is not None
         distinguished_name = str(
@@ -151,9 +207,7 @@ class SyncConflictSupportMixin:
                 or ""
             ),
             "mail": str(
-                user_details.get("Mail")
-                or getattr(batch_record, "email", "")
-                or ""
+                user_details.get("Mail") or getattr(batch_record, "email", "") or ""
             ),
             "title": str(user_details.get("Title") or ""),
             "description": str(user_details.get("Description") or ""),
@@ -174,7 +228,7 @@ class SyncConflictSupportMixin:
         items: list[dict[str, str]] = []
         seen_fields: set[str] = set()
 
-        def add_item(name: str, *, source: str) -> None:
+        def add_item(name: str, *, source: str, source_code: str = "") -> None:
             normalized_name = str(name or "").strip()
             if not normalized_name:
                 return
@@ -186,12 +240,25 @@ class SyncConflictSupportMixin:
                 {
                     "name": normalized_name,
                     "source": str(source or ""),
+                    "source_code": str(source_code or ""),
                 }
             )
 
-        add_item("displayName", source="Core user sync")
-        add_item("mail", source="Core user sync")
-        add_item("target OU", source="OU placement")
+        add_item(
+            "displayName",
+            source="Core user sync",
+            source_code="conflicts.field_source.core_user_sync",
+        )
+        add_item(
+            "mail",
+            source="Core user sync",
+            source_code="conflicts.field_source.core_user_sync",
+        )
+        add_item(
+            "target OU",
+            source="OU placement",
+            source_code="conflicts.field_source.ou_placement",
+        )
 
         for rule in repositories.attribute_mapping_repo.list_rule_records(
             direction="source_to_ad",
@@ -223,11 +290,20 @@ class SyncConflictSupportMixin:
         explanation_error = ""
         if str(getattr(conflict, "source_id", "") or "").strip():
             try:
-                explanation = self.explain_identity_routing(request, str(conflict.source_id))
+                explanation = self.explain_identity_routing(
+                    request, str(conflict.source_id)
+                )
             except Exception as exc:
-                explanation_error = str(exc)
+                self.logger.warning(
+                    "failed to explain identity routing for %s: %s",
+                    conflict.source_id,
+                    exc,
+                )
+                explanation_error = "conflicts.decision.routing_unavailable"
 
-        candidate_options = self._build_conflict_candidate_options(conflict, recommendation)
+        candidate_options = self._build_conflict_candidate_options(
+            conflict, recommendation
+        )
         selected_target_username = str(ad_username or "").strip()
         if not selected_target_username:
             selected_target_username = next(
@@ -244,7 +320,9 @@ class SyncConflictSupportMixin:
                 "",
             )
         if not selected_target_username:
-            selected_target_username = str(getattr(conflict, "target_key", "") or "").strip()
+            selected_target_username = str(
+                getattr(conflict, "target_key", "") or ""
+            ).strip()
         for item in candidate_options:
             item["is_selected"] = (
                 str(item.get("username") or "").strip().lower()
@@ -253,13 +331,18 @@ class SyncConflictSupportMixin:
 
         selected_connector = dict((explanation or {}).get("selected_connector") or {})
         current_binding = dict((explanation or {}).get("binding") or {})
-        connector_id = str(
-            selected_connector.get("connector_id")
-            or current_binding.get("connector_id")
+        connector_id = (
+            str(
+                selected_connector.get("connector_id")
+                or current_binding.get("connector_id")
+                or "default"
+            ).strip()
             or "default"
-        ).strip() or "default"
+        )
 
-        target_account = self._load_target_account_summary(request, selected_target_username)
+        target_account = self._load_target_account_summary(
+            request, selected_target_username
+        )
         repositories = get_web_repositories(request)
         existing_binding_owner = (
             repositories.user_binding_repo.get_binding_record_by_ad_username(
@@ -276,7 +359,9 @@ class SyncConflictSupportMixin:
         config = self._get_org_app_config(request)
         shared_source_user_ids = [
             str(item or "").strip()
-            for item in list(details.get("source_user_ids") or details.get("wecom_userids") or [])
+            for item in list(
+                details.get("source_user_ids") or details.get("wecom_userids") or []
+            )
             if str(item or "").strip()
         ]
         decision = build_binding_decision_summary(
@@ -291,7 +376,9 @@ class SyncConflictSupportMixin:
                 else ""
             ),
             is_protected_account=(
-                self.is_protected_ad_account_name(selected_target_username, config.exclude_accounts)
+                self.is_protected_ad_account_name(
+                    selected_target_username, config.exclude_accounts
+                )
                 if selected_target_username
                 else False
             ),
@@ -318,8 +405,12 @@ class SyncConflictSupportMixin:
             "target_account": target_account,
             "existing_binding_owner": (
                 {
-                    "source_user_id": str(getattr(existing_binding_owner, "source_user_id", "") or ""),
-                    "connector_id": str(getattr(existing_binding_owner, "connector_id", "") or ""),
+                    "source_user_id": str(
+                        getattr(existing_binding_owner, "source_user_id", "") or ""
+                    ),
+                    "connector_id": str(
+                        getattr(existing_binding_owner, "connector_id", "") or ""
+                    ),
                     "source": str(getattr(existing_binding_owner, "source", "") or ""),
                     "notes": str(getattr(existing_binding_owner, "notes", "") or ""),
                 }
@@ -353,7 +444,9 @@ class SyncConflictSupportMixin:
         actor_username: str,
     ) -> int:
         resolved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        return get_web_repositories(app).conflict_repo.resolve_open_conflicts_for_source(
+        return get_web_repositories(
+            app
+        ).conflict_repo.resolve_open_conflicts_for_source(
             job_id=job_id,
             source_id=source_id,
             resolution_payload={
@@ -380,14 +473,16 @@ class SyncConflictSupportMixin:
         conflict_message = None
         repositories = get_web_repositories(app)
         config = repositories.org_config_repo.get_app_config(org_id, config_path="")
-        if self.is_protected_ad_account_name(normalized_ad_username, config.exclude_accounts):
-            conflict_message = (
-                f"AD account {normalized_ad_username} is system-protected and cannot be managed by sync."
-            )
+        if self.is_protected_ad_account_name(
+            normalized_ad_username, config.exclude_accounts
+        ):
+            conflict_message = f"AD account {normalized_ad_username} is system-protected and cannot be managed by sync."
         else:
-            existing_by_ad = repositories.user_binding_repo.get_binding_record_by_ad_username(
-                normalized_ad_username,
-                org_id=org_id,
+            existing_by_ad = (
+                repositories.user_binding_repo.get_binding_record_by_ad_username(
+                    normalized_ad_username,
+                    org_id=org_id,
+                )
             )
             if existing_by_ad and existing_by_ad.source_user_id != conflict.source_id:
                 conflict_message = (
@@ -397,7 +492,9 @@ class SyncConflictSupportMixin:
         if conflict_message:
             return False, conflict_message, 0
 
-        binding_notes = str(notes or "").strip() or f"resolved from conflict {conflict.id}"
+        binding_notes = (
+            str(notes or "").strip() or f"resolved from conflict {conflict.id}"
+        )
         repositories.user_binding_repo.upsert_binding_for_source_user(
             conflict.source_id,
             normalized_ad_username,
@@ -498,7 +595,10 @@ class SyncConflictSupportMixin:
         action = str(recommendation.get("action") or "").strip().lower()
         reason = str(recommendation.get("reason") or "").strip()
         normalized_confirmation_reason = str(confirmation_reason or "").strip()
-        if self.recommendation_requires_confirmation(recommendation) and not normalized_confirmation_reason:
+        if (
+            self.recommendation_requires_confirmation(recommendation)
+            and not normalized_confirmation_reason
+        ):
             return (
                 False,
                 "This recommendation requires a confirmation reason before it can be applied",
@@ -506,7 +606,11 @@ class SyncConflictSupportMixin:
                 recommendation,
             )
 
-        notes = normalized_confirmation_reason or reason or f"recommended resolution from conflict {conflict.id}"
+        notes = (
+            normalized_confirmation_reason
+            or reason
+            or f"recommended resolution from conflict {conflict.id}"
+        )
         if action == "manual_binding":
             ok, detail, resolved_count = self.apply_conflict_manual_binding(
                 app=app,
@@ -526,4 +630,9 @@ class SyncConflictSupportMixin:
                 notes=notes,
             )
             return ok, detail, resolved_count, recommendation
-        return False, f"Unsupported recommendation action: {action or '-'}", 0, recommendation
+        return (
+            False,
+            f"Unsupported recommendation action: {action or '-'}",
+            0,
+            recommendation,
+        )

@@ -76,7 +76,7 @@
       <div class="bulk-action-bar__controls">
         {{ forms.select("action", t("Action"), [("apply_recommendation", t("Apply Recommendation")), ("skip_user_sync", t("Add skip_user_sync")), ("dismiss", t("Dismiss")), ("reopen", t("Reopen"))]) }}
         {{ forms.input("notes", t("Notes / Confirmation Reason"), placeholder=t('Required for low-confidence recommendation apply')) }}
-        {{ ui.button(t("Run Bulk Action"), type="submit", icon="play", confirm_text=t("Run this bulk action for the selected conflicts? This can create bindings, exception rules, or resolution records.")) }}
+        {{ ui.button(t("Run Bulk Action"), type="submit", icon="play", confirm_text=t("Run this bulk action for the selected conflicts? This can create bindings, exception rules, or resolution records."), confirm_title=t("Confirm Bulk Conflict Action"), confirm_details=[(t("Organization"), current_org.name if current_org else "-"), (t("Selected Conflicts"), "{selected_count}"), (t("Requested Action"), "{selected_action}")], attrs='data-selection-requires-items') }}
       </div>
     </form>
     {% endif %}
@@ -89,11 +89,22 @@
           <div class="conflict-card__header">
             <div>
               <div class="conflict-card__eyebrow">{{ t("Conflict") }} #{{ item.id }}</div>
-              <h2>{{ item.conflict_type }}</h2>
-              <p>{{ item.message }}</p>
+              <h2>{{ t(item.conflict_type) }}</h2>
+              <p>
+                {% if item.details and item.details.message_code %}
+                {{ t(item.details.message_code, **(item.details.message_params or {})) }}
+                {% elif ui_language == "zh-CN" and item.conflict_type in ["multiple_ad_candidates", "shared_ad_account", "existing_ad_identity_claim_review"] %}
+                {% set fallback_message_code = "conflicts.message." ~ item.conflict_type %}
+                {{ t(fallback_message_code, source_id=item.source_id, target_key=item.target_key, candidates="", source_users="") }}
+                {% elif ui_language == "zh-CN" %}
+                {{ t("conflicts.message.generic", source_id=item.source_id) }}
+                {% else %}
+                {{ item.message }}
+                {% endif %}
+              </p>
             </div>
             <div class="conflict-card__badges">
-              {{ ui.badge(t(item.status), 'warning' if item.status == 'open' else ('success' if item.status == 'resolved' else 'info')) }}
+              {{ ui.badge(t(item.status|capitalize), 'warning' if item.status == 'open' else ('success' if item.status == 'resolved' else 'info')) }}
               {% if can("mappings.write") %}
               <label class="inline-checkbox conflict-card__select">
                 <input form="bulk-conflicts-form" type="checkbox" name="conflict_ids" value="{{ item.id }}">
@@ -111,7 +122,18 @@
           </div>
 
           {% if item.resolution_hint %}
-          <div class="panel-note info">{{ t("Hint") }}: {{ item.resolution_hint }}</div>
+          <div class="panel-note info">{{ t("Hint") }}:
+            {% if item.details and item.details.resolution_code %}
+            {{ t(item.details.resolution_code) }}
+            {% elif ui_language == "zh-CN" and item.conflict_type in ["multiple_ad_candidates", "shared_ad_account", "existing_ad_identity_claim_review"] %}
+            {% set fallback_resolution_code = "conflicts.resolution." ~ item.conflict_type %}
+            {{ t(fallback_resolution_code) }}
+            {% elif ui_language == "zh-CN" %}
+            {{ t("conflicts.resolution.generic") }}
+            {% else %}
+            {{ item.resolution_hint }}
+            {% endif %}
+          </div>
           {% endif %}
 
           {% if recommendation %}
@@ -119,15 +141,15 @@
             <div class="section-header">
               <div class="section-header__copy">
                 <h3 class="section-header__title">{{ t("Recommended Action") }}</h3>
-                <p class="section-header__description">{{ recommendation.reason }}</p>
+                <p class="section-header__description">{{ t(recommendation.reason_code, **recommendation.reason_params) if recommendation.reason_code else recommendation.reason }}</p>
               </div>
               {% if recommendation.confidence %}
-              {{ ui.badge(recommendation.confidence, "info") }}
+              {{ ui.badge(t(recommendation.confidence|capitalize), "info") }}
               {% endif %}
             </div>
             <div class="stack-row">
               <div>
-                <strong>{{ recommendation.label }}</strong>
+                <strong>{{ t(recommendation.label_code) if recommendation.label_code else recommendation.label }}</strong>
                 {% if recommendation.ad_username %}
                 <div class="muted">{{ t("Target AD Username: {username}", username=recommendation.ad_username) }}</div>
                 {% endif %}

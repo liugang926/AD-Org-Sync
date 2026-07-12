@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from sync_app.services.external_integrations import approve_job_review as approve_job_review_action
+from sync_app.application import ApproveSyncPlanUseCase, TenantContext
 from sync_app.services.external_integrations import (
     build_integration_center_context,
     extract_bearer_token,
@@ -31,6 +31,7 @@ from sync_app.storage.local_db import (
 @dataclass(slots=True)
 class WebIntegrationService:
     db_manager: DatabaseManager
+    approve_plan_use_case: ApproveSyncPlanUseCase
     settings_repo: SettingsRepository
     subscription_repo: IntegrationWebhookSubscriptionRepository
     job_repo: SyncJobRepository
@@ -156,6 +157,7 @@ class WebIntegrationService:
             self.db_manager,
             org_id=org_id,
             delivery_id=delivery_id,
+            requested_by=actor_username,
         )
         delivery = result["delivery"]
         self.audit_repo.add_log(
@@ -177,6 +179,7 @@ class WebIntegrationService:
         result = retry_failed_outbox_deliveries(
             self.db_manager,
             org_id=org_id,
+            requested_by=actor_username,
         )
         retried_count = int(result.get("retried_count") or 0)
         if retried_count > 0:
@@ -251,27 +254,16 @@ class WebIntegrationService:
         reviewer_username: str,
         review_notes: str,
     ) -> dict[str, Any]:
-        result = approve_job_review_action(
-            self.db_manager,
-            org_id=org_id,
-            job_id=job_id,
-            reviewer_username=reviewer_username,
-            review_notes=review_notes,
-        )
-        self.audit_repo.add_log(
+        tenant = TenantContext.create(
             org_id=org_id,
             actor_username=reviewer_username,
-            action_type="integration.review_approve",
-            target_type="sync_job",
-            target_id=job_id,
-            result="success",
-            message="Approved high-risk synchronization plan through integration API",
-            payload={
-                "expires_at": result["expires_at_iso"],
-                "replay_request_id": result["replay_request_id"],
-                "fresh_approval": result["fresh_approval"],
-            },
+            channel="integration_api",
         )
+        result = self.approve_plan_use_case.execute(
+            tenant,
+            job_id=job_id,
+            review_notes=review_notes,
+        ).to_dict()
         return {
             "ok": True,
             "org_id": org_id,

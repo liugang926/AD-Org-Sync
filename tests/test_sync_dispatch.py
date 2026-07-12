@@ -1,10 +1,17 @@
 import unittest
+import time
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from sync_app.services.sync_dispatch import enqueue_sync_job, run_sync_request
+from sync_app.services.sync_dispatch import (
+    _DispatchCancelFlag,
+    _LeaseHeartbeat,
+    enqueue_sync_job,
+    run_sync_request,
+)
 from sync_app.storage.local_db import DatabaseManager, SyncJobRepository
 
 
@@ -66,6 +73,7 @@ class SyncDispatchTests(unittest.TestCase):
                 "job-expired-001",
                 lease_expires_at="2000-01-01T00:00:00+00:00",
             )
+            job_repo.mark_phase_started("job-expired-001", "apply")
 
             expired_job_ids = job_repo.fail_expired_execution_jobs()
             refreshed = job_repo.get_job_record("job-expired-001")
@@ -75,6 +83,31 @@ class SyncDispatchTests(unittest.TestCase):
             self.assertTrue(refreshed.ended_at)
             self.assertEqual(refreshed.lease_owner, "")
             self.assertEqual(refreshed.lease_expires_at, "")
+            self.assertEqual(refreshed.current_phase, "apply")
+            self.assertIn("inspect operation logs", refreshed.recovery_hint)
+            self.assertTrue(refreshed.summary["recovery_required"])
+
+    def test_lease_heartbeat_marks_dispatch_cancelled_when_renewal_fails(self):
+        heartbeat = _LeaseHeartbeat(
+            db_path="ignored.db",
+            job_id="job-lease-lost",
+            worker_id="worker-1",
+            lease_seconds=60,
+            heartbeat_seconds=0.01,
+        )
+        fake_repo = SimpleNamespace(renew_lease=lambda *args, **kwargs: False)
+        user_cancel_flag = SimpleNamespace(is_cancelled=False)
+        dispatch_cancel_flag = _DispatchCancelFlag(user_cancel_flag, heartbeat)
+
+        with patch("sync_app.services.sync_dispatch._open_job_repo", return_value=(None, fake_repo)):
+            heartbeat.start()
+            deadline = time.time() + 1
+            while not heartbeat.lease_lost and time.time() < deadline:
+                time.sleep(0.01)
+            heartbeat.stop()
+
+        self.assertTrue(heartbeat.lease_lost)
+        self.assertTrue(dispatch_cancel_flag.is_cancelled)
 
     def test_run_sync_request_reuses_the_queued_job_id(self):
         with TemporaryDirectory() as temp_dir:

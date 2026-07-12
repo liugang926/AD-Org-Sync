@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
+from sync_app.core.observability import METRICS
 
 DEFAULT_SOURCE_PROVIDER = "wecom"
 
@@ -213,6 +214,17 @@ def get_source_provider_secret_field_names(value: str | None) -> set[str]:
     }
 
 
+def instantiate_source_api_client(api_factory, *args: Any, logger=None):
+    """Support legacy factories without masking TypeErrors raised inside a factory."""
+    try:
+        return api_factory(*args, logger=logger)
+    except TypeError as exc:
+        message = str(exc).lower()
+        if "logger" not in message or "unexpected keyword" not in message:
+            raise
+        return api_factory(*args)
+
+
 class SourceDirectoryProvider(ABC):
     provider_id = DEFAULT_SOURCE_PROVIDER
     display_name = "Source Provider"
@@ -239,6 +251,10 @@ class SourceDirectoryProvider(ABC):
             try:
                 department_users = self.list_department_users(int(department.department_id))
             except Exception:
+                METRICS.increment(
+                    "ad_org_sync_source_provider_department_failures_total",
+                    labels={"provider": self.provider_id},
+                )
                 continue
             for user in department_users:
                 user_id = str(user.source_user_id or "").strip()
@@ -290,3 +306,14 @@ class SourceDirectoryProvider(ABC):
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
+
+
+def validate_source_provider_contract(provider: Any) -> SourceDirectoryProvider:
+    if not isinstance(provider, SourceDirectoryProvider):
+        raise TypeError("source provider factory must return SourceDirectoryProvider")
+    if not str(getattr(provider, "provider_id", "") or "").strip():
+        raise TypeError("source provider must declare a non-empty provider_id")
+    for method_name in ("list_departments", "list_department_users", "get_user_detail", "close"):
+        if not callable(getattr(provider, method_name, None)):
+            raise TypeError(f"source provider is missing required method: {method_name}")
+    return provider

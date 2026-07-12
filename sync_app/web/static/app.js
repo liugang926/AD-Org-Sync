@@ -49,23 +49,54 @@
 
   function initConfirmationPrompts() {
     const dialog = document.querySelector("[data-confirm-dialog]");
+    const panel = dialog?.querySelector(".confirm-dialog__panel");
+    const titleTarget = dialog?.querySelector("[data-confirm-title-target]");
     const messageTarget = dialog?.querySelector("[data-confirm-message-target]");
+    const detailsTarget = dialog?.querySelector("[data-confirm-details]");
+    const verification = dialog?.querySelector("[data-confirm-verification]");
+    const inputHelp = dialog?.querySelector("[data-confirm-input-help]");
+    const confirmInput = dialog?.querySelector("[data-confirm-input]");
     const approveButton = dialog?.querySelector("[data-confirm-approve]");
     const cancelButtons = dialog ? Array.from(dialog.querySelectorAll("[data-confirm-cancel]")) : [];
     let pendingElement = null;
+    let restoreFocusTo = null;
 
-    const closeDialog = () => {
+    const resolveConfirmationValue = (template, element) => {
+      const selectionScope = element.closest("[data-selection-scope]") || element.closest("form");
+      const form = element.closest("form");
+      const selectedCount = selectionScope?.querySelectorAll("input[type='checkbox']:checked").length || 0;
+      const actionSelect = form?.querySelector("select[name='action'], select[name='bulk_action']");
+      const selectedAction =
+        actionSelect instanceof HTMLSelectElement
+          ? actionSelect.selectedOptions[0]?.textContent?.trim() || actionSelect.value
+          : "";
+      return String(template)
+        .replaceAll("{selected_count}", String(selectedCount))
+        .replaceAll("{selected_action}", selectedAction);
+    };
+
+    const closeDialog = ({ restoreFocus = true } = {}) => {
       if (!(dialog instanceof HTMLElement)) {
         return;
       }
       dialog.hidden = true;
       document.body?.classList.remove("confirm-dialog-open");
       pendingElement = null;
+      if (confirmInput instanceof HTMLInputElement) {
+        confirmInput.value = "";
+      }
+      if (approveButton instanceof HTMLButtonElement) {
+        approveButton.disabled = false;
+      }
+      if (restoreFocus && restoreFocusTo instanceof HTMLElement) {
+        restoreFocusTo.focus();
+      }
+      restoreFocusTo = null;
     };
 
     const runConfirmedAction = () => {
       const element = pendingElement;
-      closeDialog();
+      closeDialog({ restoreFocus: false });
       if (!(element instanceof HTMLElement)) {
         return;
       }
@@ -91,25 +122,97 @@
       button.addEventListener("click", closeDialog);
     });
     document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && dialog instanceof HTMLElement && !dialog.hidden) {
+      if (!(dialog instanceof HTMLElement) || dialog.hidden) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
         closeDialog();
+        return;
+      }
+      if (event.key === "Tab") {
+        const focusable = Array.from(
+          dialog.querySelectorAll(
+            'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter((element) => element instanceof HTMLElement && !element.hidden);
+        if (focusable.length === 0) {
+          event.preventDefault();
+          panel?.focus();
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     });
 
-    document.querySelectorAll("button[data-confirm], a[data-confirm]").forEach((element) => {
+    document
+      .querySelectorAll("button[data-confirm], a[data-confirm], form[data-confirm] button[type='submit']")
+      .forEach((element) => {
       element.addEventListener("click", (event) => {
-        const message = element.getAttribute("data-confirm") || defaultConfirmMessage();
+        const source = element.hasAttribute("data-confirm") ? element : element.closest("form[data-confirm]");
+        const message = source?.getAttribute("data-confirm") || defaultConfirmMessage();
+        const requiredText = source?.getAttribute("data-confirm-require") || "";
         if (dialog instanceof HTMLElement && messageTarget instanceof HTMLElement) {
           event.preventDefault();
           event.stopImmediatePropagation();
           pendingElement = element;
+          restoreFocusTo = element;
           messageTarget.textContent = message;
+          if (titleTarget instanceof HTMLElement) {
+            titleTarget.textContent =
+              source?.getAttribute("data-confirm-title") || titleTarget.dataset.defaultTitle || titleTarget.textContent;
+          }
+          if (detailsTarget instanceof HTMLElement) {
+            detailsTarget.replaceChildren();
+            for (let index = 1; index <= 8; index += 1) {
+              const label = source?.getAttribute(`data-confirm-detail-${index}-label`) || "";
+              const valueTemplate = source?.getAttribute(`data-confirm-detail-${index}-value`) || "";
+              const value = resolveConfirmationValue(valueTemplate, element);
+              if (!label || !value) {
+                continue;
+              }
+              const term = document.createElement("dt");
+              const description = document.createElement("dd");
+              term.textContent = label;
+              description.textContent = value;
+              detailsTarget.append(term, description);
+            }
+            detailsTarget.hidden = detailsTarget.childElementCount === 0;
+          }
+          if (verification instanceof HTMLElement && confirmInput instanceof HTMLInputElement) {
+            verification.hidden = !requiredText;
+            confirmInput.value = "";
+            if (inputHelp instanceof HTMLElement) {
+              const template = source?.getAttribute("data-confirm-input-help") || "Type {value} to confirm.";
+              inputHelp.textContent = template.replace("{value}", requiredText);
+            }
+            if (approveButton instanceof HTMLButtonElement) {
+              approveButton.disabled = Boolean(requiredText);
+            }
+            confirmInput.oninput = () => {
+              if (approveButton instanceof HTMLButtonElement) {
+                approveButton.disabled = confirmInput.value.trim() !== requiredText;
+              }
+            };
+          }
           dialog.hidden = false;
           document.body?.classList.add("confirm-dialog-open");
           if (window.lucide) {
             window.lucide.createIcons();
           }
-          if (approveButton instanceof HTMLElement) {
+          if (requiredText && confirmInput instanceof HTMLInputElement) {
+            confirmInput.focus();
+          } else if (cancelButtons[0] instanceof HTMLElement) {
+            cancelButtons[0].focus();
+          } else if (approveButton instanceof HTMLElement) {
             approveButton.focus();
           }
           return;
@@ -135,6 +238,12 @@
         });
         scope.querySelectorAll("[data-selection-has-items]").forEach((target) => {
           target.classList.toggle("is-active", checkedCount > 0);
+        });
+        scope.querySelectorAll("[data-selection-requires-items]").forEach((target) => {
+          if (target instanceof HTMLButtonElement) {
+            target.disabled = checkedCount === 0;
+            target.setAttribute("aria-disabled", String(checkedCount === 0));
+          }
         });
       };
       scope.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
@@ -183,12 +292,71 @@
 
   function initSidebarActiveState() {
     const currentPath = window.location.pathname;
-    document.querySelectorAll("[data-sidebar-nav] a").forEach((link) => {
+    const nav = document.querySelector("[data-sidebar-nav]");
+    if (!(nav instanceof HTMLElement)) {
+      return;
+    }
+    const links = Array.from(nav.querySelectorAll("a:not([data-sidebar-recent-link])"));
+    links.forEach((link) => {
       const href = link.getAttribute("href");
       if (href === currentPath || (href !== "/" && currentPath.startsWith(href || ""))) {
         link.classList.add("active");
+        const group = link.closest("details");
+        if (group instanceof HTMLDetailsElement) {
+          group.open = true;
+        }
       }
     });
+
+    const storageKey = "ad-org-sync.recent-navigation";
+    const recent = nav.querySelector("[data-sidebar-recent]");
+    const recentLinks = nav.querySelector("[data-sidebar-recent-links]");
+    let recentPaths = [];
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(storageKey) || "[]");
+      recentPaths = Array.isArray(stored) ? stored.filter((item) => typeof item === "string") : [];
+    } catch (_error) {
+      recentPaths = [];
+    }
+
+    const renderRecent = () => {
+      if (!(recent instanceof HTMLElement) || !(recentLinks instanceof HTMLElement)) {
+        return;
+      }
+      recentLinks.replaceChildren();
+      recentPaths.slice(0, 3).forEach((path) => {
+        const source = links.find((link) => link.getAttribute("href") === path);
+        if (!(source instanceof HTMLAnchorElement)) {
+          return;
+        }
+        if (requiredText && window.prompt(`Type ${requiredText} to confirm.`) !== requiredText) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+        const clone = source.cloneNode(true);
+        clone.setAttribute("data-sidebar-recent-link", "true");
+        clone.classList.toggle("active", path === currentPath);
+        recentLinks.appendChild(clone);
+      });
+      recent.hidden = recentLinks.childElementCount === 0;
+    };
+
+    links.forEach((link) => {
+      link.addEventListener("click", () => {
+        const href = link.getAttribute("href");
+        if (!href) {
+          return;
+        }
+        recentPaths = [href, ...recentPaths.filter((path) => path !== href)].slice(0, 3);
+        try {
+          window.localStorage.setItem(storageKey, JSON.stringify(recentPaths));
+        } catch (_error) {
+          // Navigation still works when storage is unavailable.
+        }
+      });
+    });
+    renderRecent();
   }
 
   function initTableHover() {
@@ -196,7 +364,7 @@
       row.addEventListener("mouseenter", () => {
         row.style.transition = "background-color 0.2s ease";
       });
-    });
+      });
   }
 
   function initMobileNav() {

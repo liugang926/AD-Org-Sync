@@ -18,6 +18,11 @@ from sync_app.core.conflict_recommendations import (
     recommendation_requires_confirmation,
 )
 from sync_app.core.sync_policies import normalize_mapping_direction
+from sync_app.core.observability import (
+    METRICS,
+    bind_observability_context,
+    normalize_correlation_id,
+)
 from sync_app.providers.source import (
     build_source_provider,
     get_source_provider_display_name,
@@ -34,6 +39,7 @@ from sync_app.web.helpers import parse_bulk_bindings
 from sync_app.web.app_state import get_web_repositories, initialize_web_app_state
 from sync_app.web.config_support import ConfigSupport
 from sync_app.web.i18n import translate
+from sync_app.web.oidc import OIDCService, OIDCSettings
 from sync_app.web.pagination import (
     fetch_page,
     iter_all_pages,
@@ -58,7 +64,10 @@ from sync_app.web.routes_mappings import register_mapping_routes
 from sync_app.web.routes_metadata import register_metadata_routes
 from sync_app.web.routes_organizations import register_organization_routes
 from sync_app.web.routes_public import register_public_routes
-from sync_app.web.runtime import resolve_web_runtime_settings, web_runtime_requires_restart
+from sync_app.web.runtime import (
+    resolve_web_runtime_settings as resolve_web_runtime_settings,
+    web_runtime_requires_restart as web_runtime_requires_restart,
+)
 from sync_app.web.sync_support import SyncSupport
 from sync_app.web.security import (
     hash_password,
@@ -119,6 +128,7 @@ PUBLIC_AUTH_PATHS = {
 PUBLIC_AUTH_PREFIXES = (
     "/static/",
     "/api/integrations/",
+    "/auth/oidc/",
 )
 
 def _safe_redirect_target(value: str | None, default: str) -> str:
@@ -219,6 +229,12 @@ def create_app(
     )
     repositories = web_app_state.repositories
     runtime_state = web_app_state.runtime
+    environment_label = str(
+        runtime_state.web_runtime_settings.get("public_base_url")
+        or f"{runtime_state.web_runtime_settings.get('bind_host')}:{runtime_state.web_runtime_settings.get('bind_port')}"
+    )
+    oidc_settings = OIDCSettings.from_environment(default_environment_label=environment_label)
+    oidc_service = OIDCService(oidc_settings)
 
     app = FastAPI(title="AD Org Sync Web", version=APP_VERSION)
     if STATIC_DIR.exists():
@@ -252,6 +268,25 @@ def create_app(
     )
 
     @app.middleware("http")
+    async def observability_middleware(request: Request, call_next):
+        correlation_id = normalize_correlation_id(request.headers.get("x-correlation-id"))
+        with bind_observability_context(correlation_id=correlation_id):
+            try:
+                response = await call_next(request)
+            except Exception:
+                METRICS.increment(
+                    "ad_org_sync_http_requests_total",
+                    labels={"method": request.method.upper(), "status": "500"},
+                )
+                raise
+            response.headers["X-Correlation-ID"] = correlation_id
+            METRICS.increment(
+                "ad_org_sync_http_requests_total",
+                labels={"method": request.method.upper(), "status": str(response.status_code)},
+            )
+            return response
+
+    @app.middleware("http")
     async def require_login_middleware(request: Request, call_next):
         if request.method.upper() == "OPTIONS" or _is_public_auth_path(request.url.path):
             return await call_next(request)
@@ -265,7 +300,7 @@ def create_app(
     app.add_middleware(
         SessionMiddleware,
         secret_key=runtime_state.session_secret,
-        same_site="strict",
+        same_site="lax" if oidc_settings.configured else "strict",
         https_only=runtime_state.session_cookie_secure,
         max_age=runtime_state.session_minutes * 60,
     )
@@ -330,6 +365,7 @@ def create_app(
         get_current_user=request_support.get_current_user,
         hash_password=hash_password,
         normalize_role=normalize_role,
+        oidc_service=oidc_service,
         reject_invalid_csrf=request_support.reject_invalid_csrf,
         render=request_support.render,
         rotate_csrf_token=rotate_csrf_token,

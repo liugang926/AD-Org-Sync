@@ -1,12 +1,29 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 from sync_app.core.models import SyncJobSummary
+from sync_app.core.observability import METRICS
+from sync_app.core.fingerprints import canonical_json, fingerprint_json
 from sync_app.services.runtime_context import SyncContext
+
+
+PLAN_DIAGNOSTIC_STATE_FIELDS = {
+    "binding_resolution",
+    "field_ownership_policy",
+    "placement_reason",
+}
+
+
+def _fingerprint_desired_state(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): item
+        for key, item in value.items()
+        if str(key) not in PLAN_DIAGNOSTIC_STATE_FIELDS
+    }
 
 
 def compute_plan_fingerprint(items: list[dict[str, Any]]) -> str:
@@ -20,6 +37,7 @@ def compute_plan_fingerprint(items: list[dict[str, Any]]) -> str:
                 "department_id": str(item.get("department_id") or ""),
                 "target_dn": str(item.get("target_dn") or ""),
                 "risk_level": str(item.get("risk_level") or "normal"),
+                "desired_state": _fingerprint_desired_state(item.get("desired_state")),
             }
         )
     normalized = sorted(
@@ -31,10 +49,10 @@ def compute_plan_fingerprint(items: list[dict[str, Any]]) -> str:
             item["department_id"],
             item["target_dn"],
             item["risk_level"],
+            canonical_json(item["desired_state"]),
         ),
     )
-    payload = json.dumps(normalized, ensure_ascii=False, sort_keys=True)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return fingerprint_json(normalized, namespace="sync-plan")
 
 
 def handle_plan_review_gate(
@@ -144,6 +162,7 @@ def handle_plan_review_gate(
             )
         else:
             approved_review = review_repo.find_matching_approved_review(
+                org_id=organization.org_id,
                 plan_fingerprint=plan_fingerprint,
                 config_snapshot_hash=config_hash,
                 now_iso=datetime.now(timezone.utc).isoformat(timespec='seconds'),
@@ -237,6 +256,7 @@ def complete_dry_run(
         'high_risk_operation_count': high_risk_operation_count,
         'review_required': sync_stats['review_required'],
         'plan_fingerprint': plan_fingerprint,
+        'phase_durations_ms': dict(sync_stats.get('phase_durations_ms') or {}),
         'field_ownership_policy': dict(field_ownership_policy),
         'skipped_operation_count': sync_stats['skipped_operations']['total'],
         'skipped_by_action': dict(sync_stats['skipped_operations']['by_action']),
@@ -276,6 +296,13 @@ def complete_plan_phase(ctx: SyncContext) -> dict[str, Any] | None:
     if early_response is not None:
         return early_response
 
+    if ctx.plan.approved_review:
+        ctx.sync_stats.plan_source_job_id = str(ctx.plan.approved_review.job_id or "")
+        ctx.repositories.job_repo.update_job(
+            ctx.job_id,
+            plan_source_job_id=ctx.sync_stats.plan_source_job_id,
+        )
+
     ctx.hooks.mark_job('READY')
     ctx.hooks.record_event(
         'INFO',
@@ -296,7 +323,7 @@ def complete_plan_phase(ctx: SyncContext) -> dict[str, Any] | None:
     )
 
     if ctx.execution_mode == 'dry_run':
-        return complete_dry_run(
+        result = complete_dry_run(
             sync_stats=ctx.sync_stats,
             organization=ctx.organization,
             execution_mode=ctx.execution_mode,
@@ -316,4 +343,9 @@ def complete_plan_phase(ctx: SyncContext) -> dict[str, Any] | None:
             generate_skip_detail_report=ctx.hooks.generate_skip_detail_report,
             mark_job=ctx.hooks.mark_job,
         )
+        METRICS.increment(
+            "ad_org_sync_runs_total",
+            labels={"status": "succeeded" if ctx.sync_stats['error_count'] == 0 else "completed_with_errors"},
+        )
+        return result
     return None

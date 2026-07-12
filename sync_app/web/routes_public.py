@@ -6,6 +6,8 @@ from typing import Any, Callable
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from sync_app.core.observability import METRICS
+from sync_app.core.slo import evaluate_runtime_slos
 from sync_app.web.app_state import get_web_repositories
 
 
@@ -53,6 +55,21 @@ def register_public_routes(
         if db_error:
             payload["database_error"] = db_error
         return JSONResponse(payload, status_code=200 if ready else 503)
+
+    @app.get("/metrics")
+    def metrics(request: Request):
+        if not get_current_user(request):
+            return JSONResponse({"detail": "authentication required"}, status_code=401)
+        return Response(
+            METRICS.render_prometheus(),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+
+    @app.get("/api/observability/slo")
+    def runtime_slo(request: Request):
+        if not get_current_user(request):
+            return JSONResponse({"detail": "authentication required"}, status_code=401)
+        return evaluate_runtime_slos(METRICS.snapshot())
 
     @app.get("/favicon.ico")
     def favicon(request: Request):

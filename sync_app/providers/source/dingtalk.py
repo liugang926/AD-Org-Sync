@@ -4,7 +4,7 @@ from typing import Any, Callable
 
 from sync_app.clients.dingtalk import DingTalkAPI
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
-from sync_app.providers.source.base import SourceDirectoryProvider
+from sync_app.providers.source.base import SourceDirectoryProvider, instantiate_source_api_client
 
 
 class DingTalkSourceProvider(SourceDirectoryProvider):
@@ -24,10 +24,13 @@ class DingTalkSourceProvider(SourceDirectoryProvider):
         self.app_secret = app_secret
         self.agentid = agentid
         self._api_factory = api_factory or DingTalkAPI
-        try:
-            self._api = self._api_factory(app_key, app_secret, agentid, logger=logger)
-        except TypeError:
-            self._api = self._api_factory(app_key, app_secret, agentid)
+        self._api = instantiate_source_api_client(
+            self._api_factory,
+            app_key,
+            app_secret,
+            agentid,
+            logger=logger,
+        )
 
     def list_departments(self) -> list[DepartmentNode]:
         return [DepartmentNode.from_source_payload(item) for item in self._api.get_department_list()]

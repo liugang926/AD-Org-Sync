@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from sync_app.core import logging_utils as sync_logging
 from sync_app.core.config import load_sync_config
+from sync_app.core.fingerprints import fingerprint_json
 from sync_app.core.models import AppConfig, OrganizationRecord
 from sync_app.core.sync_policies import normalize_group_type
+from sync_app.services.config_resolution import resolve_organization_config
 from sync_app.services.state import SyncStateManager
 from sync_app.services.typed_settings import normalize_first_sync_identity_claim_mode
 from sync_app.storage.local_db import (
@@ -119,6 +118,9 @@ class SyncRuntimeBootstrap:
     config: AppConfig
     policy_settings: RuntimePolicySettings
     config_hash: str
+    config_source_kind: str
+    config_source_reference: str
+    config_resolved_file_path: str
 
 
 def _parse_root_unit_ids(raw_value: Any) -> list[int]:
@@ -303,7 +305,7 @@ def _build_config_hash(
             "custom_group_ou_path": policy_settings.global_custom_group_ou_path,
         },
     }
-    return hashlib.md5(json.dumps(config_snapshot_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    return fingerprint_json(config_snapshot_payload, namespace="sync-config")
 
 
 def bootstrap_sync_runtime(
@@ -364,10 +366,13 @@ def bootstrap_sync_runtime(
     )
 
     resolved_config_path = organization.config_path or config_path
-    if organization_config_repo.has_config(organization.org_id) or os.path.exists(resolved_config_path):
-        config = organization_config_repo.get_app_config(organization.org_id, config_path=resolved_config_path)
-    else:
-        config = load_sync_config_fn(resolved_config_path)
+    config_resolution = resolve_organization_config(
+        organization_config_repo,
+        org_id=organization.org_id,
+        config_path=resolved_config_path,
+        file_loader=load_sync_config_fn,
+    )
+    config = config_resolution.config
 
     repositories = RuntimeRepositories(
         settings_repo=settings_repo,
@@ -411,4 +416,7 @@ def bootstrap_sync_runtime(
         config=config,
         policy_settings=policy_settings,
         config_hash=config_hash,
+        config_source_kind=config_resolution.source_kind,
+        config_source_reference=config_resolution.source_reference,
+        config_resolved_file_path=config_resolution.resolved_file_path,
     )

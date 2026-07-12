@@ -2216,6 +2216,7 @@ class RunSyncDryRunTests(unittest.TestCase):
         latest_job = SyncJobRepository(manager).get_job_record(approved_apply_result["job_id"])
         self.assertIsNotNone(latest_job)
         self.assertEqual(latest_job.status, "COMPLETED")
+        self.assertEqual(latest_job.plan_source_job_id, dry_run_result["job_id"])
 
     def test_run_sync_job_uses_selected_organization_config_and_connector_scope(self):
         default_config = AppConfig(

@@ -128,6 +128,13 @@
       {{ t("Restart the web service after saving to apply deployment changes.") }}
       {% endif %}
     </p>
+    <div class="compact-stats config-preview-categories">
+      {{ ui.compact_stat(t("Added"), config_change_preview.category_counts.added) }}
+      {{ ui.compact_stat(t("Modified"), config_change_preview.category_counts.modified) }}
+      {{ ui.compact_stat(t("Disabled"), config_change_preview.category_counts.disabled) }}
+      {{ ui.compact_stat(t("Deleted"), config_change_preview.category_counts.deleted) }}
+      {{ ui.compact_stat(t("High Risk"), config_change_preview.category_counts.high_risk) }}
+    </div>
     <div class="stack-md">
       {% for group in config_change_preview.groups %}
       {% call ui.detail_toggle(t(group.title), t("Review changed values"), open=(loop.first)) %}
@@ -135,6 +142,7 @@
           <table>
             <thead>
               <tr>
+                <th>{{ t("Category") }}</th>
                 <th>{{ t("Field") }}</th>
                 <th>{{ t("Current Value") }}</th>
                 <th>{{ t("Pending Value") }}</th>
@@ -143,6 +151,10 @@
             <tbody>
               {% for change in group.changes %}
               <tr>
+                <td>
+                  {{ ui.badge(t(change.category), "warning" if change.category in ["Disabled", "Deleted"] else "info") }}
+                  {% if change.high_risk %}{{ ui.badge(t("High Risk"), "error") }}{% endif %}
+                </td>
                 <td>{{ t(change.label) }}</td>
                 <td>{{ t(change.before) if change.translate_before else change.before }}</td>
                 <td>{{ t(change.after) if change.translate_after else change.after }}</td>
@@ -169,6 +181,8 @@
     action="/config"
     class="page-stack"
     data-config-form="true"
+    data-label-unsaved="{{ t('Unsaved changes') }}"
+    data-label-leave-warning="{{ t('You have unsaved configuration changes.') }}"
     data-source-catalog-url="/config/source-units/catalog"
     data-target-ou-catalog-url="/config/target-ou/catalog"
     data-label-loading="{{ t('Loading...') }}"
@@ -462,9 +476,13 @@
     </section>
 
     <div class="sticky-submit-bar">
+      <div class="sticky-submit-bar__status" data-config-unsaved-status role="status" aria-live="polite" hidden>
+        {{ ui.badge(t("Unsaved changes"), "warning") }}
+      </div>
       <div class="actions flush-top">
-        {{ ui.button(t("Save Configuration"), type="submit", icon="save") }}
+        {{ ui.button(t("Save Draft"), type="submit", icon="save") }}
         {{ ui.button(t("Preview Changes"), type="submit", variant="secondary", icon="file-search", attrs='formaction="/config/preview"') }}
+        {{ ui.button(t("Publish"), href="/config/releases", variant="secondary", icon="send") }}
       </div>
     </div>
   </form>

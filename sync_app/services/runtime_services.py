@@ -22,7 +22,6 @@ def build_execution_services(
     display_separator: str,
 ) -> SyncExecutionServices:
     sync_stats = ctx.sync_stats
-    dept_tree = ctx.environment.dept_tree
     ad_sync_clients = ctx.environment.ad_sync_clients
     default_ad_sync = ad_sync_clients["default"]
     connector_specs_by_id = ctx.environment.connector_specs_by_id

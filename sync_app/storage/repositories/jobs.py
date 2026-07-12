@@ -12,6 +12,7 @@ class SyncJobRepository(BaseRepository):
     QUEUED_STATUSES = {"QUEUED"}
     EXECUTION_STATUSES = {"LEASED", "CREATED", "PLANNING", "READY", "RUNNING", "CANCELING"}
     ACTIVE_STATUSES = QUEUED_STATUSES | EXECUTION_STATUSES
+    PRE_APPLY_PHASES = {"replay", "prepare", "plan"}
 
     @staticmethod
     def _normalize_status_values(statuses: set[str]) -> tuple[str, list[Any]]:
@@ -159,6 +160,7 @@ class SyncJobRepository(BaseRepository):
         trigger_type: Optional[str] = None,
         execution_mode: Optional[str] = None,
         app_version: Optional[str] = None,
+        plan_source_job_id: Optional[str] = None,
         config_snapshot_hash: Optional[str] = None,
         requested_by: Optional[str] = None,
         requested_config_path: Optional[str] = None,
@@ -196,6 +198,9 @@ class SyncJobRepository(BaseRepository):
         if app_version is not None:
             updates.append("app_version = ?")
             params.append(str(app_version or "").strip())
+        if plan_source_job_id is not None:
+            updates.append("plan_source_job_id = ?")
+            params.append(str(plan_source_job_id or "").strip())
         if config_snapshot_hash is not None:
             updates.append("config_snapshot_hash = ?")
             params.append(str(config_snapshot_hash or "").strip())
@@ -363,12 +368,61 @@ class SyncJobRepository(BaseRepository):
             ).rowcount
         return bool(updated)
 
+    def mark_phase_started(self, job_id: str, phase_name: str) -> None:
+        now = utcnow_iso()
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE sync_jobs
+                SET current_phase = ?,
+                    phase_started_at = ?,
+                    phase_updated_at = ?,
+                    recovery_hint = ''
+                WHERE job_id = ?
+                """,
+                (str(phase_name or "").strip().lower(), now, now, str(job_id or "").strip()),
+            )
+
+    def mark_phase_completed(self, job_id: str, phase_name: str) -> None:
+        now = utcnow_iso()
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE sync_jobs
+                SET current_phase = '',
+                    last_completed_phase = ?,
+                    phase_updated_at = ?,
+                    recovery_hint = ''
+                WHERE job_id = ?
+                """,
+                (str(phase_name or "").strip().lower(), now, str(job_id or "").strip()),
+            )
+
+    def mark_phase_failed(self, job_id: str, phase_name: str, recovery_hint: str) -> None:
+        now = utcnow_iso()
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE sync_jobs
+                SET current_phase = ?,
+                    phase_updated_at = ?,
+                    recovery_hint = ?
+                WHERE job_id = ?
+                """,
+                (
+                    str(phase_name or "").strip().lower(),
+                    now,
+                    str(recovery_hint or "").strip(),
+                    str(job_id or "").strip(),
+                ),
+            )
+
     def fail_expired_execution_jobs(self) -> list[str]:
         now = utcnow_iso()
         placeholders, params = self._normalize_status_values(self.EXECUTION_STATUSES)
         rows = self._fetchall(
             f"""
-            SELECT job_id
+            SELECT job_id, current_phase, last_completed_phase
             FROM sync_jobs
             WHERE status IN ({placeholders})
               AND lease_expires_at != ''
@@ -377,15 +431,33 @@ class SyncJobRepository(BaseRepository):
             """,
             (*params, now),
         )
-        expired_job_ids = [str(row["job_id"] or "").strip() for row in rows if str(row["job_id"] or "").strip()]
-        for expired_job_id in expired_job_ids:
+        expired_job_ids: list[str] = []
+        for row in rows:
+            expired_job_id = str(row["job_id"] or "").strip()
+            if not expired_job_id:
+                continue
+            expired_job_ids.append(expired_job_id)
+            current_phase = str(row["current_phase"] or "").strip().lower()
+            last_completed_phase = str(row["last_completed_phase"] or "").strip().lower()
+            recovery_action = (
+                "enqueue a fresh run; no apply phase was entered"
+                if current_phase in self.PRE_APPLY_PHASES or (not current_phase and last_completed_phase != "apply")
+                else "inspect operation logs and target state before running a new dry run"
+            )
             self.update_job(
                 expired_job_id,
                 status="FAILED",
                 ended=True,
-                summary={"error": "job lease expired before completion"},
+                summary={
+                    "error": "job lease expired before completion",
+                    "recovery_required": True,
+                    "current_phase": current_phase,
+                    "last_completed_phase": last_completed_phase,
+                    "recovery_action": recovery_action,
+                },
                 clear_lease=True,
             )
+            self.mark_phase_failed(expired_job_id, current_phase or "unknown", recovery_action)
         return expired_job_ids
 
 
@@ -512,6 +584,21 @@ class PlannedOperationRepository(BaseRepository):
     def list_operations_for_job(self, job_id: str, limit: int = 500) -> list[dict[str, Any]]:
         rows, _total = self.list_operations_for_job_page(job_id, limit=limit, offset=0)
         return rows
+
+    def count_operation_types_for_job(self, job_id: str) -> dict[str, int]:
+        rows = self._fetchall(
+            """
+            SELECT operation_type, COUNT(*) AS operation_count
+            FROM planned_operations
+            WHERE job_id = ?
+            GROUP BY operation_type
+            """,
+            (job_id,),
+        )
+        return {
+            str(row["operation_type"] or ""): int(row["operation_count"] or 0)
+            for row in rows
+        }
 
     def list_operations_for_job_page(
         self,

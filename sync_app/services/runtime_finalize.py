@@ -7,6 +7,7 @@ from typing import Any
 
 from sync_app.core.common import format_time_duration
 from sync_app.core.models import SyncJobSummary
+from sync_app.core.observability import METRICS
 from sync_app.services.runtime_context import SyncContext
 
 
@@ -191,7 +192,9 @@ def finalize_successful_sync(ctx: SyncContext) -> dict[str, Any]:
         'high_risk_operation_count': ctx.high_risk_operation_count,
         'review_required': False,
         'approved_review_job_id': ctx.plan.approved_review.job_id if ctx.plan.approved_review else '',
+        'plan_source_job_id': ctx.sync_stats.plan_source_job_id,
         'plan_fingerprint': ctx.plan.plan_fingerprint,
+        'phase_durations_ms': dict(ctx.sync_stats.phase_durations_ms),
         'field_ownership_policy': dict(ctx.sync_stats['field_ownership_policy']),
         'skipped_operation_count': ctx.sync_stats['skipped_operations']['total'],
         'skipped_by_action': dict(ctx.sync_stats['skipped_operations']['by_action']),
@@ -243,6 +246,10 @@ def finalize_successful_sync(ctx: SyncContext) -> dict[str, Any]:
         ended=True,
         summary=summary,
     )
+    METRICS.increment(
+        "ad_org_sync_runs_total",
+        labels={"status": "succeeded" if ctx.sync_stats['error_count'] == 0 else "completed_with_errors"},
+    )
     return ctx.sync_stats.to_dict()
 
 
@@ -293,6 +300,7 @@ def finalize_interrupted_sync(ctx: SyncContext, interrupted_error: InterruptedEr
         ended=True,
         summary=interruption_details,
     )
+    METRICS.increment("ad_org_sync_runs_total", labels={"status": "canceled"})
     ctx.sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(ctx.sync_stats).to_dict()
     return ctx.sync_stats.to_dict()
 
@@ -330,4 +338,5 @@ def finalize_failed_sync(ctx: SyncContext, sync_error: Exception) -> None:
         ended=True,
         summary=failure_details,
     )
+    METRICS.increment("ad_org_sync_runs_total", labels={"status": "failed"})
     ctx.sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(ctx.sync_stats).to_dict()

@@ -14,31 +14,31 @@
     <div class="control-tower__layout">
       <div class="control-tower__summary">
         <div class="control-tower__eyebrow">{{ t("Apply Gate") }}</div>
-        <h2 class="control-tower__title">{{ t(job_center_summary.overall_label) }}</h2>
+        <h2 class="control-tower__title">{{ t(job_center_summary.overall_label_code) }}</h2>
         <p class="control-tower__description">
           {% if job_center_summary.blocked_reasons %}
-          {{ t(job_center_summary.blocked_reasons[0]) }}
+          {{ t(job_center_summary.blocked_reasons[0].message_code, **job_center_summary.blocked_reasons[0].params) }}
           {% else %}
           {{ t("The latest checks show no blocking item. Review the most recent dry run before applying changes.") }}
           {% endif %}
         </p>
         <div class="control-tower__actions">
-          {{ ui.button(t(job_center_summary.next_action_label), href=job_center_summary.next_action_url, variant=("success" if job_center_summary.overall_status == "success" else "primary")) }}
-          {{ ui.button(t("Run Review"), href="/jobs", variant="secondary") }}
-          {% if can("config.read") %}
-          {{ ui.button(t("Review Config"), href="/config", variant="ghost") }}
-          {% endif %}
+          {{ ui.button(t(job_center_summary.next_action_label_code), href=job_center_summary.next_action_url) }}
         </div>
       </div>
 
       <div class="control-gate-card">
-        <div class="control-gate-card__label">{{ t("Current Readiness") }}</div>
+        <div class="control-gate-card__label">{{ t("Latest Apply") }}</div>
         <div class="control-gate-card__status">
-          {{ ui.badge(t(job_center_summary.overall_label), job_center_summary.overall_status) }}
+          {% if job_center_summary.latest_apply %}
+          <a href="/jobs/{{ job_center_summary.latest_apply.job_id }}" class="cell-mono cell-strong">{{ job_center_summary.latest_apply.job_id }}</a>
+          {% else %}
+          <strong>-</strong>
+          {% endif %}
         </div>
         <div class="control-gate-card__next">
-          <span>{{ t("Next best action") }}</span>
-          <a href="{{ job_center_summary.next_action_url }}">{{ t(job_center_summary.next_action_label) }}</a>
+          <span>{{ t("Last known status") }}</span>
+          <strong>{{ t(job_center_summary.latest_apply.status) if job_center_summary.latest_apply else t("No apply run yet") }}</strong>
         </div>
       </div>
     </div>
@@ -67,12 +67,13 @@
         <strong>{{ job_center_summary.impact_preview.high_risk_operation_count }}</strong>
       </div>
       <div class="control-metric">
-        <span>{{ t("Preflight Errors") }}</span>
-        <strong>{{ preflight_summary.status_counts.error }}</strong>
+        <span>{{ t("Blocking Reasons") }}</span>
+        <strong>{{ job_center_summary.blocked_reasons|length }}</strong>
       </div>
     </div>
   </section>
 
+  {% call ui.detail_toggle(t("Gate Details"), t("Expand to review every blocker and the recent execution timeline."), open=False) %}
   <div class="grid cols-2">
     {% call ui.panel(t("Blocking Queue"), description=t("The highest-priority items that stop or weaken safe rollout."), class_name="toolbar-card") %}
       <div class="list-stack">
@@ -111,6 +112,7 @@
       </div>
     {% endcall %}
   </div>
+  {% endcall %}
 
   <div class="dense-two-col">
     {% call ui.panel(t("Rollout Path"), description=t("If the system is new, work through these actions in order."), class_name="toolbar-card") %}
@@ -242,7 +244,7 @@
         <div class="panel-note error">
           <ul class="list-compact">
             {% for item in config_validation_errors[:4] %}
-            <li>{{ t(item) }}</li>
+            <li>{{ t(item.message_code, **item.params) }}</li>
             {% endfor %}
           </ul>
         </div>

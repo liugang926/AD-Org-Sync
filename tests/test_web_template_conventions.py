@@ -61,6 +61,67 @@ class WebTemplateConventionTests(unittest.TestCase):
         self.assertTrue((VENDOR_DIR / "tom-select.complete.min.js").exists())
         self.assertTrue((VENDOR_DIR / "tom-select.default.min.css").exists())
 
+    def test_shared_feedback_and_confirmation_markup_is_accessible(self):
+        base_template = (TEMPLATE_DIR / "base.html").read_text(encoding="utf-8")
+        forms_template = (TEMPLATE_DIR / "components" / "forms.html").read_text(encoding="utf-8")
+        app_script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('aria-live="polite"', base_template)
+        self.assertIn('aria-modal="true"', base_template)
+        self.assertIn('data-confirm-input', base_template)
+        self.assertIn('aria-describedby="{{ field_id }}-help"', forms_template)
+        self.assertIn('restoreFocusTo.focus()', app_script)
+        self.assertIn('event.key === "Tab"', app_script)
+
+    def test_bulk_confirmation_reports_dynamic_scope_and_requires_selection(self):
+        conflicts = (TEMPLATE_DIR / "conflicts.html").read_text(encoding="utf-8")
+        app_script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-selection-requires-items', conflicts)
+        self.assertIn('"{selected_count}"', conflicts)
+        self.assertIn('"{selected_action}"', conflicts)
+        self.assertIn('.replaceAll("{selected_count}"', app_script)
+        self.assertIn('.replaceAll("{selected_action}"', app_script)
+
+    def test_irreversible_deletes_require_typed_confirmation(self):
+        organizations = (TEMPLATE_DIR / "organizations.html").read_text(encoding="utf-8")
+        advanced_sync = (TEMPLATE_DIR / "advanced_sync.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-confirm-require="{{ organization.name }}"', organizations)
+        self.assertIn('data-confirm-require="{{ connector.connector_id }}"', advanced_sync)
+
+    def test_scoped_deletes_describe_the_affected_record(self):
+        templates = {
+            "advanced_sync.html": "Field Mapping",
+            "exceptions.html": "Match Value",
+            "integration_center.html": "Target URL",
+            "mappings.html": "Source User ID",
+        }
+        for name, expected_detail in templates.items():
+            with self.subTest(template=name):
+                text = (TEMPLATE_DIR / name).read_text(encoding="utf-8")
+                self.assertIn("data-confirm-title", text)
+                self.assertIn(expected_detail, text)
+
+    def test_styles_use_tokens_outside_the_token_catalog(self):
+        stylesheet = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
+        root_match = re.search(r":root\s*\{(.*?)\n\}", stylesheet, re.S)
+
+        self.assertIsNotNone(root_match)
+        stylesheet_without_catalog = stylesheet.replace(root_match.group(1), "", 1)
+        raw_colors = re.findall(
+            r"(?i)(?:#[0-9a-f]{3,8}\b|rgba?\([^)]*\))",
+            stylesheet_without_catalog,
+        )
+        self.assertEqual(raw_colors, [])
+        self.assertLessEqual(stylesheet.count("!important"), 6)
+
+    def test_login_fields_declare_enterprise_friendly_autocomplete(self):
+        login_template = (TEMPLATE_DIR / "login.html").read_text(encoding="utf-8")
+
+        self.assertIn('autocomplete="username"', login_template)
+        self.assertIn('autocomplete="current-password"', login_template)
+
 
 if __name__ == "__main__":
     unittest.main()

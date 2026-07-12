@@ -107,6 +107,63 @@ class CliDeployCommandTests(unittest.TestCase):
         self.assertEqual(second_exit, 1)
         self.assertIn("Use --reset", second_stderr)
 
+    def test_bootstrap_admin_if_missing_is_idempotent_without_reading_password_again(self):
+        first_exit, _, first_stderr = self._run_cli(
+            [
+                "bootstrap-admin",
+                "--db-path",
+                str(self.db_path),
+                "--username",
+                "deployadmin",
+                "--password",
+                "simple88",
+            ]
+        )
+        second_exit, second_stdout, second_stderr = self._run_cli(
+            [
+                "bootstrap-admin",
+                "--db-path",
+                str(self.db_path),
+                "--username",
+                "deployadmin",
+                "--if-missing",
+                "--password-file",
+                str(self.config_path.with_name("missing-secret.txt")),
+            ]
+        )
+
+        self.assertEqual(first_exit, 0)
+        self.assertEqual(first_stderr, "")
+        self.assertEqual(second_exit, 0)
+        self.assertEqual(second_stderr, "")
+        self.assertIn("leaving unchanged", second_stdout)
+
+    def test_bootstrap_admin_reads_password_from_file(self):
+        password_path = self.config_path.with_name("cli_deploy_admin_password.txt")
+        password_path.write_text("FileSecret88!\n", encoding="utf-8")
+        try:
+            exit_code, stdout, stderr = self._run_cli(
+                [
+                    "bootstrap-admin",
+                    "--db-path",
+                    str(self.db_path),
+                    "--username",
+                    "fileadmin",
+                    "--password-file",
+                    str(password_path),
+                ]
+            )
+        finally:
+            password_path.unlink(missing_ok=True)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("administrator created: fileadmin", stdout)
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        user = WebAdminUserRepository(manager).get_user_record_by_username("fileadmin")
+        self.assertTrue(verify_password("FileSecret88!", user.password_hash))
+
     def test_validate_config_accepts_generic_compatibility_sections(self):
         self.config_path.write_text(
             "\n".join(

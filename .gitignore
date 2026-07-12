@@ -29,6 +29,9 @@ workspace_*.db
 venv/
 .venv/
 .run/
+.env
+.claude/
+secrets/
 
 config.ini
 sync_state.json

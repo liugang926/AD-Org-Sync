@@ -5,13 +5,6 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Optional
 
 from sync_app.core.models.base import MappingLikeModel
-from sync_app.core.models.directory import (
-    DepartmentGroupInfo,
-    GroupPolicyEvaluation,
-    SourceDirectoryUser,
-)
-
-
 @dataclass(slots=True)
 class SkipOperationSummary(MappingLikeModel):
     total: int = 0
@@ -92,6 +85,8 @@ class SyncRunStats(MappingLikeModel):
     org_id: str = "default"
     organization_name: str = ""
     organization_config_path: str = ""
+    config_source_kind: str = ""
+    config_resolved_file_path: str = ""
     total_users: int = 0
     processed_users: int = 0
     disabled_users: list[str] = field(default_factory=list)
@@ -106,6 +101,7 @@ class SyncRunStats(MappingLikeModel):
     db_migration_source_path: str = ""
     db_integrity_check: Dict[str, Any] = field(default_factory=dict)
     job_id: str = ""
+    plan_source_job_id: str = ""
     planned_operation_count: int = 0
     executed_operation_count: int = 0
     high_risk_operation_count: int = 0
@@ -117,6 +113,8 @@ class SyncRunStats(MappingLikeModel):
     errors: SyncErrorBuckets = field(default_factory=SyncErrorBuckets)
     operations: SyncOperationCounters = field(default_factory=SyncOperationCounters)
     field_ownership_policy: Dict[str, str] = field(default_factory=dict)
+    phase_durations_ms: Dict[str, int] = field(default_factory=dict)
+    phase_state: Dict[str, Any] = field(default_factory=dict)
     summary: Optional[Dict[str, Any]] = None
     job_summary: Optional[Dict[str, Any]] = None
 
@@ -131,6 +129,8 @@ class SyncRunStats(MappingLikeModel):
             org_id=str(value.get("org_id") or "default"),
             organization_name=str(value.get("organization_name") or ""),
             organization_config_path=str(value.get("organization_config_path") or ""),
+            config_source_kind=str(value.get("config_source_kind") or ""),
+            config_resolved_file_path=str(value.get("config_resolved_file_path") or ""),
             total_users=int(value.get("total_users") or 0),
             processed_users=int(value.get("processed_users") or value.get("users_processed") or 0),
             disabled_users=list(value.get("disabled_users") or []),
@@ -145,6 +145,7 @@ class SyncRunStats(MappingLikeModel):
             db_migration_source_path=str(value.get("db_migration_source_path") or ""),
             db_integrity_check=dict(value.get("db_integrity_check") or {}),
             job_id=str(value.get("job_id") or ""),
+            plan_source_job_id=str(value.get("plan_source_job_id") or ""),
             planned_operation_count=int(value.get("planned_operation_count") or 0),
             executed_operation_count=int(value.get("executed_operation_count") or 0),
             high_risk_operation_count=int(value.get("high_risk_operation_count") or 0),
@@ -158,6 +159,11 @@ class SyncRunStats(MappingLikeModel):
             errors=SyncErrorBuckets.from_mapping(value.get("errors")),
             operations=SyncOperationCounters.from_mapping(value.get("operations")),
             field_ownership_policy=dict(value.get("field_ownership_policy") or {}),
+            phase_durations_ms={
+                str(key): max(int(duration or 0), 0)
+                for key, duration in dict(value.get("phase_durations_ms") or {}).items()
+            },
+            phase_state=dict(value.get("phase_state") or {}),
             summary=dict(value.get("summary")) if isinstance(value.get("summary"), dict) else value.get("summary"),
             job_summary=dict(value.get("job_summary")) if isinstance(value.get("job_summary"), dict) else value.get("job_summary"),
         )
@@ -215,6 +221,11 @@ class SyncJobRecord(MappingLikeModel):
     config_snapshot_hash: str = ""
     lease_owner: str = ""
     lease_expires_at: str = ""
+    current_phase: str = ""
+    last_completed_phase: str = ""
+    phase_started_at: str = ""
+    phase_updated_at: str = ""
+    recovery_hint: str = ""
     planned_operation_count: int = 0
     executed_operation_count: int = 0
     error_count: int = 0
@@ -247,6 +258,17 @@ class SyncJobRecord(MappingLikeModel):
             config_snapshot_hash=str(row["config_snapshot_hash"] or ""),
             lease_owner=str(row["lease_owner"] or ""),
             lease_expires_at=str(row["lease_expires_at"] or ""),
+            current_phase=str(row["current_phase"] or "") if "current_phase" in row.keys() else "",
+            last_completed_phase=(
+                str(row["last_completed_phase"] or "") if "last_completed_phase" in row.keys() else ""
+            ),
+            phase_started_at=(
+                str(row["phase_started_at"] or "") if "phase_started_at" in row.keys() else ""
+            ),
+            phase_updated_at=(
+                str(row["phase_updated_at"] or "") if "phase_updated_at" in row.keys() else ""
+            ),
+            recovery_hint=str(row["recovery_hint"] or "") if "recovery_hint" in row.keys() else "",
             planned_operation_count=int(row["planned_operation_count"] or 0),
             executed_operation_count=int(row["executed_operation_count"] or 0),
             error_count=int(row["error_count"] or 0),

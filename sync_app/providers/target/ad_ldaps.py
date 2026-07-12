@@ -94,12 +94,21 @@ class ADLDAPSTargetProvider(TargetDirectoryProvider):
         ou_path: list[str] | None = None,
         connector_id: str = "default",
     ):
-        return self.client.ensure_custom_group(
-            source_type=source_type,
-            source_key=source_key,
-            display_name=display_name,
-            ou_path=ou_path,
-        )
+        kwargs = {
+            "source_type": source_type,
+            "source_key": source_key,
+            "display_name": display_name,
+            "ou_path": ou_path,
+            "connector_id": connector_id,
+        }
+        try:
+            return self.client.ensure_custom_group(**kwargs)
+        except TypeError as exc:
+            message = str(exc).lower()
+            if "connector_id" not in message or "unexpected keyword" not in message:
+                raise
+            kwargs.pop("connector_id")
+            return self.client.ensure_custom_group(**kwargs)
 
     def create_user(
         self,

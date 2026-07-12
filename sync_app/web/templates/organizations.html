@@ -98,11 +98,11 @@
                   {{ ui.button(t("Select"), type="submit", variant="secondary", size="small", disabled=(current_org and organization.org_id == current_org.org_id)) }}
                 </form>
                 {% if not organization.is_default %}
-                <form method="post" action="/organizations/{{ organization.org_id }}/toggle" data-confirm="{{ t('Are you sure you want to perform this action?') }}">
+                <form method="post" action="/organizations/{{ organization.org_id }}/toggle" data-confirm="{{ t('Review the organization and requested status change before continuing.') }}" data-confirm-title="{{ t('Confirm Organization Status Change') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ organization.name }}" data-confirm-detail-2-label="{{ t('Organization ID') }}" data-confirm-detail-2-value="{{ organization.org_id }}" data-confirm-detail-3-label="{{ t('Requested Action') }}" data-confirm-detail-3-value="{{ t('Disable') if organization.is_enabled else t('Enable') }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   {{ ui.button(t("Disable") if organization.is_enabled else t("Enable"), type="submit", variant="secondary", size="small") }}
                 </form>
-                <form method="post" action="/organizations/{{ organization.org_id }}/delete" data-confirm="{{ t('Are you sure you want to perform this action?') }}">
+                <form method="post" action="/organizations/{{ organization.org_id }}/delete" data-confirm="{{ t('Deleting an organization is irreversible and removes its organization-scoped configuration.') }}" data-confirm-title="{{ t('Confirm Organization Deletion') }}" data-confirm-require="{{ organization.name }}" data-confirm-input-help="{{ t('Type {value} to confirm.') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ organization.name }}" data-confirm-detail-2-label="{{ t('Organization ID') }}" data-confirm-detail-2-value="{{ organization.org_id }}" data-confirm-detail-3-label="{{ t('Requested Action') }}" data-confirm-detail-3-value="{{ t('Permanent deletion') }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   {{ ui.button(t("Delete"), type="submit", variant="danger", size="small") }}
                 </form>

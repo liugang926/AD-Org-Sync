@@ -4,6 +4,16 @@
 {% block content %}
 <div class="page-stack">
   {% set apply_blocked = (job_center_summary.blocked_reasons|length > 0) or active_job %}
+  {% set apply_confirm_details = [
+    (t("Organization"), current_org.name if current_org else "-"),
+    (t("Dry Run ID"), job_center_summary.impact_preview.job_id or t("Not available")),
+    (t("Planned Changes"), job_center_summary.impact_preview.planned_operation_count),
+    (t("High-Risk Changes"), job_center_summary.impact_preview.high_risk_operation_count),
+    (t("Disable Operations"), job_center_summary.impact_preview.disabled_operation_count),
+    (t("Delete Or Remove Operations"), job_center_summary.impact_preview.delete_operation_count),
+    (t("Approved By"), job_center_summary.review_record.reviewer_username if job_center_summary.review_record and job_center_summary.review_record.reviewer_username else t("Not approved")),
+    (t("Rollback Point"), t("No automatic rollback point"))
+  ] %}
   {% call ui.page_header(t("Run Review"), t("Review the latest dry run, understand what changed, and only apply when the safety gate is green."), eyebrow=t("Execution"), badge_text=(current_org.name if current_org else "-"), badge_level="info") %}
     <div class="surface-inline">
       {% if active_job %}
@@ -16,14 +26,47 @@
     </div>
   {% endcall %}
 
+  <ol class="execution-flow" aria-label="{{ t('Synchronization workflow') }}">
+    <li class="execution-flow__step" data-state="{{ 'complete' if job_center_summary.preflight_summary.status_counts.error == 0 else 'blocked' }}">
+      <span class="execution-flow__index">1</span>
+      <div><strong>{{ t("Configuration Check") }}</strong><small>{{ t("Responsible") }}: {{ current_user.username }}</small></div>
+      {{ ui.badge(t("Complete") if job_center_summary.preflight_summary.status_counts.error == 0 else t("Blocked"), "success" if job_center_summary.preflight_summary.status_counts.error == 0 else "error") }}
+    </li>
+    <li class="execution-flow__step" data-state="{{ 'complete' if job_center_summary.preflight_summary.overall_status == 'success' else 'pending' }}">
+      <span class="execution-flow__index">2</span>
+      <div><strong>{{ t("Connectivity Preflight") }}</strong><small>{{ t("Responsible") }}: {{ current_user.username }}</small></div>
+      {{ ui.badge(t("Complete") if job_center_summary.preflight_summary.overall_status == "success" else t("Pending"), "success" if job_center_summary.preflight_summary.overall_status == "success" else "warning") }}
+    </li>
+    <li class="execution-flow__step" data-state="{{ 'complete' if job_center_summary.latest_successful_dry_run else 'pending' }}">
+      <span class="execution-flow__index">3</span>
+      <div><strong>{{ t("Dry Run") }}</strong><small>{{ job_center_summary.latest_dry_run.started_at if job_center_summary.latest_dry_run else t("Pending") }}</small></div>
+      {{ ui.badge(t("Complete") if job_center_summary.latest_successful_dry_run else t("Pending"), "success" if job_center_summary.latest_successful_dry_run else "warning") }}
+    </li>
+    <li class="execution-flow__step" data-state="{{ 'complete' if (not job_center_summary.review_required or (job_center_summary.review_record and job_center_summary.review_record.status == 'approved')) else 'pending' }}">
+      <span class="execution-flow__index">4</span>
+      <div><strong>{{ t("Change Review And Approval") }}</strong><small>{{ t("Responsible") }}: {{ job_center_summary.review_record.reviewer_username if job_center_summary.review_record and job_center_summary.review_record.reviewer_username else t("Reviewer") }}</small></div>
+      {{ ui.badge(t("Complete") if (not job_center_summary.review_required or (job_center_summary.review_record and job_center_summary.review_record.status == "approved")) else t("Pending"), "success" if (not job_center_summary.review_required or (job_center_summary.review_record and job_center_summary.review_record.status == "approved")) else "warning") }}
+    </li>
+    <li class="execution-flow__step" data-state="{{ 'complete' if job_center_summary.latest_apply else 'pending' }}">
+      <span class="execution-flow__index">5</span>
+      <div><strong>{{ t("Apply") }}</strong><small>{{ job_center_summary.latest_apply.started_at if job_center_summary.latest_apply else t("Pending") }}</small></div>
+      {{ ui.badge(t(job_center_summary.latest_apply.status) if job_center_summary.latest_apply else t("Pending"), "success" if job_center_summary.latest_apply and job_center_summary.latest_apply.status == "success" else "warning") }}
+    </li>
+    <li class="execution-flow__step" data-state="{{ 'complete' if job_center_summary.latest_apply and job_center_summary.latest_apply.status == 'success' else 'pending' }}">
+      <span class="execution-flow__index">6</span>
+      <div><strong>{{ t("Result And Rollback") }}</strong><small>{{ t("Inspect the result and preserve a recovery point.") }}</small></div>
+      {{ ui.badge(t("Complete") if job_center_summary.latest_apply and job_center_summary.latest_apply.status == "success" else t("Pending"), "success" if job_center_summary.latest_apply and job_center_summary.latest_apply.status == "success" else "warning") }}
+    </li>
+  </ol>
+
   <section class="run-review run-review--{{ job_center_summary.overall_status }}">
     <div class="run-review__layout">
       <div class="run-review__gate">
         <div class="run-review__eyebrow">{{ t("Execution Readiness And Impact Preview") }}</div>
-        <h2>{{ t(job_center_summary.overall_label) }}</h2>
+        <h2>{{ t(job_center_summary.overall_label_code) }}</h2>
         <p>
           {% if job_center_summary.blocked_reasons %}
-          {{ t(job_center_summary.blocked_reasons[0]) }}
+          {{ t(job_center_summary.blocked_reasons[0].message_code, **job_center_summary.blocked_reasons[0].params) }}
           {% else %}
           {{ t("The current dry run and preflight state are ready for the next controlled apply.") }}
           {% endif %}
@@ -38,16 +81,16 @@
           <form class="inline" method="post" action="/jobs/run">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="mode" value="apply">
-            {{ ui.button(t("Run Apply"), type="submit", variant="success", disabled=apply_blocked, confirm_text=t("Are you sure you want to perform this action?")) }}
+            {{ ui.button(t("Run Apply"), type="submit", disabled=apply_blocked, attrs='aria-describedby="apply-disabled-reason"', confirm_text=t("You are about to apply the reviewed plan. Verify the impact before continuing."), confirm_title=t("Confirm Apply"), confirm_details=apply_confirm_details) }}
           </form>
           {% endif %}
-          {{ ui.button(t(job_center_summary.next_action_label), href=job_center_summary.next_action_url, variant="secondary") }}
+          {{ ui.button(t(job_center_summary.next_action_label_code), href=job_center_summary.next_action_url, variant="secondary") }}
         </div>
       </div>
 
       <div class="decision-rail">
         <div class="decision-rail__label">{{ t("Apply Gate") }}</div>
-        {{ ui.badge(t(job_center_summary.overall_label), job_center_summary.overall_status) }}
+        {{ ui.badge(t(job_center_summary.overall_label_code), job_center_summary.overall_status) }}
         <div class="decision-rail__meta">
           <span>{{ t("Review Gate") }}</span>
           {% if job_center_summary.review_required %}
@@ -158,9 +201,9 @@
       <article class="blocker-item blocker-item--{{ job_center_summary.overall_status }}">
         <div>
           <div class="blocker-item__title">{{ t("Action Required") }}</div>
-          <p class="blocker-item__detail">{{ t(reason) }}</p>
+          <p class="blocker-item__detail">{{ t(reason.message_code, **reason.params) }}</p>
         </div>
-        <a href="{{ job_center_summary.next_action_url }}">{{ t(job_center_summary.next_action_label) }}</a>
+        <a href="{{ job_center_summary.next_action_url }}">{{ t(job_center_summary.next_action_label_code) }}</a>
       </article>
       {% endfor %}
     </div>
@@ -178,7 +221,7 @@
       <form class="inline" method="post" action="/jobs/run">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="mode" value="apply">
-        {{ ui.button(t("Run Apply"), type="submit", variant="success", disabled=apply_blocked, confirm_text=t("Are you sure you want to perform this action?")) }}
+        {{ ui.button(t("Run Apply"), type="submit", disabled=apply_blocked, attrs='aria-describedby="apply-disabled-reason"', confirm_text=t("You are about to apply the reviewed plan. Verify the impact before continuing."), confirm_title=t("Confirm Apply"), confirm_details=apply_confirm_details) }}
       </form>
       {% endif %}
       {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
@@ -206,7 +249,7 @@
     {% endif %}
 
     {% if apply_blocked %}
-    <div class="panel-note warning">
+    <div class="panel-note warning" id="apply-disabled-reason" role="note">
       {{ t("Apply is disabled until the gate is green. Use the next best action above to clear the current blocker.") }}
     </div>
     {% endif %}

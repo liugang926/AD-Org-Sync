@@ -159,3 +159,22 @@ class TargetDirectoryProvider(ABC):
 
     def close(self) -> None:
         return None
+
+
+def validate_target_provider_contract(provider: Any) -> TargetDirectoryProvider:
+    if not isinstance(provider, TargetDirectoryProvider):
+        raise TypeError("target provider factory must return TargetDirectoryProvider")
+    if not str(getattr(provider, "provider_id", "") or "").strip():
+        raise TypeError("target provider must declare a non-empty provider_id")
+    for method_name in (
+        "get_ou_dn",
+        "list_organizational_units",
+        "get_users_batch",
+        "create_user",
+        "update_user",
+        "disable_user",
+        "close",
+    ):
+        if not callable(getattr(provider, method_name, None)):
+            raise TypeError(f"target provider is missing required method: {method_name}")
+    return provider

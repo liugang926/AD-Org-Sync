@@ -367,18 +367,21 @@ class SyncPlanReviewRepository(BaseRepository):
         reviewer_username: str,
         review_notes: str = "",
         expires_at: Optional[str] = None,
-    ) -> None:
+        connection: Any | None = None,
+        only_if_pending: bool = False,
+    ) -> bool:
         reviewed_at = utcnow_iso()
-        with self.db.transaction() as conn:
-            conn.execute(
-                """
+        pending_clause = " AND status = 'pending'" if only_if_pending else ""
+        with self._write_connection(connection) as conn:
+            cursor = conn.execute(
+                f"""
                 UPDATE sync_plan_reviews
                 SET status = 'approved',
                     reviewer_username = ?,
                     review_notes = ?,
                     reviewed_at = ?,
                     expires_at = ?
-                WHERE job_id = ?
+                WHERE job_id = ?{pending_clause}
                 """,
                 (
                     reviewer_username,
@@ -388,26 +391,31 @@ class SyncPlanReviewRepository(BaseRepository):
                     job_id,
                 ),
             )
+            return int(cursor.rowcount or 0) == 1
 
     def find_matching_approved_review(
         self,
         *,
+        org_id: str,
         plan_fingerprint: str,
         config_snapshot_hash: str,
         now_iso: str,
     ) -> Optional[SyncPlanReviewRecord]:
         row = self._fetchone(
             """
-            SELECT *
-            FROM sync_plan_reviews
-            WHERE plan_fingerprint = ?
-              AND config_snapshot_hash = ?
-              AND status = 'approved'
-              AND (expires_at IS NULL OR expires_at >= ?)
-            ORDER BY reviewed_at DESC, id DESC
+            SELECT r.*
+            FROM sync_plan_reviews AS r
+            INNER JOIN sync_jobs AS j ON j.job_id = r.job_id
+            WHERE j.org_id = ?
+              AND r.plan_fingerprint = ?
+              AND r.config_snapshot_hash = ?
+              AND r.status = 'approved'
+              AND (r.expires_at IS NULL OR r.expires_at >= ?)
+            ORDER BY r.reviewed_at DESC, r.id DESC
             LIMIT 1
             """,
             (
+                str(org_id or "").strip().lower() or "default",
                 plan_fingerprint,
                 config_snapshot_hash,
                 now_iso,

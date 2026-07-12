@@ -2,6 +2,7 @@ import unittest
 
 from sync_app.clients.dingtalk import DingTalkAPI
 from sync_app.core.models import SourceDirectoryUser
+from sync_app.core.value_coercion import coerce_int_list
 
 
 class DingTalkClientBehaviorTests(unittest.TestCase):
@@ -74,6 +75,19 @@ class DingTalkClientBehaviorTests(unittest.TestCase):
 
 
 class SourceDirectoryUserNormalizationTests(unittest.TestCase):
+    def test_shared_integer_coercion_handles_nested_payloads_and_preserves_order(self):
+        self.assertEqual(
+            coerce_int_list(
+                [
+                    {"departmentId": "7"},
+                    {"9": "ignored"},
+                    {"nested": {"deptId": "11"}},
+                    "7, -2, 9",
+                ]
+            ),
+            [7, 9, 11, -2],
+        )
+
     def test_from_source_payload_parses_stringified_department_list(self):
         user = SourceDirectoryUser.from_source_payload(
             {

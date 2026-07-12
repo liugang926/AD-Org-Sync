@@ -32,58 +32,50 @@
       <div class="version">{{ t("Build {version}", version=app_version) }}</div>
     </div>
     <nav data-sidebar-nav>
-      {% if can("dashboard.read") %}
-      <a href="/dashboard" class="{% if page == 'dashboard' %}active{% endif %}">
-        <i data-lucide="layout-grid" class="icon icon-sm sidebar-nav__icon"></i>
-        <span>{{ t("Dashboard") }}</span>
-      </a>
-      {% endif %}
-      
-      {% if can("jobs.read") %}
-      <a href="/jobs" class="{% if page == 'jobs' %}active{% endif %}">
-        <i data-lucide="refresh-cw" class="icon icon-sm sidebar-nav__icon"></i>
-        <span>{{ t("Jobs") }}</span>
-      </a>
-      {% endif %}
-
-      {% if can("conflicts.read") %}
-      <a href="/conflicts" class="{% if page == 'conflicts' %}active{% endif %}">
-        <i data-lucide="shield-alert" class="icon icon-sm sidebar-nav__icon"></i>
-        <span>{{ t("Conflicts") }}</span>
-      </a>
-      {% endif %}
-
-      {% if can("config.read") or (show_advanced_navigation and can("mappings.read")) %}
-      <div class="sidebar-section-label">
-        {{ t("Configuration") }}
+      <div class="sidebar-recent" data-sidebar-recent hidden>
+        <div class="sidebar-section-label">{{ t("Recently Used") }}</div>
+        <div data-sidebar-recent-links></div>
       </div>
-      {% endif %}
 
-      {% if can("config.read") %}
-      <a href="/config" class="{% if page == 'config' %}active{% endif %}">
-        <i data-lucide="settings-2" class="icon icon-sm sidebar-nav__icon"></i>
-        <span>{{ t("Config") }}</span>
-      </a>
-      {% endif %}
+      <details class="sidebar-nav-group" {% if page in ['dashboard', 'jobs', 'automation-center', 'audit'] %}open{% endif %}>
+        <summary><span class="sidebar-nav-group__label">{{ t("Run Monitoring") }}</span><i data-lucide="chevron-down" class="icon icon-xs sidebar-nav-group__chevron"></i></summary>
+        <div class="sidebar-nav-group__links">
+          {% if can("dashboard.read") %}<a href="/dashboard" class="{% if page == 'dashboard' %}active{% endif %}"><i data-lucide="layout-grid" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Dashboard") }}</span></a>{% endif %}
+          {% if can("jobs.read") %}<a href="/jobs" class="{% if page == 'jobs' %}active{% endif %}"><i data-lucide="refresh-cw" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Jobs") }}</span></a>{% endif %}
+          {% if show_advanced_navigation and can("config.read") %}<a href="/automation-center" class="{% if page == 'automation-center' %}active{% endif %}"><i data-lucide="bell-ring" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Automation Center") }}</span></a>{% endif %}
+          {% if show_advanced_navigation and can("audit.read") %}<a href="/audit" class="{% if page == 'audit' %}active{% endif %}"><i data-lucide="scroll-text" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Audit") }}</span></a>{% endif %}
+        </div>
+      </details>
+
+      <details class="sidebar-nav-group" {% if page in ['conflicts', 'mappings', 'data-quality', 'lifecycle', 'exceptions'] %}open{% endif %}>
+        <summary><span class="sidebar-nav-group__label">{{ t("Identity Governance") }}</span><i data-lucide="chevron-down" class="icon icon-xs sidebar-nav-group__chevron"></i></summary>
+        <div class="sidebar-nav-group__links">
+          {% if can("conflicts.read") %}<a href="/conflicts" class="{% if page == 'conflicts' %}active{% endif %}"><i data-lucide="shield-alert" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Conflicts") }}</span></a>{% endif %}
+          {% if show_advanced_navigation and can("mappings.read") %}<a href="/mappings" class="{% if page == 'mappings' %}active{% endif %}"><i data-lucide="layers" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Identity Overrides") }}</span></a>{% endif %}
+          {% if show_advanced_navigation and can("config.read") %}<a href="/data-quality" class="{% if page == 'data-quality' %}active{% endif %}"><i data-lucide="circle-check-big" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Data Quality Center") }}</span></a>{% endif %}
+          {% if show_advanced_navigation and can("config.read") %}<a href="/lifecycle" class="{% if page == 'lifecycle' %}active{% endif %}"><i data-lucide="clock-3" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Lifecycle Workbench") }}</span></a>{% endif %}
+          {% if show_advanced_navigation and can("exceptions.read") %}<a href="/exceptions" class="{% if page == 'exceptions' %}active{% endif %}"><i data-lucide="ban" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Exceptions") }}</span></a>{% endif %}
+        </div>
+      </details>
+
+      <details class="sidebar-nav-group" {% if page in ['config', 'advanced-sync'] %}open{% endif %}>
+        <summary><span class="sidebar-nav-group__label">{{ t("Rule Configuration") }}</span><i data-lucide="chevron-down" class="icon icon-xs sidebar-nav-group__chevron"></i></summary>
+        <div class="sidebar-nav-group__links">
+          {% if can("config.read") %}<a href="/config" class="{% if page == 'config' %}active{% endif %}"><i data-lucide="settings-2" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Config") }}</span></a>{% endif %}
+          {% if show_advanced_navigation and can("config.read") %}<a href="/advanced-sync" class="{% if page == 'advanced-sync' %}active{% endif %}"><i data-lucide="waypoints" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Advanced Sync") }}</span></a>{% endif %}
+        </div>
+      </details>
 
       {% if show_advanced_navigation %}
-      {% if can("mappings.read") %}<a href="/mappings" class="{% if page == 'mappings' %}active{% endif %}"><i data-lucide="layers" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Identity Overrides") }}</span></a>{% endif %}
-      {% if can("config.read") %}<a href="/advanced-sync" class="{% if page == 'advanced-sync' %}active{% endif %}"><i data-lucide="waypoints" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Advanced Sync") }}</span></a>{% endif %}
-      {% if can("config.read") %}<a href="/automation-center" class="{% if page == 'automation-center' %}active{% endif %}"><i data-lucide="bell-ring" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Automation Center") }}</span></a>{% endif %}
-      {% if can("config.read") %}<a href="/data-quality" class="{% if page == 'data-quality' %}active{% endif %}"><i data-lucide="shield-alert" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Data Quality Center") }}</span></a>{% endif %}
-      {% if can("config.read") %}<a href="/integrations" class="{% if page == 'integrations' %}active{% endif %}"><i data-lucide="plug" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Integration Center") }}</span></a>{% endif %}
-      {% if can("config.read") %}<a href="/lifecycle" class="{% if page == 'lifecycle' %}active{% endif %}"><i data-lucide="clock-3" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Lifecycle Workbench") }}</span></a>{% endif %}
-      {% if can("account.manage") or can("exceptions.read") or can("organizations.manage") or can("database.read") or can("audit.read") %}
-      <div class="sidebar-section-label">
-        {{ t("Management") }}
-      </div>
-
-      {% if can("account.manage") %}<a href="/account" class="{% if page == 'account' %}active{% endif %}"><i data-lucide="user-cog" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Account") }}</span></a>{% endif %}
-      {% if can("exceptions.read") %}<a href="/exceptions" class="{% if page == 'exceptions' %}active{% endif %}"><i data-lucide="ban" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Exceptions") }}</span></a>{% endif %}
-      {% if can("organizations.manage") %}<a href="/organizations" class="{% if page == 'organizations' %}active{% endif %}"><i data-lucide="building-2" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Organizations") }}</span></a>{% endif %}
-      {% if can("database.read") %}<a href="/database" class="{% if page == 'database' %}active{% endif %}"><i data-lucide="database" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Database") }}</span></a>{% endif %}
-      {% if can("audit.read") %}<a href="/audit" class="{% if page == 'audit' %}active{% endif %}"><i data-lucide="scroll-text" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Audit") }}</span></a>{% endif %}
-      {% endif %}
+      <details class="sidebar-nav-group" {% if page in ['account', 'integrations', 'organizations', 'database'] %}open{% endif %}>
+        <summary><span class="sidebar-nav-group__label">{{ t("Platform Management") }}</span><i data-lucide="chevron-down" class="icon icon-xs sidebar-nav-group__chevron"></i></summary>
+        <div class="sidebar-nav-group__links">
+          {% if can("config.read") %}<a href="/integrations" class="{% if page == 'integrations' %}active{% endif %}"><i data-lucide="plug" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Integration Center") }}</span></a>{% endif %}
+          {% if can("organizations.manage") %}<a href="/organizations" class="{% if page == 'organizations' %}active{% endif %}"><i data-lucide="building-2" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Organizations") }}</span></a>{% endif %}
+          {% if can("database.read") %}<a href="/database" class="{% if page == 'database' %}active{% endif %}"><i data-lucide="database" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Database") }}</span></a>{% endif %}
+          {% if can("account.manage") %}<a href="/account" class="{% if page == 'account' %}active{% endif %}"><i data-lucide="user-cog" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Account") }}</span></a>{% endif %}
+        </div>
+      </details>
       {% endif %}
     </nav>
     <div class="footer">
@@ -154,7 +146,7 @@
 
     <div class="{% if current_user %}content-wrapper{% else %}login-shell{% endif %}">
       {% if flash %}
-      <div class="flash {{ flash.level }}" id="global-flash">
+      <div class="flash {{ flash.level }}" id="global-flash" role="status" aria-live="polite" aria-atomic="true">
         <div class="flash__icon-shell flash__icon-shell--{{ flash.level }}">
           <i data-lucide="{% if flash.level == 'success' %}check-circle-2{% elif flash.level == 'error' %}alert-circle{% else %}alert-triangle{% endif %}" class="icon icon-md flash__icon flash__icon--{{ flash.level }}"></i>
         </div>
@@ -162,7 +154,7 @@
           <div class="flash__title">{{ t(flash.level|capitalize) }}</div>
           <div class="flash__message">{{ flash.message }}</div>
         </div>
-        <button class="ghost flash__dismiss" type="button" data-dismiss-closest=".flash">
+        <button class="ghost flash__dismiss" type="button" data-dismiss-closest=".flash" aria-label="{{ t('Dismiss message') }}">
           <i data-lucide="x" class="icon icon-sm"></i>
         </button>
       </div>
@@ -175,14 +167,20 @@
   {% if current_user and not is_lightweight_shell %}
   <div class="confirm-dialog" data-confirm-dialog hidden>
     <div class="confirm-dialog__backdrop" data-confirm-cancel></div>
-    <section class="confirm-dialog__panel" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+    <section class="confirm-dialog__panel" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message" tabindex="-1">
       <div class="confirm-dialog__icon">
         <i data-lucide="shield-alert" class="icon icon-md"></i>
       </div>
       <div class="confirm-dialog__body">
         <div class="confirm-dialog__eyebrow">{{ t("Safety Check") }}</div>
-        <h2 id="confirm-dialog-title">{{ t("Confirm High-Risk Action") }}</h2>
-        <p data-confirm-message-target>{{ t("Are you sure you want to perform this action?") }}</p>
+        <h2 id="confirm-dialog-title" data-confirm-title-target data-default-title="{{ t('Confirm High-Risk Action') }}">{{ t("Confirm High-Risk Action") }}</h2>
+        <p id="confirm-dialog-message" data-confirm-message-target>{{ t("Are you sure you want to perform this action?") }}</p>
+        <dl class="confirm-dialog__details" data-confirm-details hidden></dl>
+        <div class="confirm-dialog__verification" data-confirm-verification hidden>
+          <label for="confirm-dialog-input">{{ t("Confirmation text") }}</label>
+          <p class="form-help" id="confirm-dialog-input-help" data-confirm-input-help></p>
+          <input id="confirm-dialog-input" type="text" autocomplete="off" aria-describedby="confirm-dialog-input-help" data-confirm-input>
+        </div>
       </div>
       <div class="confirm-dialog__actions">
         {{ ui.button(t("Cancel"), type="button", variant="ghost", attrs='data-confirm-cancel') }}

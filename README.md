@@ -102,6 +102,12 @@ without redesigning the synchronization control plane.
 - Tagged releases (`v*`) build and publish a wheel, a Windows `exe`, and a deployable web `zip` through GitHub Actions.
 - The packaged web build now includes both Jinja templates and `sync_app/web/static` assets, so CSS and JS are present in non-source deployments.
 
+Architecture and operations references:
+
+- [Modular monolith ADR](docs/architecture/adr-001-modular-monolith.md)
+- [Reliability operations](docs/operations/reliability.md)
+- [Docker deployment](docs/deployment-docker.md)
+
 ## Fast Deployment
 
 For a new Windows environment, the fastest supported deployment path is:
@@ -118,7 +124,7 @@ One-command example:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-deploy.txt
-.\install_web_service.ps1 -AdminUsername admin -AdminPassword "simple888"
+.\install_web_service.ps1 -AdminUsername admin -AdminPassword "<strong-password>"
 ```
 
 After installation:
@@ -158,7 +164,8 @@ Database-backed organization config is now the primary configuration source.
 
 ```powershell
 .\.venv\Scripts\python.exe -m sync_app.cli init-web --db-path test_artifacts\demo_web.db --config config.ini
-.\.venv\Scripts\python.exe -m sync_app.cli bootstrap-admin --db-path test_artifacts\demo_web.db --username admin --password simple88
+$env:AD_ORG_SYNC_ADMIN_PASSWORD = "<strong-password>"
+.\.venv\Scripts\python.exe -m sync_app.cli bootstrap-admin --db-path test_artifacts\demo_web.db --username admin --password-env AD_ORG_SYNC_ADMIN_PASSWORD
 .\.venv\Scripts\python.exe -m sync_app.cli validate-config --db-path test_artifacts\demo_web.db --org-id default
 .\.venv\Scripts\python.exe -m sync_app.cli test-source --db-path test_artifacts\demo_web.db --org-id default
 .\.venv\Scripts\python.exe -m sync_app.cli test-ldap --db-path test_artifacts\demo_web.db --org-id default
@@ -194,7 +201,7 @@ For a production-style local deployment on Windows, prefer the service scripts i
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-deploy.txt
-.\install_web_service.ps1 -AdminUsername admin -AdminPassword "simple88"
+.\install_web_service.ps1 -AdminUsername admin -AdminPassword "<strong-password>"
 ```
 
 Daily operations:
@@ -211,6 +218,12 @@ Health endpoints:
 - `GET /readyz` for readiness
 
 Detailed deployment notes are in [docs/deployment-windows-service.md](docs/deployment-windows-service.md).
+
+## Docker Deployment
+
+The production-oriented container runs as a non-root user, installs the packaged application instead of an editable source tree, mounts data and logs separately, and reads the initial administrator password from a container secret.
+
+See [docs/deployment-docker.md](docs/deployment-docker.md) for the required secret file, HTTPS public URL, startup commands, and upgrade procedure.
 
 ## Operational Guides
 
@@ -272,6 +285,29 @@ The UI supports:
 - automatic Simplified Chinese fallback for Chinese browsers
 - manual language switching
 - basic and advanced modes
+
+### Enterprise administrator sign-in
+
+The Web console supports local administrator passwords and optional standards-based OIDC SSO. OIDC identities never auto-provision or inherit a role: the configured username claim must match an existing enabled user under `Users`, so authorization remains controlled by the local role model.
+
+Required environment variables:
+
+- `AD_ORG_SYNC_OIDC_ENABLED=true`
+- `AD_ORG_SYNC_OIDC_DISCOVERY_URL=https://id.example/.well-known/openid-configuration`
+- `AD_ORG_SYNC_OIDC_CLIENT_ID=<client-id>`
+- `AD_ORG_SYNC_OIDC_CLIENT_SECRET=<client-secret>`
+
+Common optional settings:
+
+- `AD_ORG_SYNC_OIDC_DISPLAY_NAME` controls the login button label.
+- `AD_ORG_SYNC_OIDC_USERNAME_CLAIM` defaults to `preferred_username`.
+- `AD_ORG_SYNC_OIDC_CALLBACK_URL` overrides the callback URL; otherwise `<public-base-url>/auth/oidc/callback` is used.
+- `AD_ORG_SYNC_OIDC_MFA_REQUIRED=true` requires an accepted `amr` value.
+- `AD_ORG_SYNC_OIDC_ACCEPTED_MFA_METHODS=mfa,otp,hwk,sms` controls accepted MFA methods.
+- `AD_ORG_SYNC_PASSWORD_RESET_URL` adds the enterprise password-recovery link.
+- `AD_ORG_SYNC_ENVIRONMENT_LABEL` identifies the deployment on the login page.
+
+The flow uses authorization code + PKCE, state and nonce validation, HTTPS-only remote endpoints, RS256/JWKS signature verification, issuer/audience/expiry checks, and UserInfo subject binding. Register `/auth/oidc/callback` as the redirect URI at the identity provider. Local password fallback remains available for break-glass administration.
 
 ## Key Safety Controls
 

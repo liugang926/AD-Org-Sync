@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
 
+{% macro localized_field(record, field) -%}
+  {%- set code = record.get(field ~ "_code") -%}
+  {%- set params = record.get(field ~ "_params") or {} -%}
+  {{- t(code, **params) if code else t(record.get(field) or "") -}}
+{%- endmacro %}
+
 {% block content %}
 <div class="page-stack decision-wizard">
   <div class="hero-header">
@@ -20,12 +26,12 @@
   <section class="decision-wizard__hero">
     <div class="decision-wizard__copy">
       <div class="decision-wizard__eyebrow">{{ t("Identity Decision") }}</div>
-      <h2>{{ decision_guide.decision.bind_now.label }}</h2>
-      <p>{{ decision_guide.decision.bind_now.summary }}</p>
+      <h2>{{ localized_field(decision_guide.decision.bind_now, "label") }}</h2>
+      <p>{{ localized_field(decision_guide.decision.bind_now, "summary") }}</p>
       {% if decision_guide.recommendation %}
       <div class="panel-note info">
-        <strong>{{ t("Recommendation") }}:</strong> {{ decision_guide.recommendation.label or "-" }}
-        <div class="muted">{{ decision_guide.recommendation.reason or "" }}</div>
+        <strong>{{ t("Recommendation") }}:</strong> {{ t(decision_guide.recommendation.label_code) if decision_guide.recommendation.label_code else (decision_guide.recommendation.label or "-") }}
+        <div class="muted">{{ t(decision_guide.recommendation.reason_code, **decision_guide.recommendation.reason_params) if decision_guide.recommendation.reason_code else (decision_guide.recommendation.reason or "") }}</div>
       </div>
       {% endif %}
     </div>
@@ -89,7 +95,7 @@
   <div class="grid cols-2 decision-wizard__section-grid">
     {% call ui.panel(t("Source Routing"), description=t("This explains why the selected source user lands on this connector, username, and OU.")) %}
       {% if decision_guide.routing_error %}
-      <div class="panel-note warning">{{ decision_guide.routing_error }}</div>
+      <div class="panel-note warning">{{ t(decision_guide.routing_error) }}</div>
       {% endif %}
       <div class="detail-grid">
         <div class="detail-item">
@@ -181,8 +187,14 @@
             {% if candidate.is_selected %}{{ ui.badge(t("Selected"), "success") }}{% endif %}
           </div>
         </div>
-        {% if candidate.rule %}<div class="muted">{{ t("Rule") }}: {{ candidate.rule }}</div>{% endif %}
-        {% if candidate.explanation %}<p>{{ candidate.explanation }}</p>{% endif %}
+        {% if candidate.rule %}<div class="muted">{{ t("Rule") }}: {{ t(candidate.rule_code) if candidate.rule_code else candidate.rule }}</div>{% endif %}
+        {% if candidate.explanation_code %}
+        <p>{{ t(candidate.explanation_code, **(candidate.explanation_params or {})) }}</p>
+        {% elif candidate.explanation and ui_language != "zh-CN" %}
+        <p>{{ candidate.explanation }}</p>
+        {% elif candidate.explanation %}
+        <p>{{ t("conflicts.candidate.explanation.generic") }}</p>
+        {% endif %}
         {% if not candidate.is_selected %}
         {{ ui.button(t("Review This Account"), href="/conflicts/" ~ conflict.id ~ "/decision-guide?ad_username=" ~ (candidate.username|urlencode) ~ "&return_query=" ~ ((return_query or '')|urlencode) ~ "&return_status=" ~ ((return_status or 'open')|urlencode) ~ "&return_job_id=" ~ ((return_job_id or conflict.job_id)|urlencode), variant="ghost", size="small") }}
         {% endif %}
@@ -197,14 +209,15 @@
       <div class="section-header">
         <div class="section-header__copy">
           <h3 class="section-header__title">{{ t("If You Bind This Account") }}</h3>
-          <p class="section-header__description">{{ decision_guide.decision.bind_now.summary }}</p>
+          <p class="section-header__description">{{ localized_field(decision_guide.decision.bind_now, "summary") }}</p>
         </div>
         {{ ui.badge(t(decision_guide.decision.bind_now.status|capitalize), decision_guide.decision.bind_now.status) }}
       </div>
       <div class="detail-grid">
         <div class="detail-item">
           <div class="label">{{ t("Next Sync Action") }}</div>
-          <div class="value cell-mono">{{ decision_guide.decision.bind_now.action or "-" }}</div>
+          {% set action_code = "conflicts.decision.action." ~ decision_guide.decision.bind_now.action %}
+          <div class="value">{{ t(action_code) if decision_guide.decision.bind_now.action else "-" }}</div>
         </div>
         <div class="detail-item">
           <div class="label">{{ t("Create New Account") }}</div>
@@ -222,16 +235,18 @@
           {% for field in decision_guide.field_updates %}
           <div class="field-update-item">
             <strong>{{ field.name }}</strong>
-            <span>{{ field.source }}</span>
+            <span>{{ t(field.source_code) if field.source_code else field.source }}</span>
           </div>
           {% endfor %}
         </div>
       </div>
       {% endif %}
-      {% if decision_guide.decision.bind_now.notes %}
+      {% if decision_guide.decision.bind_now.note_messages or decision_guide.decision.bind_now.notes %}
       <div class="stack-tight">
-        {% for note in decision_guide.decision.bind_now.notes %}
-        <div class="panel-note warning">{{ note }}</div>
+        {% for note in decision_guide.decision.bind_now.note_messages or [] %}
+        <div class="panel-note warning">{{ t(note.code, **(note.params or {})) }}</div>
+        {% else %}
+        {% for note in decision_guide.decision.bind_now.notes %}<div class="panel-note warning">{{ t(note) }}</div>{% endfor %}
         {% endfor %}
       </div>
       {% endif %}
@@ -241,7 +256,7 @@
       <div class="section-header">
         <div class="section-header__copy">
           <h3 class="section-header__title">{{ t("If You Do Not Bind") }}</h3>
-          <p class="section-header__description">{{ decision_guide.decision.without_binding.summary }}</p>
+          <p class="section-header__description">{{ localized_field(decision_guide.decision.without_binding, "summary") }}</p>
         </div>
         {{ ui.badge(t(decision_guide.decision.without_binding.status|capitalize), decision_guide.decision.without_binding.status) }}
       </div>
@@ -255,10 +270,12 @@
           <div class="value">{{ t("Yes") if decision_guide.decision.without_binding.will_conflict_continue else t("No") }}</div>
         </div>
       </div>
-      {% if decision_guide.decision.without_binding.notes %}
+      {% if decision_guide.decision.without_binding.note_messages or decision_guide.decision.without_binding.notes %}
       <div class="stack-tight">
-        {% for note in decision_guide.decision.without_binding.notes %}
-        <div class="panel-note warning">{{ note }}</div>
+        {% for note in decision_guide.decision.without_binding.note_messages or [] %}
+        <div class="panel-note warning">{{ t(note.code, **(note.params or {})) }}</div>
+        {% else %}
+        {% for note in decision_guide.decision.without_binding.notes %}<div class="panel-note warning">{{ t(note) }}</div>{% endfor %}
         {% endfor %}
       </div>
       {% endif %}

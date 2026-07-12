@@ -248,7 +248,7 @@
                   <input type="hidden" name="enabled" value="{{ 'false' if item.is_enabled else 'true' }}">
                   {{ ui.button(t("Disable") if item.is_enabled else t("Enable"), type="submit", variant=("danger" if item.is_enabled else "secondary"), size="small") }}
                 </form>
-                <form class="inline" method="post" action="/exceptions/{{ item.id }}/delete">
+                <form class="inline" method="post" action="/exceptions/{{ item.id }}/delete" data-confirm="{{ t('Deleting this exception removes its protection from the next sync run.') }}" data-confirm-title="{{ t('Confirm Exception Rule Deletion') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Match Type') }}" data-confirm-detail-2-value="{{ t(exception_match_type_labels.get(item.match_type, item.match_type)) }}" data-confirm-detail-3-label="{{ t('Match Value') }}" data-confirm-detail-3-value="{{ item.match_value }}" data-confirm-detail-4-label="{{ t('Requested Action') }}" data-confirm-detail-4-value="{{ t('Permanent deletion') }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   {{ ui.button(t("Delete"), type="submit", variant="danger", size="small") }}
                 </form>

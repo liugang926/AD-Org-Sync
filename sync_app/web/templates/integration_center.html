@@ -156,7 +156,7 @@
         </td>
         <td>{{ item.last_attempt_at or "-" }}</td>
         <td>
-          <form method="post" action="/integrations/subscriptions/{{ item.id }}/delete">
+          <form method="post" action="/integrations/subscriptions/{{ item.id }}/delete" data-confirm="{{ t('Deleting this webhook subscription stops future deliveries to the target URL.') }}" data-confirm-title="{{ t('Confirm Webhook Subscription Deletion') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Event') }}" data-confirm-detail-2-value="{{ item.event_type }}" data-confirm-detail-3-label="{{ t('Target URL') }}" data-confirm-detail-3-value="{{ item.target_url }}" data-confirm-detail-4-label="{{ t('Requested Action') }}" data-confirm-detail-4-value="{{ t('Permanent deletion') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             {{ ui.button(t("Delete"), type="submit", variant="secondary") }}
           </form>

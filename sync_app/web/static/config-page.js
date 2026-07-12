@@ -863,9 +863,75 @@
     void ensureSourceSummaryDisplay();
   }
 
+  function initConfigFormFeedback() {
+    const form = document.querySelector("[data-config-form]");
+    if (!(form instanceof HTMLFormElement)) {
+      return;
+    }
+    const unsavedStatus = form.querySelector("[data-config-unsaved-status]");
+    let dirty = false;
+
+    const setDirty = (value) => {
+      dirty = Boolean(value);
+      if (unsavedStatus instanceof HTMLElement) {
+        unsavedStatus.hidden = !dirty;
+      }
+    };
+
+    form.addEventListener("input", (event) => {
+      setDirty(true);
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      target.removeAttribute("aria-invalid");
+      target.closest(".form-group")?.querySelector(".field-error")?.remove();
+    });
+    form.addEventListener("change", () => setDirty(true));
+    form.addEventListener("submit", () => setDirty(false));
+    form.addEventListener(
+      "invalid",
+      (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) {
+          return;
+        }
+        target.setAttribute("aria-invalid", "true");
+        const group = target.closest(".form-group");
+        if (group instanceof HTMLElement) {
+          let error = group.querySelector(".field-error");
+          if (!(error instanceof HTMLElement)) {
+            error = document.createElement("div");
+            error.className = "field-error";
+            error.setAttribute("role", "alert");
+            group.appendChild(error);
+          }
+          error.textContent = target.validationMessage;
+          const errorId = `${target.id || target.name}-error`;
+          error.id = errorId;
+          const describedBy = new Set((target.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
+          describedBy.add(errorId);
+          target.setAttribute("aria-describedby", Array.from(describedBy).join(" "));
+          group.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
+        target.focus();
+      },
+      true
+    );
+
+    window.addEventListener("beforeunload", (event) => {
+      if (!dirty) {
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = form.dataset.labelLeaveWarning || "";
+    });
+  }
+
   ADOrgSync.initConfigPage = () => {
     initSourceProviderUi();
     initConfigSectionNavigation();
     initConfigCatalogBrowsers();
+    initConfigFormFeedback();
   };
 })();

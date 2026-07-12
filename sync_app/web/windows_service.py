@@ -223,7 +223,6 @@ def _query_service_status(service_name: str = SERVICE_NAME) -> dict[str, Any]:
 def _configure_logging(log_path: str) -> None:
     resolved_log_path = Path(log_path).expanduser().resolve()
     resolved_log_path.parent.mkdir(parents=True, exist_ok=True)
-    root_logger = logging.getLogger()
     file_handler = logging.FileHandler(resolved_log_path, encoding="utf-8")
     file_handler.setFormatter(JsonLineFormatter())
     logging.basicConfig(

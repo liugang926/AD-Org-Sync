@@ -13,7 +13,6 @@ from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
 
 class WebAuthorizationTests(WebAuthzBaseTestCase):
-
     def test_operator_cannot_access_config_or_database_actions(self):
         self._login("operator1")
 
@@ -47,22 +46,31 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_unauthenticated_private_metadata_api_redirects_to_login(self):
         with TestClient(self.app) as client:
-            response = client.get("/api/metadata/source-users?q=alice", follow_redirects=False)
+            response = client.get(
+                "/api/metadata/source-users?q=alice", follow_redirects=False
+            )
             self.assertEqual(response.status_code, 303)
             self.assertEqual(response.headers["location"], "/login")
 
-    def test_unauthenticated_integration_api_returns_json_401_instead_of_login_redirect(self):
+    def test_unauthenticated_integration_api_returns_json_401_instead_of_login_redirect(
+        self,
+    ):
         with TestClient(self.app) as client:
-            response = client.get("/api/integrations/orgs/default/jobs", follow_redirects=False)
+            response = client.get(
+                "/api/integrations/orgs/default/jobs", follow_redirects=False
+            )
             self.assertEqual(response.status_code, 401)
             self.assertEqual(response.json()["ok"], False)
             self.assertIn("token", response.json()["error"].lower())
 
     def test_healthz_remains_public_without_login(self):
         with TestClient(self.app) as client:
-            response = client.get("/healthz")
+            response = client.get(
+                "/healthz", headers={"X-Correlation-ID": "health-check-123"}
+            )
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["status"], "ok")
+            self.assertEqual(response.headers["X-Correlation-ID"], "health-check-123")
 
     def test_login_page_uses_lightweight_shell_without_external_runtime_assets(self):
         response = self._route("/login", "GET")(self._request("/login"))
@@ -72,7 +80,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertNotIn("fonts.googleapis.com", body)
         self.assertNotIn("unpkg.com/lucide", body)
         self.assertNotIn("tom-select", body)
-        self.assertNotIn('/static/app.js', body)
+        self.assertNotIn("/static/app.js", body)
 
     def test_auditor_sees_readonly_mappings_and_cannot_run_jobs(self):
         self._login("auditor1")
@@ -81,7 +89,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             mock_wecom.return_value.get_department_list.return_value = []
             response = self._route("/mappings", "GET")(self._request("/mappings"))
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Current role can view identity overrides only.", self._text(response))
+        self.assertIn(
+            "Current role can view identity overrides only.", self._text(response)
+        )
 
         response = self._route("/jobs/run", "POST")(
             self._request("/jobs/run", "POST"),
@@ -159,7 +169,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/users")
-        self.assertIsNone(self.app.state.user_repo.get_user_record_by_username("weakuser"))
+        self.assertIsNone(
+            self.app.state.user_repo.get_user_record_by_username("weakuser")
+        )
 
     def test_super_admin_can_create_user_with_simple_eight_character_password(self):
         self._login("superadmin")
@@ -178,13 +190,17 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/users")
-        self.assertIsNotNone(self.app.state.user_repo.get_user_record_by_username("simple8"))
+        self.assertIsNotNone(
+            self.app.state.user_repo.get_user_record_by_username("simple8")
+        )
 
     def test_super_admin_can_manage_exception_rules(self):
         self._login("superadmin")
 
         with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
-            mock_wecom.return_value.get_department_list.return_value = [{"id": 1, "name": "HQ"}]
+            mock_wecom.return_value.get_department_list.return_value = [
+                {"id": 1, "name": "HQ"}
+            ]
             response = self._route("/exceptions", "GET")(self._request("/exceptions"))
         self.assertEqual(response.status_code, 200)
         match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(response))
@@ -241,18 +257,28 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             )
         )
 
-        export_response = self._route("/exceptions/export", "GET")(self._request("/exceptions/export"))
+        export_response = self._route("/exceptions/export", "GET")(
+            self._request("/exceptions/export")
+        )
         self.assertEqual(export_response.status_code, 200)
         export_text = self._response_body(export_response).decode("utf-8-sig")
         self.assertIn(
             "rule_type,match_value,rule_owner,effective_reason,notes,is_enabled,expires_at,next_review_at,is_once,last_reviewed_at,hit_count,last_hit_at",
             export_text,
         )
-        self.assertIn("skip_user_disable,alice,iam@corp.example,Grace period before disable,keep enabled,true,", export_text)
+        self.assertIn(
+            "skip_user_disable,alice,iam@corp.example,Grace period before disable,keep enabled,true,",
+            export_text,
+        )
         self.assertIn(",true", export_text)
-        self.assertIn("skip_user_sync,bob,ops@corp.example,Bulk replay guard,bulk import,true,", export_text)
+        self.assertIn(
+            "skip_user_sync,bob,ops@corp.example,Bulk replay guard,bulk import,true,",
+            export_text,
+        )
 
-    def test_super_admin_can_manage_advanced_sync_settings_connectors_and_mappings(self):
+    def test_super_admin_can_manage_advanced_sync_settings_connectors_and_mappings(
+        self,
+    ):
         self._login("superadmin")
 
         response = self._route("/advanced-sync", "GET")(self._request("/advanced-sync"))
@@ -272,7 +298,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("First Sync Identity Claim", body)
         self.assertIn("Department To AD OU Mapping", body)
         self.assertIn("Same-Name Collision Policy", body)
-        self.assertNotIn('name="advanced_connector_routing_enabled" value="1" checked', body)
+        self.assertNotIn(
+            'name="advanced_connector_routing_enabled" value="1" checked', body
+        )
         match = re.search(r'name="csrf_token" value="([^"]+)"', body)
         self.assertIsNotNone(match)
         csrf_token = match.group(1)
@@ -306,38 +334,91 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             custom_group_ou_path="Managed Groups/Regional",
         )
         self.assertEqual(response.status_code, 303)
-        self.assertTrue(self.app.state.settings_repo.get_bool("advanced_connector_routing_enabled", False, org_id="default"))
-        self.assertTrue(self.app.state.settings_repo.get_bool("attribute_mapping_enabled", False, org_id="default"))
-        self.assertTrue(self.app.state.settings_repo.get_bool("write_back_enabled", False, org_id="default"))
-        self.assertTrue(self.app.state.settings_repo.get_bool("custom_group_sync_enabled", False, org_id="default"))
-        self.assertTrue(self.app.state.settings_repo.get_bool("offboarding_lifecycle_enabled", False, org_id="default"))
-        self.assertTrue(self.app.state.settings_repo.get_bool("rehire_restore_enabled", False, org_id="default"))
-        self.assertTrue(self.app.state.settings_repo.get_bool("automatic_replay_enabled", False, org_id="default"))
-        self.assertTrue(self.app.state.settings_repo.get_bool("future_onboarding_enabled", False, org_id="default"))
-        self.assertTrue(self.app.state.settings_repo.get_bool("contractor_lifecycle_enabled", False, org_id="default"))
-        self.assertEqual(self.app.state.settings_repo.get_int("offboarding_grace_days", 0, org_id="default"), 7)
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "advanced_connector_routing_enabled", False, org_id="default"
+            )
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "attribute_mapping_enabled", False, org_id="default"
+            )
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "write_back_enabled", False, org_id="default"
+            )
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "custom_group_sync_enabled", False, org_id="default"
+            )
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "offboarding_lifecycle_enabled", False, org_id="default"
+            )
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "rehire_restore_enabled", False, org_id="default"
+            )
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "automatic_replay_enabled", False, org_id="default"
+            )
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "future_onboarding_enabled", False, org_id="default"
+            )
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "contractor_lifecycle_enabled", False, org_id="default"
+            )
+        )
         self.assertEqual(
-            self.app.state.settings_repo.get_value("future_onboarding_start_field", "", org_id="default"),
+            self.app.state.settings_repo.get_int(
+                "offboarding_grace_days", 0, org_id="default"
+            ),
+            7,
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value(
+                "future_onboarding_start_field", "", org_id="default"
+            ),
             "hire_date",
         )
         self.assertEqual(
-            self.app.state.settings_repo.get_value("contractor_end_field", "", org_id="default"),
+            self.app.state.settings_repo.get_value(
+                "contractor_end_field", "", org_id="default"
+            ),
             "contract_end_date",
         )
         self.assertEqual(
-            self.app.state.settings_repo.get_value("contractor_type_values", "", org_id="default"),
+            self.app.state.settings_repo.get_value(
+                "contractor_type_values", "", org_id="default"
+            ),
             "contractor,intern",
         )
         self.assertEqual(
-            self.app.state.settings_repo.get_float("disable_circuit_breaker_percent", 0.0, org_id="default"),
+            self.app.state.settings_repo.get_float(
+                "disable_circuit_breaker_percent", 0.0, org_id="default"
+            ),
             3.5,
         )
         self.assertEqual(
-            self.app.state.settings_repo.get_value("managed_group_type", "", org_id="default"),
+            self.app.state.settings_repo.get_value(
+                "managed_group_type", "", org_id="default"
+            ),
             "distribution",
         )
         self.assertEqual(
-            self.app.state.settings_repo.get_value("first_sync_identity_claim_mode", "", org_id="default"),
+            self.app.state.settings_repo.get_value(
+                "first_sync_identity_claim_mode", "", org_id="default"
+            ),
             "review",
         )
 
@@ -375,7 +456,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         connector = self.app.state.connector_repo.get_connector_record("asia")
         self.assertIsNotNone(connector)
         self.assertEqual(connector.root_department_ids, [2, 3])
-        self.assertEqual(connector.username_strategy, "family_name_pinyin_given_initials")
+        self.assertEqual(
+            connector.username_strategy, "family_name_pinyin_given_initials"
+        )
         self.assertEqual(connector.username_collision_policy, "custom_template")
         self.assertEqual(connector.username_collision_template, "{base}{counter2}")
         self.assertEqual(connector.group_type, "mail_enabled_security")
@@ -399,7 +482,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             is_enabled="1",
         )
         self.assertEqual(response.status_code, 303)
-        rules = self.app.state.attribute_mapping_repo.list_rule_records(connector_id="asia", org_id="default")
+        rules = self.app.state.attribute_mapping_repo.list_rule_records(
+            connector_id="asia", org_id="default"
+        )
         self.assertEqual(len(rules), 1)
         self.assertEqual(rules[0].direction, "source_to_ad")
         self.assertEqual(rules[0].source_field, "position")
@@ -417,7 +502,11 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             is_enabled="1",
         )
         self.assertEqual(response.status_code, 303)
-        mapping_records = self.app.state.department_ou_mapping_repo.list_mapping_records(org_id="default")
+        mapping_records = (
+            self.app.state.department_ou_mapping_repo.list_mapping_records(
+                org_id="default"
+            )
+        )
         self.assertEqual(len(mapping_records), 1)
         self.assertEqual(mapping_records[0].connector_id, "asia")
         self.assertEqual(mapping_records[0].source_department_id, "20018")
@@ -497,7 +586,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(replay_response.status_code, 303)
         self.assertEqual(replay_response.headers["location"], "/lifecycle")
-        original_replay_request = self.app.state.replay_request_repo.get_request_record(replay_request_id)
+        original_replay_request = self.app.state.replay_request_repo.get_request_record(
+            replay_request_id
+        )
         self.assertIsNotNone(original_replay_request)
         self.assertEqual(original_replay_request.status, "superseded")
 
@@ -510,10 +601,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(offboarding_response.status_code, 303)
         self.assertEqual(offboarding_response.headers["location"], "/lifecycle")
-        pending_replay_requests = self.app.state.replay_request_repo.list_request_records(
-            status="pending",
-            org_id="default",
-            limit=10,
+        pending_replay_requests = (
+            self.app.state.replay_request_repo.list_request_records(
+                status="pending",
+                org_id="default",
+                limit=10,
+            )
         )
         self.assertGreaterEqual(len(pending_replay_requests), 2)
 
@@ -532,7 +625,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
                 rule.rule_type == "skip_user_disable"
                 and rule.match_value == "contract-001"
                 and rule.expires_at
-                for rule in self.app.state.exception_rule_repo.list_enabled_rule_records(org_id="default")
+                for rule in self.app.state.exception_rule_repo.list_enabled_rule_records(
+                    org_id="default"
+                )
             )
         )
 
@@ -569,7 +664,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(preview["primary_candidate"]["username"], "smitha")
         self.assertEqual(preview["template_context"]["employee_id"], "10018")
         self.assertEqual(preview["template_context"]["position"], "Engineer")
-        self.assertTrue(any(item["username"] == "smitha10018" for item in preview["candidates"]))
+        self.assertTrue(
+            any(item["username"] == "smitha10018" for item in preview["candidates"])
+        )
 
     def test_advanced_sync_identity_explainer_returns_connector_and_target_ou(self):
         self._login("superadmin")
@@ -607,7 +704,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             is_enabled=True,
         )
 
-        config = self.app.state.org_config_repo.get_app_config("default", config_path=str(self.config_path))
+        config = self.app.state.org_config_repo.get_app_config(
+            "default", config_path=str(self.config_path)
+        )
 
         class FakeSourceProvider:
             def list_departments(self):
@@ -634,7 +733,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             def close(self):
                 return None
 
-        with patch("sync_app.web.sync_support.SyncSupport._get_source_provider", return_value=(config, FakeSourceProvider())):
+        with patch(
+            "sync_app.web.sync_support.SyncSupport._get_source_provider",
+            return_value=(config, FakeSourceProvider()),
+        ):
             response = self._route("/advanced-sync/identity-explain", "GET")(
                 self._request(
                     "/advanced-sync/identity-explain",
@@ -649,7 +751,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(explanation["selected_connector"]["connector_id"], "asia")
         self.assertEqual(explanation["target_department"]["department_id"], 3)
         self.assertEqual(explanation["target_ou_path"], "Managed Users/Asia/China")
-        self.assertEqual(explanation["username_preview"]["primary_candidate"]["username"], "smitha")
+        self.assertEqual(
+            explanation["username_preview"]["primary_candidate"]["username"], "smitha"
+        )
         self.assertEqual(explanation["identity_claim_policy"]["mode"], "review")
         self.assertEqual(
             explanation["identity_claim_policy"]["existing_match_behavior"],
@@ -662,7 +766,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             )
         )
 
-    def test_advanced_sync_data_quality_snapshot_surfaces_naming_and_source_data_gaps(self):
+    def test_advanced_sync_data_quality_snapshot_surfaces_naming_and_source_data_gaps(
+        self,
+    ):
         self._login("superadmin")
         self.app.state.connector_repo.upsert_connector(
             connector_id="primary",
@@ -716,7 +822,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
                         },
                     ],
                 }
-                return [SourceDirectoryUser.from_source_payload(item) for item in rows.get(department_id, [])]
+                return [
+                    SourceDirectoryUser.from_source_payload(item)
+                    for item in rows.get(department_id, [])
+                ]
 
             def get_user_detail(self, source_user_id: str):
                 detail_rows = {
@@ -755,7 +864,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             def close(self):
                 return None
 
-        with patch("sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()):
+        with patch(
+            "sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()
+        ):
             response = self._route("/advanced-sync/data-quality-snapshot", "GET")(
                 self._request("/advanced-sync/data-quality-snapshot")
             )
@@ -775,7 +886,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("managed_username_collision", issues_by_key)
         self.assertIn("naming_prerequisite_gap", issues_by_key)
         self.assertEqual(issues_by_key["managed_username_collision"]["count"], 1)
-        self.assertIn("alice1", issues_by_key["managed_username_collision"]["samples"][0]["detail"])
+        self.assertIn(
+            "alice1",
+            issues_by_key["managed_username_collision"]["samples"][0]["detail"],
+        )
         self.assertEqual(issues_by_key["naming_prerequisite_gap"]["count"], 1)
         self.assertGreaterEqual(len(snapshot["repair_items"]), 5)
         self.assertGreaterEqual(len(snapshot["high_risk_items"]), 2)
@@ -844,7 +958,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
                         },
                     ],
                 }
-                return [SourceDirectoryUser.from_source_payload(item) for item in rows.get(department_id, [])]
+                return [
+                    SourceDirectoryUser.from_source_payload(item)
+                    for item in rows.get(department_id, [])
+                ]
 
             def get_user_detail(self, source_user_id: str):
                 detail_rows = {
@@ -883,7 +1000,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             def close(self):
                 return None
 
-        with patch("sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()):
+        with patch(
+            "sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()
+        ):
             run_response = self._route("/data-quality/run", "POST")(
                 self._request("/data-quality/run", "POST"),
                 csrf_token=match.group(1),
@@ -891,7 +1010,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(run_response.status_code, 303)
         self.assertIn("/data-quality?snapshot_id=", run_response.headers["location"])
 
-        snapshots = self.app.state.data_quality_snapshot_repo.list_snapshot_records(org_id="default", limit=5)
+        snapshots = self.app.state.data_quality_snapshot_repo.list_snapshot_records(
+            org_id="default", limit=5
+        )
         self.assertEqual(len(snapshots), 1)
         snapshot_id = snapshots[0].id
 
@@ -906,7 +1027,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("Predicted managed username collisions", center_text)
 
         export_response = self._route("/data-quality/export", "GET")(
-            self._request("/data-quality/export", query={"snapshot_id": str(snapshot_id)})
+            self._request(
+                "/data-quality/export", query={"snapshot_id": str(snapshot_id)}
+            )
         )
         self.assertEqual(export_response.status_code, 200)
         export_text = self._response_body(export_response).decode("utf-8-sig")
@@ -956,10 +1079,14 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             match_value="alice",
             org_id="default",
             notes="Grace period",
-            expires_at=(datetime.now(timezone.utc) + timedelta(days=3)).isoformat(timespec="seconds"),
+            expires_at=(datetime.now(timezone.utc) + timedelta(days=3)).isoformat(
+                timespec="seconds"
+            ),
         )
 
-        response = self._route("/automation-center", "GET")(self._request("/automation-center"))
+        response = self._route("/automation-center", "GET")(
+            self._request("/automation-center")
+        )
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
         self.assertIn("Notification And Automation Center", body)
@@ -987,17 +1114,41 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(save_response.status_code, 303)
         self.assertEqual(save_response.headers["location"], "/automation-center")
-        self.assertTrue(self.app.state.settings_repo.get_bool("ops_notify_dry_run_failure_enabled", False, org_id="default"))
-        self.assertTrue(self.app.state.settings_repo.get_bool("ops_notify_conflict_backlog_enabled", False, org_id="default"))
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "ops_notify_dry_run_failure_enabled", False, org_id="default"
+            )
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "ops_notify_conflict_backlog_enabled", False, org_id="default"
+            )
+        )
         self.assertEqual(
-            self.app.state.settings_repo.get_int("ops_notify_conflict_backlog_threshold", 0, org_id="default"),
+            self.app.state.settings_repo.get_int(
+                "ops_notify_conflict_backlog_threshold", 0, org_id="default"
+            ),
             2,
         )
-        self.assertTrue(self.app.state.settings_repo.get_bool("ops_notify_review_pending_enabled", False, org_id="default"))
-        self.assertTrue(self.app.state.settings_repo.get_bool("ops_notify_rule_governance_enabled", False, org_id="default"))
-        self.assertTrue(self.app.state.settings_repo.get_bool("ops_scheduled_apply_gate_enabled", False, org_id="default"))
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "ops_notify_review_pending_enabled", False, org_id="default"
+            )
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "ops_notify_rule_governance_enabled", False, org_id="default"
+            )
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "ops_scheduled_apply_gate_enabled", False, org_id="default"
+            )
+        )
         self.assertEqual(
-            self.app.state.settings_repo.get_int("ops_scheduled_apply_max_dry_run_age_hours", 0, org_id="default"),
+            self.app.state.settings_repo.get_int(
+                "ops_scheduled_apply_max_dry_run_age_hours", 0, org_id="default"
+            ),
             12,
         )
 
@@ -1082,11 +1233,15 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         subscription_id = int(subscription_records[0].id or 0)
 
         with TestClient(self.app) as client:
-            unauthorized = client.get("/api/integrations/orgs/default/jobs", follow_redirects=False)
+            unauthorized = client.get(
+                "/api/integrations/orgs/default/jobs", follow_redirects=False
+            )
             self.assertEqual(unauthorized.status_code, 401)
 
             headers = {"Authorization": f"Bearer {integration_token}"}
-            jobs_response = client.get("/api/integrations/orgs/default/jobs", headers=headers)
+            jobs_response = client.get(
+                "/api/integrations/orgs/default/jobs", headers=headers
+            )
             self.assertEqual(jobs_response.status_code, 200)
             jobs_payload = jobs_response.json()
             self.assertTrue(jobs_payload["ok"])
@@ -1099,7 +1254,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             self.assertEqual(invalid_jobs_limit.status_code, 400)
             self.assertIn("limit", invalid_jobs_limit.json()["error"])
 
-            job_response = client.get("/api/integrations/orgs/default/jobs/job-integration-001", headers=headers)
+            job_response = client.get(
+                "/api/integrations/orgs/default/jobs/job-integration-001",
+                headers=headers,
+            )
             self.assertEqual(job_response.status_code, 200)
             self.assertTrue(job_response.json()["item"]["review_required"])
 
@@ -1131,12 +1289,18 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             self.assertTrue(approval_payload["fresh_approval"])
             self.assertEqual(approval_payload["review"]["status"], "approved")
 
-        updated_review = self.app.state.review_repo.get_review_record_by_job_id("job-integration-001")
+        updated_review = self.app.state.review_repo.get_review_record_by_job_id(
+            "job-integration-001"
+        )
         self.assertIsNotNone(updated_review)
         self.assertEqual(updated_review.status, "approved")
 
-        delete_response = self._route("/integrations/subscriptions/{subscription_id}/delete", "POST")(
-            self._request(f"/integrations/subscriptions/{subscription_id}/delete", "POST"),
+        delete_response = self._route(
+            "/integrations/subscriptions/{subscription_id}/delete", "POST"
+        )(
+            self._request(
+                f"/integrations/subscriptions/{subscription_id}/delete", "POST"
+            ),
             subscription_id=subscription_id,
             csrf_token=csrf_token,
         )
@@ -1155,27 +1319,31 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self._login("superadmin")
         self.session["ui_mode"] = "advanced"
 
-        subscription = self.app.state.integration_webhook_subscription_repo.upsert_subscription(
-            org_id="default",
-            event_type="job.failed",
-            target_url="https://example.invalid/hooks/recover",
-            secret="",
-            description="Recovery sink",
-            is_enabled=True,
+        subscription = (
+            self.app.state.integration_webhook_subscription_repo.upsert_subscription(
+                org_id="default",
+                event_type="job.failed",
+                target_url="https://example.invalid/hooks/recover",
+                secret="",
+                description="Recovery sink",
+                is_enabled=True,
+            )
         )
-        failed_delivery = self.app.state.integration_webhook_outbox_repo.enqueue_delivery(
-            org_id="default",
-            subscription_id=int(subscription.id or 0),
-            event_type="job.failed",
-            delivery_id="delivery-recover-001",
-            target_url=subscription.target_url,
-            payload={
-                "_delivery_kind": "integration.event",
-                "event_type": "job.failed",
-                "payload": {"job": {"job_id": "job-recover-001"}},
-            },
-            max_attempts=1,
-            next_attempt_at="2026-04-22T00:00:00+00:00",
+        failed_delivery = (
+            self.app.state.integration_webhook_outbox_repo.enqueue_delivery(
+                org_id="default",
+                subscription_id=int(subscription.id or 0),
+                event_type="job.failed",
+                delivery_id="delivery-recover-001",
+                target_url=subscription.target_url,
+                payload={
+                    "_delivery_kind": "integration.event",
+                    "event_type": "job.failed",
+                    "payload": {"job": {"job_id": "job-recover-001"}},
+                },
+                max_attempts=1,
+                next_attempt_at="2026-04-22T00:00:00+00:00",
+            )
         )
         self.app.state.integration_webhook_outbox_repo.mark_delivery_retry(
             int(failed_delivery.id or 0),
@@ -1195,31 +1363,39 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIsNotNone(match)
         csrf_token = match.group(1)
 
-        retry_response = self._route("/integrations/deliveries/{delivery_id}/retry", "POST")(
-            self._request(f"/integrations/deliveries/{int(failed_delivery.id or 0)}/retry", "POST"),
+        retry_response = self._route(
+            "/integrations/deliveries/{delivery_id}/retry", "POST"
+        )(
+            self._request(
+                f"/integrations/deliveries/{int(failed_delivery.id or 0)}/retry", "POST"
+            ),
             delivery_id=int(failed_delivery.id or 0),
             csrf_token=csrf_token,
         )
         self.assertEqual(retry_response.status_code, 303)
         self.assertEqual(retry_response.headers["location"], "/integrations")
-        refreshed = self.app.state.integration_webhook_outbox_repo.get_delivery_record(int(failed_delivery.id or 0))
+        refreshed = self.app.state.integration_webhook_outbox_repo.get_delivery_record(
+            int(failed_delivery.id or 0)
+        )
         self.assertIsNotNone(refreshed)
         self.assertEqual(refreshed.status, "pending")
         self.assertEqual(refreshed.max_attempts, 2)
 
-        second_failed_delivery = self.app.state.integration_webhook_outbox_repo.enqueue_delivery(
-            org_id="default",
-            subscription_id=int(subscription.id or 0),
-            event_type="job.failed",
-            delivery_id="delivery-recover-002",
-            target_url=subscription.target_url,
-            payload={
-                "_delivery_kind": "integration.event",
-                "event_type": "job.failed",
-                "payload": {"job": {"job_id": "job-recover-002"}},
-            },
-            max_attempts=1,
-            next_attempt_at="2026-04-22T00:00:00+00:00",
+        second_failed_delivery = (
+            self.app.state.integration_webhook_outbox_repo.enqueue_delivery(
+                org_id="default",
+                subscription_id=int(subscription.id or 0),
+                event_type="job.failed",
+                delivery_id="delivery-recover-002",
+                target_url=subscription.target_url,
+                payload={
+                    "_delivery_kind": "integration.event",
+                    "event_type": "job.failed",
+                    "payload": {"job": {"job_id": "job-recover-002"}},
+                },
+                max_attempts=1,
+                next_attempt_at="2026-04-22T00:00:00+00:00",
+            )
         )
         self.app.state.integration_webhook_outbox_repo.mark_delivery_retry(
             int(second_failed_delivery.id or 0),
@@ -1229,14 +1405,18 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             retry_delay_seconds=60,
         )
 
-        retry_all_response = self._route("/integrations/deliveries/retry-failed", "POST")(
+        retry_all_response = self._route(
+            "/integrations/deliveries/retry-failed", "POST"
+        )(
             self._request("/integrations/deliveries/retry-failed", "POST"),
             csrf_token=csrf_token,
         )
         self.assertEqual(retry_all_response.status_code, 303)
         self.assertEqual(retry_all_response.headers["location"], "/integrations")
-        bulk_refreshed = self.app.state.integration_webhook_outbox_repo.get_delivery_record(
-            int(second_failed_delivery.id or 0)
+        bulk_refreshed = (
+            self.app.state.integration_webhook_outbox_repo.get_delivery_record(
+                int(second_failed_delivery.id or 0)
+            )
         )
         self.assertIsNotNone(bulk_refreshed)
         self.assertEqual(bulk_refreshed.status, "pending")
@@ -1283,7 +1463,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("job-dryrun-001", body)
         self.assertIn("Open Conflicts", body)
         self.assertIn("Planned Changes", body)
-        self.assertIn("Latest high-risk dry run still needs review approval before apply can continue.", body)
+        self.assertIn(
+            "Latest high-risk dry run still needs review approval before apply can continue.",
+            body,
+        )
 
     def test_job_detail_shows_failure_diagnostics_and_structured_log_payloads(self):
         self._login("superadmin")
@@ -1339,8 +1522,13 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("Failure Diagnostics", body)
         self.assertIn("RuntimeError", body)
         self.assertIn("Connectivity", body)
-        self.assertIn("The failure looks like a network or endpoint reachability problem.", body)
-        self.assertIn("Check DNS, firewall, and port reachability to the source system and LDAP endpoint.", body)
+        self.assertIn(
+            "The failure looks like a network or endpoint reachability problem.", body
+        )
+        self.assertIn(
+            "Check DNS, firewall, and port reachability to the source system and LDAP endpoint.",
+            body,
+        )
         self.assertIn("logs/test-runtime.log", body)
         self.assertIn("Traceback line 1", body)
         self.assertIn("sync_failed", body)
@@ -1362,7 +1550,11 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             notes="should be blocked",
         )
         self.assertEqual(response.status_code, 303)
-        self.assertIsNone(self.app.state.user_binding_repo.get_binding_record_by_source_user_id("alice"))
+        self.assertIsNone(
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice"
+            )
+        )
         self.assertIn("system-protected", self.session["_flash"]["message"])
 
     def test_mappings_page_uses_search_selectors_for_source_and_target_objects(self):
@@ -1371,25 +1563,50 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         response = self._route("/mappings", "GET")(self._request("/mappings"))
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
-        self.assertIn('data-mappings-page', body)
-        self.assertIn('data-mapping-source-user-select', body)
-        self.assertIn('data-mapping-target-user-select', body)
-        self.assertIn('data-mapping-source-department-select', body)
+        self.assertIn("data-mappings-page", body)
+        self.assertIn("data-mapping-source-user-select", body)
+        self.assertIn("data-mapping-target-user-select", body)
+        self.assertIn("data-mapping-source-department-select", body)
         self.assertIn("Search and choose a source user", body)
         self.assertIn("Search and choose an AD user", body)
 
     def test_mappings_metadata_endpoints_return_source_target_options(self):
         self._login("superadmin")
 
-        with patch(
-            "sync_app.web.sync_support.SyncSupport.search_source_users",
-            return_value=[{"id": "alice", "name": "Alice Zhang", "email": "alice@example.com", "departments": ["1001"]}],
-        ), patch(
-            "sync_app.web.sync_support.SyncSupport.search_target_users",
-            return_value=[{"id": "alice.ad", "name": "Alice Zhang", "mail": "alice.ad@example.com", "dn": "CN=Alice,DC=example,DC=local"}],
-        ), patch(
-            "sync_app.web.sync_support.SyncSupport.list_source_user_departments",
-            return_value=[{"id": "1001", "name": "Headquarters", "path_display": "HQ / Headquarters", "level": 1}],
+        with (
+            patch(
+                "sync_app.web.sync_support.SyncSupport.search_source_users",
+                return_value=[
+                    {
+                        "id": "alice",
+                        "name": "Alice Zhang",
+                        "email": "alice@example.com",
+                        "departments": ["1001"],
+                    }
+                ],
+            ),
+            patch(
+                "sync_app.web.sync_support.SyncSupport.search_target_users",
+                return_value=[
+                    {
+                        "id": "alice.ad",
+                        "name": "Alice Zhang",
+                        "mail": "alice.ad@example.com",
+                        "dn": "CN=Alice,DC=example,DC=local",
+                    }
+                ],
+            ),
+            patch(
+                "sync_app.web.sync_support.SyncSupport.list_source_user_departments",
+                return_value=[
+                    {
+                        "id": "1001",
+                        "name": "Headquarters",
+                        "path_display": "HQ / Headquarters",
+                        "level": 1,
+                    }
+                ],
+            ),
         ):
             source_response = self._route("/api/metadata/source-users", "GET")(
                 self._request("/api/metadata/source-users", query={"q": "alice"})
@@ -1397,16 +1614,26 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             target_response = self._route("/api/metadata/ad-users", "GET")(
                 self._request("/api/metadata/ad-users", query={"q": "alice"})
             )
-            department_response = self._route("/api/metadata/source-user-departments", "GET")(
-                self._request("/api/metadata/source-user-departments", query={"user_id": "alice"})
+            department_response = self._route(
+                "/api/metadata/source-user-departments", "GET"
+            )(
+                self._request(
+                    "/api/metadata/source-user-departments", query={"user_id": "alice"}
+                )
             )
 
         self.assertEqual(source_response.status_code, 200)
         self.assertEqual(target_response.status_code, 200)
         self.assertEqual(department_response.status_code, 200)
-        self.assertEqual(json.loads(self._text(source_response))["options"][0]["id"], "alice")
-        self.assertEqual(json.loads(self._text(target_response))["options"][0]["id"], "alice.ad")
-        self.assertEqual(json.loads(self._text(department_response))["options"][0]["id"], "1001")
+        self.assertEqual(
+            json.loads(self._text(source_response))["options"][0]["id"], "alice"
+        )
+        self.assertEqual(
+            json.loads(self._text(target_response))["options"][0]["id"], "alice.ad"
+        )
+        self.assertEqual(
+            json.loads(self._text(department_response))["options"][0]["id"], "1001"
+        )
 
     def test_super_admin_cannot_bind_nonexistent_source_user(self):
         self._login("superadmin")
@@ -1418,7 +1645,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
         with patch(
             "sync_app.web.sync_support.SyncSupport.source_user_exists_in_source_provider",
-            return_value=(False, "Source user ghost does not exist in the configured source directory"),
+            return_value=(
+                False,
+                "Source user ghost does not exist in the configured source directory",
+            ),
         ):
             response = self._route("/mappings/bind", "POST")(
                 self._request("/mappings/bind", "POST"),
@@ -1429,7 +1659,11 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             )
 
         self.assertEqual(response.status_code, 303)
-        self.assertIsNone(self.app.state.user_binding_repo.get_binding_record_by_source_user_id("ghost"))
+        self.assertIsNone(
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "ghost"
+            )
+        )
         self.assertIn("does not exist", self.session["_flash"]["message"])
 
     def test_super_admin_can_save_mapping_governance_metadata(self):
@@ -1441,12 +1675,15 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIsNotNone(match)
         csrf_token = match.group(1)
 
-        with patch(
-            "sync_app.web.sync_support.SyncSupport.source_user_exists_in_source_provider",
-            return_value=(True, None),
-        ), patch(
-            "sync_app.web.sync_support.SyncSupport.validate_binding_target",
-            return_value=None,
+        with (
+            patch(
+                "sync_app.web.sync_support.SyncSupport.source_user_exists_in_source_provider",
+                return_value=(True, None),
+            ),
+            patch(
+                "sync_app.web.sync_support.SyncSupport.validate_binding_target",
+                return_value=None,
+            ),
         ):
             bind_response = self._route("/mappings/bind", "POST")(
                 self._request("/mappings/bind", "POST"),
@@ -1460,22 +1697,28 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             )
 
         self.assertEqual(bind_response.status_code, 303)
-        binding = self.app.state.user_binding_repo.get_binding_record_by_source_user_id("alice")
+        binding = self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+            "alice"
+        )
         self.assertIsNotNone(binding)
         self.assertEqual(binding.rule_owner, "iam@corp.example")
         self.assertEqual(binding.effective_reason, "Known legacy mailbox binding")
         self.assertEqual(binding.next_review_at, "2026-05-01T09:00:00+00:00")
         self.assertTrue(binding.last_reviewed_at)
 
-        with patch(
-            "sync_app.web.sync_support.SyncSupport.source_user_exists_in_source_provider",
-            return_value=(True, None),
-        ), patch(
-            "sync_app.web.sync_support.SyncSupport.department_exists_in_source_provider",
-            return_value=(True, None),
-        ), patch(
-            "sync_app.web.sync_support.SyncSupport.source_user_has_department",
-            return_value=(True, None),
+        with (
+            patch(
+                "sync_app.web.sync_support.SyncSupport.source_user_exists_in_source_provider",
+                return_value=(True, None),
+            ),
+            patch(
+                "sync_app.web.sync_support.SyncSupport.department_exists_in_source_provider",
+                return_value=(True, None),
+            ),
+            patch(
+                "sync_app.web.sync_support.SyncSupport.source_user_has_department",
+                return_value=(True, None),
+            ),
         ):
             override_response = self._route("/mappings/override", "POST")(
                 self._request("/mappings/override", "POST"),
@@ -1489,14 +1732,18 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             )
 
         self.assertEqual(override_response.status_code, 303)
-        override = self.app.state.department_override_repo.get_override_record_by_source_user_id("alice")
+        override = self.app.state.department_override_repo.get_override_record_by_source_user_id(
+            "alice"
+        )
         self.assertIsNotNone(override)
         self.assertEqual(override.rule_owner, "ops@corp.example")
         self.assertEqual(override.effective_reason, "Primary placement must stay in HQ")
         self.assertEqual(override.next_review_at, "2026-05-02T09:00:00+00:00")
         self.assertTrue(override.last_reviewed_at)
 
-    def test_super_admin_cannot_save_department_override_outside_selected_user_scope(self):
+    def test_super_admin_cannot_save_department_override_outside_selected_user_scope(
+        self,
+    ):
         self._login("superadmin")
 
         response = self._route("/mappings", "GET")(self._request("/mappings"))
@@ -1504,15 +1751,22 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(response))
         self.assertIsNotNone(match)
 
-        with patch(
-            "sync_app.web.sync_support.SyncSupport.source_user_exists_in_source_provider",
-            return_value=(True, None),
-        ), patch(
-            "sync_app.web.sync_support.SyncSupport.department_exists_in_source_provider",
-            return_value=(True, None),
-        ), patch(
-            "sync_app.web.sync_support.SyncSupport.source_user_has_department",
-            return_value=(False, "Department 2001 is not one of source user alice's departments"),
+        with (
+            patch(
+                "sync_app.web.sync_support.SyncSupport.source_user_exists_in_source_provider",
+                return_value=(True, None),
+            ),
+            patch(
+                "sync_app.web.sync_support.SyncSupport.department_exists_in_source_provider",
+                return_value=(True, None),
+            ),
+            patch(
+                "sync_app.web.sync_support.SyncSupport.source_user_has_department",
+                return_value=(
+                    False,
+                    "Department 2001 is not one of source user alice's departments",
+                ),
+            ),
         ):
             response = self._route("/mappings/override", "POST")(
                 self._request("/mappings/override", "POST"),
@@ -1523,7 +1777,11 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             )
 
         self.assertEqual(response.status_code, 303)
-        self.assertIsNone(self.app.state.department_override_repo.get_override_record_by_source_user_id("alice"))
+        self.assertIsNone(
+            self.app.state.department_override_repo.get_override_record_by_source_user_id(
+                "alice"
+            )
+        )
         self.assertIn("not one of", self.session["_flash"]["message"])
 
     def test_mappings_and_advanced_sync_pages_use_generic_source_wording(self):
@@ -1537,7 +1795,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertNotIn("WeCom User ID", mappings_text)
         self.assertNotIn("Search WeCom user, AD user, or notes", mappings_text)
 
-        advanced_response = self._route("/advanced-sync", "GET")(self._request("/advanced-sync"))
+        advanced_response = self._route("/advanced-sync", "GET")(
+            self._request("/advanced-sync")
+        )
         self.assertEqual(advanced_response.status_code, 200)
         advanced_text = self._text(advanced_response)
         self.assertIn("Account Creation Rules And Connector Routing", advanced_text)
@@ -1550,7 +1810,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertNotIn("Enable AD -&gt; WeCom write-back", advanced_text)
         self.assertNotIn("WeCom Root Department IDs", advanced_text)
 
-    def test_advanced_sync_policies_and_mappings_are_scoped_to_selected_organization(self):
+    def test_advanced_sync_policies_and_mappings_are_scoped_to_selected_organization(
+        self,
+    ):
         self._login("superadmin")
         asia_config_path = self.db_path.parent / "web_authz_asia.ini"
         save_editable_config(
@@ -1626,10 +1888,28 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             custom_group_ou_path="Managed Groups/Asia",
         )
         self.assertEqual(response.status_code, 303)
-        self.assertTrue(self.app.state.settings_repo.get_bool("attribute_mapping_enabled", False, org_id="asia"))
-        self.assertFalse(self.app.state.settings_repo.get_bool("attribute_mapping_enabled", False, org_id="default"))
-        self.assertEqual(self.app.state.settings_repo.get_int("offboarding_grace_days", 0, org_id="asia"), 9)
-        self.assertEqual(self.app.state.settings_repo.get_int("offboarding_grace_days", 0, org_id="default"), 0)
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "attribute_mapping_enabled", False, org_id="asia"
+            )
+        )
+        self.assertFalse(
+            self.app.state.settings_repo.get_bool(
+                "attribute_mapping_enabled", False, org_id="default"
+            )
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_int(
+                "offboarding_grace_days", 0, org_id="asia"
+            ),
+            9,
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_int(
+                "offboarding_grace_days", 0, org_id="default"
+            ),
+            0,
+        )
 
         response = self._route("/advanced-sync/mappings", "POST")(
             self._request("/advanced-sync/mappings", "POST"),
@@ -1656,7 +1936,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(asia_rules[0].direction, "source_to_ad")
         self.assertEqual(len(default_rules), 0)
 
-    def test_config_page_links_to_identity_overrides_and_advanced_account_creation_rules(self):
+    def test_config_page_links_to_identity_overrides_and_advanced_account_creation_rules(
+        self,
+    ):
         self._login("superadmin")
 
         response = self._route("/config", "GET")(self._request("/config"))
@@ -1708,12 +1990,27 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         response_text = self._text(response)
         self.assertIn("alice matched multiple AD candidates", response_text)
         self.assertIn("Resolve identity ambiguity before Apply.", response_text)
-        self.assertIn("Preview the action and provide a reason before changing identity state.", response_text)
-        self.assertIn("Binding decides identity first. It does not create a duplicate account by itself.", response_text)
+        self.assertIn(
+            "Preview the action and provide a reason before changing identity state.",
+            response_text,
+        )
+        self.assertIn(
+            "Binding decides identity first. It does not create a duplicate account by itself.",
+            response_text,
+        )
         self.assertIn(
             "The next sync run will treat the chosen AD account as the authoritative target for this source user.",
             response_text,
         )
+        self.session["ui_language"] = "zh-CN"
+        localized_response = self._route("/conflicts", "GET")(
+            self._request("/conflicts")
+        )
+        localized_text = self._text(localized_response)
+        self.assertNotIn("alice matched multiple AD candidates", localized_text)
+        self.assertNotIn("create manual binding", localized_text)
+        self.assertIn("源用户 alice 匹配到多个 AD 候选账号", localized_text)
+        self.assertIn("请先创建手工身份绑定", localized_text)
         match = re.search(r'name="csrf_token" value="([^"]+)"', response_text)
         self.assertIsNotNone(match)
 
@@ -1724,16 +2021,22 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             ad_username="alice.alt",
         )
         self.assertEqual(response.status_code, 303)
-        self.assertIn("/conflicts?job_id=job-conflict-001", response.headers["location"])
+        self.assertIn(
+            "/conflicts?job_id=job-conflict-001", response.headers["location"]
+        )
 
-        binding = self.app.state.user_binding_repo.get_binding_record_by_source_user_id("alice")
+        binding = self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+            "alice"
+        )
         self.assertIsNotNone(binding)
         self.assertEqual(binding.ad_username, "alice.alt")
 
         conflict = self.app.state.conflict_repo.get_conflict_record(conflict_id)
         self.assertIsNotNone(conflict)
         self.assertEqual(conflict.status, "resolved")
-        self.assertEqual((conflict.resolution_payload or {}).get("action"), "manual_binding")
+        self.assertEqual(
+            (conflict.resolution_payload or {}).get("action"), "manual_binding"
+        )
 
     def test_manual_binding_resolves_all_matching_open_conflicts_without_limit(self):
         self._login("superadmin")
@@ -1839,7 +2142,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             return_job_id="job-conflict-002",
         )
         self.assertEqual(response.status_code, 303)
-        self.assertIn("/conflicts?status=open&job_id=job-conflict-002", response.headers["location"])
+        self.assertIn(
+            "/conflicts?status=open&job_id=job-conflict-002",
+            response.headers["location"],
+        )
 
         self.assertTrue(
             any(
@@ -1853,8 +2159,14 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
                 for item in self.app.state.exception_rule_repo.list_rule_records()
             )
         )
-        self.assertEqual(self.app.state.conflict_repo.get_conflict_record(conflict_id_1).status, "resolved")
-        self.assertEqual(self.app.state.conflict_repo.get_conflict_record(conflict_id_2).status, "resolved")
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id_1).status,
+            "resolved",
+        )
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id_2).status,
+            "resolved",
+        )
 
         response = self._route("/conflicts/{conflict_id}/reopen", "POST")(
             self._request("/conflicts/1/reopen", "POST"),
@@ -1865,9 +2177,14 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             return_job_id="job-conflict-002",
         )
         self.assertEqual(response.status_code, 303)
-        self.assertIn("/conflicts?status=resolved&job_id=job-conflict-002", response.headers["location"])
+        self.assertIn(
+            "/conflicts?status=resolved&job_id=job-conflict-002",
+            response.headers["location"],
+        )
 
-        reopened_conflict = self.app.state.conflict_repo.get_conflict_record(conflict_id_1)
+        reopened_conflict = self.app.state.conflict_repo.get_conflict_record(
+            conflict_id_1
+        )
         self.assertIsNotNone(reopened_conflict)
         self.assertEqual(reopened_conflict.status, "open")
         self.assertIsNone(reopened_conflict.resolution_payload)
@@ -1916,16 +2233,23 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             return_job_id="job-conflict-003",
         )
         self.assertEqual(response.status_code, 303)
-        self.assertIn("/conflicts?status=open&job_id=job-conflict-003", response.headers["location"])
+        self.assertIn(
+            "/conflicts?status=open&job_id=job-conflict-003",
+            response.headers["location"],
+        )
 
-        binding = self.app.state.user_binding_repo.get_binding_record_by_source_user_id("alice")
+        binding = self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+            "alice"
+        )
         self.assertIsNotNone(binding)
         self.assertEqual(binding.ad_username, "alice")
 
         conflict = self.app.state.conflict_repo.get_conflict_record(conflict_id)
         self.assertIsNotNone(conflict)
         self.assertEqual(conflict.status, "resolved")
-        self.assertEqual((conflict.resolution_payload or {}).get("action"), "manual_binding")
+        self.assertEqual(
+            (conflict.resolution_payload or {}).get("action"), "manual_binding"
+        )
 
     def test_existing_ad_identity_claim_review_conflict_has_decision_actions(self):
         self._login("superadmin")
@@ -1972,10 +2296,15 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             return_job_id="job-identity-claim-review",
         )
         self.assertEqual(response.status_code, 303)
-        binding = self.app.state.user_binding_repo.get_binding_record_by_source_user_id("alice")
+        binding = self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+            "alice"
+        )
         self.assertIsNotNone(binding)
         self.assertEqual(binding.ad_username, "alice")
-        self.assertEqual(self.app.state.conflict_repo.get_conflict_record(conflict_id).status, "resolved")
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status,
+            "resolved",
+        )
 
     def test_low_confidence_recommendation_requires_confirmation_reason(self):
         self._login("superadmin")
@@ -2017,8 +2346,13 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             return_job_id="job-conflict-004",
         )
         self.assertEqual(response.status_code, 303)
-        self.assertIn("/conflicts?status=open&job_id=job-conflict-004", response.headers["location"])
-        self.assertEqual(self.app.state.conflict_repo.get_conflict_record(conflict_id).status, "open")
+        self.assertIn(
+            "/conflicts?status=open&job_id=job-conflict-004",
+            response.headers["location"],
+        )
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status, "open"
+        )
 
         response = self._route("/conflicts/{conflict_id}/apply-recommendation", "POST")(
             self._request("/conflicts/1/apply-recommendation", "POST"),
@@ -2030,7 +2364,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             return_job_id="job-conflict-004",
         )
         self.assertEqual(response.status_code, 303)
-        self.assertEqual(self.app.state.conflict_repo.get_conflict_record(conflict_id).status, "resolved")
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status,
+            "resolved",
+        )
 
     def test_conflict_decision_guide_page_renders_binding_outcomes(self):
         self._login("superadmin")
@@ -2059,7 +2396,11 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         with patch(
             "sync_app.web.sync_support.SyncSupport.build_conflict_decision_guide",
             return_value={
-                "source_user": {"userid": "alice", "name": "Alice Zhang", "email": "alice@example.com"},
+                "source_user": {
+                    "userid": "alice",
+                    "name": "Alice Zhang",
+                    "email": "alice@example.com",
+                },
                 "routing": {
                     "binding": None,
                     "target_department": {"name": "Headquarters"},
@@ -2068,7 +2409,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
                     "username_preview": {"primary_candidate": {"username": "alice"}},
                 },
                 "routing_error": "",
-                "recommendation": {"label": "Create manual binding", "reason": "alice is the strongest match"},
+                "recommendation": {
+                    "label": "Create manual binding",
+                    "reason": "alice is the strongest match",
+                },
                 "candidate_options": [
                     {
                         "username": "alice",
@@ -2086,7 +2430,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
                     },
                 ],
                 "selected_target_username": "alice",
-                "selected_connector": {"connector_id": "default", "name": "Default Connector"},
+                "selected_connector": {
+                    "connector_id": "default",
+                    "name": "Default Connector",
+                },
                 "target_account": {
                     "username": "alice",
                     "exists": True,
@@ -2122,7 +2469,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
                         "summary": "If you do not bind, the conflict stays open.",
                         "will_create_new_account": False,
                         "will_conflict_continue": True,
-                        "notes": ["The system still sees multiple existing AD matches."],
+                        "notes": [
+                            "The system still sees multiple existing AD matches."
+                        ],
                     },
                 },
             },
@@ -2130,7 +2479,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             response = self._route("/conflicts/{conflict_id}/decision-guide", "GET")(
                 self._request(
                     f"/conflicts/{conflict_id}/decision-guide",
-                    query={"return_status": "open", "return_job_id": "job-conflict-guide"},
+                    query={
+                        "return_status": "open",
+                        "return_job_id": "job-conflict-guide",
+                    },
                 ),
                 conflict_id=conflict_id,
             )
@@ -2194,9 +2546,18 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
 
         first_response = self._route("/conflicts", "GET")(
-            self._request("/conflicts", query={"q": "alice", "status": "open", "job_id": "job-conflict-remembered"})
+            self._request(
+                "/conflicts",
+                query={
+                    "q": "alice",
+                    "status": "open",
+                    "job_id": "job-conflict-remembered",
+                },
+            )
         )
-        remembered_response = self._route("/conflicts", "GET")(self._request("/conflicts"))
+        remembered_response = self._route("/conflicts", "GET")(
+            self._request("/conflicts")
+        )
         reset_response = self._route("/conflicts", "GET")(
             self._request("/conflicts", query={"clear_filters": "1"})
         )
@@ -2204,9 +2565,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(remembered_response.status_code, 200)
         self.assertEqual(reset_response.status_code, 200)
         remembered_text = self._text(remembered_response)
-        self.assertIn('value="alice"', remembered_text)
+        query_input = '<input type="text" id="q" name="q" value="alice"'
+        self.assertIn(query_input, remembered_text)
         self.assertIn('value="job-conflict-remembered"', remembered_text)
-        self.assertIn("Filters are remembered for this browser session.", remembered_text)
+        self.assertIn(
+            "Filters are remembered for this browser session.", remembered_text
+        )
         self.assertIn('name="job_id" value=""', self._text(reset_response))
 
     def test_job_detail_supports_independent_pagination(self):
@@ -2298,7 +2662,11 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.app.state.job_repo.update_job(
             previous_apply_job_id,
             planned_operation_count=1,
-            summary={"planned_operation_count": 1, "conflict_count": 0, "high_risk_operation_count": 0},
+            summary={
+                "planned_operation_count": 1,
+                "conflict_count": 0,
+                "high_risk_operation_count": 0,
+            },
         )
 
         self.app.state.job_repo.create_job(
@@ -2327,7 +2695,11 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.app.state.job_repo.update_job(
             previous_dry_run_job_id,
             planned_operation_count=1,
-            summary={"planned_operation_count": 1, "conflict_count": 1, "high_risk_operation_count": 0},
+            summary={
+                "planned_operation_count": 1,
+                "conflict_count": 1,
+                "high_risk_operation_count": 0,
+            },
         )
 
         self.app.state.job_repo.create_job(
@@ -2370,7 +2742,11 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.app.state.job_repo.update_job(
             current_job_id,
             planned_operation_count=2,
-            summary={"planned_operation_count": 2, "conflict_count": 2, "high_risk_operation_count": 1},
+            summary={
+                "planned_operation_count": 2,
+                "conflict_count": 2,
+                "high_risk_operation_count": 1,
+            },
         )
 
         response = self._route("/jobs/{job_id}", "GET")(
@@ -2447,7 +2823,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(reset_response.status_code, 200)
         remembered_text = self._text(remembered_response)
         self.assertIn('value="remembered"', remembered_text)
-        self.assertIn("Filters are remembered for this browser session.", remembered_text)
+        self.assertIn(
+            "Filters are remembered for this browser session.", remembered_text
+        )
         self.assertNotIn('value="remembered"', self._text(reset_response))
 
     def test_audit_page_scopes_logs_to_selected_organization_with_global_entries(self):
@@ -2455,14 +2833,18 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
-            config_path=str((self.db_path.parent / "web_authz_audit_asia.ini").resolve()),
+            config_path=str(
+                (self.db_path.parent / "web_authz_audit_asia.ini").resolve()
+            ),
             description="",
             is_enabled=True,
         )
         self.app.state.organization_repo.upsert_organization(
             org_id="europe",
             name="Europe Region",
-            config_path=str((self.db_path.parent / "web_authz_audit_europe.ini").resolve()),
+            config_path=str(
+                (self.db_path.parent / "web_authz_audit_europe.ini").resolve()
+            ),
             description="",
             is_enabled=True,
         )
@@ -2521,11 +2903,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
         with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = [
-                {"id": 2000 + index, "name": f"Dept {index:02d}"}
-                for index in range(25)
+                {"id": 2000 + index, "name": f"Dept {index:02d}"} for index in range(25)
             ]
             response = self._route("/mappings", "GET")(
-                self._request("/mappings", query={"binding_page": "2", "override_page": "2"})
+                self._request(
+                    "/mappings", query={"binding_page": "2", "override_page": "2"}
+                )
             )
         self.assertEqual(response.status_code, 200)
         response_text = self._text(response)
@@ -2536,9 +2919,15 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_page_shows_rule_governance_summary(self):
         self._login("superadmin")
-        stale_iso = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat(timespec="seconds")
-        expiring_iso = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(timespec="seconds")
-        expired_iso = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds")
+        stale_iso = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat(
+            timespec="seconds"
+        )
+        expiring_iso = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(
+            timespec="seconds"
+        )
+        expired_iso = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(
+            timespec="seconds"
+        )
 
         self.app.state.user_binding_repo.upsert_binding(
             "alice",
@@ -2579,7 +2968,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             )
 
         with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
-            mock_wecom.return_value.get_department_list.return_value = [{"id": 1001, "name": "Operations"}]
+            mock_wecom.return_value.get_department_list.return_value = [
+                {"id": 1001, "name": "Operations"}
+            ]
             response = self._route("/mappings", "GET")(self._request("/mappings"))
         self.assertEqual(response.status_code, 200)
         response_text = self._text(response)
@@ -2608,17 +2999,23 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             first_response = self._route("/mappings", "GET")(
                 self._request("/mappings", query={"q": "alice", "status": "enabled"})
             )
-            remembered_response = self._route("/mappings", "GET")(self._request("/mappings"))
+            remembered_response = self._route("/mappings", "GET")(
+                self._request("/mappings")
+            )
             reset_response = self._route("/mappings", "GET")(
                 self._request("/mappings", query={"clear_filters": "1"})
             )
         self.assertEqual(first_response.status_code, 200)
         self.assertEqual(remembered_response.status_code, 200)
         self.assertEqual(reset_response.status_code, 200)
-        self.assertIn('value="alice"', self._text(remembered_response))
-        self.assertIn("Filters are remembered for this browser session.", self._text(remembered_response))
+        query_input = '<input type="text" id="q" name="q" value="alice"'
+        self.assertIn(query_input, self._text(remembered_response))
+        self.assertIn(
+            "Filters are remembered for this browser session.",
+            self._text(remembered_response),
+        )
         self.assertIn('value="all" selected', self._text(reset_response))
-        self.assertNotIn('value="alice"', self._text(reset_response))
+        self.assertNotIn(query_input, self._text(reset_response))
 
     def test_exceptions_page_supports_database_pagination(self):
         self._login("superadmin")
@@ -2642,9 +3039,15 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_exceptions_page_shows_rule_governance_summary(self):
         self._login("superadmin")
-        stale_iso = (datetime.now(timezone.utc) - timedelta(days=140)).isoformat(timespec="seconds")
-        expiring_iso = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(timespec="seconds")
-        expired_iso = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(timespec="seconds")
+        stale_iso = (datetime.now(timezone.utc) - timedelta(days=140)).isoformat(
+            timespec="seconds"
+        )
+        expiring_iso = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(
+            timespec="seconds"
+        )
+        expired_iso = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(
+            timespec="seconds"
+        )
 
         self.app.state.user_binding_repo.upsert_binding(
             "legacy-user",
@@ -2685,7 +3088,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             )
 
         with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
-            mock_wecom.return_value.get_department_list.return_value = [{"id": 2001, "name": "Contractors"}]
+            mock_wecom.return_value.get_department_list.return_value = [
+                {"id": 2001, "name": "Contractors"}
+            ]
             response = self._route("/exceptions", "GET")(self._request("/exceptions"))
         self.assertEqual(response.status_code, 200)
         response_text = self._text(response)
@@ -2710,9 +3115,18 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = []
             first_response = self._route("/exceptions", "GET")(
-                self._request("/exceptions", query={"q": "alice", "rule_type": "skip_user_disable", "status": "enabled"})
+                self._request(
+                    "/exceptions",
+                    query={
+                        "q": "alice",
+                        "rule_type": "skip_user_disable",
+                        "status": "enabled",
+                    },
+                )
             )
-            remembered_response = self._route("/exceptions", "GET")(self._request("/exceptions"))
+            remembered_response = self._route("/exceptions", "GET")(
+                self._request("/exceptions")
+            )
             reset_response = self._route("/exceptions", "GET")(
                 self._request("/exceptions", query={"clear_filters": "1"})
             )
@@ -2720,12 +3134,17 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(remembered_response.status_code, 200)
         self.assertEqual(reset_response.status_code, 200)
         remembered_text = self._text(remembered_response)
-        self.assertIn('value="alice"', remembered_text)
+        query_input = '<input type="text" id="q" name="q" value="alice"'
+        self.assertIn(query_input, remembered_text)
         self.assertIn('value="skip_user_disable" selected', remembered_text)
-        self.assertIn("Filters are remembered for this browser session.", remembered_text)
-        self.assertNotIn('value="alice"', self._text(reset_response))
+        self.assertIn(
+            "Filters are remembered for this browser session.", remembered_text
+        )
+        self.assertNotIn(query_input, self._text(reset_response))
 
-    def test_super_admin_config_page_masks_secrets_and_dashboard_shows_security_warning(self):
+    def test_super_admin_config_page_masks_secrets_and_dashboard_shows_security_warning(
+        self,
+    ):
         self._login("superadmin")
 
         response = self._route("/config", "GET")(self._request("/config"))
@@ -2742,15 +3161,23 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         corpsecret_match = re.search(r'<input[^>]*name="corpsecret"[^>]*>', text)
         self.assertIsNotNone(corpsecret_match)
         self.assertNotIn("required", corpsecret_match.group(0))
-        self.assertIn('data-provider-secret-configured="true"', corpsecret_match.group(0))
-        self.assertIn('data-provider-secret-configured-provider="wecom"', corpsecret_match.group(0))
+        self.assertIn(
+            'data-provider-secret-configured="true"', corpsecret_match.group(0)
+        )
+        self.assertIn(
+            'data-provider-secret-configured-provider="wecom"',
+            corpsecret_match.group(0),
+        )
         self.assertIn("Secure Cookie Policy", text)
 
         dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))
         self.assertEqual(dashboard.status_code, 200)
         dashboard_text = self._text(dashboard)
         self.assertIn("LDAPS certificate validation is disabled.", dashboard_text)
-        self.assertIn("Default password is still a sample or weak password. Replace it immediately.", dashboard_text)
+        self.assertIn(
+            "Default password is still a sample or weak password. Replace it immediately.",
+            dashboard_text,
+        )
 
     def test_config_page_separates_optional_notification_settings(self):
         self._login("superadmin")
@@ -2768,7 +3195,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
         self.assertIn("OU Filter And Root Mapping", text)
-        self.assertIn("Save Configuration", text)
+        self.assertIn("Save Draft", text)
         self.assertIn("Preview Changes", text)
         self.assertIn('name="source_root_unit_ids"', text)
         self.assertIn('name="directory_root_ou_path"', text)
@@ -2785,7 +3212,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
     def test_super_admin_can_publish_and_rollback_config_release_snapshots(self):
         self._login("superadmin")
 
-        release_page = self._route("/config/releases", "GET")(self._request("/config/releases"))
+        release_page = self._route("/config/releases", "GET")(
+            self._request("/config/releases")
+        )
         self.assertEqual(release_page.status_code, 200)
         release_text = self._text(release_page)
         self.assertIn("Config Release Center", release_text)
@@ -2801,7 +3230,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(publish_response.status_code, 303)
         self.assertEqual(publish_response.headers["location"], "/config/releases")
 
-        snapshots = self.app.state.config_release_snapshot_repo.list_snapshot_records(org_id="default", limit=10)
+        snapshots = self.app.state.config_release_snapshot_repo.list_snapshot_records(
+            org_id="default", limit=10
+        )
         self.assertEqual(len(snapshots), 1)
         first_snapshot = snapshots[0]
         self.assertEqual(first_snapshot.snapshot_name, "Release Candidate")
@@ -2828,15 +3259,21 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             config_path=str(self.config_path),
         )
 
-        changed_release_page = self._route("/config/releases", "GET")(self._request("/config/releases"))
+        changed_release_page = self._route("/config/releases", "GET")(
+            self._request("/config/releases")
+        )
         self.assertEqual(changed_release_page.status_code, 200)
         changed_release_text = self._text(changed_release_page)
         self.assertIn("Unpublished", changed_release_text)
         self.assertIn("Unpublished Configuration Changes", changed_release_text)
-        rollback_csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', changed_release_text)
+        rollback_csrf_match = re.search(
+            r'name="csrf_token" value="([^"]+)"', changed_release_text
+        )
         self.assertIsNotNone(rollback_csrf_match)
 
-        rollback_response = self._route("/config/releases/{snapshot_id}/rollback", "POST")(
+        rollback_response = self._route(
+            "/config/releases/{snapshot_id}/rollback", "POST"
+        )(
             self._request(f"/config/releases/{first_snapshot.id}/rollback", "POST"),
             snapshot_id=first_snapshot.id,
             csrf_token=rollback_csrf_match.group(1),
@@ -2860,7 +3297,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         ]
         self.assertIn("rollback", trigger_actions)
 
-        download_response = self._route("/config/releases/{snapshot_id}/download", "GET")(
+        download_response = self._route(
+            "/config/releases/{snapshot_id}/download", "GET"
+        )(
             self._request(f"/config/releases/{first_snapshot.id}/download"),
             snapshot_id=first_snapshot.id,
         )
@@ -2876,7 +3315,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
     def test_config_source_unit_catalog_returns_department_tree(self):
         self._login("superadmin")
         config_page = self._route("/config", "GET")(self._request("/config"))
-        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(config_page))
+        csrf_match = re.search(
+            r'name="csrf_token" value="([^"]+)"', self._text(config_page)
+        )
         self.assertIsNotNone(csrf_match)
 
         class FakeSourceProvider:
@@ -2889,7 +3330,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             def close(self):
                 return None
 
-        with patch("sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()):
+        with patch(
+            "sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()
+        ):
             response = self._route("/config/source-units/catalog", "POST")(
                 self._request("/config/source-units/catalog", "POST"),
                 csrf_token=csrf_match.group(1),
@@ -2906,10 +3349,14 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(payload["items"][1]["department_id"], "8")
         self.assertEqual(payload["items"][1]["path_display"], "HQ / China")
 
-    def test_config_source_unit_catalog_requires_new_secret_when_source_provider_changes(self):
+    def test_config_source_unit_catalog_requires_new_secret_when_source_provider_changes(
+        self,
+    ):
         self._login("superadmin")
         config_page = self._route("/config", "GET")(self._request("/config"))
-        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(config_page))
+        csrf_match = re.search(
+            r'name="csrf_token" value="([^"]+)"', self._text(config_page)
+        )
         self.assertIsNotNone(csrf_match)
 
         response = self._route("/config/source-units/catalog", "POST")(
@@ -2929,7 +3376,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
     def test_config_submission_keeps_existing_corpsecret_when_other_values_change(self):
         self._login("superadmin")
         config_page = self._route("/config", "GET")(self._request("/config"))
-        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(config_page))
+        csrf_match = re.search(
+            r'name="csrf_token" value="([^"]+)"', self._text(config_page)
+        )
         self.assertIsNotNone(csrf_match)
 
         response = self._route("/config", "POST")(
@@ -2977,15 +3426,21 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(response.status_code, 303)
 
-        raw_config = self.app.state.org_config_repo.get_raw_config("default", config_path=str(self.config_path))
+        raw_config = self.app.state.org_config_repo.get_raw_config(
+            "default", config_path=str(self.config_path)
+        )
         self.assertEqual(raw_config["corpsecret"], "secret-001")
         self.assertEqual(raw_config["source_provider"], "wecom")
         self.assertEqual(
-            self.app.state.settings_repo.get_value("source_root_unit_ids", "", org_id="default"),
+            self.app.state.settings_repo.get_value(
+                "source_root_unit_ids", "", org_id="default"
+            ),
             "1, 8",
         )
         self.assertEqual(
-            self.app.state.settings_repo.get_value("source_root_unit_display_text", "", org_id="default"),
+            self.app.state.settings_repo.get_value(
+                "source_root_unit_display_text", "", org_id="default"
+            ),
             "HQ [1], China [8]",
         )
 
@@ -2997,13 +3452,20 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
     def test_config_target_ou_catalog_returns_ou_tree(self):
         self._login("superadmin")
         config_page = self._route("/config", "GET")(self._request("/config"))
-        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(config_page))
+        csrf_match = re.search(
+            r'name="csrf_token" value="([^"]+)"', self._text(config_page)
+        )
         self.assertIsNotNone(csrf_match)
 
         class FakeTargetProvider:
             def list_organizational_units(self):
                 return [
-                    {"name": "example.local", "dn": "DC=example,DC=local", "path": [], "guid": ""},
+                    {
+                        "name": "example.local",
+                        "dn": "DC=example,DC=local",
+                        "path": [],
+                        "guid": "",
+                    },
                     {
                         "name": "Managed Users",
                         "dn": "OU=Managed Users,DC=example,DC=local",
@@ -3012,7 +3474,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
                     },
                 ]
 
-        with patch("sync_app.web.app.build_target_provider", return_value=FakeTargetProvider()):
+        with patch(
+            "sync_app.web.app.build_target_provider", return_value=FakeTargetProvider()
+        ):
             response = self._route("/config/target-ou/catalog", "POST")(
                 self._request("/config/target-ou/catalog", "POST"),
                 csrf_token=csrf_match.group(1),
@@ -3030,7 +3494,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         payload = json.loads(self._text(response))
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["items"][1]["path_value"], "Managed Users")
-        self.assertEqual(payload["items"][1]["guid"], "12345678-1234-5678-1234-567812345678")
+        self.assertEqual(
+            payload["items"][1]["guid"], "12345678-1234-5678-1234-567812345678"
+        )
 
     def test_dashboard_does_not_block_when_webhook_is_not_configured(self):
         current_org = self.app.state.organization_repo.get_default_organization_record()
@@ -3084,13 +3550,18 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("Current provider", text)
         self.assertIn("DingTalk Source Connector", text)
         self.assertIn("AppKey / Client ID", text)
-        webhook_group = re.search(r'(?s)<div class="form-group field-span-full" id="group-webhook_url">.*?</div>\s*</div>', text)
+        webhook_group = re.search(
+            r'(?s)<div class="form-group field-span-full" id="group-webhook_url">.*?</div>\s*</div>',
+            text,
+        )
         self.assertIsNotNone(webhook_group)
         webhook_html = webhook_group.group(0)
         self.assertIn("DingTalk Bot Webhook", webhook_html)
         self.assertNotIn("WeCom Webhook", webhook_html)
 
-    def test_config_page_persists_web_deployment_settings_and_reloaded_app_uses_them(self):
+    def test_config_page_persists_web_deployment_settings_and_reloaded_app_uses_them(
+        self,
+    ):
         self._login("superadmin")
 
         response = self._route("/config", "GET")(self._request("/config"))
@@ -3137,28 +3608,52 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(submit_response.status_code, 303)
         self.assertEqual(
-            self.app.state.org_config_repo.get_raw_config("default", config_path=str(self.config_path))["source_provider"],
+            self.app.state.org_config_repo.get_raw_config(
+                "default", config_path=str(self.config_path)
+            )["source_provider"],
             "wecom",
         )
-        self.assertEqual(self.app.state.settings_repo.get_value("web_bind_host", ""), "0.0.0.0")
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("web_bind_host", ""), "0.0.0.0"
+        )
         self.assertEqual(self.app.state.settings_repo.get_int("web_bind_port", 0), 8443)
-        self.assertEqual(self.app.state.settings_repo.get_value("web_public_base_url", ""), "https://sync.example.com")
-        self.assertEqual(self.app.state.settings_repo.get_value("web_session_cookie_secure_mode", ""), "always")
-        self.assertTrue(self.app.state.settings_repo.get_bool("web_trust_proxy_headers", False))
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("web_public_base_url", ""),
+            "https://sync.example.com",
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value(
+                "web_session_cookie_secure_mode", ""
+            ),
+            "always",
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool("web_trust_proxy_headers", False)
+        )
         self.assertEqual(
             self.app.state.settings_repo.get_value("web_forwarded_allow_ips", ""),
             "10.0.0.1,10.0.0.2",
         )
-        self.assertEqual(self.app.state.settings_repo.get_value("brand_display_name", ""), "Directory Hub")
-        self.assertEqual(self.app.state.settings_repo.get_value("brand_mark_text", ""), "DH")
-        self.assertEqual(self.app.state.settings_repo.get_value("brand_attribution", ""), "微信公众号：大刘讲IT")
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("brand_display_name", ""),
+            "Directory Hub",
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("brand_mark_text", ""), "DH"
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value("brand_attribution", ""),
+            "微信公众号：大刘讲IT",
+        )
         self.assertIn("Restart the web process", self.session["_flash"]["message"])
 
         reloaded_settings = resolve_web_runtime_settings(self.app.state.settings_repo)
         self.assertTrue(reloaded_settings["session_cookie_secure"])
         self.assertEqual(reloaded_settings["bind_host"], "0.0.0.0")
         self.assertEqual(reloaded_settings["bind_port"], 8443)
-        self.assertEqual(reloaded_settings["public_base_url"], "https://sync.example.com")
+        self.assertEqual(
+            reloaded_settings["public_base_url"], "https://sync.example.com"
+        )
         self.assertEqual(reloaded_settings["session_cookie_secure_mode"], "always")
         self.assertTrue(reloaded_settings["trust_proxy_headers"])
         self.assertEqual(reloaded_settings["forwarded_allow_ips"], "10.0.0.1,10.0.0.2")
@@ -3188,6 +3683,8 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(preview_response.status_code, 200)
         preview_text = self._text(preview_response)
         self.assertIn("Pending Changes", preview_text)
+        self.assertIn("High Risk", preview_text)
+        self.assertIn("Modified", preview_text)
         self.assertIn("dc01.example.local", preview_text)
         self.assertIn("dc02.example.local", preview_text)
         self.assertIn("preview_token", preview_text)
@@ -3195,7 +3692,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         preview_state = self.session.get("_config_preview")
         self.assertIsInstance(preview_state, dict)
         self.assertEqual(
-            ((preview_state or {}).get("submission") or {}).get("settings_values", {}).get("schedule_execution_mode"),
+            ((preview_state or {}).get("submission") or {})
+            .get("settings_values", {})
+            .get("schedule_execution_mode"),
             "dry_run",
         )
 
@@ -3211,11 +3710,15 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIsNone(self.session.get("_config_preview"))
         self.assertEqual(self.app.state.settings_repo.get_int("web_bind_port", 0), 8443)
         self.assertEqual(
-            self.app.state.settings_repo.get_value("schedule_execution_mode", "", org_id="default"),
+            self.app.state.settings_repo.get_value(
+                "schedule_execution_mode", "", org_id="default"
+            ),
             "dry_run",
         )
         self.assertEqual(
-            self.app.state.org_config_repo.get_app_config("default", config_path=str(self.config_path)).ldap.server,
+            self.app.state.org_config_repo.get_app_config(
+                "default", config_path=str(self.config_path)
+            ).ldap.server,
             "dc02.example.local",
         )
 
@@ -3256,11 +3759,16 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertRegex(
             preview_text,
-            re.compile(r"Source Root Unit IDs Filter.*?All departments.*?2,\s*8", re.DOTALL),
+            re.compile(
+                r"Source Root Unit IDs Filter.*?All departments.*?2,\s*8", re.DOTALL
+            ),
         )
         self.assertRegex(
             preview_text,
-            re.compile(r"Target AD Root OU Path / DN.*?Domain root.*?Managed Users/China", re.DOTALL),
+            re.compile(
+                r"Target AD Root OU Path / DN.*?Domain root.*?Managed Users/China",
+                re.DOTALL,
+            ),
         )
         self.assertRegex(
             preview_text,
@@ -3287,19 +3795,27 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(submit_response.status_code, 303)
         self.assertEqual(
-            self.app.state.settings_repo.get_value("source_root_unit_ids", "", org_id="default"),
+            self.app.state.settings_repo.get_value(
+                "source_root_unit_ids", "", org_id="default"
+            ),
             "2, 8",
         )
         self.assertEqual(
-            self.app.state.settings_repo.get_value("directory_root_ou_path", "", org_id="default"),
+            self.app.state.settings_repo.get_value(
+                "directory_root_ou_path", "", org_id="default"
+            ),
             "Managed Users/China",
         )
         self.assertEqual(
-            self.app.state.settings_repo.get_value("disabled_users_ou_path", "", org_id="default"),
+            self.app.state.settings_repo.get_value(
+                "disabled_users_ou_path", "", org_id="default"
+            ),
             "Managed Users/Disabled Users",
         )
         self.assertEqual(
-            self.app.state.settings_repo.get_value("custom_group_ou_path", "", org_id="default"),
+            self.app.state.settings_repo.get_value(
+                "custom_group_ou_path", "", org_id="default"
+            ),
             "Managed Groups/Regional",
         )
 
@@ -3326,11 +3842,26 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
 
         self.assertEqual(submit_response.status_code, 303)
-        self.assertTrue(self.app.state.settings_repo.get_bool("sspr_enabled", False, org_id="default"))
-        self.assertEqual(self.app.state.settings_repo.get_int("sspr_min_password_length", 0, org_id="default"), 14)
-        self.assertTrue(self.app.state.settings_repo.get_bool("sspr_unlock_account_default", False, org_id="default"))
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "sspr_enabled", False, org_id="default"
+            )
+        )
         self.assertEqual(
-            self.app.state.settings_repo.get_int("sspr_verification_session_ttl_seconds", 0, org_id="default"),
+            self.app.state.settings_repo.get_int(
+                "sspr_min_password_length", 0, org_id="default"
+            ),
+            14,
+        )
+        self.assertTrue(
+            self.app.state.settings_repo.get_bool(
+                "sspr_unlock_account_default", False, org_id="default"
+            )
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_int(
+                "sspr_verification_session_ttl_seconds", 0, org_id="default"
+            ),
             900,
         )
 
@@ -3349,9 +3880,14 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(preview_response.status_code, 303)
         self.assertEqual(preview_response.headers["location"], "/config")
-        self.assertEqual(self.session.get("_flash", {}).get("message"), "No configuration changes were detected")
+        self.assertEqual(
+            self.session.get("_flash", {}).get("message"),
+            "No configuration changes were detected",
+        )
 
-    def test_super_admin_can_create_and_select_organization_with_separate_config_file(self):
+    def test_super_admin_can_create_and_select_organization_with_separate_config_file(
+        self,
+    ):
         self._login("superadmin")
 
         response = self._route("/organizations", "GET")(self._request("/organizations"))
@@ -3387,7 +3923,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         config_page = self._route("/config", "GET")(self._request("/config"))
         self.assertEqual(config_page.status_code, 200)
         self.assertIn("Asia Region", self._text(config_page))
-        config_match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(config_page))
+        config_match = re.search(
+            r'name="csrf_token" value="([^"]+)"', self._text(config_page)
+        )
         self.assertIsNotNone(config_match)
 
         response = self._route("/config", "POST")(
@@ -3426,7 +3964,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(response.status_code, 303)
         self.assertEqual(
-            self.app.state.org_config_repo.get_editable_config("asia", config_path=asia_config_path)["corpid"],
+            self.app.state.org_config_repo.get_editable_config(
+                "asia", config_path=asia_config_path
+            )["corpid"],
             "corp-asia",
         )
 
@@ -3504,14 +4044,20 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             org_id="asia",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn('attachment; filename="asia-config-bundle.json"', response.headers.get("content-disposition", ""))
+        self.assertIn(
+            'attachment; filename="asia-config-bundle.json"',
+            response.headers.get("content-disposition", ""),
+        )
         payload = json.loads(self._text(response))
         self.assertEqual(payload["organization"]["org_id"], "asia")
         self.assertEqual(payload["organization_config"]["corpid"], "corp-asia")
         self.assertEqual(payload["connectors"][0]["connector_id"], "asia-main")
         self.assertEqual(payload["attribute_mappings"][0]["target_field"], "title")
         self.assertTrue(
-            any(rule["match_value"] == "Domain Admins" for rule in payload["group_exclusion_rules"])
+            any(
+                rule["match_value"] == "Domain Admins"
+                for rule in payload["group_exclusion_rules"]
+            )
         )
 
     def test_super_admin_can_import_organization_bundle(self):
@@ -3613,37 +4159,53 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(response.status_code, 303)
 
-        organization = self.app.state.organization_repo.get_organization_record("europe")
+        organization = self.app.state.organization_repo.get_organization_record(
+            "europe"
+        )
         self.assertIsNotNone(organization)
         self.assertEqual(organization.name, "Source Organization")
         self.assertEqual(
-            self.app.state.org_config_repo.get_editable_config("europe", config_path="")["corpid"],
+            self.app.state.org_config_repo.get_editable_config(
+                "europe", config_path=""
+            )["corpid"],
             "corp-imported",
         )
         self.assertEqual(
-            self.app.state.settings_repo.get_value("group_display_separator", "-", org_id="europe"),
+            self.app.state.settings_repo.get_value(
+                "group_display_separator", "-", org_id="europe"
+            ),
             "/",
         )
         self.assertTrue(
-            self.app.state.settings_repo.get_bool("attribute_mapping_enabled", False, org_id="europe")
+            self.app.state.settings_repo.get_bool(
+                "attribute_mapping_enabled", False, org_id="europe"
+            )
         )
-        connector = self.app.state.connector_repo.get_connector_record("import-main", org_id="europe")
+        connector = self.app.state.connector_repo.get_connector_record(
+            "import-main", org_id="europe"
+        )
         self.assertIsNotNone(connector)
         self.assertEqual(connector.ldap_server, "dc01.imported.local")
-        mapping = self.app.state.attribute_mapping_repo.list_rule_records(org_id="europe")
+        mapping = self.app.state.attribute_mapping_repo.list_rule_records(
+            org_id="europe"
+        )
         self.assertEqual(len(mapping), 1)
         self.assertEqual(mapping[0].direction, "source_to_ad")
         self.assertEqual(mapping[0].target_field, "mobile")
         group_rules = self.app.state.exclusion_repo.list_rule_records(org_id="europe")
         self.assertTrue(any(rule.match_value == "LegacyGroup" for rule in group_rules))
         self.assertEqual(
-            self.app.state.org_config_repo.get_editable_config("default", config_path=str(self.config_path))["corpid"],
+            self.app.state.org_config_repo.get_editable_config(
+                "default", config_path=str(self.config_path)
+            )["corpid"],
             "corp-001",
         )
 
     def test_config_page_scopes_group_exclusion_rules_to_selected_organization(self):
         self._login("superadmin")
-        asia_config_path = str((self.db_path.parent / "web_authz_config_asia.ini").resolve())
+        asia_config_path = str(
+            (self.db_path.parent / "web_authz_config_asia.ini").resolve()
+        )
         save_editable_config(
             {
                 "corpid": "corp-asia",
@@ -3740,7 +4302,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
-            config_path=str((self.db_path.parent / "web_authz_asia_scope.ini").resolve()),
+            config_path=str(
+                (self.db_path.parent / "web_authz_asia_scope.ini").resolve()
+            ),
             description="",
             is_enabled=True,
         )
@@ -3771,7 +4335,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
-            config_path=str((self.db_path.parent / "web_authz_mappings_asia.ini").resolve()),
+            config_path=str(
+                (self.db_path.parent / "web_authz_mappings_asia.ini").resolve()
+            ),
             description="",
             is_enabled=True,
         )
@@ -3806,7 +4372,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.session["selected_org_id"] = "asia"
 
         with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
-            mock_wecom.return_value.get_department_list.return_value = [{"id": 2002, "name": "Asia Dept"}]
+            mock_wecom.return_value.get_department_list.return_value = [
+                {"id": 2002, "name": "Asia Dept"}
+            ]
             response = self._route("/mappings", "GET")(self._request("/mappings"))
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
@@ -3820,7 +4388,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
-            config_path=str((self.db_path.parent / "web_authz_exceptions_asia.ini").resolve()),
+            config_path=str(
+                (self.db_path.parent / "web_authz_exceptions_asia.ini").resolve()
+            ),
             description="",
             is_enabled=True,
         )
@@ -3851,7 +4421,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
-            config_path=str((self.db_path.parent / "web_authz_conflicts_asia.ini").resolve()),
+            config_path=str(
+                (self.db_path.parent / "web_authz_conflicts_asia.ini").resolve()
+            ),
             description="",
             is_enabled=True,
         )
@@ -3895,7 +4467,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_run_job_uses_selected_organization_context(self):
         self._login("superadmin")
-        asia_config_path = str((self.db_path.parent / "web_authz_run_asia.ini").resolve())
+        asia_config_path = str(
+            (self.db_path.parent / "web_authz_run_asia.ini").resolve()
+        )
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
@@ -3910,7 +4484,11 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(jobs_page))
         self.assertIsNotNone(match)
 
-        with patch.object(self.app.state.sync_runner, "launch", return_value=(True, "Synchronization job started")) as mock_launch:
+        with patch.object(
+            self.app.state.sync_runner,
+            "launch",
+            return_value=(True, "Synchronization job started"),
+        ) as mock_launch:
             response = self._route("/jobs/run", "POST")(
                 self._request("/jobs/run", "POST"),
                 csrf_token=match.group(1),
@@ -3924,12 +4502,16 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             config_path=asia_config_path,
         )
 
-    def test_dashboard_renders_global_organization_switcher_when_multiple_orgs_exist(self):
+    def test_dashboard_renders_global_organization_switcher_when_multiple_orgs_exist(
+        self,
+    ):
         self._login("superadmin")
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
-            config_path=str((self.db_path.parent / "web_authz_dashboard_asia.ini").resolve()),
+            config_path=str(
+                (self.db_path.parent / "web_authz_dashboard_asia.ini").resolve()
+            ),
             description="",
             is_enabled=True,
         )
@@ -3941,18 +4523,24 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("Asia Region", text)
         self.assertIn('action="/ui-mode"', text)
 
-    def test_scope_guidance_is_visible_on_dashboard_config_and_organizations_pages(self):
+    def test_scope_guidance_is_visible_on_dashboard_config_and_organizations_pages(
+        self,
+    ):
         self._login("superadmin")
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
-            config_path=str((self.db_path.parent / "web_authz_scope_asia.ini").resolve()),
+            config_path=str(
+                (self.db_path.parent / "web_authz_scope_asia.ini").resolve()
+            ),
             description="",
             is_enabled=True,
         )
         self.session["selected_org_id"] = "asia"
 
-        dashboard_response = self._route("/dashboard", "GET")(self._request("/dashboard"))
+        dashboard_response = self._route("/dashboard", "GET")(
+            self._request("/dashboard")
+        )
         self.assertEqual(dashboard_response.status_code, 200)
         dashboard_text = self._text(dashboard_response)
         self.assertIn("Scope Guide", dashboard_text)
@@ -3966,7 +4554,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("Global Settings", config_text)
         self.assertIn("Web Deployment", config_text)
 
-        organizations_response = self._route("/organizations", "GET")(self._request("/organizations"))
+        organizations_response = self._route("/organizations", "GET")(
+            self._request("/organizations")
+        )
         self.assertEqual(organizations_response.status_code, 200)
         organizations_text = self._text(organizations_response)
         self.assertIn("Global Scope", organizations_text)
@@ -3979,7 +4569,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertTrue(str(getattr(response, "path", "")).endswith("icon.ico"))
 
     def test_login_page_can_switch_to_simplified_chinese(self):
-        response = self._route("/login", "GET")(self._request("/login", query={"lang": "zh-CN"}))
+        response = self._route("/login", "GET")(
+            self._request("/login", query={"lang": "zh-CN"})
+        )
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
         self.assertIn("AD 组织同步", text)
@@ -3999,13 +4591,14 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("配置校验", text)
         self.assertIn("AD 组织同步", text)
 
-
     def test_dashboard_defaults_to_basic_mode_and_can_switch_to_advanced_mode(self):
         self._login("superadmin")
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
-            config_path=str((self.db_path.parent / "web_authz_mode_asia.ini").resolve()),
+            config_path=str(
+                (self.db_path.parent / "web_authz_mode_asia.ini").resolve()
+            ),
             description="",
             is_enabled=True,
         )
@@ -4033,7 +4626,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(self.session.get("ui_mode"), "advanced")
 
-        advanced_dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))
+        advanced_dashboard = self._route("/dashboard", "GET")(
+            self._request("/dashboard")
+        )
         advanced_text = self._text(advanced_dashboard)
         self.assertIn('href="/advanced-sync"', advanced_text)
         self.assertIn('href="/automation-center"', advanced_text)
@@ -4068,9 +4663,21 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(dashboard))
         self.assertIsNotNone(match)
 
-        with patch("sync_app.web.app.test_source_connection", return_value=(True, "WeCom connection succeeded (self-built app), departments: 1")), patch(
-            "sync_app.web.app.test_ldap_connection",
-            return_value=(True, "LDAP connection succeeded (auth: NTLM, protocol: LDAPS)"),
+        with (
+            patch(
+                "sync_app.web.app.test_source_connection",
+                return_value=(
+                    True,
+                    "WeCom connection succeeded (self-built app), departments: 1",
+                ),
+            ),
+            patch(
+                "sync_app.web.app.test_ldap_connection",
+                return_value=(
+                    True,
+                    "LDAP connection succeeded (auth: NTLM, protocol: LDAPS)",
+                ),
+            ),
         ):
             response = self._route("/preflight/run", "POST")(
                 self._request("/preflight/run", "POST"),
@@ -4081,13 +4688,17 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.headers["location"], "/dashboard")
         self.assertTrue(self.session.get("_preflight_snapshot"))
 
-        refreshed_dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))
+        refreshed_dashboard = self._route("/dashboard", "GET")(
+            self._request("/dashboard")
+        )
         dashboard_text = self._text(refreshed_dashboard)
         self.assertIn("Deployment Preflight", dashboard_text)
         self.assertIn("Live WeCom connection", dashboard_text)
         self.assertIn("Last live check", dashboard_text)
 
-    def test_preflight_and_getting_started_use_selected_provider_context_for_dingtalk(self):
+    def test_preflight_and_getting_started_use_selected_provider_context_for_dingtalk(
+        self,
+    ):
         current_org = self.app.state.organization_repo.get_default_organization_record()
         self.assertIsNotNone(current_org)
         values = self.app.state.org_config_repo.get_raw_config(
@@ -4114,9 +4725,21 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(dashboard))
         self.assertIsNotNone(match)
 
-        with patch("sync_app.web.app.test_source_connection", return_value=(True, "DingTalk connection succeeded (generic), departments: 1")), patch(
-            "sync_app.web.app.test_ldap_connection",
-            return_value=(True, "LDAP connection succeeded (auth: NTLM, protocol: LDAPS)"),
+        with (
+            patch(
+                "sync_app.web.app.test_source_connection",
+                return_value=(
+                    True,
+                    "DingTalk connection succeeded (generic), departments: 1",
+                ),
+            ),
+            patch(
+                "sync_app.web.app.test_ldap_connection",
+                return_value=(
+                    True,
+                    "LDAP connection succeeded (auth: NTLM, protocol: LDAPS)",
+                ),
+            ),
         ):
             response = self._route("/preflight/run", "POST")(
                 self._request("/preflight/run", "POST"),
@@ -4126,20 +4749,29 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/dashboard")
 
-        refreshed_dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))
+        refreshed_dashboard = self._route("/dashboard", "GET")(
+            self._request("/dashboard")
+        )
         dashboard_text = self._text(refreshed_dashboard)
         self.assertIn("Live DingTalk connection", dashboard_text)
 
-        getting_started = self._route("/getting-started", "GET")(self._request("/getting-started"))
+        getting_started = self._route("/getting-started", "GET")(
+            self._request("/getting-started")
+        )
         self.assertEqual(getting_started.status_code, 200)
         getting_started_text = self._text(getting_started)
-        self.assertIn("Complete the DingTalk and LDAP values for the current organization.", getting_started_text)
+        self.assertIn(
+            "Complete the DingTalk and LDAP values for the current organization.",
+            getting_started_text,
+        )
         self.assertIn("Live DingTalk connection", getting_started_text)
 
     def test_getting_started_page_renders_rollout_steps(self):
         self._login("superadmin")
 
-        response = self._route("/getting-started", "GET")(self._request("/getting-started"))
+        response = self._route("/getting-started", "GET")(
+            self._request("/getting-started")
+        )
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
         self.assertIn("Recommended Rollout Steps", text)
@@ -4159,7 +4791,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_login_page_defaults_to_browser_language_when_chinese_is_preferred(self):
         response = self._route("/login", "GET")(
-            self._request("/login", headers={"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
+            self._request(
+                "/login", headers={"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
+            )
         )
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
@@ -4170,7 +4804,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_login_page_defaults_to_english_for_non_chinese_browser_language(self):
         response = self._route("/login", "GET")(
-            self._request("/login", headers={"Accept-Language": "fr-FR,fr;q=0.9,zh;q=0.8"})
+            self._request(
+                "/login", headers={"Accept-Language": "fr-FR,fr;q=0.9,zh;q=0.8"}
+            )
         )
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
@@ -4179,7 +4815,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertNotIn("娆㈣繋鍥炴潵", text)
         self.assertIsNone(self.session.get("ui_language"))
 
-def _patched_test_login_page_defaults_to_browser_language_when_chinese_is_preferred(self):
+
+def _patched_test_login_page_defaults_to_browser_language_when_chinese_is_preferred(
+    self,
+):
     response = self._route("/login", "GET")(
         self._request("/login", headers={"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
     )
@@ -4204,12 +4843,8 @@ def _patched_test_login_page_defaults_to_english_for_non_chinese_browser_languag
     self.assertIsNone(self.session.get("ui_language"))
 
 
-WebAuthorizationTests.test_login_page_defaults_to_browser_language_when_chinese_is_preferred = (
-    _patched_test_login_page_defaults_to_browser_language_when_chinese_is_preferred
-)
-WebAuthorizationTests.test_login_page_defaults_to_english_for_non_chinese_browser_language = (
-    _patched_test_login_page_defaults_to_english_for_non_chinese_browser_language
-)
+WebAuthorizationTests.test_login_page_defaults_to_browser_language_when_chinese_is_preferred = _patched_test_login_page_defaults_to_browser_language_when_chinese_is_preferred
+WebAuthorizationTests.test_login_page_defaults_to_english_for_non_chinese_browser_language = _patched_test_login_page_defaults_to_english_for_non_chinese_browser_language
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass, fields
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import FastAPI, Request
 

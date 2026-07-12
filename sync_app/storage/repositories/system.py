@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -181,10 +182,11 @@ class SyncReplayRequestRepository(BaseRepository):
         trigger_reason: str = "",
         org_id: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
+        connection: Any | None = None,
     ) -> int:
         normalized_org_id = self._resolve_org_id(org_id) or "default"
         now = utcnow_iso()
-        with self.db.transaction() as conn:
+        with self._write_connection(connection) as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO sync_replay_requests (
@@ -310,8 +312,9 @@ class WebAuditLogRepository(BaseRepository):
         target_type: Optional[str] = None,
         target_id: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
+        connection: Any | None = None,
     ) -> int:
-        with self.db.transaction() as conn:
+        with self._write_connection(connection) as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO web_audit_logs (
@@ -812,34 +815,61 @@ class IntegrationWebhookOutboxRepository(BaseRepository):
         payload: Optional[Dict[str, Any]] = None,
         max_attempts: int = 5,
         next_attempt_at: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> IntegrationWebhookOutboxRecord:
         normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
         now = utcnow_iso()
         normalized_payload = payload if isinstance(payload, dict) else {"raw": payload}
+        normalized_event_type = str(event_type or "").strip().lower()
+        normalized_delivery_id = str(delivery_id or "").strip()
+        normalized_target_url = str(target_url or "").strip()
+        normalized_subscription_id = int(subscription_id) if subscription_id is not None else None
+        normalized_idempotency_key = str(idempotency_key or "").strip()
+        if not normalized_idempotency_key:
+            identity = "|".join(
+                (
+                    normalized_org_id,
+                    str(normalized_subscription_id or ""),
+                    normalized_event_type,
+                    normalized_delivery_id,
+                    normalized_target_url,
+                )
+            )
+            normalized_idempotency_key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         with self.db.transaction() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO integration_webhook_outbox (
+                INSERT OR IGNORE INTO integration_webhook_outbox (
                   org_id, subscription_id, event_type, delivery_id, target_url, secret,
                   payload_json, status, attempt_count, max_attempts, next_attempt_at,
-                  created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+                  idempotency_key, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     normalized_org_id,
-                    int(subscription_id) if subscription_id is not None else None,
-                    str(event_type or "").strip().lower(),
-                    str(delivery_id or "").strip(),
-                    str(target_url or "").strip(),
+                    normalized_subscription_id,
+                    normalized_event_type,
+                    normalized_delivery_id,
+                    normalized_target_url,
                     str(secret or "").strip(),
                     dumps_json(normalized_payload) or "{}",
                     max(int(max_attempts or 0), 1),
                     str(next_attempt_at or now).strip() or now,
+                    normalized_idempotency_key,
                     now,
                     now,
                 ),
             )
-            delivery_id_value = int(cursor.lastrowid)
+            if int(cursor.rowcount or 0) > 0:
+                delivery_id_value = int(cursor.lastrowid)
+            else:
+                existing = conn.execute(
+                    "SELECT id FROM integration_webhook_outbox WHERE idempotency_key = ? LIMIT 1",
+                    (normalized_idempotency_key,),
+                ).fetchone()
+                if existing is None:
+                    raise RuntimeError("Webhook outbox delivery was not inserted")
+                delivery_id_value = int(existing["id"])
         record = self.get_delivery_record(delivery_id_value)
         if record is None:
             raise ValueError("webhook outbox delivery could not be loaded after insert")
@@ -970,18 +1000,25 @@ class IntegrationWebhookOutboxRepository(BaseRepository):
             claimed_ids = [int(row["id"]) for row in rows if row["id"] is not None]
             if not claimed_ids:
                 return []
-            placeholders = ", ".join("?" for _ in claimed_ids)
-            conn.execute(
-                f"""
-                UPDATE integration_webhook_outbox
-                SET status = 'dispatching',
-                    locked_at = ?,
-                    lease_expires_at = ?,
-                    updated_at = ?
-                WHERE id IN ({placeholders})
-                """,
-                (now_text, lease_expires_at, now_text, *claimed_ids),
-            )
+            for claimed_id in claimed_ids:
+                conn.execute(
+                    """
+                    UPDATE integration_webhook_outbox
+                    SET status = 'dispatching',
+                        locked_at = ?,
+                        lease_expires_at = ?,
+                        lease_token = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        now_text,
+                        lease_expires_at,
+                        secrets.token_urlsafe(24),
+                        now_text,
+                        claimed_id,
+                    ),
+                )
 
         claimed_records = [self.get_delivery_record(record_id) for record_id in claimed_ids]
         return [record for record in claimed_records if record is not None]
@@ -992,11 +1029,17 @@ class IntegrationWebhookOutboxRepository(BaseRepository):
         *,
         last_status: str,
         attempted_at: Optional[str] = None,
-    ) -> None:
+        lease_token: Optional[str] = None,
+    ) -> bool:
         timestamp = str(attempted_at or utcnow_iso()).strip()
+        normalized_lease_token = str(lease_token or "").strip()
+        lease_clause = " AND status = 'dispatching' AND lease_token = ?" if normalized_lease_token else ""
+        params: list[Any] = [timestamp, str(last_status or "").strip(), timestamp, int(delivery_id)]
+        if normalized_lease_token:
+            params.append(normalized_lease_token)
         with self.db.transaction() as conn:
-            conn.execute(
-                """
+            cursor = conn.execute(
+                f"""
                 UPDATE integration_webhook_outbox
                 SET status = 'delivered',
                     attempt_count = attempt_count + 1,
@@ -1006,11 +1049,13 @@ class IntegrationWebhookOutboxRepository(BaseRepository):
                     last_error = '',
                     locked_at = '',
                     lease_expires_at = '',
+                    lease_token = '',
                     updated_at = ?
-                WHERE id = ?
+                WHERE id = ?{lease_clause}
                 """,
-                (timestamp, str(last_status or "").strip(), timestamp, int(delivery_id)),
+                tuple(params),
             )
+            return int(cursor.rowcount or 0) == 1
 
     def mark_delivery_retry(
         self,
@@ -1020,10 +1065,11 @@ class IntegrationWebhookOutboxRepository(BaseRepository):
         last_error: str = "",
         attempted_at: Optional[str] = None,
         retry_delay_seconds: int = 60,
-    ) -> None:
+        lease_token: Optional[str] = None,
+    ) -> bool:
         record = self.get_delivery_record(int(delivery_id))
         if record is None:
-            return
+            return False
         timestamp = str(attempted_at or utcnow_iso()).strip()
         next_attempt_at = (
             datetime.fromisoformat(timestamp.replace("Z", "+00:00")).astimezone(timezone.utc)
@@ -1031,9 +1077,24 @@ class IntegrationWebhookOutboxRepository(BaseRepository):
         ).isoformat(timespec="seconds")
         next_attempt_count = int(record.attempt_count or 0) + 1
         next_status = "failed" if next_attempt_count >= max(int(record.max_attempts or 0), 1) else "retrying"
+        normalized_lease_token = str(lease_token or "").strip()
+        lease_clause = " AND status = 'dispatching' AND lease_token = ?" if normalized_lease_token else ""
+        params: list[Any] = [
+            next_status,
+            next_attempt_count,
+            "" if next_status == "failed" else next_attempt_at,
+            timestamp,
+            str(last_status or "").strip(),
+            str(last_error or "").strip(),
+            timestamp if next_status == "failed" else "",
+            timestamp,
+            int(delivery_id),
+        ]
+        if normalized_lease_token:
+            params.append(normalized_lease_token)
         with self.db.transaction() as conn:
-            conn.execute(
-                """
+            cursor = conn.execute(
+                f"""
                 UPDATE integration_webhook_outbox
                 SET status = ?,
                     attempt_count = ?,
@@ -1043,20 +1104,14 @@ class IntegrationWebhookOutboxRepository(BaseRepository):
                     last_error = ?,
                     locked_at = '',
                     lease_expires_at = '',
+                    lease_token = '',
+                    dead_lettered_at = ?,
                     updated_at = ?
-                WHERE id = ?
+                WHERE id = ?{lease_clause}
                 """,
-                (
-                    next_status,
-                    next_attempt_count,
-                    "" if next_status == "failed" else next_attempt_at,
-                    timestamp,
-                    str(last_status or "").strip(),
-                    str(last_error or "").strip(),
-                    timestamp,
-                    int(delivery_id),
-                ),
+                tuple(params),
             )
+            return int(cursor.rowcount or 0) == 1
 
     def requeue_delivery(
         self,
@@ -1065,6 +1120,7 @@ class IntegrationWebhookOutboxRepository(BaseRepository):
         org_id: Optional[str] = None,
         failed_only: bool = False,
         next_attempt_at: Optional[str] = None,
+        requested_by: str = "system",
     ) -> Optional[IntegrationWebhookOutboxRecord]:
         record = self.get_delivery_record(int(delivery_id))
         if record is None:
@@ -1088,9 +1144,20 @@ class IntegrationWebhookOutboxRepository(BaseRepository):
                     next_attempt_at = ?,
                     locked_at = '',
                     lease_expires_at = '',
+                    lease_token = '',
+                    dead_lettered_at = '',
+                    replay_count = replay_count + 1,
+                    last_replayed_at = ?,
+                    last_replayed_by = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
-                (timestamp, timestamp, int(delivery_id)),
+                (
+                    timestamp,
+                    timestamp,
+                    str(requested_by or "system").strip() or "system",
+                    timestamp,
+                    int(delivery_id),
+                ),
             )
         return self.get_delivery_record(int(delivery_id))

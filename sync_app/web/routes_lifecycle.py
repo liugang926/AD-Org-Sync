@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse

@@ -12,20 +12,76 @@
 </div>
 
 <div class="card login-card">
+  <div class="login-card__heading">
+    <h2>{{ t("Administrator Sign-In") }}</h2>
+    <span class="badge {{ 'badge-success' if login_capabilities.sso_enabled else 'badge-info' }}">{{ t("Local password and SSO") if login_capabilities.sso_enabled else t("Local Password") }}</span>
+  </div>
   <form method="post" action="/login">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     
     <div class="login-form-section">
-      {{ forms.input("username", t("Username"), required=True, placeholder=t("Enter your username")) }}
+      {{ forms.input("username", t("Username"), required=True, placeholder=t("Enter your username"), autocomplete="username") }}
     </div>
     
     <div class="login-form-section login-form-section--spacious">
-      {{ forms.input("password", t("Password"), type="password", required=True, placeholder=t("Enter your password")) }}
+      {{ forms.input("password", t("Password"), type="password", required=True, placeholder=t("Enter your password"), autocomplete="current-password") }}
     </div>
 
     {{ ui.button(t("Sign In"), type="submit", block=True) }}
   </form>
+
+  {% if login_capabilities.sso_enabled %}
+  <div class="login-divider"><span>{{ t("or") }}</span></div>
+  {{ ui.button(t("Sign in with {provider}", provider=login_capabilities.sso_name), href="/auth/oidc/start", variant="secondary", icon="key-round", block=True) }}
+  {% elif login_capabilities.sso_configuration_error %}
+  <div class="panel-note warning login-capability-warning">
+    {{ t("Single sign-on is enabled but incomplete. Contact your administrator.") }}
+  </div>
+  {% endif %}
+
+  <div class="login-recovery">
+    {% if login_capabilities.password_reset_url %}
+    <a href="{{ login_capabilities.password_reset_url }}" rel="noopener noreferrer">{{ t("Forgot password?") }}</a>
+    {% elif login_capabilities.password_reset_url_error %}
+    <span class="text-danger">{{ t("Password reset link is misconfigured.") }}</span>
+    {% else %}
+    <span>{{ t("Password recovery is managed by your administrator.") }}</span>
+    {% endif %}
+  </div>
 </div>
+
+<dl class="login-capabilities" aria-label="{{ t('Login environment and security status') }}">
+  <div>
+    <dt>{{ t("Environment") }}</dt>
+    <dd>{{ login_capabilities.environment_label or t("Local environment") }}</dd>
+  </div>
+  <div>
+    <dt>{{ t("Authentication") }}</dt>
+    <dd>{{ t("Local password and SSO") if login_capabilities.sso_enabled else t("Local password") }}</dd>
+  </div>
+  <div>
+    <dt>{{ t("MFA Status") }}</dt>
+    <dd>
+      {% if login_capabilities.sso_enabled and login_capabilities.mfa_required %}
+      {{ t("Required for SSO") }}
+      {% elif login_capabilities.sso_enabled %}
+      {{ t("Managed by identity provider") }}
+      {% else %}
+      {{ t("Not configured for local password") }}
+      {% endif %}
+    </dd>
+  </div>
+  <div>
+    <dt>{{ t("Recent Login On This Browser") }}</dt>
+    <dd>
+      {% if login_capabilities.recent_login %}
+      {{ login_capabilities.recent_login.at }} · {{ t("SSO") if login_capabilities.recent_login.method == "oidc" else t("Local password") }}{% if login_capabilities.recent_login.mfa_satisfied %} · {{ t("MFA verified") }}{% endif %}
+      {% else %}
+      {{ t("No recent login recorded") }}
+      {% endif %}
+    </dd>
+  </div>
+</dl>
 
 <div class="login-footer">
   <div class="login-language">

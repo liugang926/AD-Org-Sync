@@ -79,3 +79,15 @@ class TargetProviderTests(unittest.TestCase):
 
         self.assertIsInstance(provider, ADLDAPSTargetProvider)
         self.assertEqual(provider.client.kwargs["server"], "ldap.example.com")
+
+    def test_custom_group_connector_scope_is_forwarded_to_client(self):
+        provider = ADLDAPSTargetProvider(FakeADSyncClient())
+
+        result = provider.ensure_custom_group(
+            source_type="tag",
+            source_key="42",
+            display_name="Engineering",
+            connector_id="tenant-connector",
+        )
+
+        self.assertEqual(result["connector_id"], "tenant-connector")

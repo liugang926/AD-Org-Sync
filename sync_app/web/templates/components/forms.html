@@ -15,12 +15,13 @@
     <input type="{{ type }}" id="{{ field_id }}" name="{{ name }}" value="{{ value }}"
            class="{{ resolved_input_class }}" placeholder="{{ placeholder }}" {% if required %}required{% endif %}
            {% if disabled %}disabled{% endif %} {% if autocomplete %}autocomplete="{{ autocomplete }}"{% endif %}
+           {% if help_text %}aria-describedby="{{ field_id }}-help"{% endif %}
            {% if min_value != '' %}min="{{ min_value }}"{% endif %} {% if max_value != '' %}max="{{ max_value }}"{% endif %}
            {% if step != '' %}step="{{ step }}"{% endif %}
            {{ attrs|safe }}>
   </div>
   {% if help_text %}
-  <div class="form-help">{{ help_text }}</div>
+  <div class="form-help" id="{{ field_id }}-help">{{ help_text }}</div>
   {% endif %}
 </div>
 {% endmacro %}
@@ -38,6 +39,7 @@
     </div>
     {% endif %}
     <select id="{{ field_id }}" name="{{ name }}" {% if required %}required{% endif %} {% if disabled %}disabled{% endif %}
+            {% if help_text %}aria-describedby="{{ field_id }}-help"{% endif %}
             {% if icon %}class="field-control--with-icon"{% endif %}
             {{ attrs|safe }}>
       {% for val, label in options %}
@@ -46,7 +48,7 @@
     </select>
   </div>
   {% if help_text %}
-  <div class="form-help">{{ help_text }}</div>
+  <div class="form-help" id="{{ field_id }}-help">{{ help_text }}</div>
   {% endif %}
 </div>
 {% endmacro %}
@@ -57,9 +59,9 @@
   {% if label %}
   <label for="{{ field_id }}">{{ label }}</label>
   {% endif %}
-  <textarea id="{{ field_id }}" name="{{ name }}" placeholder="{{ placeholder }}" rows="{{ rows }}" {% if disabled %}disabled{% endif %} {{ attrs|safe }}>{{ value }}</textarea>
+  <textarea id="{{ field_id }}" name="{{ name }}" placeholder="{{ placeholder }}" rows="{{ rows }}" {% if disabled %}disabled{% endif %} {% if help_text %}aria-describedby="{{ field_id }}-help"{% endif %} {{ attrs|safe }}>{{ value }}</textarea>
   {% if help_text %}
-  <div class="form-help">{{ help_text }}</div>
+  <div class="form-help" id="{{ field_id }}-help">{{ help_text }}</div>
   {% endif %}
 </div>
 {% endmacro %}
@@ -68,11 +70,11 @@
 {% set field_id = id or name %}
 <div class="form-group {{ class_name }}" id="group-{{ field_id }}">
   <label class="checkbox-field" for="{{ field_id }}">
-    <input id="{{ field_id }}" type="checkbox" name="{{ name }}" value="{{ value }}" {% if checked %}checked{% endif %} class="checkbox-field__input">
+    <input id="{{ field_id }}" type="checkbox" name="{{ name }}" value="{{ value }}" {% if checked %}checked{% endif %} {% if help_text %}aria-describedby="{{ field_id }}-help"{% endif %} class="checkbox-field__input">
     {{ label }}
   </label>
   {% if help_text %}
-  <div class="form-help form-help--indented">{{ help_text }}</div>
+  <div class="form-help form-help--indented" id="{{ field_id }}-help">{{ help_text }}</div>
   {% endif %}
 </div>
 {% endmacro %}

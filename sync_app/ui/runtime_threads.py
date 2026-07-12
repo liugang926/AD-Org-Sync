@@ -4,7 +4,6 @@ import logging
 import os
 import time
 import traceback
-from datetime import datetime
 
 from PyQt5.QtCore import QThread, QTimer, pyqtSignal
 

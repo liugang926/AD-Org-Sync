@@ -4,7 +4,7 @@ from typing import Any, Callable
 
 from sync_app.clients.wecom import WeComAPI
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
-from sync_app.providers.source.base import SourceDirectoryProvider
+from sync_app.providers.source.base import SourceDirectoryProvider, instantiate_source_api_client
 
 
 class WeComSourceProvider(SourceDirectoryProvider):
@@ -24,10 +24,13 @@ class WeComSourceProvider(SourceDirectoryProvider):
         self.corpsecret = corpsecret
         self.agentid = agentid
         self._api_factory = api_factory or WeComAPI
-        try:
-            self._api = self._api_factory(corpid, corpsecret, agentid, logger=logger)
-        except TypeError:
-            self._api = self._api_factory(corpid, corpsecret, agentid)
+        self._api = instantiate_source_api_client(
+            self._api_factory,
+            corpid,
+            corpsecret,
+            agentid,
+            logger=logger,
+        )
 
     def list_departments(self) -> list[DepartmentNode]:
         return [DepartmentNode.from_source_payload(item) for item in self._api.get_department_list()]

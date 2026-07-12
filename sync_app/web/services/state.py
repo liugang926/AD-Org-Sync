@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sync_app.services.external_integrations import build_approve_plan_use_case
 from sync_app.storage.local_db import (
     ConfigReleaseSnapshotRepository,
     DatabaseManager,
@@ -39,14 +40,14 @@ def build_web_service_state(
     conflict_repo: SyncConflictRepository,
     audit_repo: WebAuditLogRepository,
 ) -> WebServiceState:
+    approve_plan_use_case = build_approve_plan_use_case(db_manager)
     return WebServiceState(
         jobs=WebJobService(
-            db_manager=db_manager,
+            approve_plan_use_case=approve_plan_use_case,
             job_repo=job_repo,
             review_repo=review_repo,
             planned_operation_repo=planned_operation_repo,
             conflict_repo=conflict_repo,
-            audit_repo=audit_repo,
         ),
         conflicts=WebConflictService(
             conflict_repo=conflict_repo,
@@ -60,6 +61,7 @@ def build_web_service_state(
         ),
         integrations=WebIntegrationService(
             db_manager=db_manager,
+            approve_plan_use_case=approve_plan_use_case,
             settings_repo=settings_repo,
             subscription_repo=subscription_repo,
             job_repo=job_repo,

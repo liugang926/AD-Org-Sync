@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Optional
 
 LDAP_IMPORT_ERROR: Optional[ImportError] = None
 

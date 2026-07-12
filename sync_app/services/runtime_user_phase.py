@@ -543,7 +543,7 @@ def plan_disable_actions(
     ctx.working.managed_ad_identities.clear()
     ctx.working.managed_ad_identities.update(set(managed_source_user_id_by_identity.keys()))
 
-    for userid, resolution in ctx.identity.binding_resolution_details.items():
+    for _userid, resolution in ctx.identity.binding_resolution_details.items():
         if not resolution.get("ad_username"):
             continue
         ctx.repositories.offboarding_repo.clear_pending(

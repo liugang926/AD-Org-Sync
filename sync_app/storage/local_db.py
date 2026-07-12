@@ -1,15 +1,22 @@
+import hashlib
 import json
+import logging
 import os
+import random
 import sqlite3
+import tempfile
+import time
 from contextlib import closing, contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 from sync_app.core.models import (
     AppConfig,
     OrganizationRecord,
     SyncConnectorRecord,
 )
+from sync_app.core.observability import METRICS
 from sync_app.storage.config_codec import (
     CONNECTOR_CONFIG_FIELDS,
     ORGANIZATION_CONFIG_VALUE_TYPES,
@@ -36,6 +43,72 @@ from sync_app.storage.schema import (
 
 APP_NAME = "ADOrgSync"
 LEGACY_APP_NAMES = ("NottingADSync",)
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SQLiteRetryPolicy:
+    max_attempts: int = 4
+    base_delay_seconds: float = 0.05
+    max_delay_seconds: float = 0.5
+    jitter_ratio: float = 0.2
+
+    def delay_seconds(self, retry_number: int) -> float:
+        exponential_delay = min(
+            max(float(self.base_delay_seconds), 0.0) * (2 ** max(int(retry_number) - 1, 0)),
+            max(float(self.max_delay_seconds), 0.0),
+        )
+        jitter = exponential_delay * max(float(self.jitter_ratio), 0.0)
+        return max(exponential_delay + random.uniform(-jitter, jitter), 0.0)
+
+
+def is_retryable_sqlite_lock_error(error: BaseException) -> bool:
+    if not isinstance(error, sqlite3.OperationalError):
+        return False
+    normalized_message = str(error or "").strip().lower()
+    return any(
+        marker in normalized_message
+        for marker in (
+            "database is locked",
+            "database table is locked",
+            "database schema is locked",
+            "database is busy",
+        )
+    )
+
+
+class ResilientSQLiteConnection(sqlite3.Connection):
+    retry_policy = SQLiteRetryPolicy()
+    retry_callback: Optional[Callable[[int, sqlite3.OperationalError, float], None]] = None
+
+    def configure_retry(self, policy: SQLiteRetryPolicy, callback=None) -> None:
+        self.retry_policy = policy
+        self.retry_callback = callback
+
+    def _run_with_retry(self, operation):
+        max_attempts = max(int(self.retry_policy.max_attempts or 0), 1)
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return operation()
+            except sqlite3.OperationalError as exc:
+                if not is_retryable_sqlite_lock_error(exc) or attempt >= max_attempts:
+                    raise
+                delay_seconds = self.retry_policy.delay_seconds(attempt)
+                if self.retry_callback:
+                    self.retry_callback(attempt, exc, delay_seconds)
+                time.sleep(delay_seconds)
+        raise RuntimeError("unreachable SQLite retry state")
+
+    def execute(self, sql, parameters=(), /):
+        return self._run_with_retry(lambda: sqlite3.Connection.execute(self, sql, parameters))
+
+    def executemany(self, sql, seq_of_parameters, /):
+        return self._run_with_retry(
+            lambda: sqlite3.Connection.executemany(self, sql, seq_of_parameters)
+        )
+
+    def commit(self):
+        return self._run_with_retry(lambda: sqlite3.Connection.commit(self))
 
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -58,7 +131,6 @@ def default_db_path() -> str:
 
 def workspace_fallback_db_path(app_name: str = APP_NAME) -> str:
     base_dir = os.path.join(os.getcwd(), ".appdata", app_name)
-    os.makedirs(base_dir, exist_ok=True)
     return os.path.join(base_dir, "app.db")
 
 
@@ -126,8 +198,25 @@ def normalize_org_id(org_id: Optional[str], *, fallback: Optional[str] = None) -
 class DatabaseManager:
     _startup_snapshot_paths: set[str] = set()
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        *,
+        connection_timeout_seconds: float = 2.0,
+        busy_timeout_ms: int = 2000,
+        lock_retry_attempts: int = 4,
+        lock_retry_base_delay_seconds: float = 0.05,
+        lock_retry_max_delay_seconds: float = 0.5,
+    ):
         self._auto_db_path = db_path is None
+        self.connection_timeout_seconds = max(float(connection_timeout_seconds or 0.0), 0.0)
+        self.busy_timeout_ms = max(int(busy_timeout_ms or 0), 0)
+        self.retry_policy = SQLiteRetryPolicy(
+            max_attempts=max(int(lock_retry_attempts or 0), 1),
+            base_delay_seconds=max(float(lock_retry_base_delay_seconds or 0.0), 0.0),
+            max_delay_seconds=max(float(lock_retry_max_delay_seconds or 0.0), 0.0),
+        )
+        self.sqlite_retry_count = 0
         self.db_path = os.path.abspath(db_path or default_db_path())
         self._fallback_db_path = os.path.abspath(workspace_fallback_db_path())
         if self._auto_db_path:
@@ -137,6 +226,7 @@ class DatabaseManager:
         self.last_integrity_check: Optional[Dict[str, Any]] = None
         self.last_backup_path: Optional[str] = None
         self.last_startup_snapshot_path: Optional[str] = None
+        self.last_restore_drill: Optional[Dict[str, Any]] = None
         self.last_initialize_result: Optional[Dict[str, Any]] = None
         self.last_migration_source_path: Optional[str] = None
 
@@ -159,31 +249,51 @@ class DatabaseManager:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA temp_store = MEMORY")
-        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+
+    def _record_sqlite_retry(
+        self,
+        attempt: int,
+        error: sqlite3.OperationalError,
+        delay_seconds: float,
+    ) -> None:
+        self.sqlite_retry_count += 1
+        METRICS.increment("ad_org_sync_sqlite_lock_retries_total")
+        METRICS.observe("ad_org_sync_sqlite_lock_retry_delay_seconds", delay_seconds)
+        LOGGER.warning(
+            "SQLite write contention for %s; retry=%s delay=%.3fs error=%s",
+            self.db_path,
+            attempt,
+            delay_seconds,
+            error,
+        )
+
+    def _open_connection(self, db_path: str) -> ResilientSQLiteConnection:
+        conn = sqlite3.connect(
+            db_path,
+            timeout=self.connection_timeout_seconds,
+            factory=ResilientSQLiteConnection,
+        )
+        conn.configure_retry(self.retry_policy, self._record_sqlite_retry)
+        conn.row_factory = sqlite3.Row
+        try:
+            self._apply_connection_pragmas(conn)
+        except Exception:
+            conn.close()
+            raise
+        return conn
 
     def _connect(self) -> sqlite3.Connection:
         try:
-            conn = sqlite3.connect(self.db_path, timeout=5.0)
-            conn.row_factory = sqlite3.Row
-            try:
-                self._apply_connection_pragmas(conn)
-            except Exception:
-                conn.close()
+            return self._open_connection(self.db_path)
+        except sqlite3.OperationalError as exc:
+            if is_retryable_sqlite_lock_error(exc):
                 raise
-            return conn
-        except sqlite3.OperationalError:
             if not self._auto_db_path or os.path.normcase(self.db_path) == os.path.normcase(self._fallback_db_path):
                 raise
             self.db_path = self._fallback_db_path
             self._ensure_directory_layout()
-            conn = sqlite3.connect(self.db_path, timeout=5.0)
-            conn.row_factory = sqlite3.Row
-            try:
-                self._apply_connection_pragmas(conn)
-            except Exception:
-                conn.close()
-                raise
-            return conn
+            return self._open_connection(self.db_path)
 
     def database_exists(self) -> bool:
         return os.path.exists(self.db_path) and os.path.getsize(self.db_path) > 0
@@ -199,7 +309,12 @@ class DatabaseManager:
         return None
 
     def migrate_legacy_database_if_needed(self) -> Optional[str]:
-        if self.database_exists():
+        # An explicit database path is an isolation boundary.  Copying a
+        # workspace-level legacy database into that path is surprising for
+        # callers (and can leak production data into tests or temporary
+        # environments).  Automatic legacy discovery is only appropriate
+        # when the application selected its own default database location.
+        if not self._auto_db_path or self.database_exists():
             return None
 
         legacy_source_path = self.find_legacy_database()
@@ -229,6 +344,82 @@ class DatabaseManager:
         self.last_integrity_check = summary
         return summary
 
+    @staticmethod
+    def _migration_checksum(description: str, sql_script: str) -> str:
+        normalized_sql = str(sql_script or "").replace("\r\n", "\n").strip()
+        payload = f"{str(description or '').strip()}\n{normalized_sql}".encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def verify_migration_checksums(self, *, backfill_missing: bool = False) -> Dict[str, Any]:
+        expected = {
+            int(version): {
+                "description": str(description or "").strip(),
+                "checksum": self._migration_checksum(description, sql_script),
+            }
+            for version, description, sql_script in MIGRATIONS
+        }
+        with self.transaction() as conn:
+            columns = {
+                str(row["name"] or "")
+                for row in conn.execute("PRAGMA table_info(schema_migrations)").fetchall()
+            }
+            if "checksum" not in columns:
+                return {
+                    "ok": False,
+                    "supported": False,
+                    "verified_count": 0,
+                    "backfilled_count": 0,
+                    "mismatched_versions": [],
+                    "unexpected_versions": [],
+                }
+            rows = conn.execute(
+                "SELECT version, description, checksum FROM schema_migrations ORDER BY version"
+            ).fetchall()
+            mismatched_versions: list[int] = []
+            unexpected_versions: list[int] = []
+            backfilled_count = 0
+            for row in rows:
+                version = int(row["version"])
+                expected_entry = expected.get(version)
+                if expected_entry is None:
+                    unexpected_versions.append(version)
+                    continue
+                stored_checksum = str(row["checksum"] or "").strip()
+                if not stored_checksum and backfill_missing:
+                    conn.execute(
+                        "UPDATE schema_migrations SET checksum = ? WHERE version = ?",
+                        (expected_entry["checksum"], version),
+                    )
+                    backfilled_count += 1
+                    stored_checksum = expected_entry["checksum"]
+                stored_description = str(row["description"] or "").strip()
+                if (
+                    stored_checksum != expected_entry["checksum"]
+                    or stored_description != expected_entry["description"]
+                ):
+                    mismatched_versions.append(version)
+
+        ok = not mismatched_versions and not unexpected_versions and len(rows) == len(expected)
+        summary = {
+            "ok": ok,
+            "supported": True,
+            "verified_count": len(rows),
+            "expected_count": len(expected),
+            "backfilled_count": backfilled_count,
+            "mismatched_versions": mismatched_versions,
+            "unexpected_versions": unexpected_versions,
+        }
+        if not ok:
+            details = []
+            if mismatched_versions:
+                details.append(f"checksum mismatch={mismatched_versions}")
+            if unexpected_versions:
+                details.append(f"unexpected versions={unexpected_versions}")
+            if len(rows) != len(expected):
+                details.append(f"applied={len(rows)} expected={len(expected)}")
+            raise RuntimeError("Migration integrity check failed: " + "; ".join(details))
+        return summary
+
     def backup_database(self, *, label: Optional[str] = None) -> str:
         if not self.database_exists():
             raise FileNotFoundError(f"database file not found: {self.db_path}")
@@ -243,6 +434,81 @@ class DatabaseManager:
 
         self.last_backup_path = backup_path
         return backup_path
+
+    @staticmethod
+    def _database_table_counts(connection: sqlite3.Connection) -> Dict[str, int]:
+        rows = connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+            ORDER BY name
+            """
+        ).fetchall()
+        counts: Dict[str, int] = {}
+        for row in rows:
+            table_name = str(row[0] or "")
+            if not table_name:
+                continue
+            quoted_name = table_name.replace('"', '""')
+            counts[table_name] = int(
+                connection.execute(f'SELECT COUNT(1) FROM "{quoted_name}"').fetchone()[0]
+            )
+        return counts
+
+    @staticmethod
+    def _file_sha256(path: str) -> str:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def verify_backup_restore(self, *, backup_path: Optional[str] = None) -> Dict[str, Any]:
+        """Restore a backup into an isolated database and verify logical equivalence."""
+        selected_backup = os.path.abspath(
+            str(backup_path or "").strip() or self.backup_database(label="restore_drill")
+        )
+        if not os.path.isfile(selected_backup):
+            raise FileNotFoundError(f"backup file not found: {selected_backup}")
+        os.makedirs(self.backup_dir, exist_ok=True)
+        checked_at = utcnow_iso()
+        with tempfile.TemporaryDirectory(prefix="restore-drill-", dir=self.backup_dir) as drill_dir:
+            restored_path = os.path.join(drill_dir, "restored.db")
+            source_uri = f"file:{selected_backup.replace(os.sep, '/')}?mode=ro"
+            with closing(sqlite3.connect(source_uri, uri=True, timeout=5.0)) as source_conn:
+                source_counts = self._database_table_counts(source_conn)
+                with closing(sqlite3.connect(restored_path, timeout=5.0)) as restored_conn:
+                    source_conn.backup(restored_conn)
+                    restored_counts = self._database_table_counts(restored_conn)
+
+            restored_manager = DatabaseManager(
+                db_path=restored_path,
+                connection_timeout_seconds=self.connection_timeout_seconds,
+                busy_timeout_ms=self.busy_timeout_ms,
+                lock_retry_attempts=self.retry_policy.max_attempts,
+                lock_retry_base_delay_seconds=self.retry_policy.base_delay_seconds,
+                lock_retry_max_delay_seconds=self.retry_policy.max_delay_seconds,
+            )
+            integrity = restored_manager.run_integrity_check()
+            migration_integrity = restored_manager.verify_migration_checksums(backfill_missing=False)
+            report = {
+                "checked_at": checked_at,
+                "backup_path": selected_backup,
+                "backup_sha256": self._file_sha256(selected_backup),
+                "backup_size_bytes": os.path.getsize(selected_backup),
+                "integrity_check": integrity,
+                "migration_integrity": migration_integrity,
+                "table_counts": restored_counts,
+                "logical_counts_match": source_counts == restored_counts,
+            }
+            report["ok"] = bool(
+                integrity.get("ok")
+                and migration_integrity.get("ok")
+                and report["logical_counts_match"]
+            )
+        self.last_restore_drill = report
+        return report
 
     def ensure_startup_snapshot(self) -> Optional[str]:
         if not self.database_exists():
@@ -266,6 +532,14 @@ class DatabaseManager:
             "last_startup_snapshot_path": self.last_startup_snapshot_path,
             "last_migration_source_path": self.last_migration_source_path,
             "last_integrity_check": self.last_integrity_check,
+            "last_restore_drill": self.last_restore_drill,
+            "sqlite_retry_count": self.sqlite_retry_count,
+            "sqlite_retry_policy": {
+                "max_attempts": self.retry_policy.max_attempts,
+                "base_delay_seconds": self.retry_policy.base_delay_seconds,
+                "max_delay_seconds": self.retry_policy.max_delay_seconds,
+                "busy_timeout_ms": self.busy_timeout_ms,
+            },
         }
 
     def cleanup_history(
@@ -487,6 +761,8 @@ class DatabaseManager:
                     (version, description, utcnow_iso()),
                 )
 
+        migration_integrity = self.verify_migration_checksums(backfill_missing=True)
+
         SettingsRepository(self).seed_defaults()
         GroupExclusionRuleRepository(self).seed_defaults()
         post_init_integrity = None
@@ -505,6 +781,7 @@ class DatabaseManager:
             "startup_snapshot_path": startup_snapshot_path,
             "integrity_check": post_init_integrity,
             "preflight_integrity": preflight_integrity,
+            "migration_integrity": migration_integrity,
         }
         return self.last_initialize_result
 
@@ -552,6 +829,15 @@ class BaseRepository:
         if not row:
             return 0
         return int(row[0])
+
+    @contextmanager
+    def _write_connection(self, connection: sqlite3.Connection | None = None):
+        """Join an existing unit of work or create a repository-local transaction."""
+        if connection is not None:
+            yield connection
+            return
+        with self.db.transaction() as managed_connection:
+            yield managed_connection
 
     def _resolve_org_id(self, org_id: Optional[str] = None, *, default: Optional[str] = None) -> Optional[str]:
         fallback = self.default_org_id if default is None else default

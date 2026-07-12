@@ -1,10 +1,9 @@
 import logging
-import json
-import re
 import time
 from collections import deque
 from typing import Any, Dict, List
 
+from sync_app.core.value_coercion import coerce_int_list
 from sync_app.infra.requests_compat import ensure_requests_available, requests
 
 
@@ -144,63 +143,7 @@ class DingTalkAPI:
         return bool(value)
 
     def _coerce_int_list(self, value: Any) -> List[int]:
-        normalized: List[int] = []
-
-        def append_unique(raw_value: Any) -> None:
-            try:
-                parsed = int(raw_value)
-            except (TypeError, ValueError):
-                return
-            if parsed not in normalized:
-                normalized.append(parsed)
-
-        if value in (None, ""):
-            return normalized
-
-        if isinstance(value, dict):
-            for key in ("dept_id", "deptId", "department_id", "departmentId"):
-                if key in value:
-                    for item in self._coerce_int_list(value.get(key)):
-                        append_unique(item)
-            if normalized:
-                return normalized
-
-            numeric_keys = []
-            for key in value.keys():
-                key_text = str(key).strip()
-                if key_text.lstrip("-").isdigit():
-                    numeric_keys.append(key_text)
-            if numeric_keys:
-                for key_text in numeric_keys:
-                    append_unique(key_text)
-                return normalized
-
-            for nested_value in value.values():
-                for item in self._coerce_int_list(nested_value):
-                    append_unique(item)
-            return normalized
-
-        if isinstance(value, (list, tuple, set)):
-            for item in value:
-                for nested_item in self._coerce_int_list(item):
-                    append_unique(nested_item)
-            return normalized
-
-        if isinstance(value, str):
-            text = value.strip()
-            if not text:
-                return normalized
-            if text.startswith("[") and text.endswith("]"):
-                try:
-                    return self._coerce_int_list(json.loads(text))
-                except json.JSONDecodeError:
-                    pass
-            for token in re.findall(r"-?\d+", text):
-                append_unique(token)
-            return normalized
-
-        append_unique(value)
-        return normalized
+        return coerce_int_list(value)
 
     def _normalize_department(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return {

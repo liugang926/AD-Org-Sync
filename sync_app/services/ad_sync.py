@@ -1,7 +1,5 @@
-import configparser
 import json
 import logging
-import ssl
 import time
 import uuid
 from datetime import datetime
@@ -22,7 +20,6 @@ from sync_app.infra.ldap_compat import (
     LDAPBindError,
     LDAPException,
     Server,
-    Tls,
     ensure_ldap3_available,
     escape_filter_chars,
 )
@@ -177,7 +174,6 @@ class ADSyncLDAPS:
             username = self._convert_username_format(self.username)
             
             # 优先尝试NTLM认证（Windows AD推荐），失败则使用SIMPLE认证
-            auth_method = NTLM
             try:
                 self.connection = Connection(
                     self.server,
@@ -192,8 +188,6 @@ class ADSyncLDAPS:
                 # NTLM失败（可能是MD4问题），尝试SIMPLE认证
                 if "MD4" in str(ntlm_error) or "unsupported hash type" in str(ntlm_error):
                     self.logger.warning("NTLM认证失败（MD4不支持），尝试SIMPLE认证...")
-                    auth_method = SIMPLE
-                    
                     self.connection = Connection(
                         self.server,
                         user=username,
@@ -253,7 +247,7 @@ class ADSyncLDAPS:
                     time.sleep(self.retry_delay)
                     self._reconnect()
                 else:
-                    self.logger.error(f"LDAP操作失败，已达到最大重试次数")
+                    self.logger.error("LDAP操作失败，已达到最大重试次数")
                     raise
         
     def get_ou_dn(self, ou_path: List[str]) -> str:
@@ -600,6 +594,7 @@ class ADSyncLDAPS:
         source_key: str,
         display_name: str,
         ou_path: Optional[List[str]] = None,
+        connector_id: str = "default",
     ) -> DepartmentGroupInfo:
         desired_ou_path = [segment.strip() for segment in (ou_path or []) if str(segment or '').strip()]
         if not desired_ou_path:

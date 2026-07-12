@@ -8,8 +8,10 @@ import os
 import secrets
 import threading
 from datetime import datetime, timezone
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable
 
+from sync_app.application import ApproveSyncPlanUseCase, TenantContext
+from sync_app.core.observability import METRICS
 from sync_app.infra.requests_compat import ensure_requests_available, requests
 from sync_app.storage.local_db import DatabaseManager, normalize_org_id
 from sync_app.storage.repositories.conflicts import SyncConflictRepository, SyncPlanReviewRepository
@@ -19,7 +21,6 @@ from sync_app.storage.repositories.system import (
     IntegrationWebhookOutboxRepository,
     IntegrationWebhookSubscriptionRepository,
     SettingsRepository,
-    SyncReplayRequestRepository,
 )
 
 INTEGRATION_API_TOKEN_SETTING = "integration_api_token"
@@ -203,8 +204,13 @@ def serialize_delivery_record(delivery_record: Any) -> dict[str, Any]:
         "last_status": str(getattr(delivery_record, "last_status", "") or ""),
         "last_error": str(getattr(delivery_record, "last_error", "") or ""),
         "last_attempt_at": str(getattr(delivery_record, "last_attempt_at", "") or ""),
+        "dead_lettered_at": str(getattr(delivery_record, "dead_lettered_at", "") or ""),
+        "replay_count": int(getattr(delivery_record, "replay_count", 0) or 0),
+        "last_replayed_at": str(getattr(delivery_record, "last_replayed_at", "") or ""),
+        "last_replayed_by": str(getattr(delivery_record, "last_replayed_by", "") or ""),
         "created_at": str(getattr(delivery_record, "created_at", "") or ""),
         "retryable": str(getattr(delivery_record, "status", "") or "").strip().lower() == "failed",
+        "dead_lettered": bool(str(getattr(delivery_record, "dead_lettered_at", "") or "").strip()),
     }
 
 
@@ -329,9 +335,14 @@ def _format_response_status(response: Any) -> str:
     return status_text
 
 
-def _build_retry_delay_seconds(attempt_number: int) -> int:
+def _build_retry_delay_seconds(attempt_number: int, *, jitter_key: str = "") -> int:
     normalized_attempt = max(int(attempt_number or 0), 1)
-    return min(30 * (2 ** (normalized_attempt - 1)), 15 * 60)
+    base_delay = min(30 * (2 ** (normalized_attempt - 1)), 15 * 60)
+    jitter_digest = hashlib.sha256(
+        f"{str(jitter_key or 'outbox')}:{normalized_attempt}".encode("utf-8")
+    ).digest()
+    jitter_factor = 0.8 + (jitter_digest[0] / 255) * 0.4
+    return max(min(round(base_delay * jitter_factor), 15 * 60), 1)
 
 
 def _outbox_dispatch_key(db_path: str, org_id: str | None) -> str:
@@ -576,6 +587,7 @@ def retry_outbox_delivery(
     *,
     org_id: str,
     delivery_id: int,
+    requested_by: str = "system",
 ) -> dict[str, Any]:
     normalized_org_id = normalize_org_id(org_id, fallback="default") or "default"
     outbox_repo = IntegrationWebhookOutboxRepository(db_manager)
@@ -588,6 +600,7 @@ def retry_outbox_delivery(
         int(delivery_id),
         org_id=normalized_org_id,
         failed_only=True,
+        requested_by=requested_by,
     )
     if refreshed_record is None:
         raise ValueError("Delivery record could not be requeued")
@@ -601,6 +614,7 @@ def retry_failed_outbox_deliveries(
     *,
     org_id: str,
     limit: int = DEFAULT_OUTBOX_BATCH_LIMIT,
+    requested_by: str = "system",
 ) -> dict[str, Any]:
     normalized_org_id = normalize_org_id(org_id, fallback="default") or "default"
     outbox_repo = IntegrationWebhookOutboxRepository(db_manager)
@@ -615,6 +629,7 @@ def retry_failed_outbox_deliveries(
             int(record.id or 0),
             org_id=normalized_org_id,
             failed_only=True,
+            requested_by=requested_by,
         )
         if refreshed_record is not None:
             retried_records.append(refreshed_record)
@@ -677,6 +692,8 @@ def flush_integration_outbox(
         "delivered_count": 0,
         "failed_count": 0,
         "retrying_count": 0,
+        "dead_lettered_count": 0,
+        "stale_lease_count": 0,
     }
 
     for _ in range(max(int(max_batches or 0), 1)):
@@ -701,11 +718,15 @@ def flush_integration_outbox(
                 status_text = _format_response_status(response)
                 success, error_text = _response_success_details(delivery_kind, response)
                 if success:
-                    outbox_repo.mark_delivery_success(
+                    updated = outbox_repo.mark_delivery_success(
                         int(delivery.id or 0),
                         last_status=status_text,
                         attempted_at=attempted_at,
+                        lease_token=delivery.lease_token,
                     )
+                    if not updated:
+                        result["stale_lease_count"] += 1
+                        continue
                     if subscription_id:
                         subscription_repo.record_delivery_result(
                             subscription_id,
@@ -716,13 +737,20 @@ def flush_integration_outbox(
                     result["delivered_count"] += 1
                     continue
 
-                outbox_repo.mark_delivery_retry(
+                updated = outbox_repo.mark_delivery_retry(
                     int(delivery.id or 0),
                     last_status=status_text,
                     last_error=error_text,
                     attempted_at=attempted_at,
-                    retry_delay_seconds=_build_retry_delay_seconds(attempt_number),
+                    retry_delay_seconds=_build_retry_delay_seconds(
+                        attempt_number,
+                        jitter_key=f"{delivery.delivery_id}:{delivery.subscription_id or delivery.target_url}",
+                    ),
+                    lease_token=delivery.lease_token,
                 )
+                if not updated:
+                    result["stale_lease_count"] += 1
+                    continue
                 if subscription_id:
                     subscription_repo.record_delivery_result(
                         subscription_id,
@@ -731,14 +759,23 @@ def flush_integration_outbox(
                         attempted_at=attempted_at,
                     )
                 result["failed_count" if terminal_failure else "retrying_count"] += 1
+                if terminal_failure:
+                    result["dead_lettered_count"] += 1
             except Exception as exc:
-                outbox_repo.mark_delivery_retry(
+                updated = outbox_repo.mark_delivery_retry(
                     int(delivery.id or 0),
                     last_status="request_failed",
                     last_error=str(exc),
                     attempted_at=attempted_at,
-                    retry_delay_seconds=_build_retry_delay_seconds(attempt_number),
+                    retry_delay_seconds=_build_retry_delay_seconds(
+                        attempt_number,
+                        jitter_key=f"{delivery.delivery_id}:{delivery.subscription_id or delivery.target_url}",
+                    ),
+                    lease_token=delivery.lease_token,
                 )
+                if not updated:
+                    result["stale_lease_count"] += 1
+                    continue
                 if subscription_id:
                     subscription_repo.record_delivery_result(
                         subscription_id,
@@ -747,6 +784,18 @@ def flush_integration_outbox(
                         attempted_at=attempted_at,
                     )
                 result["failed_count" if terminal_failure else "retrying_count"] += 1
+                if terminal_failure:
+                    result["dead_lettered_count"] += 1
+    for metric_suffix, result_key in (
+        ("claimed", "claimed_count"),
+        ("delivered", "delivered_count"),
+        ("retrying", "retrying_count"),
+        ("dead_lettered", "dead_lettered_count"),
+        ("stale_lease", "stale_lease_count"),
+    ):
+        metric_value = int(result.get(result_key) or 0)
+        if metric_value:
+            METRICS.increment(f"ad_org_sync_outbox_{metric_suffix}_total", metric_value)
     return result
 
 
@@ -846,6 +895,59 @@ def emit_job_lifecycle_events(
     return {"emitted_events": emitted_events}
 
 
+class IntegrationApprovalEventPublisher:
+    def __init__(
+        self,
+        db_manager: DatabaseManager,
+        *,
+        dispatch_inline: bool = True,
+        dispatch_async: bool = False,
+    ) -> None:
+        self.db_manager = db_manager
+        self.dispatch_inline = dispatch_inline
+        self.dispatch_async = dispatch_async
+
+    def publish_review_approved(
+        self,
+        *,
+        tenant: TenantContext,
+        job: Any,
+        review: Any,
+        replay_request_id: int | None,
+    ) -> None:
+        emit_integration_event(
+            self.db_manager,
+            org_id=tenant.org_id,
+            event_type="review.approved",
+            payload={
+                "organization": {"org_id": tenant.org_id},
+                "job": serialize_job_record(job, review_record=review),
+                "review": _serialize_review_record(review),
+                "replay_request_id": replay_request_id,
+                "approved_by": tenant.actor_username,
+                "channel": tenant.channel,
+            },
+            dispatch_inline=self.dispatch_inline,
+            dispatch_async=self.dispatch_async,
+        )
+
+
+def build_approve_plan_use_case(
+    db_manager: DatabaseManager,
+    *,
+    dispatch_inline: bool = True,
+    dispatch_async: bool = False,
+) -> ApproveSyncPlanUseCase:
+    return ApproveSyncPlanUseCase(
+        db_manager,
+        event_publisher=IntegrationApprovalEventPublisher(
+            db_manager,
+            dispatch_inline=dispatch_inline,
+            dispatch_async=dispatch_async,
+        ),
+    )
+
+
 def approve_job_review(
     db_manager: DatabaseManager,
     *,
@@ -856,71 +958,20 @@ def approve_job_review(
     dispatch_inline: bool = True,
     dispatch_async: bool = False,
 ) -> dict[str, Any]:
-    normalized_org_id = normalize_org_id(org_id, fallback="default") or "default"
-    job_repo = SyncJobRepository(db_manager)
-    review_repo = SyncPlanReviewRepository(db_manager)
-    settings_repo = SettingsRepository(db_manager)
-    replay_request_repo = SyncReplayRequestRepository(db_manager)
-
-    job_record = job_repo.get_job_record(job_id)
-    if job_record is None:
-        raise ValueError("Job not found")
-    if (job_record.org_id or "default") != normalized_org_id:
-        raise ValueError("Job does not belong to the current organization")
-
-    review_record = review_repo.get_review_record_by_job_id(job_id)
-    if review_record is None:
-        raise ValueError("This job does not have a pending high-risk review")
-
-    review_was_already_approved = str(getattr(review_record, "status", "") or "").strip().lower() == "approved"
-    replay_request_id: int | None = None
-    if review_was_already_approved:
-        updated_review = review_record
-        expires_at_iso = str(getattr(review_record, "expires_at", "") or "")
-    else:
-        review_ttl_minutes = max(settings_repo.get_int("high_risk_review_ttl_minutes", 240), 1)
-        expires_at = datetime.now(timezone.utc).timestamp() + review_ttl_minutes * 60
-        expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(timespec="seconds")
-        review_repo.approve_review(
-            job_id,
-            reviewer_username=str(reviewer_username or "").strip(),
-            review_notes=str(review_notes or "").strip(),
-            expires_at=expires_at_iso,
-        )
-        updated_review = review_repo.get_review_record_by_job_id(job_id)
-        if settings_repo.get_bool("automatic_replay_enabled", False, org_id=normalized_org_id):
-            replay_request_id = replay_request_repo.enqueue_request(
-                request_type="plan_approval",
-                execution_mode="apply",
-                requested_by=str(reviewer_username or "").strip(),
-                org_id=normalized_org_id,
-                target_scope="job",
-                target_id=job_id,
-                trigger_reason="high_risk_plan_approved",
-                payload={"expires_at": expires_at_iso},
-            )
-        emit_integration_event(
-            db_manager,
-            org_id=normalized_org_id,
-            event_type="review.approved",
-            payload={
-                "organization": {"org_id": normalized_org_id},
-                "job": serialize_job_record(job_record, review_record=updated_review),
-                "review": _serialize_review_record(updated_review),
-                "replay_request_id": replay_request_id,
-                "approved_by": str(reviewer_username or "").strip(),
-            },
-            dispatch_inline=dispatch_inline,
-            dispatch_async=dispatch_async,
-        )
-
-    return {
-        "job": job_record,
-        "review": updated_review,
-        "expires_at_iso": expires_at_iso,
-        "replay_request_id": replay_request_id,
-        "fresh_approval": not review_was_already_approved,
-    }
+    tenant = TenantContext.create(
+        org_id=org_id,
+        actor_username=reviewer_username,
+        channel="compatibility_api",
+    )
+    return build_approve_plan_use_case(
+        db_manager,
+        dispatch_inline=dispatch_inline,
+        dispatch_async=dispatch_async,
+    ).execute(
+        tenant,
+        job_id=job_id,
+        review_notes=review_notes,
+    ).to_dict()
 
 
 def serialize_job_records(job_records: Iterable[Any], review_repo: SyncPlanReviewRepository) -> list[dict[str, Any]]:

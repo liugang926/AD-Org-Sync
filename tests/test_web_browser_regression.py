@@ -79,21 +79,30 @@ class WebBrowserRegressionTests(unittest.TestCase):
         cls.base_url = f"http://127.0.0.1:{cls.port}"
         cls.server = uvicorn.Server(
             uvicorn.Config(
-                create_app(db_path=str(cls.db_path), config_path="config.ini", bind_host="127.0.0.1", bind_port=cls.port),
+                create_app(
+                    db_path=str(cls.db_path),
+                    config_path="config.ini",
+                    bind_host="127.0.0.1",
+                    bind_port=cls.port,
+                ),
                 host="127.0.0.1",
                 port=cls.port,
                 log_level="warning",
             )
         )
         cls.server.install_signal_handlers = lambda: None
-        cls.server_thread = threading.Thread(target=cls.server.run, name="browser-regression-server", daemon=True)
+        cls.server_thread = threading.Thread(
+            target=cls.server.run, name="browser-regression-server", daemon=True
+        )
         cls.server_thread.start()
         _wait_for_http(f"{cls.base_url}/login")
 
         try:
             cls.playwright = sync_playwright().start()
             cls.browser = cls.playwright.chromium.launch()
-        except PlaywrightError as exc:  # pragma: no cover - depends on browser install state
+        except (
+            PlaywrightError
+        ) as exc:  # pragma: no cover - depends on browser install state
             cls.server.should_exit = True
             cls.server_thread.join(timeout=10)
             raise unittest.SkipTest(f"playwright browser is not installed: {exc}")
@@ -114,7 +123,9 @@ class WebBrowserRegressionTests(unittest.TestCase):
             thread.join(timeout=10)
 
     def setUp(self):
-        self.context = self.browser.new_context(viewport={"width": 1440, "height": 1100})
+        self.context = self.browser.new_context(
+            viewport={"width": 1440, "height": 1100}
+        )
         self.page = self.context.new_page()
 
     def tearDown(self):
@@ -150,6 +161,60 @@ class WebBrowserRegressionTests(unittest.TestCase):
             )
         ).strip()
 
+    def _assert_page_has_no_horizontal_overflow(self) -> None:
+        dimensions = self.page.evaluate(
+            """() => ({
+                viewportWidth: document.documentElement.clientWidth,
+                documentWidth: document.documentElement.scrollWidth,
+                bodyWidth: document.body.scrollWidth,
+            })"""
+        )
+        self.assertLessEqual(
+            dimensions["documentWidth"], dimensions["viewportWidth"] + 1, dimensions
+        )
+        self.assertLessEqual(
+            dimensions["bodyWidth"], dimensions["viewportWidth"] + 1, dimensions
+        )
+
+    def _assert_mobile_page_header_is_compact(self) -> None:
+        header = self.page.locator(".page-header")
+        if header.count() == 0:
+            return
+        header_box = header.bounding_box()
+        meta_box = self.page.locator(".page-header__meta").bounding_box()
+        self.assertIsNotNone(header_box)
+        self.assertIsNotNone(meta_box)
+        self.assertLess(float(header_box["height"]), 420.0, header_box)
+        self.assertLess(float(meta_box["height"]), 220.0, meta_box)
+
+    def test_responsive_pages_keep_tables_local_and_body_within_viewport(self):
+        self._login()
+        for width in (390, 768, 1024, 1440):
+            self.page.set_viewport_size({"width": width, "height": 900})
+            for path in ("/dashboard", "/config", "/audit"):
+                with self.subTest(width=width, path=path):
+                    self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
+                    self._assert_page_has_no_horizontal_overflow()
+                    if width <= 1024:
+                        self._assert_mobile_page_header_is_compact()
+
+                    table_shells = self.page.locator(".table-shell")
+                    for index in range(table_shells.count()):
+                        shell = table_shells.nth(index)
+                        if not shell.is_visible():
+                            continue
+                        shell_box = shell.bounding_box()
+                        self.assertIsNotNone(shell_box)
+                        self.assertLessEqual(
+                            float(shell_box["width"]), float(width) + 1
+                        )
+                        self.assertIn(
+                            shell.evaluate(
+                                "element => getComputedStyle(element).overflowX"
+                            ),
+                            {"auto", "scroll"},
+                        )
+
     def test_login_page_loads_styles_and_primary_action(self):
         self.page.goto(f"{self.base_url}/login", wait_until="networkidle")
         stylesheet_loaded = self.page.evaluate(
@@ -172,9 +237,15 @@ class WebBrowserRegressionTests(unittest.TestCase):
         signout_height = self._height(".header-signout")
         self.assertLessEqual(abs(mode_height - language_height), 6.0)
         self.assertLessEqual(abs(signout_height - language_height), 6.0)
-        self.assertNotEqual(self._style(".mode-switcher button.active", "color"), "rgb(255, 255, 255)")
-        self.assertNotEqual(self._style(".language-switcher a.active", "color"), "rgb(255, 255, 255)")
-        self.assertNotEqual(self._style(".header-signout", "border-top-color"), "rgba(0, 0, 0, 0)")
+        self.assertNotEqual(
+            self._style(".mode-switcher button.active", "color"), "rgb(255, 255, 255)"
+        )
+        self.assertNotEqual(
+            self._style(".language-switcher a.active", "color"), "rgb(255, 255, 255)"
+        )
+        self.assertNotEqual(
+            self._style(".header-signout", "border-top-color"), "rgba(0, 0, 0, 0)"
+        )
         self.assertTrue(self.page.locator(".control-tower").is_visible())
         self.assertTrue(self.page.locator(".control-gate-card").is_visible())
         gate_box = self.page.locator(".control-gate-card").bounding_box()
@@ -182,13 +253,53 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertGreater(float(gate_box["x"]), 300.0)
         self._capture("dashboard-page.png")
 
+    def test_mobile_header_controls_meet_touch_target_minimum(self):
+        self.context.close()
+        self.context = self.browser.new_context(viewport={"width": 390, "height": 900})
+        self.page = self.context.new_page()
+        self._login()
+        self.page.goto(f"{self.base_url}/dashboard", wait_until="networkidle")
+
+        for selector in (
+            ".mobile-nav-toggle",
+            ".mode-switcher .topbar-segment",
+            ".language-switcher .topbar-segment",
+            ".header-signout",
+        ):
+            with self.subTest(selector=selector):
+                self.assertGreaterEqual(self._height(selector), 40.0)
+
+    def test_chinese_operating_pages_do_not_leak_known_dynamic_english_messages(self):
+        self._login()
+        for path in ("/dashboard?lang=zh-CN", "/jobs?lang=zh-CN"):
+            with self.subTest(path=path):
+                self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
+                page_text = self.page.locator("main").inner_text()
+                self.assertNotIn("Fix Configuration", page_text)
+                self.assertNotIn("Apply gate blocker", page_text)
+                self.assertNotIn("Failed to load configuration", page_text)
+                self.assertNotIn("jobs.blocker.", page_text)
+
     def test_config_page_renders_multi_provider_schema_controls(self):
         self._login()
         self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
-        self.assertIn("WeCom Connector Configuration", self.page.locator("body").inner_text())
-        self.assertIn("Shared Page, Provider-Specific Fields", self.page.locator("body").inner_text())
-        self.assertTrue(self.page.get_by_role("button", name="Source System Provider and credentials").is_visible())
-        self.assertTrue(self.page.get_by_role("button", name="Target AD LDAP and OU roots").is_visible())
+        self.assertIn(
+            "WeCom Connector Configuration", self.page.locator("body").inner_text()
+        )
+        self.assertIn(
+            "Shared Page, Provider-Specific Fields",
+            self.page.locator("body").inner_text(),
+        )
+        self.assertTrue(
+            self.page.get_by_role(
+                "button", name="Source System Provider and credentials"
+            ).is_visible()
+        )
+        self.assertTrue(
+            self.page.get_by_role(
+                "button", name="Target AD LDAP and OU roots"
+            ).is_visible()
+        )
         self.assertTrue(self.page.locator("#config-section-source").is_visible())
         self.assertFalse(self.page.locator("#config-section-target").is_visible())
         option_text = self.page.locator("#source_provider option").all_inner_texts()
@@ -202,52 +313,109 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.page.wait_for_function(
             "() => document.querySelector('[data-config-provider-card-title]')?.textContent.includes('DingTalk Source Connector')"
         )
-        self.assertIn("DingTalk Source Connector", self.page.locator("body").inner_text())
-        self.assertIn("AppKey / Client ID", self.page.locator("#group-corpid label").inner_text())
-        self.assertEqual(self.page.locator("#corpid").get_attribute("placeholder"), "Enter AppKey")
+        self.assertIn(
+            "DingTalk Source Connector", self.page.locator("body").inner_text()
+        )
+        self.assertIn(
+            "AppKey / Client ID", self.page.locator("#group-corpid label").inner_text()
+        )
+        self.assertEqual(
+            self.page.locator("#corpid").get_attribute("placeholder"), "Enter AppKey"
+        )
         self.assertIn(
             "The DingTalk application key or client ID.",
             self.page.locator("#group-corpid").inner_text(),
         )
-        self.assertIn("DingTalk Bot Webhook", self.page.locator("#group-webhook_url label").inner_text())
+        self.assertIn(
+            "DingTalk Bot Webhook",
+            self.page.locator("#group-webhook_url label").inner_text(),
+        )
         self.assertTrue(self.page.get_by_text("Source Scope").first.is_visible())
-        browse_source_button = self.page.get_by_role("button", name="Browse Source Unit Tree")
+        browse_source_button = self.page.get_by_role(
+            "button", name="Browse Source Unit Tree"
+        )
         self.assertTrue(browse_source_button.is_visible())
-        self.assertTrue(self.page.get_by_role("button", name="Save Configuration").is_visible())
-        self.assertTrue(self.page.get_by_role("button", name="Preview Changes").is_visible())
-        self.assertTrue(self.page.get_by_role("link", name="Open Account Creation Rules").is_visible())
-        self.assertTrue(self.page.get_by_role("link", name="Open Department Routing").is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="Save Draft").is_visible())
+        self.assertTrue(
+            self.page.get_by_role("button", name="Preview Changes").is_visible()
+        )
+        self.assertTrue(self.page.get_by_role("link", name="Publish").is_visible())
+        self.assertTrue(
+            self.page.get_by_role(
+                "link", name="Open Account Creation Rules"
+            ).is_visible()
+        )
+        self.assertTrue(
+            self.page.get_by_role("link", name="Open Department Routing").is_visible()
+        )
         browse_source_button.click()
-        self.page.locator("#group-source_root_unit_ids [data-config-source-browser]").wait_for(state="visible")
-        self.assertTrue(self.page.locator("#group-source_root_unit_ids [data-config-source-browser]").is_visible())
+        self.page.locator(
+            "#group-source_root_unit_ids [data-config-source-browser]"
+        ).wait_for(state="visible")
+        self.assertTrue(
+            self.page.locator(
+                "#group-source_root_unit_ids [data-config-source-browser]"
+            ).is_visible()
+        )
         self.page.get_by_role("button", name="Target AD LDAP and OU roots").click()
         self.page.locator("#config-section-target").wait_for(state="visible")
-        self.assertTrue(self.page.get_by_text("OU Filter And Root Mapping").first.is_visible())
-        select_target_button = self.page.get_by_role("button", name="Select Target Root OU")
+        self.assertTrue(
+            self.page.get_by_text("OU Filter And Root Mapping").first.is_visible()
+        )
+        select_target_button = self.page.get_by_role(
+            "button", name="Select Target Root OU"
+        )
         self.assertTrue(select_target_button.is_visible())
         select_target_button.click()
-        self.page.locator("#group-directory_root_ou_path [data-config-target-browser]").wait_for(state="visible")
-        self.assertTrue(self.page.locator("#group-directory_root_ou_path [data-config-target-browser]").is_visible())
-        self.assertFalse(
-            self.page.locator("#group-disabled_users_ou_path [data-config-target-browser]").is_visible()
+        self.page.locator(
+            "#group-directory_root_ou_path [data-config-target-browser]"
+        ).wait_for(state="visible")
+        self.assertTrue(
+            self.page.locator(
+                "#group-directory_root_ou_path [data-config-target-browser]"
+            ).is_visible()
         )
-        self.assertTrue(self.page.get_by_role("button", name="Select Disabled Users OU").is_visible())
-        self.assertTrue(self.page.get_by_role("button", name="Select Custom Group OU").is_visible())
+        self.assertFalse(
+            self.page.locator(
+                "#group-disabled_users_ou_path [data-config-target-browser]"
+            ).is_visible()
+        )
+        self.assertTrue(
+            self.page.get_by_role(
+                "button", name="Select Disabled Users OU"
+            ).is_visible()
+        )
+        self.assertTrue(
+            self.page.get_by_role("button", name="Select Custom Group OU").is_visible()
+        )
         self._capture("config-page.png")
 
-    def test_advanced_sync_page_surfaces_account_creation_rules_as_first_class_section(self):
+    def test_advanced_sync_page_surfaces_account_creation_rules_as_first_class_section(
+        self,
+    ):
         self._login()
         self.page.goto(f"{self.base_url}/advanced-sync", wait_until="networkidle")
         self.assertEqual(self.page.locator("#account-creation-rules").count(), 1)
-        self.assertIn("Account Creation Rules And Connector Routing", self.page.locator("body").inner_text())
-        toggle = self.page.locator("summary").filter(has_text="Configure Account Creation Rule").first
+        self.assertIn(
+            "Account Creation Rules And Connector Routing",
+            self.page.locator("body").inner_text(),
+        )
+        toggle = (
+            self.page.locator("summary")
+            .filter(has_text="Configure Account Creation Rule")
+            .first
+        )
         self.assertTrue(toggle.is_visible())
         if not self.page.locator("#username_collision_policy").is_visible():
             toggle.click()
         self.page.locator("#username_collision_policy").wait_for(state="visible")
         self.assertTrue(self.page.locator("#username_collision_policy").is_visible())
         self.assertTrue(self.page.locator("#root_department_ids").is_visible())
-        self.assertTrue(self.page.get_by_role("button", name="Save Account Creation Rule").is_visible())
+        self.assertTrue(
+            self.page.get_by_role(
+                "button", name="Save Account Creation Rule"
+            ).is_visible()
+        )
 
     def test_config_source_picker_loads_and_selects_inside_same_field_frame(self):
         self._login()
@@ -285,27 +453,47 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(source_group.locator(".picker-field__surface").is_visible())
         source_group.get_by_role("button", name="Browse Source Unit Tree").click()
         source_group.locator("[data-config-source-browser]").wait_for(state="visible")
-        source_group.locator("[data-config-source-list] .config-tree-row").nth(1).wait_for()
-        self.assertTrue(source_group.locator(".picker-field__surface .picker-inline-panel").is_visible())
+        source_group.locator("[data-config-source-list] .config-tree-row").nth(
+            1
+        ).wait_for()
+        self.assertTrue(
+            source_group.locator(
+                ".picker-field__surface .picker-inline-panel"
+            ).is_visible()
+        )
         source_group.locator('[data-source-unit-checkbox][value="8"]').check()
-        self.assertEqual(source_group.locator('input[name="source_root_unit_ids"]').input_value(), "8")
+        self.assertEqual(
+            source_group.locator('input[name="source_root_unit_ids"]').input_value(),
+            "8",
+        )
         self.assertIn(
             "China [8]",
-            source_group.locator('[data-picker-summary-for="source_root_unit_ids"]').inner_text(),
+            source_group.locator(
+                '[data-picker-summary-for="source_root_unit_ids"]'
+            ).inner_text(),
         )
         self.assertRegex(
-            source_group.locator('[data-picker-meta-for="source_root_unit_ids"]').inner_text(),
+            source_group.locator(
+                '[data-picker-meta-for="source_root_unit_ids"]'
+            ).inner_text(),
             r"1",
         )
         source_group.get_by_role("button", name="Close Picker").click()
         source_group.get_by_role("button", name="Browse Source Unit Tree").click()
-        self.assertTrue(source_group.locator("[data-config-source-list] .config-tree-row").nth(1).is_visible())
+        self.assertTrue(
+            source_group.locator("[data-config-source-list] .config-tree-row")
+            .nth(1)
+            .is_visible()
+        )
 
     def test_jobs_empty_state_actions_remain_visually_consistent(self):
         self._login()
         self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
         self.assertTrue(self.page.locator(".run-review").is_visible())
-        self.assertIn("execution readiness and impact preview", self.page.locator(".run-review").inner_text().lower())
+        self.assertIn(
+            "execution readiness and impact preview",
+            self.page.locator(".run-review").inner_text().lower(),
+        )
         dry_run_button = self.page.locator("button:has-text('Run Dry Run')").first
         apply_button = self.page.locator("button:has-text('Run Apply')").first
         self.assertTrue(apply_button.is_disabled())
@@ -350,7 +538,9 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
 
         self._login()
-        self.page.goto(f"{self.base_url}/jobs/browser-job-detail-001", wait_until="networkidle")
+        self.page.goto(
+            f"{self.base_url}/jobs/browser-job-detail-001", wait_until="networkidle"
+        )
         self.assertTrue(self.page.locator(".job-review-hero").is_visible())
         hero_text = self.page.locator(".job-review-hero").inner_text()
         self.assertIn("high risk", hero_text.lower())
@@ -381,24 +571,75 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 "userid": "browser-alice",
                 "candidates": [
                     {"rule": "existing_ad_userid", "username": "browser-alice"},
-                    {"rule": "existing_ad_email_localpart", "username": "browser.alice"},
+                    {
+                        "rule": "existing_ad_email_localpart",
+                        "username": "browser.alice",
+                    },
                 ],
             },
         )
 
         self._login()
-        self.page.goto(f"{self.base_url}/conflicts?job_id=browser-conflict-001", wait_until="networkidle")
+        self.page.goto(
+            f"{self.base_url}/conflicts?job_id=browser-conflict-001",
+            wait_until="networkidle",
+        )
         self.assertTrue(self.page.locator(".conflict-command-center").is_visible())
         self.assertTrue(self.page.locator(".bulk-action-bar").is_visible())
         self.assertGreaterEqual(self.page.locator(".conflict-card").count(), 1)
-        self.assertIn("Resolve identity ambiguity before Apply.", self.page.locator("body").inner_text())
+        self.assertIn(
+            "Resolve identity ambiguity before Apply.",
+            self.page.locator("body").inner_text(),
+        )
+
+        bulk_button = self.page.locator("[data-selection-requires-items]")
+        self.assertFalse(bulk_button.is_enabled())
+        self.page.locator("input[name='conflict_ids']").check()
+        self.assertTrue(bulk_button.is_enabled())
+        self.page.locator("select[name='action']").select_option("dismiss")
+        bulk_button.click()
+        self.assertTrue(self.page.locator("[data-confirm-dialog]").is_visible())
+        confirmation_details = self.page.locator("[data-confirm-details]").inner_text()
+        self.assertIn("Selected Conflicts\n1", confirmation_details)
+        self.assertIn("Requested Action\nDismiss", confirmation_details)
+        self.page.keyboard.press("Escape")
+        self.assertFalse(self.page.locator("[data-confirm-dialog]").is_visible())
+        self.assertTrue(
+            bulk_button.evaluate("element => document.activeElement === element")
+        )
         self._capture("conflict-queue-page.png")
 
-        self.page.goto(f"{self.base_url}/conflicts/{conflict_id}/decision-guide", wait_until="networkidle")
+        self.page.goto(
+            f"{self.base_url}/conflicts?job_id=browser-conflict-001&lang=zh-CN",
+            wait_until="networkidle",
+        )
+        localized_conflict = self.page.locator(".conflict-card").inner_text()
+        self.assertNotIn(
+            "browser-alice matched multiple AD candidates", localized_conflict
+        )
+        self.assertNotIn("create manual binding", localized_conflict.lower())
+        self.assertIn("多个 AD 候选账号", localized_conflict)
+        self.assertIn("创建手工绑定", localized_conflict)
+
+        self.page.goto(
+            f"{self.base_url}/conflicts/{conflict_id}/decision-guide?lang=zh-CN",
+            wait_until="networkidle",
+        )
+        localized_guide = self.page.locator(".decision-wizard").inner_text()
+        self.assertNotIn("Prefer browser-alice because", localized_guide)
+        self.assertNotIn("failed to get access token", localized_guide.lower())
+        self.assertIn("创建手工绑定", localized_guide)
+
+        self.page.goto(
+            f"{self.base_url}/conflicts/{conflict_id}/decision-guide?lang=en",
+            wait_until="networkidle",
+        )
         self.assertTrue(self.page.locator(".decision-wizard").is_visible())
         self.assertEqual(self.page.locator(".decision-step").count(), 5)
         self.assertTrue(self.page.locator(".outcome-card").first.is_visible())
-        self.assertIn("If You Bind This Account", self.page.locator("body").inner_text())
+        self.assertIn(
+            "If You Bind This Account", self.page.locator("body").inner_text()
+        )
         self._capture("conflict-decision-page.png")
 
     def test_z_lifecycle_workbench_uses_four_lane_board(self):
@@ -453,7 +694,9 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.page.goto(f"{self.base_url}/lifecycle", wait_until="networkidle")
         self.assertTrue(self.page.locator(".lifecycle-command-center").is_visible())
         self.assertEqual(self.page.locator(".lifecycle-lane").count(), 4)
-        self.assertIn("daily operations board", self.page.locator("body").inner_text().lower())
+        self.assertIn(
+            "daily operations board", self.page.locator("body").inner_text().lower()
+        )
         self.assertIn("browser-contractor", self.page.locator("body").inner_text())
         self._capture("lifecycle-workbench-page.png")
 
@@ -462,31 +705,56 @@ class WebBrowserRegressionTests(unittest.TestCase):
 
         self.page.goto(f"{self.base_url}/data-quality", wait_until="networkidle")
         self.assertTrue(self.page.locator(".quality-ops-hero").is_visible())
-        self.assertIn("quality operations", self.page.locator("body").inner_text().lower())
+        self.assertIn(
+            "quality operations", self.page.locator("body").inner_text().lower()
+        )
         self._capture("data-quality-page.png")
 
         self.page.goto(f"{self.base_url}/config/releases", wait_until="networkidle")
         self.assertTrue(self.page.locator(".release-pipeline").is_visible())
-        self.assertIn("release pipeline", self.page.locator("body").inner_text().lower())
+        self.assertIn(
+            "release pipeline", self.page.locator("body").inner_text().lower()
+        )
         self._capture("config-release-page.png")
 
         self.page.goto(f"{self.base_url}/integrations", wait_until="networkidle")
         self.assertTrue(self.page.locator(".integration-portal-hero").is_visible())
-        self.assertIn("integration portal", self.page.locator("body").inner_text().lower())
+        self.assertIn(
+            "integration portal", self.page.locator("body").inner_text().lower()
+        )
         self._capture("integration-center-page.png")
 
     def test_mappings_page_uses_search_selectors_instead_of_manual_ids(self):
         self._login()
 
         self.page.goto(f"{self.base_url}/mappings", wait_until="networkidle")
-        self.assertTrue(self.page.locator("#group-binding_source_user_id .ts-wrapper").is_visible())
-        self.assertTrue(self.page.locator("#group-binding_ad_username .ts-wrapper").is_visible())
-        self.assertTrue(self.page.locator("#group-override_source_user_id .ts-wrapper").is_visible())
-        self.assertTrue(self.page.locator("#group-override_primary_department_id .ts-wrapper").is_visible())
+        self.assertTrue(
+            self.page.locator("#group-binding_source_user_id .ts-wrapper").is_visible()
+        )
+        self.assertTrue(
+            self.page.locator("#group-binding_ad_username .ts-wrapper").is_visible()
+        )
+        self.assertTrue(
+            self.page.locator("#group-override_source_user_id .ts-wrapper").is_visible()
+        )
+        self.assertTrue(
+            self.page.locator(
+                "#group-override_primary_department_id .ts-wrapper"
+            ).is_visible()
+        )
         self.assertEqual(self.page.locator('input[name="source_user_id"]').count(), 0)
-        self.assertIn("Search and choose a source user", self.page.locator("#group-binding_source_user_id").inner_text())
-        self.assertIn("Search and choose an AD user", self.page.locator("#group-binding_ad_username").inner_text())
-        self.assertIn("Select a source user first", self.page.locator("#group-override_primary_department_id").inner_text())
+        self.assertIn(
+            "Search and choose a source user",
+            self.page.locator("#group-binding_source_user_id").inner_text(),
+        )
+        self.assertIn(
+            "Search and choose an AD user",
+            self.page.locator("#group-binding_ad_username").inner_text(),
+        )
+        self.assertIn(
+            "Select a source user first",
+            self.page.locator("#group-override_primary_department_id").inner_text(),
+        )
         self._capture("mappings-page-selectors.png")
 
 

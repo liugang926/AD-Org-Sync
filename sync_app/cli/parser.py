@@ -18,7 +18,7 @@ from sync_app.cli.handlers.conflicts import (
     _handle_conflicts_resolve_binding,
     _handle_conflicts_skip_user,
 )
-from sync_app.cli.handlers.database import _handle_db_backup, _handle_db_check
+from sync_app.cli.handlers.database import _handle_db_backup, _handle_db_check, _handle_db_restore_check
 from sync_app.cli.handlers.sync import _handle_approve_plan, _handle_sync, _handle_version
 from sync_app.cli.handlers.web import (
     _handle_bootstrap_admin,
@@ -62,11 +62,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bootstrap_admin_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
     bootstrap_admin_parser.add_argument("--username", default="admin", help="Administrator username")
-    bootstrap_admin_parser.add_argument("--password", default="", help="Administrator password")
-    bootstrap_admin_parser.add_argument(
+    password_source_group = bootstrap_admin_parser.add_mutually_exclusive_group()
+    password_source_group.add_argument("--password", default="", help="Administrator password")
+    password_source_group.add_argument(
         "--password-env",
         default="",
         help="Environment variable name that stores the administrator password",
+    )
+    password_source_group.add_argument(
+        "--password-file",
+        default="",
+        help="UTF-8 file that stores the administrator password, suitable for container secrets",
     )
     bootstrap_admin_parser.add_argument(
         "--role",
@@ -74,10 +80,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="super_admin",
         help="Role for a newly created account",
     )
-    bootstrap_admin_parser.add_argument(
+    existing_account_group = bootstrap_admin_parser.add_mutually_exclusive_group()
+    existing_account_group.add_argument(
         "--reset",
         action="store_true",
         help="Reset the password when the administrator already exists",
+    )
+    existing_account_group.add_argument(
+        "--if-missing",
+        action="store_true",
+        help="Create the administrator only when it does not already exist",
     )
     bootstrap_admin_parser.add_argument(
         "--enable",
@@ -131,9 +143,15 @@ def build_parser() -> argparse.ArgumentParser:
     approve_parser = subparsers.add_parser("approve-plan", help="Approve a dry-run high-risk plan for apply execution")
     approve_parser.add_argument("job_id", help="Dry-run job ID to approve")
     approve_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
+    approve_parser.add_argument("--org-id", default="default", help="Organization that owns the dry-run job")
     approve_parser.add_argument("--reviewer", default=None, help="Reviewer name, defaults to current OS user")
     approve_parser.add_argument("--notes", default="", help="Optional review notes")
-    approve_parser.add_argument("--ttl-minutes", type=int, default=240, help="Approval validity window in minutes")
+    approve_parser.add_argument(
+        "--ttl-minutes",
+        type=int,
+        default=None,
+        help="Approval validity window; defaults to the configured high-risk review TTL",
+    )
     approve_parser.set_defaults(handler=_handle_approve_plan)
 
     conflicts_parser = subparsers.add_parser("conflicts", help="Inspect or manage sync conflicts")
@@ -212,6 +230,19 @@ def build_parser() -> argparse.ArgumentParser:
     db_backup_parser.add_argument("--label", default="manual", help="Backup label")
     db_backup_parser.add_argument("--json", action="store_true", help="Print machine-readable output")
     db_backup_parser.set_defaults(handler=_handle_db_backup)
+
+    db_restore_check_parser = subparsers.add_parser(
+        "db-restore-check",
+        help="Restore a backup into an isolated database and verify recoverability",
+    )
+    db_restore_check_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
+    db_restore_check_parser.add_argument(
+        "--backup-path",
+        default=None,
+        help="Backup to verify; creates a fresh restore-drill backup when omitted",
+    )
+    db_restore_check_parser.add_argument("--json", action="store_true", help="Print machine-readable output")
+    db_restore_check_parser.set_defaults(handler=_handle_db_restore_check)
 
     web_parser = subparsers.add_parser("web", help="Launch the web control plane")
     web_parser.add_argument("--host", default=None, help="Bind host, defaults to SQLite app setting or 127.0.0.1")

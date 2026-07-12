@@ -8,8 +8,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sync_app.core.sync_policies import (
     ATTRIBUTE_SYNC_MODES,
     MANAGED_GROUP_TYPES,
-    USERNAME_COLLISION_POLICIES,
-    USERNAME_STRATEGIES,
     normalize_username_collision_policy,
     normalize_username_strategy,
 )

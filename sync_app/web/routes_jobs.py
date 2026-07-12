@@ -31,7 +31,6 @@ def register_job_routes(
         if isinstance(user, RedirectResponse):
             return user
         services = get_web_services(request)
-        repositories = get_web_repositories(request)
         runtime_state = get_web_runtime_state(request)
         current_org = get_current_org(request)
         preflight_summary = merge_saved_preflight_snapshot_data(

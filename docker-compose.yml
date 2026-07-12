@@ -1,0 +1,52 @@
+services:
+  volume-permissions:
+    build:
+      context: .
+    user: root
+    volumes:
+      - ad_org_sync_data:/data
+      - ad_org_sync_logs:/app/logs
+    command: ["sh", "-c", "chown -R 10001:10001 /data /app/logs"]
+
+  web:
+    build:
+      context: .
+    depends_on:
+      volume-permissions:
+        condition: service_completed_successfully
+    working_dir: /app
+    environment:
+      AD_ORG_SYNC_DB_PATH: /data/app.db
+      AD_ORG_SYNC_ADMIN_USERNAME: ${AD_ORG_SYNC_ADMIN_USERNAME:-admin}
+      AD_ORG_SYNC_PUBLIC_BASE_URL: ${AD_ORG_SYNC_PUBLIC_BASE_URL:?Set AD_ORG_SYNC_PUBLIC_BASE_URL to the external HTTPS URL}
+      AD_ORG_SYNC_SECURE_COOKIES: ${AD_ORG_SYNC_SECURE_COOKIES:-always}
+    secrets:
+      - admin_password
+    volumes:
+      - ad_org_sync_data:/data
+      - ad_org_sync_logs:/app/logs
+    ports:
+      - "127.0.0.1:${AD_ORG_SYNC_PORT:-8010}:8010"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        python -m sync_app.cli init-web --db-path "$${AD_ORG_SYNC_DB_PATH}" --config /app/config.example.ini
+        python -m sync_app.cli bootstrap-admin --db-path "$${AD_ORG_SYNC_DB_PATH}" --username "$${AD_ORG_SYNC_ADMIN_USERNAME}" --password-file /run/secrets/admin_password --if-missing
+        exec python -m sync_app.cli web --db-path "$${AD_ORG_SYNC_DB_PATH}" --config /app/config.example.ini --host 0.0.0.0 --port 8010 --public-base-url "$${AD_ORG_SYNC_PUBLIC_BASE_URL}" --secure-cookies "$${AD_ORG_SYNC_SECURE_COOKIES}"
+
+volumes:
+  ad_org_sync_data:
+  ad_org_sync_logs:
+
+secrets:
+  admin_password:
+    file: ${AD_ORG_SYNC_ADMIN_PASSWORD_FILE:?Set AD_ORG_SYNC_ADMIN_PASSWORD_FILE to a protected password file}

@@ -5,10 +5,12 @@ import json
 import os
 import sys
 
+from sync_app.application import TenantContext
 from sync_app.cli.common import _get_cli_dependency, _print_summary, _resolve_cli_org_context
 from sync_app.core.common import APP_VERSION
 from sync_app.core.models import SyncJobSummary
-from sync_app.storage.local_db import DatabaseManager, SyncPlanReviewRepository
+from sync_app.services.external_integrations import build_approve_plan_use_case
+from sync_app.storage.local_db import DatabaseManager
 
 
 def _handle_version(_args: argparse.Namespace) -> int:
@@ -49,29 +51,29 @@ def _handle_sync(args: argparse.Namespace) -> int:
 def _handle_approve_plan(args: argparse.Namespace) -> int:
     db_manager = DatabaseManager(db_path=args.db_path)
     db_manager.initialize(create_startup_snapshot=False, verify_integrity=True)
-    review_repo = SyncPlanReviewRepository(db_manager)
-    review_record = review_repo.get_review_record_by_job_id(args.job_id)
-    if not review_record:
-        print(f"review record not found for job: {args.job_id}", file=sys.stderr)
+    reviewer = args.reviewer or os.getenv("USERNAME") or os.getenv("USER") or "cli"
+    try:
+        tenant = TenantContext.create(
+            org_id=args.org_id,
+            actor_username=reviewer,
+            channel="cli",
+        )
+        result = build_approve_plan_use_case(db_manager).execute(
+            tenant,
+            job_id=args.job_id,
+            review_notes=args.notes,
+            ttl_minutes=args.ttl_minutes,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
 
-    reviewer = args.reviewer or os.getenv("USERNAME") or os.getenv("USER") or "cli"
-    expires_at = None
-    if args.ttl_minutes and args.ttl_minutes > 0:
-        from datetime import datetime, timedelta, timezone
-
-        expires_at = (
-            datetime.now(timezone.utc) + timedelta(minutes=int(args.ttl_minutes))
-        ).isoformat(timespec="seconds")
-
-    review_repo.approve_review(
-        args.job_id,
-        reviewer_username=reviewer,
-        review_notes=args.notes,
-        expires_at=expires_at,
-    )
     print(f"approved plan: {args.job_id}")
     print(f"reviewer: {reviewer}")
-    if expires_at:
-        print(f"expires_at: {expires_at}")
+    print(f"organization: {tenant.org_id}")
+    print(f"expires_at: {result.expires_at_iso}")
+    if result.replay_request_id is not None:
+        print(f"replay_request_id: {result.replay_request_id}")
+    if not result.fresh_approval:
+        print("approval_status: already_approved")
     return 0

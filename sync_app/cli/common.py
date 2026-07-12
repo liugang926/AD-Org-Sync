@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import argparse
 
 from sync_app.core.config import load_sync_config
+from sync_app.services.config_resolution import resolve_organization_config
 from sync_app.storage.local_db import (
     DatabaseManager,
     OrganizationConfigRepository,
@@ -56,17 +59,24 @@ def _load_cli_db_config(
         org_id=org_id,
         config_path=config_path,
     )
-    config = OrganizationConfigRepository(db_manager).get_app_config(
-        organization.org_id,
+    resolution = resolve_organization_config(
+        OrganizationConfigRepository(db_manager),
+        org_id=organization.org_id,
         config_path=resolved_config_path,
     )
-    return db_manager, organization, config
+    return db_manager, organization, resolution.config
 
 def _load_cli_effective_config(args: argparse.Namespace):
     raw_config_path = str(getattr(args, "config", "") or "").strip()
     if raw_config_path:
-        config = load_sync_config(raw_config_path)
-        return None, None, config, os.path.abspath(raw_config_path)
+        resolution = resolve_organization_config(
+            None,
+            org_id=getattr(args, "org_id", "default"),
+            config_path=raw_config_path,
+            explicit_file_override=True,
+            file_loader=load_sync_config,
+        )
+        return None, None, resolution.config, resolution.source_reference
     db_manager, organization, config = _load_cli_db_config(
         db_path=getattr(args, "db_path", None),
         org_id=getattr(args, "org_id", "default"),

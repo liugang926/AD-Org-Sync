@@ -2,6 +2,8 @@ import logging
 import os
 from datetime import datetime
 
+from sync_app.core.observability import ObservabilityContextFilter, RedactingFormatter
+
 log_filename = ""
 
 
@@ -17,11 +19,16 @@ def setup_logging():
     root_logger.setLevel(logging.INFO)
     root_logger.handlers.clear()
 
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    formatter = RedactingFormatter(
+        "%(asctime)s - %(levelname)s - correlation_id=%(correlation_id)s org_id=%(org_id)s job_id=%(job_id)s - %(message)s"
+    )
+    context_filter = ObservabilityContextFilter()
     file_handler = logging.FileHandler(log_filename, encoding="utf-8")
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(context_filter)
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
+    console_handler.addFilter(context_filter)
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
 
@@ -33,8 +40,12 @@ def setup_logging():
         encoding="utf-8",
     )
     detailed_handler.setFormatter(
-        logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(filename)s:%(lineno)d - %(message)s")
+        RedactingFormatter(
+            "%(asctime)s - %(levelname)s - correlation_id=%(correlation_id)s org_id=%(org_id)s "
+            "job_id=%(job_id)s - %(name)s - %(filename)s:%(lineno)d - %(message)s"
+        )
     )
+    detailed_handler.addFilter(context_filter)
     detailed_log.addHandler(detailed_handler)
 
     return logging.getLogger(__name__)

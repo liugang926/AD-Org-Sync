@@ -206,7 +206,7 @@ def plan_directory_and_custom_groups(
     source_provider = ctx.environment.source_provider
     source_provider_name = ctx.environment.source_provider_name
 
-    for dept_id, dept_info in dept_tree.items():
+    for _dept_id, dept_info in dept_tree.items():
         if ctx.hooks.is_cancelled():
             raise InterruptedError("sync cancelled by user")
         if is_department_excluded(dept_info):

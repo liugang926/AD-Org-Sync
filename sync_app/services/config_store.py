@@ -1,13 +1,12 @@
 import configparser
 import os
-from typing import Any, Dict, Iterable
+from typing import Any, Dict
 
 from sync_app.core.directory_protection import (
     DEFAULT_PROTECTED_AD_ACCOUNTS,
     filter_custom_protected_ad_accounts,
 )
 from sync_app.storage.config_codec import (
-    ORGANIZATION_CONFIG_VALUE_TYPES,
     build_app_config_from_org_values,
     build_editable_org_config,
     default_org_config_values,

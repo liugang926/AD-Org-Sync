@@ -17,6 +17,46 @@ from sync_app.web.config_presentation import (
 from sync_app.web.runtime import resolve_web_runtime_settings, web_runtime_requires_restart
 
 
+HIGH_RISK_CONFIG_FIELDS = {
+    "source_provider",
+    "corpsecret",
+    "ldap_server",
+    "ldap_domain",
+    "ldap_username",
+    "ldap_password",
+    "ldap_use_ssl",
+    "ldap_validate_cert",
+    "ldap_ca_cert_path",
+    "default_password",
+    "source_root_unit_ids",
+    "directory_root_ou_path",
+    "disabled_users_ou_path",
+    "custom_group_ou_path",
+    "managed_relation_cleanup_enabled",
+    "schedule_execution_mode",
+    "web_bind_host",
+    "web_bind_port",
+    "web_public_base_url",
+    "web_session_cookie_secure_mode",
+    "web_trust_proxy_headers",
+    "web_forwarded_allow_ips",
+}
+
+
+def _config_value_is_empty(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == ()
+
+
+def _config_change_category(field_type: str, current_value: Any, proposed_value: Any) -> str:
+    if field_type == "bool" and bool(current_value) and not bool(proposed_value):
+        return "Disabled"
+    if _config_value_is_empty(current_value) and not _config_value_is_empty(proposed_value):
+        return "Added"
+    if not _config_value_is_empty(current_value) and _config_value_is_empty(proposed_value):
+        return "Deleted"
+    return "Modified"
+
+
 def _normalize_job_status(value: str | None) -> str:
     return str(value or "").strip().upper()
 
@@ -183,6 +223,13 @@ def build_config_change_preview(support: Any, request: Request, submission: dict
     }
     groups: list[dict[str, Any]] = []
     changed_count = 0
+    category_counts = {
+        "added": 0,
+        "modified": 0,
+        "disabled": 0,
+        "deleted": 0,
+        "high_risk": 0,
+    }
     provider_schema = get_source_provider_schema(submission["org_values"].get("source_provider"))
     for group_title, fields in build_config_preview_groups(provider_schema):
         group_changes: list[dict[str, Any]] = []
@@ -207,6 +254,11 @@ def build_config_change_preview(support: Any, request: Request, submission: dict
                 split_csv_values=support.split_csv_values,
                 previous_value=current_value,
             )
+            category = _config_change_category(field_type, current_value, proposed_value)
+            high_risk = field_name in HIGH_RISK_CONFIG_FIELDS
+            category_counts[category.lower()] += 1
+            if high_risk:
+                category_counts["high_risk"] += 1
             group_changes.append(
                 {
                     "field_name": field_name,
@@ -215,6 +267,8 @@ def build_config_change_preview(support: Any, request: Request, submission: dict
                     "after": after_display,
                     "translate_before": before_translate,
                     "translate_after": after_translate,
+                    "category": category,
+                    "high_risk": high_risk,
                 }
             )
         if group_changes:
@@ -233,6 +287,7 @@ def build_config_change_preview(support: Any, request: Request, submission: dict
     return {
         "groups": groups,
         "changed_count": changed_count,
+        "category_counts": category_counts,
         "restart_required": web_runtime_requires_restart(
             runtime_state.web_runtime_settings,
             proposed_runtime_settings,

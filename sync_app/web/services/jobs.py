@@ -4,26 +4,23 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from sync_app.services.external_integrations import approve_job_review as approve_job_review_action
+from sync_app.application import ApproveSyncPlanUseCase, TenantContext
 from sync_app.services.job_diff import build_job_comparison_summary
 from sync_app.storage.local_db import (
-    DatabaseManager,
     PlannedOperationRepository,
     SyncConflictRepository,
     SyncJobRepository,
     SyncPlanReviewRepository,
-    WebAuditLogRepository,
 )
 
 
 @dataclass(slots=True)
 class WebJobService:
-    db_manager: DatabaseManager
+    approve_plan_use_case: ApproveSyncPlanUseCase
     job_repo: SyncJobRepository
     review_repo: SyncPlanReviewRepository
     planned_operation_repo: PlannedOperationRepository
     conflict_repo: SyncConflictRepository
-    audit_repo: WebAuditLogRepository
 
     @staticmethod
     def _normalize_job_status(value: str | None) -> str:
@@ -96,28 +93,16 @@ class WebJobService:
         reviewer_username: str,
         review_notes: str,
     ) -> dict[str, Any]:
-        result = approve_job_review_action(
-            self.db_manager,
-            org_id=org_id,
-            job_id=job_id,
-            reviewer_username=reviewer_username,
-            review_notes=review_notes,
-        )
-        self.audit_repo.add_log(
+        tenant = TenantContext.create(
             org_id=org_id,
             actor_username=reviewer_username,
-            action_type="job.review_approve",
-            target_type="sync_job",
-            target_id=job_id,
-            result="success",
-            message="Approved high-risk synchronization plan",
-            payload={
-                "expires_at": result["expires_at_iso"],
-                "replay_request_id": result["replay_request_id"],
-                "fresh_approval": result["fresh_approval"],
-            },
+            channel="web",
         )
-        return result
+        return self.approve_plan_use_case.execute(
+            tenant,
+            job_id=job_id,
+            review_notes=review_notes,
+        ).to_dict()
 
     def build_job_comparison_sections(self, *, org_id: str, job: Any) -> list[dict[str, Any]]:
         recent_jobs = self.list_recent_jobs(org_id=org_id, limit=200)
@@ -181,65 +166,79 @@ class WebJobService:
             if review_required:
                 review_record = self.get_review_record(latest_successful_dry_run.job_id)
 
-        blocked_reasons: list[str] = []
+        blocked_reasons: list[dict[str, Any]] = []
         if str(preflight_summary.get("overall_status") or "") == "error":
-            blocked_reasons.append("Fix organization configuration or connectivity errors before running apply.")
+            blocked_reasons.append({"message_code": "jobs.blocker.config_or_connectivity", "params": {}})
         if latest_dry_run and not latest_successful_dry_run:
-            blocked_reasons.append(
-                "The most recent dry run did not complete successfully. Re-run dry run after fixing errors."
-            )
+            blocked_reasons.append({"message_code": "jobs.blocker.latest_dry_run_failed", "params": {}})
         if not latest_successful_dry_run:
-            blocked_reasons.append("No successful dry run has been recorded for this organization yet.")
+            blocked_reasons.append({"message_code": "jobs.blocker.no_successful_dry_run", "params": {}})
         open_conflict_count = int(preflight_summary.get("open_conflict_count") or 0)
         if open_conflict_count > 0:
-            blocked_reasons.append("Resolve the open conflict queue before running apply.")
+            blocked_reasons.append(
+                {
+                    "message_code": "jobs.blocker.open_conflicts",
+                    "params": {"count": open_conflict_count},
+                }
+            )
         if review_required and (
             review_record is None or str(review_record.status or "").strip().lower() != "approved"
         ):
-            blocked_reasons.append("Latest high-risk dry run still needs review approval before apply can continue.")
+            blocked_reasons.append({"message_code": "jobs.blocker.review_required", "params": {}})
 
         if str(preflight_summary.get("overall_status") or "") == "error":
             overall_status = "error"
-            overall_label = "Blocked"
+            overall_label_code = "jobs.status.blocked"
         elif blocked_reasons:
             overall_status = "warning"
-            overall_label = "Needs Attention"
+            overall_label_code = "jobs.status.needs_attention"
         else:
             overall_status = "success"
-            overall_label = "Ready"
+            overall_label_code = "jobs.status.ready"
 
         if str(preflight_summary.get("overall_status") or "") == "error":
             next_action_url = "/config"
-            next_action_label = "Fix Configuration"
+            next_action_label_code = "jobs.action.fix_configuration"
         elif latest_dry_run and not latest_successful_dry_run:
             next_action_url = f"/jobs/{latest_dry_run.job_id}"
-            next_action_label = "Inspect Dry Run Errors"
+            next_action_label_code = "jobs.action.inspect_dry_run_errors"
         elif not latest_successful_dry_run:
             next_action_url = "/jobs"
-            next_action_label = "Run Dry Run"
+            next_action_label_code = "jobs.action.run_dry_run"
         elif open_conflict_count > 0:
             next_action_url = "/conflicts"
-            next_action_label = "Review Conflicts"
+            next_action_label_code = "jobs.action.review_conflicts"
         elif review_required and (
             review_record is None or str(review_record.status or "").strip().lower() != "approved"
         ):
             next_action_url = f"/jobs/{latest_successful_dry_run.job_id}"
-            next_action_label = "Approve High-Risk Plan"
+            next_action_label_code = "jobs.action.approve_high_risk_plan"
         elif not latest_apply:
             next_action_url = "/jobs"
-            next_action_label = "Run Apply"
+            next_action_label_code = "jobs.action.run_apply"
         else:
             next_action_url = "/jobs"
-            next_action_label = "Review Latest Apply"
+            next_action_label_code = "jobs.action.review_latest_apply"
 
         impact_job = latest_successful_dry_run or latest_dry_run
         impact_summary = dict(getattr(impact_job, "summary", {}) or {}) if impact_job else {}
+        impact_operation_counts = (
+            self.planned_operation_repo.count_operation_types_for_job(str(getattr(impact_job, "job_id", "")))
+            if impact_job
+            else {}
+        )
+        disabled_operation_count = int(impact_operation_counts.get("disable_user") or 0)
+        delete_operation_count = sum(
+            count
+            for operation_type, count in impact_operation_counts.items()
+            if operation_type.startswith(("delete_", "remove_"))
+        )
         return {
             "overall_status": overall_status,
-            "overall_label": overall_label,
+            "overall_label_code": overall_label_code,
             "blocked_reasons": blocked_reasons,
             "next_action_url": next_action_url,
-            "next_action_label": next_action_label,
+            "next_action_label_code": next_action_label_code,
             "preflight_summary": preflight_summary,
             "latest_dry_run": latest_dry_run,
             "latest_successful_dry_run": latest_successful_dry_run,
@@ -254,6 +253,8 @@ class WebJobService:
                     or 0
                 ),
                 "high_risk_operation_count": int(impact_summary.get("high_risk_operation_count") or 0),
+                "disabled_operation_count": disabled_operation_count,
+                "delete_operation_count": delete_operation_count,
                 "conflict_count": int(impact_summary.get("conflict_count") or 0),
                 "error_count": int(getattr(impact_job, "error_count", 0) or 0),
             },

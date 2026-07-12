@@ -48,6 +48,7 @@ from sync_app.services.runtime_connectors import (
 )
 from sync_app.services.runtime_identity import build_identity_candidates, resolve_target_department
 from sync_app.services.runtime_plan import compute_plan_fingerprint
+from sync_app.services.runtime_phases import run_runtime_phase
 from sync_app.services.runtime_services import (
     build_execution_services,
     evaluate_group_policy as evaluate_group_policy_rule_set,
@@ -478,7 +479,6 @@ def run_sync_job(
     repositories = bootstrap.repositories
     policy_settings = bootstrap.policy_settings
     organization = bootstrap.organization
-    config = bootstrap.config
     config_hash = bootstrap.config_hash
     resolved_config_path = organization.config_path or config_path
     settings_repo = repositories.settings_repo
@@ -487,26 +487,18 @@ def run_sync_job(
     plan_repo = repositories.plan_repo
     operation_log_repo = repositories.operation_log_repo
     conflict_repo = repositories.conflict_repo
-    review_repo = repositories.review_repo
-    replay_request_repo = repositories.replay_request_repo
-    exception_rule_repo = repositories.exception_rule_repo
     enabled_group_rules = policy_settings.enabled_group_rules
     enabled_exception_rules = policy_settings.enabled_exception_rules
     exception_match_values_by_rule_type = policy_settings.exception_match_values_by_rule_type
-    connector_routing_enabled = policy_settings.connector_routing_enabled
-    offboarding_lifecycle_enabled = policy_settings.offboarding_lifecycle_enabled
-    field_conflict_queue_enabled = policy_settings.field_conflict_queue_enabled
-    rehire_restore_enabled = policy_settings.rehire_restore_enabled
-    custom_group_archive_enabled = policy_settings.custom_group_archive_enabled
-    scheduled_review_execution_enabled = policy_settings.scheduled_review_execution_enabled
     group_recursive_enabled = policy_settings.group_recursive_enabled
     managed_relation_cleanup_enabled = policy_settings.managed_relation_cleanup_enabled
     user_ou_placement_strategy = policy_settings.user_ou_placement_strategy
-    disable_breaker_requires_approval = policy_settings.disable_breaker_requires_approval
     display_separator = policy_settings.display_separator
     sync_stats['org_id'] = organization.org_id
     sync_stats['organization_name'] = organization.name
-    sync_stats['organization_config_path'] = config.config_path
+    sync_stats['organization_config_path'] = bootstrap.config_source_reference
+    sync_stats['config_source_kind'] = bootstrap.config_source_kind
+    sync_stats['config_resolved_file_path'] = bootstrap.config_resolved_file_path
     job_id = str(job_id or generate_job_id()).strip() or generate_job_id()
     sync_stats['job_id'] = job_id
     ctx = SyncContext(
@@ -783,19 +775,23 @@ def run_sync_job(
     )
     try:
         mark_job('PLANNING')
-        _run_automatic_replay_stage(ctx)
-        _prepare_sync_environment(ctx)
+        run_runtime_phase(ctx, 'replay', lambda: _run_automatic_replay_stage(ctx))
+        run_runtime_phase(ctx, 'prepare', lambda: _prepare_sync_environment(ctx))
         services = build_execution_services(
             ctx,
             enabled_group_rules=enabled_group_rules,
             exception_match_values_by_rule_type=exception_match_values_by_rule_type,
             display_separator=display_separator,
         )
-        early_response, planned_hierarchy_pairs = run_planning_phase(
+        early_response, planned_hierarchy_pairs = run_runtime_phase(
             ctx,
-            services=services,
-            field_ownership_policy=FIELD_OWNERSHIP_POLICY,
-            display_separator=display_separator,
+            'plan',
+            lambda: run_planning_phase(
+                ctx,
+                services=services,
+                field_ownership_policy=FIELD_OWNERSHIP_POLICY,
+                display_separator=display_separator,
+            ),
         )
         if early_response is not None:
             _emit_external_job_events(ctx)
@@ -804,14 +800,18 @@ def run_sync_job(
             return early_response
 
         mark_job('RUNNING')
-        run_apply_phase(
+        run_runtime_phase(
             ctx,
-            services=services,
-            field_ownership_policy=FIELD_OWNERSHIP_POLICY,
-            display_separator=display_separator,
-            planned_hierarchy_pairs=planned_hierarchy_pairs,
+            'apply',
+            lambda: run_apply_phase(
+                ctx,
+                services=services,
+                field_ownership_policy=FIELD_OWNERSHIP_POLICY,
+                display_separator=display_separator,
+                planned_hierarchy_pairs=planned_hierarchy_pairs,
+            ),
         )
-        successful_result = finalize_successful_sync(ctx)
+        successful_result = run_runtime_phase(ctx, 'finalize', lambda: finalize_successful_sync(ctx))
         _emit_external_job_events(ctx)
         return successful_result
 

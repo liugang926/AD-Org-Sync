@@ -621,11 +621,11 @@
           <td>
             {% if connector.connector_id != "default" and can("config.write") %}
             <div class="actions">
-              <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/toggle" data-confirm="{{ t('Are you sure you want to perform this action?') }}">
+              <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/toggle" data-confirm="{{ t('Review the connector and requested status change before continuing.') }}" data-confirm-title="{{ t('Confirm Connector Status Change') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Connector') }}" data-confirm-detail-2-value="{{ connector.connector_id }}" data-confirm-detail-3-label="{{ t('Requested Action') }}" data-confirm-detail-3-value="{{ t('Disable') if connector.is_enabled else t('Enable') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 {{ ui.button(t("Disable") if connector.is_enabled else t("Enable"), type="submit", variant="secondary") }}
               </form>
-              <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/delete" data-confirm="{{ t('Are you sure you want to perform this action?') }}">
+              <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/delete" data-confirm="{{ t('Deleting a connector is irreversible and can remove its routing scope.') }}" data-confirm-title="{{ t('Confirm Connector Deletion') }}" data-confirm-require="{{ connector.connector_id }}" data-confirm-input-help="{{ t('Type {value} to confirm.') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Connector') }}" data-confirm-detail-2-value="{{ connector.connector_id }}" data-confirm-detail-3-label="{{ t('Requested Action') }}" data-confirm-detail-3-value="{{ t('Permanent deletion') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 {{ ui.button(t("Delete"), type="submit", variant="danger") }}
               </form>
@@ -743,7 +743,7 @@
         </td>
         <td>
           {% if can("config.write") %}
-          <form method="post" action="/advanced-sync/mappings/{{ rule.id }}/delete" data-confirm="{{ t('Are you sure you want to perform this action?') }}">
+          <form method="post" action="/advanced-sync/mappings/{{ rule.id }}/delete" data-confirm="{{ t('Deleting this attribute mapping stops the field transformation on future sync runs.') }}" data-confirm-title="{{ t('Confirm Attribute Mapping Deletion') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Connector') }}" data-confirm-detail-2-value="{{ rule.connector_id or t('Global') }}" data-confirm-detail-3-label="{{ t('Field Mapping') }}" data-confirm-detail-3-value="{{ rule.source_field }} → {{ rule.target_field }}" data-confirm-detail-4-label="{{ t('Requested Action') }}" data-confirm-detail-4-value="{{ t('Permanent deletion') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             {{ ui.button(t("Delete"), type="submit", variant="danger") }}
           </form>
@@ -792,7 +792,7 @@
         </td>
         <td>
           {% if can("config.write") %}
-          <form method="post" action="/advanced-sync/department-ou-mappings/{{ record.id }}/delete" data-confirm="{{ t('Are you sure you want to perform this action?') }}">
+          <form method="post" action="/advanced-sync/department-ou-mappings/{{ record.id }}/delete" data-confirm="{{ t('Deleting this routing rule returns the department to the default OU placement policy.') }}" data-confirm-title="{{ t('Confirm Department Routing Deletion') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Source Department') }}" data-confirm-detail-2-value="{{ record.source_department_name or record.source_department_id }}" data-confirm-detail-3-label="{{ t('Target OU') }}" data-confirm-detail-3-value="{{ record.target_ou_path }}" data-confirm-detail-4-label="{{ t('Requested Action') }}" data-confirm-detail-4-value="{{ t('Permanent deletion') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             {{ ui.button(t("Delete"), type="submit", variant="danger") }}
           </form>

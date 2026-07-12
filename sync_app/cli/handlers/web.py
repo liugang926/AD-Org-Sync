@@ -5,6 +5,7 @@ import getpass
 import json
 import os
 import sys
+from pathlib import Path
 
 from sync_app.cli.common import _open_db_manager
 from sync_app.services.typed_settings import WebSecuritySettings
@@ -29,6 +30,16 @@ def _resolve_admin_password_input(args: argparse.Namespace) -> str:
         if not env_value:
             raise ValueError(f"environment variable is empty or missing: {password_env}")
         return env_value
+
+    password_file = str(getattr(args, "password_file", "") or "").strip()
+    if password_file:
+        try:
+            file_value = Path(password_file).expanduser().read_text(encoding="utf-8").rstrip("\r\n")
+        except OSError as exc:
+            raise ValueError(f"unable to read administrator password file: {password_file}: {exc}") from exc
+        if not file_value:
+            raise ValueError(f"administrator password file is empty: {password_file}")
+        return file_value
 
     password = getpass.getpass("Administrator password: ")
     confirm_password = getpass.getpass("Confirm administrator password: ")
@@ -89,6 +100,18 @@ def _handle_bootstrap_admin(args: argparse.Namespace) -> int:
         print("administrator username is required", file=sys.stderr)
         return 1
 
+    existing_user = user_repo.get_user_record_by_username(username)
+    if existing_user:
+        if getattr(args, "if_missing", False):
+            print(f"administrator already exists, leaving unchanged: {username}")
+            return 0
+        if not getattr(args, "reset", False):
+            print(
+                f"administrator already exists: {username}. Use --reset to rotate the password.",
+                file=sys.stderr,
+            )
+            return 1
+
     try:
         password = _resolve_admin_password_input(args)
     except ValueError as exc:
@@ -104,14 +127,7 @@ def _handle_bootstrap_admin(args: argparse.Namespace) -> int:
         print(password_error, file=sys.stderr)
         return 1
 
-    existing_user = user_repo.get_user_record_by_username(username)
     if existing_user:
-        if not getattr(args, "reset", False):
-            print(
-                f"administrator already exists: {username}. Use --reset to rotate the password.",
-                file=sys.stderr,
-            )
-            return 1
         user_repo.set_password(username, hash_password(password))
         if getattr(args, "enable", False) and not existing_user.is_enabled:
             user_repo.set_enabled(existing_user.id, True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import configparser
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -8,6 +9,7 @@ from fastapi import FastAPI, Request
 from sync_app.core.config import load_sync_config
 from sync_app.core.models import AppConfig, OrganizationRecord
 from sync_app.providers.source import get_source_provider_schema
+from sync_app.services.config_resolution import resolve_organization_config
 from sync_app.services.config_validation import (
     run_config_security_self_check,
     test_ldap_connection,
@@ -46,21 +48,36 @@ class DashboardSupport:
         organization: Optional[OrganizationRecord] = None,
         *,
         config_path_override: Optional[str] = None,
-    ) -> tuple[Optional[AppConfig], list[str], list[str]]:
+    ) -> tuple[Optional[AppConfig], list[dict[str, Any]], list[str]]:
         try:
             if organization is not None:
                 repositories = get_web_repositories(self.app)
-                config = repositories.org_config_repo.get_app_config(
-                    organization.org_id,
+                resolution = resolve_organization_config(
+                    repositories.org_config_repo,
+                    org_id=organization.org_id,
                     config_path=config_path_override or organization.config_path or self.config_path,
                 )
+                config = resolution.config
             else:
-                config = load_sync_config(config_path_override or self.config_path)
-        except Exception as exc:
-            return None, [f"Failed to load configuration: {exc}"], []
+                resolution = resolve_organization_config(
+                    None,
+                    org_id="default",
+                    config_path=config_path_override or self.config_path,
+                    explicit_file_override=True,
+                    file_loader=load_sync_config,
+                )
+                config = resolution.config
+        except configparser.NoSectionError as exc:
+            return None, [{"message_code": "preflight.config.missing_section", "params": {"section": exc.section}}], []
+        except Exception:
+            return None, [{"message_code": "preflight.config.load_failed", "params": {}}], []
         is_valid, errors = validate_config(config)
         warnings = run_config_security_self_check(config)
-        return config, ([] if is_valid else errors), warnings
+        normalized_errors = [
+            {"message_code": str(error), "params": {}}
+            for error in errors
+        ]
+        return config, ([] if is_valid else normalized_errors), warnings
 
     def _build_preflight_snapshot_from_loaded_data(
         self,
@@ -68,7 +85,7 @@ class DashboardSupport:
         *,
         current_org: OrganizationRecord,
         config: Optional[AppConfig],
-        validation_errors: list[str],
+        validation_errors: list[dict[str, Any]],
         security_warnings: list[str],
         include_live: bool = False,
     ) -> dict[str, Any]:
@@ -109,7 +126,16 @@ class DashboardSupport:
                     "key": "config",
                     "label": "Organization configuration",
                     "status": "error",
-                    "detail": validation_errors[0] if validation_errors else "Organization configuration is incomplete.",
+                    "detail": (
+                        validation_errors[0].get("message_code")
+                        if validation_errors
+                        else "Organization configuration is incomplete."
+                    ),
+                    "detail_params": (
+                        dict(validation_errors[0].get("params") or {})
+                        if validation_errors
+                        else {}
+                    ),
                     "action_url": "/config",
                 }
             )
@@ -317,7 +343,7 @@ class DashboardSupport:
         include_live: bool = False,
         current_org: Optional[OrganizationRecord] = None,
         config: Optional[AppConfig] = None,
-        validation_errors: Optional[list[str]] = None,
+        validation_errors: Optional[list[dict[str, Any]]] = None,
         security_warnings: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         resolved_org = current_org or self.request_support.get_current_org(request)
@@ -360,10 +386,13 @@ class DashboardSupport:
             blockers.append(
                 {
                     "level": str(job_center_summary.get("overall_status") or "warning"),
-                    "title": "Apply gate blocker",
-                    "detail": str(reason),
+                    "title": "jobs.blocker.apply_gate",
+                    "detail": str(reason.get("message_code") or "jobs.blocker.unknown"),
+                    "detail_params": dict(reason.get("params") or {}),
                     "action_url": next_url,
-                    "action_label": str(job_center_summary.get("next_action_label") or "Review"),
+                    "action_label": str(
+                        job_center_summary.get("next_action_label_code") or "jobs.action.review"
+                    ),
                 }
             )
 

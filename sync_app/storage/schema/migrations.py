@@ -1296,4 +1296,44 @@ MIGRATIONS = [
         ON integration_webhook_outbox (subscription_id, created_at DESC, id DESC);
         """,
     ),
+    (
+        28,
+        "persist sync runtime phase and recovery metadata",
+        """
+        ALTER TABLE sync_jobs ADD COLUMN current_phase TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_jobs ADD COLUMN last_completed_phase TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_jobs ADD COLUMN phase_started_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_jobs ADD COLUMN phase_updated_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_jobs ADD COLUMN recovery_hint TEXT NOT NULL DEFAULT '';
+
+        CREATE INDEX IF NOT EXISTS idx_sync_jobs_recovery_phase
+        ON sync_jobs (status, current_phase, phase_updated_at);
+        """,
+    ),
+    (
+        29,
+        "harden integration outbox idempotency fencing and dead-letter metadata",
+        """
+        ALTER TABLE integration_webhook_outbox ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT '';
+        ALTER TABLE integration_webhook_outbox ADD COLUMN lease_token TEXT NOT NULL DEFAULT '';
+        ALTER TABLE integration_webhook_outbox ADD COLUMN dead_lettered_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE integration_webhook_outbox ADD COLUMN replay_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE integration_webhook_outbox ADD COLUMN last_replayed_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE integration_webhook_outbox ADD COLUMN last_replayed_by TEXT NOT NULL DEFAULT '';
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_integration_webhook_outbox_idempotency
+        ON integration_webhook_outbox (idempotency_key)
+        WHERE idempotency_key <> '';
+
+        CREATE INDEX IF NOT EXISTS idx_integration_webhook_outbox_dead_letter
+        ON integration_webhook_outbox (org_id, dead_lettered_at, updated_at DESC, id DESC);
+        """,
+    ),
+    (
+        30,
+        "record immutable migration checksums",
+        """
+        ALTER TABLE schema_migrations ADD COLUMN checksum TEXT NOT NULL DEFAULT '';
+        """,
+    ),
 ]

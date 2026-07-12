@@ -12,20 +12,18 @@ IDENTITY_RULE_PRIORITY = (
 )
 
 IDENTITY_RULE_PRIORITY_INDEX = {
-    rule_name: index
-    for index, rule_name in enumerate(IDENTITY_RULE_PRIORITY)
+    rule_name: index for index, rule_name in enumerate(IDENTITY_RULE_PRIORITY)
 }
 
 CONFIDENCE_ORDER = ("low", "medium", "high")
-CONFIDENCE_INDEX = {
-    level: index
-    for index, level in enumerate(CONFIDENCE_ORDER)
-}
+CONFIDENCE_INDEX = {level: index for index, level in enumerate(CONFIDENCE_ORDER)}
 DEFAULT_DIRECT_APPLY_MIN_CONFIDENCE = "high"
 
 
 def _pick_best_candidate(candidates: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
-    normalized_candidates = [candidate for candidate in candidates if candidate.get("username")]
+    normalized_candidates = [
+        candidate for candidate in candidates if candidate.get("username")
+    ]
     if not normalized_candidates:
         return None
     return sorted(
@@ -51,13 +49,20 @@ def recommendation_requires_confirmation(
 ) -> bool:
     if not recommendation:
         return False
-    recommendation_confidence = normalize_recommendation_confidence(recommendation.get("confidence"))
+    recommendation_confidence = normalize_recommendation_confidence(
+        recommendation.get("confidence")
+    )
     threshold_confidence = normalize_recommendation_confidence(min_confidence)
-    return CONFIDENCE_INDEX[recommendation_confidence] < CONFIDENCE_INDEX[threshold_confidence]
+    return (
+        CONFIDENCE_INDEX[recommendation_confidence]
+        < CONFIDENCE_INDEX[threshold_confidence]
+    )
 
 
 def _finalize_recommendation(recommendation: dict[str, Any]) -> dict[str, Any]:
-    normalized_confidence = normalize_recommendation_confidence(recommendation.get("confidence"))
+    normalized_confidence = normalize_recommendation_confidence(
+        recommendation.get("confidence")
+    )
     finalized = dict(recommendation)
     finalized["confidence"] = normalized_confidence
     finalized["requires_confirmation"] = recommendation_requires_confirmation(
@@ -78,69 +83,113 @@ def recommend_conflict_resolution(conflict: Any) -> Optional[dict[str, Any]]:
         candidates = list(details.get("candidates") or [])
         best_candidate = _pick_best_candidate(candidates)
         if not best_candidate:
-            return _finalize_recommendation({
-                "action": "skip_user_sync",
-                "label": "Add skip_user_sync",
-                "reason": f"No stable AD candidate is available for {source_id}; skip this user until identity is clarified.",
-                "confidence": "medium",
-            })
+            return _finalize_recommendation(
+                {
+                    "action": "skip_user_sync",
+                    "label": "Add skip_user_sync",
+                    "label_code": "conflicts.recommendation.action.skip_user_sync",
+                    "reason": f"No stable AD candidate is available for {source_id}; skip this user until identity is clarified.",
+                    "reason_code": "conflicts.recommendation.reason.no_stable_candidate",
+                    "reason_params": {"source_id": source_id},
+                    "confidence": "medium",
+                }
+            )
 
         candidate_rule = str(best_candidate.get("rule") or "")
         candidate_username = str(best_candidate.get("username") or "")
         if candidate_rule == "existing_ad_userid":
             reason = f"Prefer {candidate_username} because it matches the source user ID directly."
+            reason_code = "conflicts.recommendation.reason.prefer_source_user_id"
             confidence = "high"
         elif candidate_rule == "existing_ad_email_localpart":
             reason = f"Prefer {candidate_username} because it matches the source email local part."
+            reason_code = "conflicts.recommendation.reason.prefer_email_local_part"
             confidence = "medium"
         else:
             reason = f"Prefer {candidate_username} because it is the strongest remaining identity match."
+            reason_code = "conflicts.recommendation.reason.prefer_strongest_match"
             confidence = "medium"
-        return _finalize_recommendation({
-            "action": "manual_binding",
-            "label": "Create manual binding",
-            "reason": reason,
-            "confidence": confidence,
-            "ad_username": candidate_username,
-        })
+        return _finalize_recommendation(
+            {
+                "action": "manual_binding",
+                "label": "Create manual binding",
+                "label_code": "conflicts.recommendation.action.manual_binding",
+                "reason": reason,
+                "reason_code": reason_code,
+                "reason_params": {"candidate_username": candidate_username},
+                "confidence": confidence,
+                "ad_username": candidate_username,
+            }
+        )
 
     if conflict_type == "existing_ad_identity_claim_review":
-        candidate = details.get("candidate") if isinstance(details.get("candidate"), dict) else {}
+        candidate_payload = details.get("candidate")
+        candidate: dict[str, Any] = (
+            candidate_payload if isinstance(candidate_payload, dict) else {}
+        )
         candidate_username = str(candidate.get("username") or target_key or "").strip()
         candidate_rule = str(candidate.get("rule") or "").strip()
         if not candidate_username:
-            return _finalize_recommendation({
-                "action": "skip_user_sync",
-                "label": "Add skip_user_sync",
-                "reason": f"No reviewable AD account is available for {source_id}; skip this user until identity is clarified.",
-                "confidence": "medium",
-            })
+            return _finalize_recommendation(
+                {
+                    "action": "skip_user_sync",
+                    "label": "Add skip_user_sync",
+                    "label_code": "conflicts.recommendation.action.skip_user_sync",
+                    "reason": f"No reviewable AD account is available for {source_id}; skip this user until identity is clarified.",
+                    "reason_code": "conflicts.recommendation.reason.no_reviewable_account",
+                    "reason_params": {"source_id": source_id},
+                    "confidence": "medium",
+                }
+            )
         if candidate_rule == "existing_ad_userid":
             reason = f"Bind {source_id} to {candidate_username} because it matches the source user ID directly."
+            reason_code = "conflicts.recommendation.reason.bind_source_user_id"
             confidence = "high"
         else:
             reason = f"Bind {source_id} to {candidate_username} after review because it is the configured existing AD match."
+            reason_code = "conflicts.recommendation.reason.bind_configured_match"
             confidence = "medium"
-        return _finalize_recommendation({
-            "action": "manual_binding",
-            "label": "Approve existing AD account claim",
-            "reason": reason,
-            "confidence": confidence,
-            "ad_username": candidate_username,
-        })
+        return _finalize_recommendation(
+            {
+                "action": "manual_binding",
+                "label": "Approve existing AD account claim",
+                "label_code": "conflicts.recommendation.action.approve_existing_claim",
+                "reason": reason,
+                "reason_code": reason_code,
+                "reason_params": {
+                    "source_id": source_id,
+                    "candidate_username": candidate_username,
+                },
+                "confidence": confidence,
+                "ad_username": candidate_username,
+            }
+        )
 
     if conflict_type == "shared_ad_account":
-        related_userids = list(details.get("source_user_ids") or details.get("wecom_userids") or [])
+        related_userids = list(
+            details.get("source_user_ids") or details.get("wecom_userids") or []
+        )
         reason = (
             f"AD account {target_key or '-'} is shared by multiple source users"
             f"{': ' + ', '.join(related_userids) if related_userids else ''}. "
             f"Safest default is to skip syncing {source_id} until a unique AD identity is assigned."
         )
-        return _finalize_recommendation({
-            "action": "skip_user_sync",
-            "label": "Add skip_user_sync",
-            "reason": reason,
-            "confidence": "high",
-        })
+        return _finalize_recommendation(
+            {
+                "action": "skip_user_sync",
+                "label": "Add skip_user_sync",
+                "label_code": "conflicts.recommendation.action.skip_user_sync",
+                "reason": reason,
+                "reason_code": "conflicts.recommendation.reason.shared_account",
+                "reason_params": {
+                    "target_key": target_key or "-",
+                    "source_id": source_id,
+                    "related_users_suffix": f": {', '.join(related_userids)}"
+                    if related_userids
+                    else "",
+                },
+                "confidence": "high",
+            }
+        )
 
     return None

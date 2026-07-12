@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import os
 import threading
-import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -65,14 +64,20 @@ class _LeaseHeartbeat:
         self.job_id = str(job_id or "").strip()
         self.worker_id = str(worker_id or "").strip()
         self.lease_seconds = max(int(lease_seconds or 0), 1)
-        self.heartbeat_seconds = max(int(heartbeat_seconds or 0), 1)
+        self.heartbeat_seconds = max(float(heartbeat_seconds or 0), 0.01)
         self._stop_event = threading.Event()
+        self._lease_lost_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+
+    @property
+    def lease_lost(self) -> bool:
+        return self._lease_lost_event.is_set()
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
+        self._lease_lost_event.clear()
         self._thread = threading.Thread(
             target=self._run,
             daemon=True,
@@ -96,10 +101,28 @@ class _LeaseHeartbeat:
                 )
                 if not renewed:
                     LOGGER.warning("failed to renew sync job lease for %s", self.job_id)
+                    self._lease_lost_event.set()
                     return
             except Exception:
                 LOGGER.exception("unexpected error while renewing sync job lease")
+                self._lease_lost_event.set()
                 return
+
+
+class _DispatchCancelFlag:
+    def __init__(self, user_cancel_flag: Any, heartbeat: _LeaseHeartbeat):
+        self.user_cancel_flag = user_cancel_flag
+        self.heartbeat = heartbeat
+
+    @property
+    def is_cancelled(self) -> bool:
+        return bool(
+            self.heartbeat.lease_lost
+            or (
+                self.user_cancel_flag
+                and getattr(self.user_cancel_flag, "is_cancelled", False)
+            )
+        )
 
 
 def enqueue_sync_job(
@@ -195,12 +218,13 @@ def run_claimed_sync_job(
         heartbeat_seconds=heartbeat_seconds,
     )
     heartbeat.start()
+    dispatch_cancel_flag = _DispatchCancelFlag(cancel_flag, heartbeat)
     try:
         from sync_app.services.runtime import run_sync_job
 
         return run_sync_job(
             stats_callback=stats_callback,
-            cancel_flag=cancel_flag,
+            cancel_flag=dispatch_cancel_flag,
             execution_mode=job_record.execution_mode or "apply",
             trigger_type=job_record.trigger_type or "manual",
             db_path=db_path,

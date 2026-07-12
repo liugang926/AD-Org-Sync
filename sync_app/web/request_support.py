@@ -239,7 +239,7 @@ class RequestSupport:
     def render(self, request: Request, template_name: str, **context: Any):
         repositories = get_web_repositories(request)
         current_user = context.setdefault("current_user", self.get_current_user(request))
-        current_org = context.setdefault("current_org", self.get_current_org(request) if current_user else None)
+        context.setdefault("current_org", self.get_current_org(request) if current_user else None)
         csrf_token = ensure_csrf_token(request.session)
         current_role = current_user.role if current_user else None
         ui_language = self.get_ui_language(request)

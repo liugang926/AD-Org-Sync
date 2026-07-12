@@ -44,6 +44,10 @@ desktop = [
   "schedule>=1.2.0",
 ]
 test = [
+  "pytest>=8.0.0",
+  "ruff>=0.15.0",
+  "mypy>=1.19.0,<3.0.0",
+  "cyclonedx-bom>=7.0.0,<8.0.0",
   "httpx>=0.27.0",
   "playwright>=1.52.0",
   "trio>=0.25.0",
@@ -67,7 +71,34 @@ include-package-data = true
 include = ["sync_app*"]
 
 [tool.setuptools.package-data]
-"sync_app.web" = ["templates/*.html", "templates/components/*.html", "static/*", "locales/*.json"]
+"sync_app.web" = [
+  "templates/*.html",
+  "templates/components/*.html",
+  "static/*",
+  "static/vendor/*",
+  "locales/*.json",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.10"
+check_untyped_defs = true
+follow_imports = "silent"
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+pretty = true
+exclude_gitignore = true
+
+[[tool.mypy.overrides]]
+module = [
+  "ldap3.*",
+  "pypinyin.*",
+  "PyQt5.*",
+  "requests.*",
+  "win32crypt.*",
+]
+ignore_missing_imports = true

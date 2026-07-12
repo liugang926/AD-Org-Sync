@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from fastapi import FastAPI, Request
+
+if TYPE_CHECKING:
+    from sync_app.core.models import AppConfig
 
 from sync_app.core.models import OrganizationRecord, WebAdminUserRecord
 from sync_app.services.config_release import (
