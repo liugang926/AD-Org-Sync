@@ -1,10 +1,10 @@
 # Docker Deployment
 
-The repository Docker configuration is production-oriented. It does not contain a default administrator password, does not reset an existing administrator during restart, and binds the published port to loopback by default.
+The repository Docker configuration is production-oriented. The application and Nginx reverse proxy both run in Docker. It does not contain a default administrator password and does not reset an existing administrator during restart.
 
 ## Prerequisites
 
-1. Terminate TLS at a reverse proxy and choose the external HTTPS URL.
+1. Choose the external URL. The bundled Nginx container serves HTTP; terminate TLS at an upstream load balancer or extend the Nginx configuration with managed certificates before using a public network.
 2. Create a password file that is readable only by the deployment operator.
 3. Keep the password file outside source control. The repository ignores `secrets/` by default.
 
@@ -39,12 +39,12 @@ An existing administrator password is never reset automatically. Rotate it expli
 
 ## Network and health checks
 
-The default host publication is `127.0.0.1:8010`, intended for a reverse proxy on the same host. The container exposes:
+The application container is available only to the Compose network. The Nginx container publishes `${AD_ORG_SYNC_HTTP_BIND:-0.0.0.0}:${AD_ORG_SYNC_HTTP_PORT:-80}` and proxies to the application. The application exposes:
 
 - `GET /healthz` for liveness.
 - `GET /readyz` for readiness.
 
-Do not expose port 8010 directly to an untrusted network. Keep `AD_ORG_SYNC_SECURE_COOKIES=always` when the public URL uses HTTPS.
+Do not expose application port 8010 directly. Keep `AD_ORG_SYNC_SECURE_COOKIES=always` when the public URL uses HTTPS; use `never` only for an explicitly approved private HTTP deployment.
 
 ## Upgrade
 
@@ -55,3 +55,16 @@ docker compose exec web python -m sync_app.cli db-check --db-path /data/app.db
 ```
 
 The named `ad_org_sync_data` volume contains the database and its backups. Back up this volume before major upgrades and verify `/readyz` after every deployment.
+
+## Continuous deployment
+
+`scripts/deploy-production.sh` is intended for a GitHub Actions self-hosted runner labeled `production`. A push to `main` deploys only after the quality, Windows, container, supply-chain, and browser-regression jobs pass. The script:
+
+1. validates the Compose configuration;
+2. creates a pre-deployment SQLite backup when the service already exists;
+3. builds a commit-addressed application image;
+4. recreates the Compose services and waits for readiness;
+5. runs a database integrity check and records the successful image tag;
+6. restores the previous successful image when startup or validation fails.
+
+Production configuration stays outside the checkout at `/opt/ad-org-sync/shared/.env`. The administrator password file referenced by that environment file must also stay outside source control.

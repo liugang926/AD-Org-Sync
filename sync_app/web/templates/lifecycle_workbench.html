@@ -87,7 +87,7 @@
           </div>
           <div class="dense-meta">
             <div>{{ t("AD Username") }}: <strong class="cell-mono">{{ row.record.ad_username or "-" }}</strong></div>
-            <div>{{ t("Effective At") }}: <strong>{{ row.record.effective_at or "-" }}</strong></div>
+            <div>{{ t("Effective At") }}: <strong>{{ ui.local_time(row.record.effective_at) }}</strong></div>
             <div>{{ t("Sponsor") }}: <strong>{{ row.record.sponsor_userid or "-" }}</strong></div>
             <div>{{ t("Managers") }}: <strong>{{ row.record.manager_userids|join(", ") if row.record.manager_userids else "-" }}</strong></div>
           </div>
@@ -139,7 +139,7 @@
           </div>
           <div class="dense-meta">
             <div>{{ t("AD Username") }}: <strong class="cell-mono">{{ row.record.ad_username or "-" }}</strong></div>
-            <div>{{ t("Effective At") }}: <strong>{{ row.record.effective_at or "-" }}</strong></div>
+            <div>{{ t("Effective At") }}: <strong>{{ ui.local_time(row.record.effective_at) }}</strong></div>
             <div>{{ t("Employment Type") }}: <strong>{{ row.record.employment_type or "-" }}</strong></div>
             <div>{{ t("Sponsor") }}: <strong>{{ row.record.sponsor_userid or "-" }}</strong></div>
           </div>
@@ -190,7 +190,7 @@
           </div>
           <div class="dense-meta">
             <div>{{ t("AD Username") }}: <strong class="cell-mono">{{ row.record.ad_username or "-" }}</strong></div>
-            <div>{{ t("Due At") }}: <strong>{{ row.record.due_at or "-" }}</strong></div>
+            <div>{{ t("Due At") }}: <strong>{{ ui.local_time(row.record.due_at) }}</strong></div>
             <div>{{ t("Managers") }}: <strong>{{ row.record.manager_userids|join(", ") if row.record.manager_userids else "-" }}</strong></div>
           </div>
           {% if row.manual_hold %}
@@ -237,7 +237,7 @@
             <div>{{ t("Scope") }}: <strong>{{ row.record.target_scope or "-" }}</strong></div>
             <div>{{ t("Target") }}: <strong class="cell-mono">{{ row.record.target_id or "-" }}</strong></div>
             <div>{{ t("Requested By") }}: <strong>{{ row.record.requested_by or "-" }}</strong></div>
-            <div>{{ t("Created At") }}: <strong>{{ row.record.created_at or "-" }}</strong></div>
+            <div>{{ t("Created At") }}: <strong>{{ ui.local_time(row.record.created_at) }}</strong></div>
           </div>
         </article>
         {% else %}

@@ -116,7 +116,7 @@
 
           <div class="dense-meta">
             <div>{{ t("Job ID") }}: <a href="/jobs/{{ item.job_id }}">{{ item.job_id }}</a></div>
-            <div>{{ t("Created At") }}: <strong>{{ item.created_at }}</strong></div>
+            <div>{{ t("Created At") }}: <strong>{{ ui.local_time(item.created_at) }}</strong></div>
             <div>{{ t("Source") }}: <strong class="cell-mono">{{ item.source_id or "-" }}</strong></div>
             <div>{{ t("Target") }}: <strong class="cell-mono">{{ item.target_key or "-" }}</strong></div>
           </div>

@@ -595,7 +595,7 @@
         {% for connector in connectors %}
         <tr>
           <td>
-            <strong>{{ connector.connector_id }}</strong><br>
+            {{ ui.identifier(connector.connector_id, t("Copy Connector ID"), t("Connector ID copied")) }}<br>
             <span class="muted">{{ connector.name }}</span>
           </td>
           <td>
@@ -625,9 +625,9 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 {{ ui.button(t("Disable") if connector.is_enabled else t("Enable"), type="submit", variant="secondary") }}
               </form>
-              <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/delete" data-confirm="{{ t('Deleting a connector is irreversible and can remove its routing scope.') }}" data-confirm-title="{{ t('Confirm Connector Deletion') }}" data-confirm-require="{{ connector.connector_id }}" data-confirm-input-help="{{ t('Type {value} to confirm.') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Connector') }}" data-confirm-detail-2-value="{{ connector.connector_id }}" data-confirm-detail-3-label="{{ t('Requested Action') }}" data-confirm-detail-3-value="{{ t('Permanent deletion') }}">
+              <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/delete" data-confirm="{{ t('Deleting a connector is irreversible and can remove its routing scope.') }}" data-confirm-title="{{ t('Confirm Connector Deletion') }}" data-confirm-require="{{ connector.connector_id }}" data-confirm-input-help="{{ t('Type {value} to confirm.') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Connector') }}" data-confirm-detail-2-value="{{ connector.connector_id }}" data-confirm-detail-3-label="{{ t('Requested Action') }}" data-confirm-detail-3-value="{{ t('Permanent deletion') }}" data-confirm-detail-4-label="{{ t('Environment') }}" data-confirm-detail-4-value="{{ t(environment_label) }}" data-confirm-detail-5-label="{{ t('User Role') }}" data-confirm-detail-5-value="{{ t(current_user.role) }}" data-confirm-detail-6-label="{{ t('Reversible') }}" data-confirm-detail-6-value="{{ t('No') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                {{ ui.button(t("Delete"), type="submit", variant="danger") }}
+                {{ ui.button(t("Delete Connector"), type="submit", variant="danger") }}
               </form>
             </div>
             {% else %}
@@ -830,7 +830,7 @@
           <td>{{ record.connector_id }}</td>
           <td>{{ record.ad_username }}</td>
           <td>{{ record.source_user_id or record.wecom_userid or "-" }}</td>
-          <td>{{ record.due_at }}</td>
+          <td>{{ ui.local_time(record.due_at) }}</td>
           <td>{{ record.manager_userids|join(", ") if record.manager_userids else "-" }}</td>
         </tr>
         {% else %}
@@ -865,7 +865,7 @@
           <td>{{ record.connector_id }}</td>
           <td>{{ record.ad_username or "-" }}</td>
           <td>{{ record.source_user_id or record.wecom_userid }}</td>
-          <td>{{ record.effective_at or "-" }}</td>
+          <td>{{ ui.local_time(record.effective_at) }}</td>
           <td>{{ record.employment_type or "-" }}</td>
           <td>{{ record.sponsor_userid or "-" }}</td>
         </tr>
@@ -902,7 +902,7 @@
           <td>{{ record.target_scope or "-" }}</td>
           <td>{{ record.target_id or "-" }}</td>
           <td>{{ record.requested_by or "-" }}</td>
-          <td>{{ record.created_at or "-" }}</td>
+          <td>{{ ui.local_time(record.created_at) }}</td>
         </tr>
         {% else %}
         <tr>

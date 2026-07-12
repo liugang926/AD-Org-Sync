@@ -229,9 +229,11 @@ def create_app(
     )
     repositories = web_app_state.repositories
     runtime_state = web_app_state.runtime
-    environment_label = str(
-        runtime_state.web_runtime_settings.get("public_base_url")
-        or f"{runtime_state.web_runtime_settings.get('bind_host')}:{runtime_state.web_runtime_settings.get('bind_port')}"
+    runtime_bind_host = str(runtime_state.web_runtime_settings.get("bind_host") or "").strip().lower()
+    environment_label = (
+        "Local environment"
+        if runtime_bind_host in {"127.0.0.1", "localhost", "::1"}
+        else "Unlabeled environment"
     )
     oidc_settings = OIDCSettings.from_environment(default_environment_label=environment_label)
     oidc_service = OIDCService(oidc_settings)
@@ -256,6 +258,7 @@ def create_app(
         default_brand_display_name=DEFAULT_BRAND_DISPLAY_NAME,
         default_brand_mark_text=DEFAULT_BRAND_MARK_TEXT,
         default_brand_attribution=DEFAULT_BRAND_ATTRIBUTION,
+        environment_label=oidc_settings.environment_label or environment_label,
         supported_ui_modes=SUPPORTED_UI_MODES,
         placement_strategies=PLACEMENT_STRATEGIES,
         advanced_nav_pages=ADVANCED_NAV_PAGES,

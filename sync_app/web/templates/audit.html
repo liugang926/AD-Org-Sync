@@ -42,7 +42,7 @@
         <tbody>
           {% for item in logs %}
           <tr>
-            <td>{{ item.created_at }}</td>
+            <td>{{ ui.local_time(item.created_at) }}</td>
             <td>{{ item.actor_username or "-" }}</td>
             <td>{{ item.action_type }}</td>
             <td>{{ item.target_type or "-" }} / {{ item.target_id or "-" }}</td>

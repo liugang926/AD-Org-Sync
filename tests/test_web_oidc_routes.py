@@ -34,6 +34,9 @@ class WebOIDCRouteTests(WebAuthzBaseTestCase):
 
         self.assertIn("Production / Shanghai", text)
         self.assertIn("Sign in with Example Identity", text)
+        self.assertIn('class="login-sso-primary"', text)
+        self.assertIn('class="login-local-fallback"', text)
+        self.assertIn("Use local administrator password", text)
         self.assertIn('href="/auth/oidc/start"', text)
         self.assertIn("Required for SSO", text)
         self.assertIn('href="https://id.example/reset"', text)

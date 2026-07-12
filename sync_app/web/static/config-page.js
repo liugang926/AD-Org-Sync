@@ -869,7 +869,59 @@
       return;
     }
     const unsavedStatus = form.querySelector("[data-config-unsaved-status]");
+    const errorSummary = form.querySelector("[data-config-error-summary]");
+    const errorList = form.querySelector("[data-config-error-list]");
     let dirty = false;
+    let validationFrame = 0;
+
+    const fieldLabel = (field) => {
+      const label = field.id ? form.querySelector(`label[for="${CSS.escape(field.id)}"]`) : null;
+      return label?.textContent?.replace("*", "").trim() || field.name || field.id || "Field";
+    };
+
+    const renderErrorSummary = () => {
+      if (!(errorSummary instanceof HTMLElement) || !(errorList instanceof HTMLElement)) {
+        return;
+      }
+      const invalidFields = Array.from(form.querySelectorAll("[aria-invalid='true']"));
+      errorList.replaceChildren();
+      invalidFields.forEach((field) => {
+        if (!(field instanceof HTMLElement)) {
+          return;
+        }
+        if (!field.id) {
+          field.id = `config-field-${field.name || invalidFields.indexOf(field) + 1}`;
+        }
+        const item = document.createElement("li");
+        const link = document.createElement("a");
+        link.href = `#${field.id}`;
+        link.textContent = fieldLabel(field);
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          field.scrollIntoView({ block: "center", behavior: "smooth" });
+          field.focus();
+        });
+        item.appendChild(link);
+        errorList.appendChild(item);
+      });
+      errorSummary.hidden = invalidFields.length === 0;
+    };
+
+    const scheduleValidationFocus = () => {
+      if (validationFrame) {
+        return;
+      }
+      validationFrame = window.requestAnimationFrame(() => {
+        validationFrame = 0;
+        renderErrorSummary();
+        const firstInvalid = form.querySelector("[aria-invalid='true']");
+        if (firstInvalid instanceof HTMLElement) {
+          errorSummary?.focus();
+          firstInvalid.scrollIntoView({ block: "center", behavior: "smooth" });
+          firstInvalid.focus();
+        }
+      });
+    };
 
     const setDirty = (value) => {
       dirty = Boolean(value);
@@ -886,6 +938,7 @@
       }
       target.removeAttribute("aria-invalid");
       target.closest(".form-group")?.querySelector(".field-error")?.remove();
+      renderErrorSummary();
     });
     form.addEventListener("change", () => setDirty(true));
     form.addEventListener("submit", () => setDirty(false));
@@ -912,9 +965,8 @@
           const describedBy = new Set((target.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
           describedBy.add(errorId);
           target.setAttribute("aria-describedby", Array.from(describedBy).join(" "));
-          group.scrollIntoView({ block: "center", behavior: "smooth" });
         }
-        target.focus();
+        scheduleValidationFocus();
       },
       true
     );

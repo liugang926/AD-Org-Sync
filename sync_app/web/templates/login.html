@@ -2,6 +2,19 @@
 {% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
 
+{% macro local_login_form() %}
+<form method="post" action="/login">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="login-form-section">
+    {{ forms.input("username", t("Username"), required=True, placeholder=t("Enter your username"), autocomplete="username") }}
+  </div>
+  <div class="login-form-section login-form-section--spacious">
+    {{ forms.input("password", t("Password"), type="password", required=True, placeholder=t("Enter your password"), autocomplete="current-password") }}
+  </div>
+  {{ ui.button(t("Sign In"), type="submit", block=True) }}
+</form>
+{% endmacro %}
+
 {% block content %}
 <div class="login-hero">
   <div class="login-mark">
@@ -16,27 +29,22 @@
     <h2>{{ t("Administrator Sign-In") }}</h2>
     <span class="badge {{ 'badge-success' if login_capabilities.sso_enabled else 'badge-info' }}">{{ t("Local password and SSO") if login_capabilities.sso_enabled else t("Local Password") }}</span>
   </div>
-  <form method="post" action="/login">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    
-    <div class="login-form-section">
-      {{ forms.input("username", t("Username"), required=True, placeholder=t("Enter your username"), autocomplete="username") }}
-    </div>
-    
-    <div class="login-form-section login-form-section--spacious">
-      {{ forms.input("password", t("Password"), type="password", required=True, placeholder=t("Enter your password"), autocomplete="current-password") }}
-    </div>
-
-    {{ ui.button(t("Sign In"), type="submit", block=True) }}
-  </form>
-
   {% if login_capabilities.sso_enabled %}
-  <div class="login-divider"><span>{{ t("or") }}</span></div>
-  {{ ui.button(t("Sign in with {provider}", provider=login_capabilities.sso_name), href="/auth/oidc/start", variant="secondary", icon="key-round", block=True) }}
-  {% elif login_capabilities.sso_configuration_error %}
+  <div class="login-sso-primary">
+    {{ ui.button(t("Sign in with {provider}", provider=login_capabilities.sso_name), href="/auth/oidc/start", icon="key-round", block=True) }}
+    <p>{{ t("Your organization uses single sign-on as the primary authentication method.") }}</p>
+  </div>
+  <details class="login-local-fallback">
+    <summary>{{ t("Use local administrator password") }}</summary>
+    <div class="login-local-fallback__body">{{ local_login_form() }}</div>
+  </details>
+  {% else %}
+  {{ local_login_form() }}
+  {% if login_capabilities.sso_configuration_error %}
   <div class="panel-note warning login-capability-warning">
     {{ t("Single sign-on is enabled but incomplete. Contact your administrator.") }}
   </div>
+  {% endif %}
   {% endif %}
 
   <div class="login-recovery">
@@ -53,7 +61,7 @@
 <dl class="login-capabilities" aria-label="{{ t('Login environment and security status') }}">
   <div>
     <dt>{{ t("Environment") }}</dt>
-    <dd>{{ login_capabilities.environment_label or t("Local environment") }}</dd>
+    <dd>{{ t(login_capabilities.environment_label) if login_capabilities.environment_label else t("Local environment") }}</dd>
   </div>
   <div>
     <dt>{{ t("Authentication") }}</dt>
@@ -75,7 +83,7 @@
     <dt>{{ t("Recent Login On This Browser") }}</dt>
     <dd>
       {% if login_capabilities.recent_login %}
-      {{ login_capabilities.recent_login.at }} · {{ t("SSO") if login_capabilities.recent_login.method == "oidc" else t("Local password") }}{% if login_capabilities.recent_login.mfa_satisfied %} · {{ t("MFA verified") }}{% endif %}
+      {{ ui.local_time(login_capabilities.recent_login.at) }} · {{ t("SSO") if login_capabilities.recent_login.method == "oidc" else t("Local password") }}{% if login_capabilities.recent_login.mfa_satisfied %} · {{ t("MFA verified") }}{% endif %}
       {% else %}
       {{ t("No recent login recorded") }}
       {% endif %}

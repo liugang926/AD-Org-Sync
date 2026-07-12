@@ -12,6 +12,7 @@ import uvicorn
 from sync_app.storage.local_db import (
     DatabaseManager,
     OffboardingQueueRepository,
+    OrganizationConfigRepository,
     OrganizationRepository,
     SyncConflictRepository,
     SyncJobRepository,
@@ -57,6 +58,22 @@ def _wait_for_http(url: str, *, timeout_seconds: float = 20.0) -> None:
     raise TimeoutError(f"timed out waiting for {url}")
 
 
+def _launch_chromium(playwright):
+    try:
+        return playwright.chromium.launch()
+    except PlaywrightError as bundled_error:
+        candidates = (
+            Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+            Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
+            Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+        )
+        for candidate in candidates:
+            if candidate.is_file():
+                return playwright.chromium.launch(executable_path=str(candidate))
+        raise bundled_error
+
+
 class WebBrowserRegressionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -99,7 +116,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
 
         try:
             cls.playwright = sync_playwright().start()
-            cls.browser = cls.playwright.chromium.launch()
+            cls.browser = _launch_chromium(cls.playwright)
         except (
             PlaywrightError
         ) as exc:  # pragma: no cover - depends on browser install state
@@ -124,7 +141,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
 
     def setUp(self):
         self.context = self.browser.new_context(
-            viewport={"width": 1440, "height": 1100}
+            viewport={"width": 1440, "height": 1100}, locale="en-US"
         )
         self.page = self.context.new_page()
 
@@ -189,7 +206,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
 
     def test_responsive_pages_keep_tables_local_and_body_within_viewport(self):
         self._login()
-        for width in (390, 768, 1024, 1440):
+        for width in (390, 768, 1024, 1366, 1440):
             self.page.set_viewport_size({"width": width, "height": 900})
             for path in ("/dashboard", "/config", "/audit"):
                 with self.subTest(width=width, path=path):
@@ -214,6 +231,89 @@ class WebBrowserRegressionTests(unittest.TestCase):
                             ),
                             {"auto", "scroll"},
                         )
+                        self.assertGreaterEqual(int(shell.get_attribute("tabindex") or -1), 0)
+
+    def test_config_mobile_summary_fields_and_action_bar_remain_usable(self):
+        self.context.close()
+        self.context = self.browser.new_context(
+            viewport={"width": 390, "height": 900}, locale="en-US"
+        )
+        self.page = self.context.new_page()
+        self._login()
+        self.page.goto(f"{self.base_url}/config?lang=zh-CN", wait_until="networkidle")
+
+        metrics = self.page.evaluate(
+            """() => {
+                const root = document.documentElement;
+                const brief = document.querySelector('.config-brief__main')?.getBoundingClientRect();
+                const actionCopy = document.querySelector('.config-action-row__copy')?.getBoundingClientRect();
+                const firstField = document.querySelector(
+                    '#config-section-source input:not([type="hidden"]), #config-section-source select, #config-section-source textarea'
+                )?.getBoundingClientRect();
+                const bar = document.querySelector('.sticky-submit-bar');
+                const barRect = bar?.getBoundingClientRect();
+                const form = document.querySelector('form[data-config-form]');
+                const zeroTextContainers = Array.from(document.querySelectorAll('main *'))
+                    .filter((element) => {
+                        const style = getComputedStyle(element);
+                        const rect = element.getBoundingClientRect();
+                        return !['SVG', 'PATH'].includes(element.tagName)
+                            && style.display !== 'none'
+                            && style.visibility !== 'hidden'
+                            && rect.height > 0
+                            && rect.width === 0
+                            && (element.innerText || '').trim();
+                    })
+                    .slice(0, 10)
+                    .map((element) => `${element.tagName}.${element.className}`);
+                return {
+                    clientWidth: root.clientWidth,
+                    scrollWidth: root.scrollWidth,
+                    briefWidth: brief?.width || 0,
+                    actionCopyWidth: actionCopy?.width || 0,
+                    firstFieldY: firstField?.y ?? Number.MAX_SAFE_INTEGER,
+                    barPosition: bar ? getComputedStyle(bar).position : '',
+                    barHeight: barRect?.height || 0,
+                    formPaddingBottom: form ? parseFloat(getComputedStyle(form).paddingBottom || '0') : 0,
+                    zeroTextContainers,
+                };
+            }"""
+        )
+
+        self.assertLessEqual(metrics["scrollWidth"], metrics["clientWidth"] + 1, metrics)
+        self.assertGreater(metrics["briefWidth"], 200, metrics)
+        self.assertGreater(metrics["actionCopyWidth"], 200, metrics)
+        self.assertLess(metrics["firstFieldY"], 1350, metrics)
+        self.assertEqual(metrics["barPosition"], "fixed", metrics)
+        self.assertGreaterEqual(metrics["formPaddingBottom"], metrics["barHeight"], metrics)
+        self.assertEqual(metrics["zeroTextContainers"], [], metrics)
+        self._capture("config-page-390.png")
+
+        self.page.set_viewport_size({"width": 1024, "height": 900})
+        self.page.reload(wait_until="networkidle")
+        self.assertEqual(self._style(".sticky-submit-bar", "position"), "sticky")
+
+    def test_execution_flow_uses_six_three_two_and_one_column_layouts(self):
+        self._login()
+        expected_columns = {390: 1, 768: 2, 1024: 3, 1366: 6, 1440: 6}
+        for width, expected in expected_columns.items():
+            with self.subTest(width=width):
+                self.page.set_viewport_size({"width": width, "height": 900})
+                self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
+                self._assert_page_has_no_horizontal_overflow()
+                layout = self.page.locator(".execution-flow").evaluate(
+                    """element => {
+                        const rects = Array.from(element.children).map(child => child.getBoundingClientRect());
+                        const firstY = rects[0]?.y || 0;
+                        return {
+                            columns: rects.filter(rect => Math.abs(rect.y - firstY) < 1).length,
+                            clientWidth: element.clientWidth,
+                            scrollWidth: element.scrollWidth,
+                        };
+                    }"""
+                )
+                self.assertEqual(layout["columns"], expected, layout)
+                self.assertLessEqual(layout["scrollWidth"], layout["clientWidth"] + 1, layout)
 
     def test_login_page_loads_styles_and_primary_action(self):
         self.page.goto(f"{self.base_url}/login", wait_until="networkidle")
@@ -255,19 +355,99 @@ class WebBrowserRegressionTests(unittest.TestCase):
 
     def test_mobile_header_controls_meet_touch_target_minimum(self):
         self.context.close()
-        self.context = self.browser.new_context(viewport={"width": 390, "height": 900})
+        self.context = self.browser.new_context(
+            viewport={"width": 390, "height": 900}, locale="en-US"
+        )
         self.page = self.context.new_page()
         self._login()
         self.page.goto(f"{self.base_url}/dashboard", wait_until="networkidle")
 
+        self.page.locator("[data-mobile-nav-toggle]").click()
+
         for selector in (
             ".mobile-nav-toggle",
-            ".mode-switcher .topbar-segment",
-            ".language-switcher .topbar-segment",
-            ".header-signout",
+            ".sidebar-mode-switcher .topbar-segment",
+            ".sidebar-language-switcher .topbar-segment",
+            ".sidebar-mobile-signout .button",
         ):
             with self.subTest(selector=selector):
                 self.assertGreaterEqual(self._height(selector), 40.0)
+
+    def test_mobile_navigation_traps_focus_and_restores_the_menu_button(self):
+        self.context.close()
+        self.context = self.browser.new_context(
+            viewport={"width": 390, "height": 900}, locale="en-US"
+        )
+        self.page = self.context.new_page()
+        self._login()
+        self.page.goto(f"{self.base_url}/dashboard", wait_until="networkidle")
+
+        toggle = self.page.locator("[data-mobile-nav-toggle]")
+        self.assertTrue(toggle.is_visible())
+        self.assertEqual(
+            self.page.locator("[data-sidebar-nav] a[aria-current='page']").count(), 1
+        )
+        self.assertFalse(self.page.locator("header .mode-switcher").is_visible())
+        self.assertFalse(self.page.locator("header .language-switcher").is_visible())
+
+        toggle.click()
+        close_button = self.page.locator("[data-app-sidebar] [data-mobile-nav-close]")
+        self.assertTrue(close_button.is_visible())
+        self.assertTrue(
+            close_button.evaluate("element => document.activeElement === element")
+        )
+        self.assertTrue(self.page.locator(".sidebar-mobile-preferences").is_visible())
+        self.assertIsNotNone(self.page.locator("main").get_attribute("inert"))
+
+        self.page.keyboard.press("Escape")
+        self.assertFalse(self.page.locator("body").evaluate("body => body.classList.contains('mobile-nav-open')"))
+        self.assertTrue(toggle.evaluate("element => document.activeElement === element"))
+        self.assertIsNone(self.page.locator("main").get_attribute("inert"))
+
+    def test_text_scaling_and_reduced_motion_keep_critical_pages_operable(self):
+        self.context.close()
+        self.context = self.browser.new_context(
+            viewport={"width": 390, "height": 900}, locale="en-US"
+        )
+        self.page = self.context.new_page()
+        self.page.emulate_media(reduced_motion="reduce")
+        self.page.goto(f"{self.base_url}/login", wait_until="networkidle")
+        self.page.evaluate(
+            "document.documentElement.style.webkitTextSizeAdjust = '200%'"
+        )
+        self.assertEqual(
+            self.page.evaluate(
+                "getComputedStyle(document.documentElement).webkitTextSizeAdjust"
+            ),
+            "200%",
+        )
+        self._assert_page_has_no_horizontal_overflow()
+        for selector in (".login-card", "#username", "#password", "button[type='submit']"):
+            with self.subTest(selector=selector):
+                box = self.page.locator(selector).bounding_box()
+                self.assertIsNotNone(box)
+                self.assertGreater(float(box["width"]), 0)
+                self.assertGreaterEqual(float(box["x"]), 0)
+                self.assertLessEqual(float(box["x"] + box["width"]), 390)
+        self._capture("login-text-scale-200.png")
+
+        self.page.fill("#username", "admin")
+        self.page.fill("#password", "simple888")
+        self.page.click("button[type='submit']")
+        self.page.wait_for_url(f"{self.base_url}/dashboard")
+        reduced_transition = self._style("aside", "transition-duration")
+        self.assertTrue(reduced_transition.endswith("s"))
+        self.assertLessEqual(float(reduced_transition.removesuffix("s")), 0.001)
+        self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
+        self.page.evaluate(
+            "document.documentElement.style.webkitTextSizeAdjust = '200%'"
+        )
+        self._assert_page_has_no_horizontal_overflow()
+        first_field = self.page.locator(
+            "#config-section-source input:not([type='hidden']), #config-section-source select, #config-section-source textarea"
+        ).first
+        self.assertGreater(float(first_field.bounding_box()["width"]), 0)
+        self._capture("config-text-scale-200.png")
 
     def test_chinese_operating_pages_do_not_leak_known_dynamic_english_messages(self):
         self._login()
@@ -340,6 +520,14 @@ class WebBrowserRegressionTests(unittest.TestCase):
             self.page.get_by_role("button", name="Preview Changes").is_visible()
         )
         self.assertTrue(self.page.get_by_role("link", name="Publish").is_visible())
+        supporting_help = self.page.locator(".config-supporting-help")
+        self.assertTrue(supporting_help.is_visible())
+        self.assertFalse(
+            self.page.get_by_role(
+                "link", name="Open Account Creation Rules"
+            ).is_visible()
+        )
+        supporting_help.locator("summary").click()
         self.assertTrue(
             self.page.get_by_role(
                 "link", name="Open Account Creation Rules"
@@ -495,7 +683,9 @@ class WebBrowserRegressionTests(unittest.TestCase):
             self.page.locator(".run-review").inner_text().lower(),
         )
         dry_run_button = self.page.locator("button:has-text('Run Dry Run')").first
-        apply_button = self.page.locator("button:has-text('Run Apply')").first
+        apply_button = self.page.locator(
+            "form:has(input[name='mode'][value='apply']) button[type='submit']"
+        )
         self.assertTrue(apply_button.is_disabled())
         dry_run_box = dry_run_button.bounding_box()
         apply_box = apply_button.bounding_box()
@@ -547,6 +737,63 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertIn("conflicts", hero_text.lower())
         self.assertIn("browser-job-detail-001", hero_text)
         self._capture("job-detail-page.png")
+
+    def test_z_irreversible_dialog_shows_context_requires_name_and_restores_focus(self):
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        OrganizationRepository(manager).upsert_organization(
+            org_id="browser-delete",
+            name="Browser Delete Org",
+            config_path=str(ARTIFACT_DIR / "browser-delete.ini"),
+            description="Browser confirmation fixture",
+            is_enabled=True,
+        )
+
+        self.context.close()
+        self.context = self.browser.new_context(
+            viewport={"width": 390, "height": 900}, locale="en-US"
+        )
+        self.page = self.context.new_page()
+        self._login()
+        self.page.goto(f"{self.base_url}/organizations", wait_until="networkidle")
+
+        delete_form = self.page.locator(
+            "form[action='/organizations/browser-delete/delete']"
+        )
+        delete_button = delete_form.get_by_role("button", name="Delete Organization")
+        self.assertEqual(delete_button.count(), 1)
+        delete_button.click()
+
+        dialog = self.page.locator("[data-confirm-dialog]")
+        self.assertTrue(dialog.is_visible())
+        details = dialog.locator("[data-confirm-details]").inner_text()
+        self.assertIn("Browser Delete Org", details)
+        self.assertIn("Environment", details)
+        self.assertIn("Reversible", details)
+        approve = dialog.locator("[data-confirm-approve]")
+        self.assertTrue(approve.is_disabled())
+        self.assertIn("confirm-dialog-input-help", approve.get_attribute("aria-describedby"))
+        self.assertEqual(approve.inner_text().strip(), "Delete Organization")
+
+        panel_box = dialog.locator(".confirm-dialog__panel").bounding_box()
+        self.assertIsNotNone(panel_box)
+        self.assertGreaterEqual(float(panel_box["x"]), 0)
+        self.assertGreaterEqual(float(panel_box["y"]), 0)
+        self.assertLessEqual(float(panel_box["x"] + panel_box["width"]), 390)
+        self.assertLessEqual(float(panel_box["y"] + panel_box["height"]), 900)
+
+        confirmation_input = dialog.locator("[data-confirm-input]")
+        confirmation_input.fill("wrong")
+        self.assertTrue(approve.is_disabled())
+        confirmation_input.fill("Browser Delete Org")
+        self.assertTrue(approve.is_enabled())
+        self._capture("high-risk-confirm-390.png")
+
+        self.page.keyboard.press("Escape")
+        self.assertFalse(dialog.is_visible())
+        self.assertTrue(
+            delete_button.evaluate("element => document.activeElement === element")
+        )
 
     def test_z_conflict_queue_and_decision_wizard_use_decision_surfaces(self):
         manager = DatabaseManager(db_path=str(self.db_path))
@@ -642,6 +889,106 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self._capture("conflict-decision-page.png")
 
+    def test_z_apply_confirmation_shows_real_impact_and_explicit_action(self):
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        config_repo = OrganizationConfigRepository(manager)
+        configured_values = {
+            "source_provider": "wecom",
+            "corpid": "browser-corp",
+            "agentid": "10001",
+            "corpsecret": "browser-secret",
+            "webhook_url": "",
+            "ldap_server": "dc01.example.local",
+            "ldap_domain": "example.local",
+            "ldap_username": "EXAMPLE\\administrator",
+            "ldap_password": "Password123!",
+            "ldap_use_ssl": True,
+            "ldap_port": 636,
+            "ldap_validate_cert": False,
+            "ldap_ca_cert_path": "",
+            "default_password": "ChangeMe123!",
+            "force_change_password": True,
+            "password_complexity": "strong",
+        }
+        config_repo.save_config("default", configured_values, config_path="config.ini")
+        job_repo = SyncJobRepository(manager)
+        job_repo.create_job(
+            "browser-apply-ready-001",
+            trigger_type="browser_regression",
+            execution_mode="dry_run",
+            status="COMPLETED",
+            org_id="default",
+        )
+        job_repo.update_job(
+            "browser-apply-ready-001",
+            planned_operation_count=126,
+            error_count=0,
+            summary={
+                "planned_operation_count": 126,
+                "high_risk_operation_count": 3,
+                "conflict_count": 0,
+                "review_required": False,
+            },
+        )
+
+        try:
+            self.context.close()
+            self.context = self.browser.new_context(
+                viewport={"width": 390, "height": 900}, locale="en-US"
+            )
+            self.page = self.context.new_page()
+            self._login()
+            self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
+
+            apply_button = self.page.get_by_role(
+                "button", name="Apply 126 Changes", exact=True
+            )
+            self.assertEqual(apply_button.count(), 1)
+            self.assertTrue(apply_button.is_enabled())
+            apply_button.click()
+
+            dialog = self.page.locator("[data-confirm-dialog]")
+            self.assertTrue(dialog.is_visible())
+            details = dialog.locator("[data-confirm-details]").inner_text()
+            for expected in (
+                "Default Organization",
+                "Local environment",
+                "browser-apply-ready-001",
+                "Planned Changes\n126",
+                "High-Risk Changes\n3",
+                "Reversible\nNo",
+            ):
+                self.assertIn(expected, details)
+            self.assertEqual(
+                dialog.locator("[data-confirm-approve]").inner_text().strip(),
+                "Apply 126 Changes",
+            )
+            panel_box = dialog.locator(".confirm-dialog__panel").bounding_box()
+            self.assertLessEqual(float(panel_box["x"] + panel_box["width"]), 390)
+            self.assertLessEqual(float(panel_box["y"] + panel_box["height"]), 900)
+            self._capture("apply-confirm-390.png")
+            self.page.keyboard.press("Escape")
+            self.assertFalse(dialog.is_visible())
+            self.assertTrue(
+                apply_button.evaluate("element => document.activeElement === element")
+            )
+        finally:
+            config_repo.save_config(
+                "default",
+                {
+                    **configured_values,
+                    "corpid": "",
+                    "corpsecret": "",
+                    "ldap_server": "",
+                    "ldap_domain": "",
+                    "ldap_username": "",
+                    "ldap_password": "",
+                    "default_password": "",
+                },
+                config_path="config.ini",
+            )
+
     def test_z_lifecycle_workbench_uses_four_lane_board(self):
         manager = DatabaseManager(db_path=str(self.db_path))
         manager.initialize(create_startup_snapshot=False, verify_integrity=True)
@@ -699,6 +1046,182 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.assertIn("browser-contractor", self.page.locator("body").inner_text())
         self._capture("lifecycle-workbench-page.png")
+
+    def test_z_long_dry_run_id_truncates_copies_and_announces(self):
+        long_job_id = "dry-run-" + ("identity-scope-" * 8) + "001"
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        job_repo = SyncJobRepository(manager)
+        job_repo.create_job(
+            long_job_id,
+            trigger_type="browser_regression",
+            execution_mode="dry_run",
+            status="COMPLETED",
+            org_id="default",
+        )
+
+        self.context.close()
+        self.context = self.browser.new_context(
+            viewport={"width": 390, "height": 900}, locale="en-US"
+        )
+        self.page = self.context.new_page()
+        self._login()
+        self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
+
+        identifier = self.page.locator(".config-brief .identifier")
+        self.assertTrue(identifier.is_visible())
+        value = identifier.locator(".identifier__value")
+        self.assertEqual(value.get_attribute("title"), long_job_id)
+        self.assertLessEqual(
+            float(identifier.bounding_box()["width"]),
+            float(self.page.locator(".config-brief__status").bounding_box()["width"]),
+        )
+        identifier.locator("[data-copy-value]").click()
+        self.page.wait_for_function(
+            "() => document.querySelector('[data-copy-status]')?.textContent.includes('Dry Run ID copied')"
+        )
+        self.assertIn(
+            "Dry Run ID copied",
+            self.page.locator("[data-copy-status]").text_content(),
+        )
+
+    def test_z_responsive_evidence_covers_critical_operating_pages(self):
+        self._login()
+        viewports = (390, 768, 1024, 1366, 1440)
+        pages = {
+            "dashboard": ("/dashboard?lang=zh-CN", ".control-tower"),
+            "config": (
+                "/config?lang=zh-CN",
+                "#config-section-source input:not([type='hidden']), #config-section-source select, #config-section-source textarea",
+            ),
+            "jobs": ("/jobs?lang=zh-CN", ".execution-flow"),
+            "audit": ("/audit?lang=zh-CN", ".table-shell"),
+            "organizations": ("/organizations?lang=zh-CN", ".table-shell"),
+            "connectors": ("/advanced-sync?lang=zh-CN", ".page-header"),
+        }
+        records: list[dict[str, object]] = []
+        console_errors: list[dict[str, str]] = []
+        failed_requests: list[dict[str, str]] = []
+        self.page.on(
+            "console",
+            lambda message: console_errors.append(
+                {"url": self.page.url, "message": message.text}
+            )
+            if message.type == "error"
+            else None,
+        )
+        self.page.on(
+            "requestfailed",
+            lambda request: failed_requests.append(
+                {"url": request.url, "failure": str(request.failure or "")}
+            ),
+        )
+
+        for width in viewports:
+            self.page.set_viewport_size({"width": width, "height": 900})
+            for page_name, (path, first_selector) in pages.items():
+                with self.subTest(width=width, page=page_name):
+                    self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
+                    metrics = self.page.evaluate(
+                        """firstSelector => {
+                            const root = document.documentElement;
+                            const first = document.querySelector(firstSelector)?.getBoundingClientRect();
+                            const sticky = document.querySelector('.sticky-submit-bar');
+                            const stickyRect = sticky?.getBoundingClientRect();
+                            const tables = Array.from(document.querySelectorAll('.table-shell')).map(table => ({
+                                clientWidth: table.clientWidth,
+                                scrollWidth: table.scrollWidth,
+                                overflowX: getComputedStyle(table).overflowX,
+                                tabindex: table.getAttribute('tabindex'),
+                            }));
+                            const zeroTextContainers = Array.from(document.querySelectorAll('main *'))
+                                .filter(element => {
+                                    const style = getComputedStyle(element);
+                                    const rect = element.getBoundingClientRect();
+                                    return !['SVG', 'PATH'].includes(element.tagName)
+                                        && style.display !== 'none'
+                                        && style.visibility !== 'hidden'
+                                        && rect.height > 0
+                                        && rect.width === 0
+                                        && (element.innerText || '').trim();
+                                })
+                                .slice(0, 10)
+                                .map(element => `${element.tagName}.${element.className}`);
+                            return {
+                                viewport: {width: innerWidth, height: innerHeight},
+                                clientWidth: root.clientWidth,
+                                scrollWidth: root.scrollWidth,
+                                pageHeight: root.scrollHeight,
+                                firstVisible: first ? {x: first.x, y: first.y, width: first.width, height: first.height} : null,
+                                tables,
+                                sticky: stickyRect ? {
+                                    x: stickyRect.x,
+                                    y: stickyRect.y,
+                                    width: stickyRect.width,
+                                    height: stickyRect.height,
+                                    position: getComputedStyle(sticky).position,
+                                } : null,
+                                zeroTextContainers,
+                            };
+                        }""",
+                        first_selector,
+                    )
+                    self.assertLessEqual(
+                        metrics["scrollWidth"], metrics["clientWidth"] + 1, metrics
+                    )
+                    self.assertEqual(metrics["zeroTextContainers"], [], metrics)
+                    self.assertIsNotNone(metrics["firstVisible"], metrics)
+                    self.assertGreater(metrics["firstVisible"]["width"], 0, metrics)
+                    for table in metrics["tables"]:
+                        self.assertIn(table["overflowX"], {"auto", "scroll"})
+                        self.assertGreaterEqual(int(table["tabindex"] or -1), 0)
+                    records.append(
+                        {"page": page_name, "path": path, "width": width, **metrics}
+                    )
+                    screenshot_path = ARTIFACT_DIR / f"evidence-{page_name}-{width}.png"
+                    self.page.screenshot(path=str(screenshot_path), full_page=True)
+
+        login_context = self.browser.new_context(locale="en-US")
+        try:
+            login_page = login_context.new_page()
+            for width in viewports:
+                login_page.set_viewport_size({"width": width, "height": 900})
+                login_page.goto(f"{self.base_url}/login?lang=zh-CN", wait_until="networkidle")
+                dimensions = login_page.evaluate(
+                    "() => ({clientWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth, pageHeight: document.documentElement.scrollHeight})"
+                )
+                self.assertLessEqual(dimensions["scrollWidth"], dimensions["clientWidth"] + 1)
+                records.append(
+                    {
+                        "page": "login",
+                        "path": "/login?lang=zh-CN",
+                        "width": width,
+                        "viewport": {"width": width, "height": 900},
+                        **dimensions,
+                    }
+                )
+                login_page.screenshot(
+                    path=str(ARTIFACT_DIR / f"evidence-login-{width}.png"),
+                    full_page=True,
+                )
+        finally:
+            login_context.close()
+
+        evidence_path = ARTIFACT_DIR / "responsive-evidence.json"
+        evidence_path.write_text(
+            json.dumps(
+                {
+                    "records": records,
+                    "console_errors": console_errors,
+                    "failed_requests": failed_requests,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(console_errors, [])
+        self.assertEqual(failed_requests, [])
 
     def test_z_phase3_operating_pages_render_shells(self):
         self._login()

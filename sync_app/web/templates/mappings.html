@@ -249,13 +249,13 @@
               <div><strong>{{ t("Owner") }}:</strong> {{ item.rule_owner or "-" }}</div>
               <div><strong>{{ t("Reason") }}:</strong> {{ item.effective_reason or item.notes or "-" }}</div>
               <div class="muted">{{ t("Next Review") }}: {{ item.next_review_at or "-" }}</div>
-              <div class="muted">{{ t("Last Reviewed") }}: {{ item.last_reviewed_at or item.updated_at or "-" }}</div>
+              <div class="muted">{{ t("Last Reviewed") }}: {{ ui.local_time(item.last_reviewed_at or item.updated_at) }}</div>
               <div class="muted">{{ t("Hits") }}: {{ item.hit_count or 0 }}{% if item.last_hit_at %} · {{ t("Last Hit") }}: {{ item.last_hit_at }}{% endif %}</div>
               {% if item.notes and item.effective_reason and item.notes != item.effective_reason %}
               <div class="muted">{{ t("Notes") }}: {{ item.notes }}</div>
               {% endif %}
             </td>
-            <td>{{ item.updated_at or "-" }}</td>
+            <td>{{ ui.local_time(item.updated_at) }}</td>
             <td>
               {% if can("mappings.write") %}
               <form class="inline" method="post" action="/mappings/bind/{{ item.source_user_id or item.wecom_userid }}/toggle">
@@ -307,13 +307,13 @@
               <div><strong>{{ t("Owner") }}:</strong> {{ item.rule_owner or "-" }}</div>
               <div><strong>{{ t("Reason") }}:</strong> {{ item.effective_reason or item.notes or "-" }}</div>
               <div class="muted">{{ t("Next Review") }}: {{ item.next_review_at or "-" }}</div>
-              <div class="muted">{{ t("Last Reviewed") }}: {{ item.last_reviewed_at or item.updated_at or "-" }}</div>
+              <div class="muted">{{ t("Last Reviewed") }}: {{ ui.local_time(item.last_reviewed_at or item.updated_at) }}</div>
               <div class="muted">{{ t("Hits") }}: {{ item.hit_count or 0 }}{% if item.last_hit_at %} · {{ t("Last Hit") }}: {{ item.last_hit_at }}{% endif %}</div>
               {% if item.notes and item.effective_reason and item.notes != item.effective_reason %}
               <div class="muted">{{ t("Notes") }}: {{ item.notes }}</div>
               {% endif %}
             </td>
-            <td>{{ item.updated_at or "-" }}</td>
+            <td>{{ ui.local_time(item.updated_at) }}</td>
             <td>
               {% if can("mappings.write") %}
               <form class="inline" method="post" action="/mappings/override/{{ item.source_user_id or item.wecom_userid }}/delete" data-confirm="{{ t('Deleting this override returns the user to automatic department placement.') }}" data-confirm-title="{{ t('Confirm Department Override Deletion') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Source User ID') }}" data-confirm-detail-2-value="{{ item.source_user_id or item.wecom_userid }}" data-confirm-detail-3-label="{{ t('Primary Department ID') }}" data-confirm-detail-3-value="{{ item.primary_department_id }}" data-confirm-detail-4-label="{{ t('Requested Action') }}" data-confirm-detail-4-value="{{ t('Permanent deletion') }}">

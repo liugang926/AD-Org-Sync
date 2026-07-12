@@ -31,6 +31,7 @@ class RequestSupport:
         default_brand_display_name: str,
         default_brand_mark_text: str,
         default_brand_attribution: str,
+        environment_label: str,
         supported_ui_modes: dict[str, str],
         placement_strategies: dict[str, str],
         advanced_nav_pages: set[str],
@@ -42,6 +43,7 @@ class RequestSupport:
         self.default_brand_display_name = default_brand_display_name
         self.default_brand_mark_text = default_brand_mark_text
         self.default_brand_attribution = default_brand_attribution
+        self.environment_label = environment_label
         self.supported_ui_modes = supported_ui_modes
         self.placement_strategies = placement_strategies
         self.advanced_nav_pages = advanced_nav_pages
@@ -288,6 +290,7 @@ class RequestSupport:
         context.setdefault("brand_display_name", brand_display_name)
         context.setdefault("brand_mark_text", str(brand_mark_text or "").strip() or self.default_brand_mark_text)
         context.setdefault("brand_attribution", str(brand_attribution or "").strip() or self.default_brand_attribution)
+        context.setdefault("environment_label", self.environment_label)
         context.setdefault("has_users", repositories.user_repo.has_any_user())
         context.setdefault(
             "organizations",
