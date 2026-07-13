@@ -28,6 +28,13 @@ from sync_app.providers.source import (
     get_source_provider_display_name,
 )
 from sync_app.providers.target import build_target_provider
+from sync_app.modules.sspr import (
+    SSPRRateLimiter,
+    SQLiteSSPROAuthTransactionStore,
+    SQLiteSSPRRateLimitStore,
+    SQLiteSSPRResetReceiptStore,
+    SQLiteSSPRSessionStore,
+)
 from sync_app.services.config_bundle import export_organization_bundle, import_organization_bundle
 from sync_app.services.config_validation import test_ldap_connection, test_source_connection, validate_config
 from sync_app.web.authz import normalize_role
@@ -65,6 +72,7 @@ from sync_app.web.routes_metadata import register_metadata_routes
 from sync_app.web.routes_organizations import register_organization_routes
 from sync_app.web.routes_public import register_public_routes
 from sync_app.web.routes_source_directory import register_source_directory_routes
+from sync_app.web.routes_sspr import register_sspr_routes
 from sync_app.web.runtime import (
     resolve_web_runtime_settings as resolve_web_runtime_settings,
     web_runtime_requires_restart as web_runtime_requires_restart,
@@ -125,11 +133,13 @@ PUBLIC_AUTH_PATHS = {
     "/logout",
     "/readyz",
     "/setup",
+    "/sspr",
 }
 PUBLIC_AUTH_PREFIXES = (
     "/static/",
     "/api/integrations/",
     "/auth/oidc/",
+    "/sspr/",
 )
 
 def _safe_redirect_target(value: str | None, default: str) -> str:
@@ -248,6 +258,23 @@ def create_app(
     app.router.on_startup.append(runtime_state.integration_outbox_worker.start)
     app.router.on_shutdown.append(runtime_state.integration_outbox_worker.stop)
 
+    sspr_oauth_store = SQLiteSSPROAuthTransactionStore(repositories.db_manager)
+    sspr_session_store = SQLiteSSPRSessionStore(repositories.db_manager)
+    sspr_receipt_store = SQLiteSSPRResetReceiptStore(repositories.db_manager)
+    sspr_rate_store = SQLiteSSPRRateLimitStore(repositories.db_manager)
+    sspr_verification_rate_limiter = SSPRRateLimiter(
+        max_attempts=5,
+        window_seconds=300,
+        lockout_seconds=300,
+        store=sspr_rate_store,
+    )
+    sspr_reset_rate_limiter = SSPRRateLimiter(
+        max_attempts=5,
+        window_seconds=300,
+        lockout_seconds=600,
+        store=sspr_rate_store,
+    )
+
     department_name_cache: dict[str, Any] = {
         "expires_at": 0.0,
         "config_fingerprint": "",
@@ -274,6 +301,7 @@ def create_app(
     @app.middleware("http")
     async def observability_middleware(request: Request, call_next):
         correlation_id = normalize_correlation_id(request.headers.get("x-correlation-id"))
+        request.state.correlation_id = correlation_id
         with bind_observability_context(correlation_id=correlation_id):
             try:
                 response = await call_next(request)
@@ -289,6 +317,22 @@ def create_app(
                 labels={"method": request.method.upper(), "status": str(response.status_code)},
             )
             return response
+
+    @app.middleware("http")
+    async def sspr_security_headers_middleware(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/sspr" or request.url.path.startswith("/sspr/"):
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; "
+                "style-src 'self'; script-src 'self' https://g.alicdn.com; connect-src 'self'; "
+                "img-src 'self' data:; font-src 'self'"
+            )
+        return response
 
     @app.middleware("http")
     async def require_login_middleware(request: Request, call_next):
@@ -514,6 +558,18 @@ def create_app(
         reject_invalid_csrf=request_support.reject_invalid_csrf,
         render=request_support.render,
         require_capability=request_support.require_capability,
+    )
+
+    register_sspr_routes(
+        app,
+        templates=TEMPLATES,
+        app_version=APP_VERSION,
+        oauth_store=sspr_oauth_store,
+        session_store=sspr_session_store,
+        receipt_store=sspr_receipt_store,
+        verification_rate_limiter=sspr_verification_rate_limiter,
+        reset_rate_limiter=sspr_reset_rate_limiter,
+        get_client_ip=request_support.get_client_ip,
     )
 
     register_source_directory_routes(

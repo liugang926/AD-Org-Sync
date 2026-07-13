@@ -6,6 +6,7 @@ import unittest
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import uvicorn
 
@@ -17,11 +18,16 @@ from sync_app.storage.local_db import (
     SyncConflictRepository,
     SyncJobRepository,
     SyncReplayRequestRepository,
+    SettingsRepository,
+    UserIdentityBindingRepository,
     UserLifecycleQueueRepository,
     WebAdminUserRepository,
 )
 from sync_app.web.app import create_app
 from sync_app.web.security import hash_password
+from sync_app.modules.sspr import SSPRVerifiedIdentity
+from sync_app.modules.sspr.repositories import hash_capability
+from sync_app.services.typed_settings import SSPRSettings
 
 try:
     from playwright.sync_api import Error as PlaywrightError
@@ -177,6 +183,237 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 f"element => getComputedStyle(element).getPropertyValue('{prop}')",
             )
         ).strip()
+
+    @classmethod
+    def _configure_sspr_browser_org(cls):
+        manager = DatabaseManager(db_path=str(cls.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        org_repo = OrganizationRepository(manager)
+        org_repo.upsert_organization(
+            org_id="sspr-browser",
+            name="SSPR Browser Organization",
+            config_path=str(ARTIFACT_DIR / "sspr-browser.ini"),
+            is_enabled=True,
+        )
+        OrganizationConfigRepository(manager).save_config(
+            "sspr-browser",
+            {
+                "source_provider": "dingtalk",
+                "corpid": "browser-ding-app-key",
+                "agentid": "10001",
+                "corpsecret": "browser-ding-secret",
+                "webhook_url": "",
+                "ldap_server": "dc.browser.example",
+                "ldap_domain": "browser.example",
+                "ldap_username": "svc-browser",
+                "ldap_password": "browser-directory-secret",
+                "ldap_use_ssl": True,
+                "ldap_port": 636,
+                "ldap_validate_cert": True,
+                "ldap_ca_cert_path": "",
+                "default_password": "",
+                "force_change_password": False,
+                "password_complexity": "strong",
+            },
+            config_path=str(ARTIFACT_DIR / "sspr-browser.ini"),
+        )
+        SSPRSettings(
+            enabled=True,
+            dingtalk_corp_id="browser-ding-corp",
+            min_password_length=12,
+            unlock_account_default=True,
+            verification_session_ttl_seconds=600,
+        ).persist(SettingsRepository(manager), org_id="sspr-browser")
+        UserIdentityBindingRepository(manager).upsert_binding(
+            "browser-alice",
+            "browser.alice",
+            org_id="sspr-browser",
+            source_provider="dingtalk",
+            connector_id="default",
+            source_display_name="Browser Alice",
+            preserve_manual=False,
+        )
+
+    def _inject_sspr_employee_session(self):
+        user_agent = self.page.evaluate("navigator.userAgent")
+        session = self.server.config.app.state.sspr_session_store.create_session(
+            SSPRVerifiedIdentity(
+                org_id="sspr-browser",
+                provider_id="dingtalk",
+                connector_id="default",
+                source_user_id="browser-alice",
+                display_name="Browser Alice",
+            ),
+            user_agent=user_agent,
+            ttl_seconds=600,
+        )
+        self.context.add_cookies(
+            [
+                {
+                    "name": "ad_org_sync_sspr",
+                    "value": session.session_id,
+                    "url": f"{self.base_url}/sspr",
+                    "httpOnly": True,
+                    "sameSite": "Lax",
+                },
+                {
+                    "name": "ad_org_sync_sspr_csrf",
+                    "value": session.csrf_token,
+                    "url": f"{self.base_url}/sspr",
+                    "httpOnly": True,
+                    "sameSite": "Lax",
+                },
+            ]
+        )
+        return session
+
+    def test_sspr_mobile_dingtalk_stub_password_feedback_and_success_states(self):
+        self._configure_sspr_browser_org()
+        self.context.close()
+        self.context = self.browser.new_context(
+            viewport={"width": 390, "height": 844}, locale="en-US"
+        )
+        self.page = self.context.new_page()
+
+        captured_auth = {}
+        self.page.route(
+            "https://g.alicdn.com/**",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/javascript",
+                body=(
+                    "window.dd={ready:function(fn){fn();},error:function(){},"
+                    "requestAuthCode:function(options){options.onSuccess({code:'stub-code'});}};"
+                ),
+            ),
+        )
+
+        def fulfill_auth(route):
+            captured_auth.update(json.loads(route.request.post_data or "{}"))
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"status": "verified", "nextUrl": "/sspr/browser-auth-complete"}),
+            )
+
+        self.page.route(f"{self.base_url}/sspr/auth/dingtalk", fulfill_auth)
+        self.page.route(
+            f"{self.base_url}/sspr/browser-auth-complete",
+            lambda route: route.fulfill(status=200, content_type="text/html", body="<h1>stub verified</h1>"),
+        )
+        self.page.goto(
+            f"{self.base_url}/sspr?corpid=browser-ding-corp",
+            wait_until="networkidle",
+        )
+        self.assertEqual(captured_auth.get("authCode"), "stub-code")
+        self.assertTrue(captured_auth.get("state"))
+        self.assertTrue(self.page.get_by_role("heading", name="stub verified").is_visible())
+
+        class BrowserTarget:
+            def get_user_account_state(self, _username):
+                return {
+                    "available": True,
+                    "exists": True,
+                    "enabled": True,
+                    "locked": True,
+                    "domain": "browser.example",
+                }
+
+            def close(self):
+                return None
+
+        self._inject_sspr_employee_session()
+        with patch("sync_app.web.routes_sspr.build_target_provider", return_value=BrowserTarget()):
+            self.page.goto(f"{self.base_url}/sspr/account", wait_until="networkidle")
+        self.assertTrue(self.page.get_by_role("heading", name="Browser Alice").is_visible())
+        self.assertIn("browser.alice", self.page.locator("body").inner_text())
+        self.assertEqual(self.page.locator("[data-app-sidebar]").count(), 0)
+        self._assert_page_has_no_horizontal_overflow()
+        self.assertGreaterEqual(self._height("#new_password"), 44)
+        self.assertGreaterEqual(self._height("[data-sspr-submit]"), 44)
+
+        self.page.locator("#new_password").focus()
+        self.page.keyboard.press("Tab")
+        self.assertEqual(
+            self.page.evaluate("document.activeElement?.dataset?.passwordToggle || ''"),
+            "new_password",
+        )
+
+        self.page.fill("#new_password", "N3w!BrowserPass")
+        self.page.fill("#confirm_password", "N3w!BrowserPass")
+        self.assertGreaterEqual(self.page.locator(".sspr-rules .is-valid").count(), 3)
+        self.page.locator('[data-password-toggle="new_password"]').click()
+        self.assertEqual(self.page.locator("#new_password").get_attribute("type"), "text")
+        self.page.locator('[data-password-toggle="new_password"]').click()
+        self.assertEqual(self.page.locator("#new_password").get_attribute("type"), "password")
+        self.page.locator("[data-sspr-reset-form]").evaluate(
+            "form => { form.addEventListener('submit', event => event.preventDefault(), {once: true}); form.requestSubmit(); }"
+        )
+        self.assertTrue(self.page.locator("[data-sspr-submit]").is_disabled())
+        self.assertIn("Securely resetting", self.page.locator("[data-sspr-submit]").inner_text())
+        self._capture("sspr-account-mobile.png")
+
+        receipt = self.server.config.app.state.sspr_receipt_store.create_receipt(
+            org_id="sspr-browser",
+            ad_username="browser.alice",
+            unlock_requested=True,
+            unlock_succeeded=True,
+        )
+        self.context.add_cookies(
+            [
+                {
+                    "name": "ad_org_sync_sspr_result",
+                    "value": receipt.token,
+                    "url": f"{self.base_url}/sspr/result",
+                    "httpOnly": True,
+                    "sameSite": "Lax",
+                }
+            ]
+        )
+        self.page.goto(f"{self.base_url}/sspr/result?lang=zh-CN", wait_until="networkidle")
+        self.assertIn("密码重置已完成", self.page.locator("body").inner_text())
+        self.assertIn("browser.alice", self.page.locator("body").inner_text())
+        self.assertNotIn("N3w!BrowserPass", self.page.content())
+        self._assert_page_has_no_horizontal_overflow()
+        self._capture("sspr-success-mobile-zh.png")
+
+    def test_sspr_dingtalk_stub_error_recovery_is_accessible(self):
+        self._configure_sspr_browser_org()
+        self.context.close()
+        self.context = self.browser.new_context(
+            viewport={"width": 390, "height": 844}, locale="zh-CN"
+        )
+        self.page = self.context.new_page()
+        self.page.route(
+            "https://g.alicdn.com/**",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/javascript",
+                body=(
+                    "window.dd={ready:function(fn){fn();},error:function(){},"
+                    "requestAuthCode:function(options){options.onFail({errorCode:'stub'});}};"
+                ),
+            ),
+        )
+
+        expired = self._inject_sspr_employee_session()
+        with self.server.config.app.state.db_manager.transaction() as connection:
+            connection.execute(
+                "UPDATE sspr_verification_sessions SET expires_at = ? WHERE token_hash = ?",
+                (
+                    "2000-01-01T00:00:00+00:00",
+                    hash_capability(expired.session_id),
+                ),
+            )
+        self.page.goto(f"{self.base_url}/sspr/account", wait_until="networkidle")
+
+        self.assertIn("/sspr/oauth/start", self.page.url)
+        self.assertIn("验证会话已过期", self.page.locator("body").inner_text())
+        self.assertTrue(self.page.get_by_role("heading", name="钉钉验证失败").is_visible())
+        self.assertTrue(self.page.get_by_role("link", name="重试").is_visible())
+        self.assertGreaterEqual(self.page.locator("[aria-live='polite']").count(), 1)
+        self._assert_page_has_no_horizontal_overflow()
+        self._capture("sspr-auth-error-mobile-zh.png")
 
     def test_source_directory_page_renders_paginated_scope_workflow_without_secrets(self):
         self._login()

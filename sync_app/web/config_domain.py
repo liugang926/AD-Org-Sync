@@ -63,6 +63,7 @@ def normalize_config_submission_values(
     web_trust_proxy_headers: Optional[str] = None,
     web_forwarded_allow_ips: str = "127.0.0.1",
     sspr_enabled: Optional[str] = None,
+    sspr_dingtalk_corp_id: str = "",
     sspr_min_password_length: int = 12,
     sspr_unlock_account_default: Optional[str] = None,
     sspr_verification_session_ttl_seconds: int = 600,
@@ -127,7 +128,8 @@ def normalize_config_submission_values(
         "web_trust_proxy_headers": to_bool(web_trust_proxy_headers, False),
         "web_forwarded_allow_ips": web_forwarded_allow_ips.strip() or "127.0.0.1",
         "sspr_enabled": to_bool(sspr_enabled, False),
-        "sspr_min_password_length": _coerce_int(sspr_min_password_length, 12, minimum=1),
+        "sspr_dingtalk_corp_id": str(sspr_dingtalk_corp_id or "").strip(),
+        "sspr_min_password_length": _coerce_int(sspr_min_password_length, 12, minimum=8),
         "sspr_unlock_account_default": to_bool(sspr_unlock_account_default, False),
         "sspr_verification_session_ttl_seconds": _coerce_int(
             sspr_verification_session_ttl_seconds,

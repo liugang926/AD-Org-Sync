@@ -33,6 +33,7 @@ class DingTalkAPI:
 
     AUTH_URL = "https://api.dingtalk.com/v1.0/oauth2/accessToken"
     OAPI_BASE_URL = "https://oapi.dingtalk.com"
+    EMPLOYEE_AUTH_INFO_PATH = "/topapi/v2/user/getuserinfo"
     ROOT_DEPARTMENT_ID = 1
 
     def __init__(self, app_key: str, app_secret: str, agentid: str = None, logger=None):
@@ -183,30 +184,66 @@ class DingTalkAPI:
                     if method.upper() == "GET"
                     else self.session.post(url, **kwargs)
                 )
-                if response.status_code in {401, 403}:
+                if response.status_code in {401, 403} and attempt < self.max_retries - 1:
                     self.logger.info("DingTalk token rejected, refreshing")
                     self._refresh_access_token()
                     continue
+                if response.status_code in {401, 403}:
+                    raise DingTalkAPIError(
+                        "DingTalk denied the API request.",
+                        category="permission_denied",
+                        status_code=response.status_code,
+                    )
+                if response.status_code == 429:
+                    raise DingTalkAPIError(
+                        "DingTalk rate limited the API request.",
+                        category="rate_limited",
+                        status_code=response.status_code,
+                    )
                 response.raise_for_status()
-                result = response.json()
+                try:
+                    result = response.json()
+                except (TypeError, ValueError) as exc:
+                    raise DingTalkAPIError(
+                        "DingTalk returned an unreadable response.",
+                        category="invalid_response",
+                        status_code=response.status_code,
+                    ) from exc
+                if not isinstance(result, dict):
+                    raise DingTalkAPIError(
+                        "DingTalk returned an unexpected response.",
+                        category="invalid_response",
+                        status_code=response.status_code,
+                    )
                 if self._should_refresh_token(result):
                     self.logger.info("DingTalk token invalid, refreshing")
                     self._refresh_access_token()
                     continue
                 return result
+            except DingTalkAPIError:
+                raise
             except requests.RequestException as exc:
+                safe_error = self._redact(exc)
                 self.logger.warning(
                     "DingTalk request failed (%s/%s): %s",
                     attempt + 1,
                     self.max_retries,
-                    exc,
+                    safe_error,
                 )
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_delay)
                     continue
-                raise
+                raise DingTalkAPIError(
+                    "DingTalk API request could not be completed.",
+                    category="network_error",
+                    detail=safe_error,
+                    status_code=getattr(getattr(exc, "response", None), "status_code", None),
+                ) from exc
 
-        raise Exception("DingTalk request failed after retries")
+        raise DingTalkAPIError(
+            "DingTalk API request could not be completed.",
+            category="network_error",
+        )
 
     def _extract_result(self, result: Dict[str, Any], *, operation: str) -> Any:
         error_code = result.get("errcode")
@@ -220,9 +257,85 @@ class DingTalkAPI:
         return result.get("result", result)
 
     def _post_oapi(self, path: str, payload: Dict[str, Any]) -> Any:
+        self._ensure_token_valid()
         url = f"{self.OAPI_BASE_URL}{path}?access_token={self.access_token}"
         result = self._request("POST", url, json=payload)
         return self._extract_result(result, operation=path)
+
+    def exchange_employee_auth_code(self, auth_code: str) -> Dict[str, Any]:
+        """Exchange a one-time JSAPI auth code for a trusted DingTalk user id."""
+
+        code = str(auth_code or "").strip()
+        if not code:
+            raise DingTalkAPIError(
+                "DingTalk authorization code is required.",
+                category="invalid_auth_code",
+            )
+        self._ensure_token_valid()
+        url = f"{self.OAPI_BASE_URL}{self.EMPLOYEE_AUTH_INFO_PATH}?access_token={self.access_token}"
+        try:
+            result = self._request("POST", url, data={"code": code})
+        except DingTalkAPIError as exc:
+            raise DingTalkAPIError(
+                str(exc).replace(code, "***"),
+                category=exc.category,
+                detail=self._redact(exc.detail).replace(code, "***"),
+                code=exc.code,
+                request_id=self._redact(exc.request_id).replace(code, "***"),
+                status_code=exc.status_code,
+            ) from None
+        error_code = str(result.get("errcode") or result.get("code") or "").strip()
+        message = self._redact(result.get("errmsg") or result.get("message") or "").replace(
+            code,
+            "***",
+        )
+        if error_code not in {"", "0"}:
+            normalized = f"{error_code} {message}".lower()
+            if "expir" in normalized or "过期" in normalized:
+                category = "expired_auth_code"
+                public_message = "DingTalk authorization code has expired."
+            elif any(marker in normalized for marker in ("permission", "forbidden", "scope", "权限")):
+                category = "permission_denied"
+                public_message = "DingTalk denied access to the employee identity."
+            elif "rate" in normalized or "频繁" in normalized:
+                category = "rate_limited"
+                public_message = "DingTalk rate limited the authorization request."
+            else:
+                category = "invalid_auth_code"
+                public_message = "DingTalk rejected the authorization code."
+            raise DingTalkAPIError(
+                public_message,
+                category=category,
+                detail=message,
+                code=error_code,
+                request_id=self._redact(
+                    result.get("requestid")
+                    or result.get("requestId")
+                    or result.get("request_id")
+                    or ""
+                ),
+            )
+        payload = result.get("result", result)
+        if not isinstance(payload, dict):
+            raise DingTalkAPIError(
+                "DingTalk returned an unexpected employee identity response.",
+                category="invalid_response",
+            )
+        user_id = str(payload.get("userid") or payload.get("userId") or "").strip()
+        if not user_id:
+            raise DingTalkAPIError(
+                "DingTalk did not return an employee user id.",
+                category="invalid_response",
+            )
+        return {
+            "userid": user_id,
+            "name": str(payload.get("name") or "").strip(),
+            "device_id": str(payload.get("device_id") or payload.get("deviceId") or "").strip(),
+            "associated_unionid": str(
+                payload.get("associated_unionid") or payload.get("associatedUnionId") or ""
+            ).strip(),
+            "sys_level": int(payload.get("sys_level") or payload.get("sysLevel") or 0),
+        }
 
     def _coerce_bool(self, value: Any) -> bool:
         if isinstance(value, bool):

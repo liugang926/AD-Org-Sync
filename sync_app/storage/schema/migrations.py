@@ -1463,4 +1463,87 @@ MIGRATIONS = [
         ON sync_job_source_scopes (org_id, provider_id, connector_id, execution_mode, selection_fingerprint, created_at DESC);
         """,
     ),
+    (
+        32,
+        "persist bounded SSPR authentication sessions and connector-scoped identities",
+        """
+        DROP INDEX IF EXISTS idx_user_identity_bindings_source_identity;
+        CREATE UNIQUE INDEX idx_user_identity_bindings_source_identity
+        ON user_identity_bindings (org_id, source_provider, connector_id, source_user_id);
+
+        CREATE TABLE sspr_verification_sessions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          token_hash TEXT NOT NULL UNIQUE,
+          csrf_token_hash TEXT NOT NULL,
+          org_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          connector_id TEXT NOT NULL DEFAULT '',
+          source_user_id TEXT NOT NULL,
+          display_name TEXT NOT NULL DEFAULT '',
+          issued_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          consumed_at TEXT,
+          revoked_at TEXT,
+          claimed_at TEXT,
+          claim_token_hash TEXT,
+          request_ip TEXT NOT NULL DEFAULT '',
+          user_agent_hash TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_sspr_sessions_identity
+        ON sspr_verification_sessions (
+          org_id, provider_id, connector_id, source_user_id, expires_at
+        );
+        CREATE INDEX idx_sspr_sessions_cleanup
+        ON sspr_verification_sessions (expires_at, consumed_at, revoked_at);
+
+        CREATE TABLE sspr_oauth_transactions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          state_hash TEXT NOT NULL UNIQUE,
+          org_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          connector_id TEXT NOT NULL DEFAULT '',
+          corp_id TEXT NOT NULL,
+          return_path TEXT NOT NULL DEFAULT '/sspr/account',
+          issued_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          consumed_at TEXT,
+          request_ip TEXT NOT NULL DEFAULT '',
+          user_agent_hash TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_sspr_oauth_context
+        ON sspr_oauth_transactions (org_id, provider_id, corp_id, expires_at);
+        CREATE INDEX idx_sspr_oauth_cleanup
+        ON sspr_oauth_transactions (expires_at, consumed_at);
+
+        CREATE TABLE sspr_reset_receipts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          token_hash TEXT NOT NULL UNIQUE,
+          org_id TEXT NOT NULL,
+          ad_username TEXT NOT NULL,
+          completed_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          unlock_requested INTEGER NOT NULL DEFAULT 0,
+          unlock_succeeded INTEGER NOT NULL DEFAULT 0,
+          consumed_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_sspr_reset_receipts_cleanup
+        ON sspr_reset_receipts (expires_at, consumed_at);
+
+        CREATE TABLE sspr_rate_limit_buckets (
+          bucket_hash TEXT PRIMARY KEY,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          window_started_at TEXT NOT NULL,
+          locked_until TEXT,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_sspr_rate_limit_cleanup
+        ON sspr_rate_limit_buckets (updated_at, locked_until);
+        """,
+    ),
 ]

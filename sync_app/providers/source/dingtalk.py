@@ -50,6 +50,19 @@ class DingTalkSourceProvider(SourceDirectoryProvider):
     def update_user(self, user_id: str, updates: dict[str, Any]) -> bool:
         return bool(self._api.update_user(user_id, updates))
 
+    def verify_employee_identity(self, request: Any) -> dict[str, Any]:
+        """Resolve identity exclusively from DingTalk's one-time authorization code."""
+
+        payload = dict(self._api.exchange_employee_auth_code(request.verification_code) or {})
+        return {
+            "org_id": str(request.org_id or "").strip().lower() or "default",
+            "provider_id": self.provider_id,
+            "connector_id": str(request.connector_id or "").strip(),
+            "source_user_id": str(payload.get("userid") or "").strip(),
+            "display_name": str(payload.get("name") or "").strip(),
+            "sys_level": int(payload.get("sys_level") or 0),
+        }
+
     def close(self) -> None:
         close_method = getattr(self._api, "close", None)
         if callable(close_method):

@@ -817,11 +817,24 @@ class ADSyncLDAPS:
                 'unicodePwd': [(MODIFY_REPLACE, [password_value])]
             }):
                 return True
-            self.logger.error(f"设置密码失败: {self.connection.result}")
+            self.last_password_reset_error_category = self._classify_password_modify_failure(
+                self.connection.result
+            )
+            self.logger.error("AD rejected a password update")
             return False
-        except Exception as e:
-            self.logger.error(f"设置密码失败: {str(e)}")
+        except Exception:
+            self.last_password_reset_error_category = "directory_unavailable"
+            self.logger.error("AD password update failed")
             return False
+
+    @staticmethod
+    def _classify_password_modify_failure(result: object) -> str:
+        normalized = str(result or "").casefold()
+        if any(marker in normalized for marker in ("constraint", "unwilling", "password", "history")):
+            return "password_policy_or_history"
+        if any(marker in normalized for marker in ("unavailable", "timeout", "busy", "server down")):
+            return "directory_unavailable"
+        return "directory_rejected"
 
     def reset_user_password(
         self,
@@ -830,15 +843,19 @@ class ADSyncLDAPS:
         *,
         force_change_at_next_login: bool = False,
     ) -> bool:
+        self.last_password_reset_error_category = ""
         try:
             if self._is_protected_account(username):
+                self.last_password_reset_error_category = "protected_account"
                 self.logger.warning(f"refusing to reset protected AD account password: {username}")
                 return False
             if not new_password or not self._validate_password_complexity(new_password):
+                self.last_password_reset_error_category = "password_complexity"
                 self.logger.warning(f"refusing weak password reset for AD user: {username}")
                 return False
             user = self.get_user(username)
             if not user:
+                self.last_password_reset_error_category = "account_not_found"
                 self.logger.error(f"user not found in AD while resetting password: {username}")
                 return False
             user_dn = user["dn"]
@@ -852,8 +869,9 @@ class ADSyncLDAPS:
                 return False
             self.logger.info(f"reset AD user password: {username}")
             return True
-        except Exception as exc:
-            self.logger.error(f"failed to reset AD user password {username}: {exc}")
+        except Exception:
+            self.last_password_reset_error_category = "directory_unavailable"
+            self.logger.error(f"failed to reset AD user password {username}")
             return False
 
     def unlock_user(self, username: str) -> bool:
@@ -1211,6 +1229,44 @@ class ADSyncLDAPS:
             self.logger.error(f"检查用户状态失败 {username}: {str(e)}")
             return False
     
+    def get_user_account_state(self, username: str) -> Dict:
+        """Return the minimum AD state SSPR needs, without exposing directory data."""
+
+        try:
+            search_filter = f"(&(objectClass=user)(sAMAccountName={escape_filter_chars(username)}))"
+            self.connection.search(
+                self.base_dn,
+                search_filter,
+                attributes=["userAccountControl", "lockoutTime"],
+            )
+            if not self.connection.entries:
+                return {
+                    "available": True,
+                    "exists": False,
+                    "enabled": None,
+                    "locked": None,
+                    "domain": self.domain,
+                }
+            entry = self.connection.entries[0]
+            user_account_control = int(getattr(entry.userAccountControl, "value", 0) or 0)
+            lockout_time = int(getattr(entry.lockoutTime, "value", 0) or 0)
+            return {
+                "available": True,
+                "exists": True,
+                "enabled": not bool(user_account_control & 2),
+                "locked": lockout_time > 0,
+                "domain": self.domain,
+            }
+        except Exception:
+            self.logger.warning("failed to read AD account state for SSPR")
+            return {
+                "available": False,
+                "exists": False,
+                "enabled": None,
+                "locked": None,
+                "domain": self.domain,
+            }
+
     def create_user(
         self,
         username: str,

@@ -3868,7 +3868,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         page_text = self._text(response)
         self.assertIn("Self-Service Password Reset", page_text)
-        self.assertIn("/sspr/callback/wecom", page_text)
+        self.assertIn("/sspr/callback/dingtalk", page_text)
         match = re.search(r'name="csrf_token" value="([^"]+)"', page_text)
         self.assertIsNotNone(match)
 
@@ -3877,6 +3877,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             csrf_token=match.group(1),
             **self._build_config_form_payload(
                 sspr_enabled="true",
+                sspr_dingtalk_corp_id="ding-corp-001",
                 sspr_min_password_length=14,
                 sspr_unlock_account_default="true",
                 sspr_verification_session_ttl_seconds=900,
@@ -3888,6 +3889,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             self.app.state.settings_repo.get_bool(
                 "sspr_enabled", False, org_id="default"
             )
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value(
+                "sspr_dingtalk_corp_id", "", org_id="default"
+            ),
+            "ding-corp-001",
         )
         self.assertEqual(
             self.app.state.settings_repo.get_int(
@@ -4080,6 +4087,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             is_enabled=True,
             source="unit_test",
         )
+        self.app.state.settings_repo.set_value(
+            "sspr_dingtalk_corp_id",
+            "ding-corp-asia",
+            "string",
+            org_id="asia",
+        )
 
         response = self._route("/organizations/{org_id}/export", "GET")(
             self._request("/organizations/asia/export"),
@@ -4093,6 +4106,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         payload = json.loads(self._text(response))
         self.assertEqual(payload["organization"]["org_id"], "asia")
         self.assertEqual(payload["organization_config"]["corpid"], "corp-asia")
+        self.assertEqual(payload["org_settings"]["sspr_dingtalk_corp_id"], "ding-corp-asia")
         self.assertEqual(payload["connectors"][0]["connector_id"], "asia-main")
         self.assertEqual(payload["attribute_mappings"][0]["target_field"], "title")
         self.assertTrue(
@@ -4139,6 +4153,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             "org_settings": {
                 "group_display_separator": "/",
                 "attribute_mapping_enabled": True,
+                "sspr_dingtalk_corp_id": "ding-corp-europe",
             },
             "connectors": [
                 {
@@ -4222,6 +4237,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             self.app.state.settings_repo.get_bool(
                 "attribute_mapping_enabled", False, org_id="europe"
             )
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value(
+                "sspr_dingtalk_corp_id", "", org_id="europe"
+            ),
+            "ding-corp-europe",
         )
         connector = self.app.state.connector_repo.get_connector_record(
             "import-main", org_id="europe"

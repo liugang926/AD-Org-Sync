@@ -343,7 +343,8 @@
             {% call ui.panel(t("Employee Self-Service"), t("Organization Scope"), "info", t("Control the public employee password reset portal for this organization.")) %}
               <div class="form-grid">
                 {{ forms.select("sspr_enabled", t("Self-Service Password Reset"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.sspr_enabled|lower) }}
-                {{ forms.input("sspr_min_password_length", t("SSPR Minimum Password Length"), editable.sspr_min_password_length, type="number", min_value="1") }}
+                {{ forms.input("sspr_dingtalk_corp_id", t("DingTalk CorpId"), editable.sspr_dingtalk_corp_id, help_text=t("The DingTalk organization CorpId; this is not the AppKey / Client ID.")) }}
+                {{ forms.input("sspr_min_password_length", t("SSPR Minimum Password Length"), editable.sspr_min_password_length, type="number", min_value="8") }}
                 {{ forms.select("sspr_unlock_account_default", t("Unlock Account By Default"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.sspr_unlock_account_default|lower) }}
                 {{ forms.input("sspr_verification_session_ttl_seconds", t("Verification Session TTL (sec)"), editable.sspr_verification_session_ttl_seconds, type="number", min_value="60", step="60") }}
               </div>
@@ -354,8 +355,14 @@
                 </div>
                 <ul class="helper-list">
                   <li><strong>{{ t("Portal URL") }}</strong>: <code>{{ sspr_status.portal_url }}</code></li>
-                  {% for callback in sspr_status.callback_urls %}
-                  <li><strong>{{ callback.label }}</strong>: <code>{{ callback.url }}</code></li>
+                  <li><strong>{{ t("DingTalk Auth Endpoint") }}</strong>: <code>{{ sspr_status.auth_url }}</code></li>
+                  <li><strong>{{ t("DingTalk Callback URL") }}</strong>: <code>{{ sspr_status.callback_url }}</code></li>
+                  <li><strong>{{ t("Public Base URL / Port") }}</strong>: <code>{{ sspr_status.public_base_url }}</code> / {{ sspr_status.public_port }}</li>
+                  <li><strong>{{ t("Enabled DingTalk to AD Bindings") }}</strong>: {{ sspr_status.enabled_binding_count }}</li>
+                  <li><strong>{{ t("Latest DingTalk Verification") }}</strong>: {% if sspr_status.last_verification %}{{ sspr_status.last_verification.created_at }} / {{ sspr_status.last_verification.result }}{% else %}{{ t("Never") }}{% endif %}</li>
+                  <li><strong>{{ t("Latest Password Reset") }}</strong>: {% if sspr_status.last_password_reset %}{{ sspr_status.last_password_reset.created_at }} / {{ sspr_status.last_password_reset.result }}{% else %}{{ t("Never") }}{% endif %}</li>
+                  {% for item in sspr_status.missing %}
+                  <li><strong>{{ t("Missing") }}</strong>: {{ t(item) }}</li>
                   {% endfor %}
                 </ul>
               </div>

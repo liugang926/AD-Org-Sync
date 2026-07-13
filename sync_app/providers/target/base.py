@@ -44,6 +44,15 @@ class TargetDirectoryProvider(ABC):
     def get_user_details(self, username: str) -> dict[str, Any]:
         raise NotImplementedError
 
+    def get_user_account_state(self, username: str) -> dict[str, Any]:
+        details = self.get_user_details(username)
+        return {
+            "available": True,
+            "exists": bool(details),
+            "enabled": True if details else None,
+            "locked": None,
+        }
+
     @abstractmethod
     def search_users(self, query: str, *, limit: int = 20) -> list[Any]:
         raise NotImplementedError

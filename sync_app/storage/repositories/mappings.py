@@ -19,10 +19,29 @@ class UserIdentityBindingRepository(BaseRepository):
         *,
         org_id: Optional[str] = None,
         source_provider: str | None = None,
+        connector_id: str | None = None,
     ):
         normalized_org_id = self._resolve_org_id(org_id)
         normalized_provider = str(source_provider or "").strip().lower()
+        normalized_connector_id = str(connector_id or "").strip()
         if normalized_org_id:
+            if normalized_provider and normalized_connector_id:
+                return self._fetchone(
+                    """
+                    SELECT * FROM user_identity_bindings
+                    WHERE org_id = ?
+                      AND source_provider = ?
+                      AND connector_id = ?
+                      AND source_user_id = ?
+                    LIMIT 1
+                    """,
+                    (
+                        normalized_org_id,
+                        normalized_provider,
+                        normalized_connector_id,
+                        source_user_id,
+                    ),
+                )
             if normalized_provider:
                 return self._fetchone(
                     """
@@ -59,11 +78,54 @@ class UserIdentityBindingRepository(BaseRepository):
         *,
         org_id: Optional[str] = None,
         source_provider: str | None = None,
+        connector_id: str | None = None,
     ) -> Optional[UserIdentityBindingRecord]:
-        row = self.get_by_source_user_id(source_user_id, org_id=org_id, source_provider=source_provider)
+        row = self.get_by_source_user_id(
+            source_user_id,
+            org_id=org_id,
+            source_provider=source_provider,
+            connector_id=connector_id,
+        )
         if not row:
             return None
         return UserIdentityBindingRecord.from_row(row)
+
+    def list_binding_records_for_source_identity(
+        self,
+        source_user_id: str,
+        *,
+        org_id: str,
+        source_provider: str,
+        connector_id: str | None = None,
+        enabled_only: bool = False,
+    ) -> list[UserIdentityBindingRecord]:
+        """Return every exact candidate so callers can fail closed on ambiguity."""
+
+        clauses = [
+            "org_id = ?",
+            "source_provider = ?",
+            "source_user_id = ?",
+        ]
+        params: list[Any] = [
+            self._resolve_org_id(org_id) or "default",
+            str(source_provider or "").strip().lower(),
+            str(source_user_id or "").strip(),
+        ]
+        normalized_connector_id = str(connector_id or "").strip()
+        if normalized_connector_id:
+            clauses.append("connector_id = ?")
+            params.append(normalized_connector_id)
+        if enabled_only:
+            clauses.append("is_enabled = 1")
+        rows = self._fetchall(
+            f"""
+            SELECT * FROM user_identity_bindings
+            WHERE {" AND ".join(clauses)}
+            ORDER BY connector_id ASC, id ASC
+            """,
+            tuple(params),
+        )
+        return [UserIdentityBindingRecord.from_row(row) for row in rows]
 
     def get_binding_record_by_wecom_userid(
         self,
@@ -287,7 +349,10 @@ class UserIdentityBindingRepository(BaseRepository):
 
         now = utcnow_iso()
         existing = self.get_binding_record_by_source_user_id(
-            source_user_id, org_id=normalized_org_id, source_provider=source_provider
+            source_user_id,
+            org_id=normalized_org_id,
+            source_provider=source_provider,
+            connector_id=connector_id,
         )
         if existing and preserve_manual and existing.source == "manual":
             return
@@ -300,9 +365,8 @@ class UserIdentityBindingRepository(BaseRepository):
                   target_object_guid, target_object_dn, managed_username_base,
                   source, notes, is_enabled, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(org_id, source_provider, source_user_id) DO UPDATE SET
+                ON CONFLICT(org_id, source_provider, connector_id, source_user_id) DO UPDATE SET
                   source_display_name = excluded.source_display_name,
-                  connector_id = excluded.connector_id,
                   ad_username = excluded.ad_username,
                   target_object_guid = excluded.target_object_guid,
                   target_object_dn = excluded.target_object_dn,
