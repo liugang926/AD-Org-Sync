@@ -110,7 +110,7 @@ class WebRuntimeSettings:
             bind_port=_coerce_int(
                 bind_port if bind_port is not None else settings_repo.get_int("web_bind_port", 8000),
                 8000,
-                minimum=1,
+                minimum=8,
             ),
             public_base_url=_clean_public_base_url(
                 public_base_url if public_base_url is not None else settings_repo.get_value("web_public_base_url", "")
@@ -202,6 +202,7 @@ class WebSecuritySettings:
 @dataclass(frozen=True, slots=True)
 class SSPRSettings:
     enabled: bool = False
+    dingtalk_corp_id: str = ""
     min_password_length: int = 12
     unlock_account_default: bool = False
     verification_session_ttl_seconds: int = 600
@@ -211,6 +212,10 @@ class SSPRSettings:
         normalized_org_id = normalize_org_id(org_id, fallback="default") or "default"
         return cls(
             enabled=settings_repo.get_bool("sspr_enabled", False, org_id=normalized_org_id),
+            dingtalk_corp_id=str(
+                settings_repo.get_value("sspr_dingtalk_corp_id", "", org_id=normalized_org_id)
+                or ""
+            ).strip(),
             min_password_length=_coerce_int(
                 settings_repo.get_int("sspr_min_password_length", 12, org_id=normalized_org_id),
                 12,
@@ -237,7 +242,8 @@ class SSPRSettings:
         data = dict(values or {})
         return cls(
             enabled=_coerce_bool(data.get("sspr_enabled"), False),
-            min_password_length=_coerce_int(data.get("sspr_min_password_length"), 12, minimum=1),
+            dingtalk_corp_id=str(data.get("sspr_dingtalk_corp_id") or "").strip(),
+            min_password_length=_coerce_int(data.get("sspr_min_password_length"), 12, minimum=8),
             unlock_account_default=_coerce_bool(data.get("sspr_unlock_account_default"), False),
             verification_session_ttl_seconds=_coerce_int(
                 data.get("sspr_verification_session_ttl_seconds"),
@@ -252,6 +258,12 @@ class SSPRSettings:
     def persist(self, settings_repo: Any, *, org_id: str) -> None:
         normalized_org_id = normalize_org_id(org_id, fallback="default") or "default"
         settings_repo.set_value("sspr_enabled", _bool_setting(self.enabled), "bool", org_id=normalized_org_id)
+        settings_repo.set_value(
+            "sspr_dingtalk_corp_id",
+            self.dingtalk_corp_id,
+            "string",
+            org_id=normalized_org_id,
+        )
         settings_repo.set_value(
             "sspr_min_password_length",
             str(self.min_password_length),

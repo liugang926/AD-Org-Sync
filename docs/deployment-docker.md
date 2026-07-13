@@ -68,3 +68,15 @@ The named `ad_org_sync_data` volume contains the database and its backups. Back 
 6. restores the previous successful image when startup or validation fails.
 
 Production configuration stays outside the checkout at `/opt/ad-org-sync/shared/.env`. The administrator password file referenced by that environment file must also stay outside source control.
+
+## DingTalk SSPR production endpoint
+
+For the current production environment, the externally visible base URL must be exactly:
+
+```text
+https://it-service.tianjizn.com:9443
+```
+
+Keep secure cookies enabled. Port `9443` is part of the public origin and must not be omitted from the public base URL, DingTalk homepage, callback, probes, or operator documentation. The DingTalk micro-app homepage is `https://it-service.tianjizn.com:9443/sspr?corpid=$CORPID$`; the safe fallback callback is `https://it-service.tianjizn.com:9443/sspr/callback/dingtalk`.
+
+After an approved exact-SHA deployment, verify `/healthz`, `/readyz`, `/login`, `/sspr`, `/sspr/oauth/start`, and the callback from outside the production host. Do not perform a real employee password reset unless a specifically authorized test account has been supplied. Without such an account, stop after DingTalk verification, binding resolution, and the pre-reset account page.

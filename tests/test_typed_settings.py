@@ -135,6 +135,7 @@ class TypedSettingsTests(unittest.TestCase):
         sspr_settings = SSPRSettings.from_mapping(
             {
                 "sspr_enabled": "true",
+                "sspr_dingtalk_corp_id": "ding-corp-001",
                 "sspr_min_password_length": "0",
                 "sspr_unlock_account_default": True,
                 "sspr_verification_session_ttl_seconds": "1",
@@ -144,7 +145,8 @@ class TypedSettingsTests(unittest.TestCase):
 
         loaded_settings = SSPRSettings.load(settings_repo, org_id="default")
         self.assertTrue(loaded_settings.enabled)
-        self.assertEqual(loaded_settings.min_password_length, 1)
+        self.assertEqual(loaded_settings.dingtalk_corp_id, "ding-corp-001")
+        self.assertEqual(loaded_settings.min_password_length, 8)
         self.assertTrue(loaded_settings.unlock_account_default)
         self.assertEqual(loaded_settings.verification_session_ttl_seconds, 60)
 

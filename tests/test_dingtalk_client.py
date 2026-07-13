@@ -34,7 +34,66 @@ class _Session:
 
 class DingTalkClientBehaviorTests(unittest.TestCase):
     def _build_api(self) -> DingTalkAPI:
-        return DingTalkAPI.__new__(DingTalkAPI)
+        api = DingTalkAPI.__new__(DingTalkAPI)
+        api.app_secret = "app-secret"
+        api.access_token = "app-access-token"
+        api._ensure_token_valid = lambda: None
+        return api
+
+    def test_exchange_employee_auth_code_returns_trusted_user_identity(self):
+        api = self._build_api()
+        calls = []
+
+        def request(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return {
+                "errcode": 0,
+                "result": {"userid": "alice.dd", "name": "Alice", "sys_level": 1},
+            }
+
+        api._request = request
+
+        identity = api.exchange_employee_auth_code("one-time-code")
+
+        self.assertEqual(identity["userid"], "alice.dd")
+        self.assertEqual(identity["name"], "Alice")
+        self.assertEqual(calls[0][0], "POST")
+        self.assertEqual(calls[0][2]["data"], {"code": "one-time-code"})
+        self.assertNotIn("one-time-code", calls[0][1])
+
+    def test_exchange_employee_auth_code_maps_invalid_and_expired_codes(self):
+        for message, expected in (("invalid one-time-code", "invalid_auth_code"), ("code expired", "expired_auth_code")):
+            api = self._build_api()
+            api._request = lambda *_args, **_kwargs: {"errcode": 40078, "errmsg": message}
+
+            with self.assertRaises(DingTalkAPIError) as raised:
+                api.exchange_employee_auth_code("one-time-code")
+
+            self.assertEqual(raised.exception.category, expected)
+            self.assertNotIn("one-time-code", str(raised.exception))
+            self.assertNotIn("one-time-code", raised.exception.detail)
+
+    def test_exchange_employee_auth_code_rejects_missing_user_id(self):
+        api = self._build_api()
+        api._request = lambda *_args, **_kwargs: {"errcode": 0, "result": {"name": "Alice"}}
+
+        with self.assertRaises(DingTalkAPIError) as raised:
+            api.exchange_employee_auth_code("one-time-code")
+
+        self.assertEqual(raised.exception.category, "invalid_response")
+
+    def test_exchange_employee_auth_code_preserves_sanitized_network_category(self):
+        api = self._build_api()
+
+        def fail(*_args, **_kwargs):
+            raise DingTalkAPIError("request unavailable", category="network_error")
+
+        api._request = fail
+
+        with self.assertRaises(DingTalkAPIError) as raised:
+            api.exchange_employee_auth_code("one-time-code")
+
+        self.assertEqual(raised.exception.category, "network_error")
 
     def test_authentication_error_preserves_provider_reason_and_redacts_secret(self):
         session = _Session(

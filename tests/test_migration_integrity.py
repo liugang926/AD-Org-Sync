@@ -53,7 +53,7 @@ class MigrationIntegrityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unexpected versions"):
             manager.initialize(create_startup_snapshot=False, verify_integrity=False)
 
-    def test_version_30_database_upgrades_to_source_directory_schema_without_data_loss(self) -> None:
+    def test_version_30_database_upgrades_to_sspr_schema_without_data_loss(self) -> None:
         with patch("sync_app.storage.local_db.MIGRATIONS", MIGRATIONS[:30]):
             legacy_manager = DatabaseManager(db_path=self.db_path)
             legacy_manager.initialize(create_startup_snapshot=False)
@@ -63,6 +63,17 @@ class MigrationIntegrityTests(unittest.TestCase):
                     INSERT INTO user_identity_bindings (
                       org_id, source_user_id, connector_id, ad_username, source, is_enabled, updated_at
                     ) VALUES ('default', 'alice', 'default', 'alice', 'manual', 1, '2026-01-01T00:00:00+00:00')
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO web_audit_logs (
+                      org_id, actor_username, action_type, target_type, target_id,
+                      result, message, payload_json, created_at
+                    ) VALUES (
+                      'default', 'admin', 'test.before_upgrade', 'binding', 'alice',
+                      'success', 'preserved', '{}', '2026-01-01T00:00:00+00:00'
+                    )
                     """
                 )
 
@@ -79,10 +90,42 @@ class MigrationIntegrityTests(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 ).fetchall()
             }
-        self.assertEqual(applied, 31)
+            index_columns = [
+                row[2]
+                for row in connection.execute(
+                    "PRAGMA index_info('idx_user_identity_bindings_source_identity')"
+                ).fetchall()
+            ]
+            audit_count = connection.execute(
+                "SELECT COUNT(*) FROM web_audit_logs WHERE action_type = 'test.before_upgrade'"
+            ).fetchone()[0]
+        self.assertEqual(applied, 32)
         self.assertEqual((binding["source_provider"], binding["source_user_id"], binding["ad_username"]), ("wecom", "alice", "alice"))
         self.assertIn("source_directory_snapshots", tables)
         self.assertIn("sync_scope_selections", tables)
+        self.assertIn("sspr_verification_sessions", tables)
+        self.assertIn("sspr_oauth_transactions", tables)
+        self.assertIn("sspr_reset_receipts", tables)
+        self.assertIn("sspr_rate_limit_buckets", tables)
+        self.assertEqual(
+            index_columns,
+            ["org_id", "source_provider", "connector_id", "source_user_id"],
+        )
+        self.assertEqual(audit_count, 1)
+
+        # Applying initialization again must keep data and migration checksums intact.
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        with manager.connection() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM user_identity_bindings").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM web_audit_logs WHERE action_type = 'test.before_upgrade'"
+                ).fetchone()[0],
+                1,
+            )
 
 
 if __name__ == "__main__":

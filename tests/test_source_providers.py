@@ -82,6 +82,11 @@ class FakeDingTalkClient:
     def update_user(self, user_id: str, updates: dict):
         return True
 
+    def exchange_employee_auth_code(self, auth_code: str):
+        if auth_code != "one-time-code":
+            return {}
+        return {"userid": "alice.dd", "name": "Alice Ding", "sys_level": 0}
+
     def close(self):
         self.closed = True
 
@@ -201,6 +206,32 @@ class SourceProviderTests(unittest.TestCase):
             self.assertEqual(users[0].declared_primary_department_id(), 10)
         finally:
             provider.close()
+
+    def test_dingtalk_provider_verifies_employee_identity_from_auth_code(self):
+        config = AppConfig(
+            wecom=WeComConfig(corpid="ding-app-key", corpsecret="ding-app-secret"),
+            ldap=LDAPConfig(server="dc.example.com", domain="example.com", username="svc", password="secret"),
+            domain="example.com",
+            source_provider="dingtalk",
+        )
+        provider = build_source_provider(app_config=config, api_factory=FakeDingTalkClient)
+        try:
+            from sync_app.modules.sspr import SSPRVerificationRequest
+
+            identity = provider.verify_employee_identity(
+                SSPRVerificationRequest(
+                    org_id="tenant-a",
+                    connector_id="ad-primary",
+                    verification_code="one-time-code",
+                )
+            )
+        finally:
+            provider.close()
+
+        self.assertEqual(identity["org_id"], "tenant-a")
+        self.assertEqual(identity["provider_id"], "dingtalk")
+        self.assertEqual(identity["connector_id"], "ad-primary")
+        self.assertEqual(identity["source_user_id"], "alice.dd")
 
     def test_test_source_connection_uses_provider_display_name(self):
         with patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComClient):

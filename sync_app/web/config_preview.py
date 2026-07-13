@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from fastapi import Request
 
@@ -191,27 +192,93 @@ def _url_with_public_base(public_base_url: str, path: str) -> str:
     return f"{normalized_base_url}{normalized_path}" if normalized_base_url else normalized_path
 
 
-def _build_sspr_status_context(editable: dict[str, Any]) -> dict[str, Any]:
+def _build_sspr_status_context(
+    editable: dict[str, Any],
+    *,
+    repositories: Any,
+    org_id: str,
+) -> dict[str, Any]:
     public_base_url = str(editable.get("web_public_base_url") or "").strip()
-    callback_items = [
-        {
-            "provider_id": "wecom",
-            "label": "WeCom",
-            "url": _url_with_public_base(public_base_url, "/sspr/callback/wecom"),
-        },
-        {
-            "provider_id": "dingtalk",
-            "label": "DingTalk",
-            "url": _url_with_public_base(public_base_url, "/sspr/callback/dingtalk"),
-        },
-    ]
+    parsed_public_url = urlparse(public_base_url)
     enabled = bool(editable.get("sspr_enabled"))
+    configured_corp_id = str(editable.get("sspr_dingtalk_corp_id") or "").strip()
+    duplicate_org_ids = []
+    for organization in repositories.organization_repo.list_organization_records(enabled_only=True):
+        if organization.org_id == org_id:
+            continue
+        other_settings = SSPRSettings.load(
+            repositories.settings_repo,
+            org_id=organization.org_id,
+        )
+        if not other_settings.enabled or other_settings.dingtalk_corp_id != configured_corp_id:
+            continue
+        try:
+            other_config = repositories.org_config_repo.get_app_config(
+                organization.org_id,
+                config_path=organization.config_path,
+            )
+        except Exception:
+            continue
+        if normalize_source_provider(other_config.source_provider) == "dingtalk":
+            duplicate_org_ids.append(organization.org_id)
+    corp_id_unique = bool(configured_corp_id) and not duplicate_org_ids
+    enabled_bindings = [
+        binding
+        for binding in repositories.user_binding_repo.list_enabled_binding_records(
+            org_id=org_id,
+            source_provider="dingtalk",
+        )
+        if str(binding.ad_username or "").strip()
+    ]
+    verify_logs, _ = repositories.audit_repo.list_recent_logs_page(
+        limit=1,
+        query="sspr.verify",
+        org_id=org_id,
+        include_global=False,
+    )
+    reset_logs, _ = repositories.audit_repo.list_recent_logs_page(
+        limit=1,
+        query="sspr.password_reset",
+        org_id=org_id,
+        include_global=False,
+    )
+    try:
+        public_port = parsed_public_url.port or (443 if parsed_public_url.scheme == "https" else None)
+    except ValueError:
+        public_port = None
+    checks = {
+        "Enable SSPR": enabled,
+        "DingTalk source provider": normalize_source_provider(editable.get("source_provider")) == "dingtalk",
+        "DingTalk CorpId": bool(str(editable.get("sspr_dingtalk_corp_id") or "").strip()),
+        "Unique DingTalk CorpId mapping": corp_id_unique,
+        "DingTalk AppKey": bool(str(editable.get("corpid") or "").strip()),
+        "DingTalk AppSecret": bool(editable.get("corpsecret_configured")),
+        "AD / LDAPS connector": all(
+            (
+                str(editable.get("ldap_server") or "").strip(),
+                str(editable.get("ldap_domain") or "").strip(),
+                str(editable.get("ldap_username") or "").strip(),
+                bool(editable.get("ldap_password_configured")),
+            )
+        ),
+        "Public HTTPS base URL": parsed_public_url.scheme == "https" and bool(parsed_public_url.netloc),
+    }
+    missing = [label for label, ready in checks.items() if not ready]
+    ready = not missing
     return {
         "enabled": enabled,
-        "badge_text": "Enabled" if enabled else "Disabled",
-        "badge_level": "success" if enabled else "warning",
-        "portal_url": _url_with_public_base(public_base_url, "/sspr"),
-        "callback_urls": callback_items,
+        "ready": ready,
+        "badge_text": "Ready" if ready else "Incomplete",
+        "badge_level": "success" if ready else "warning",
+        "portal_url": _url_with_public_base(public_base_url, "/sspr?corpid=$CORPID$"),
+        "auth_url": _url_with_public_base(public_base_url, "/sspr/auth/dingtalk"),
+        "callback_url": _url_with_public_base(public_base_url, "/sspr/callback/dingtalk"),
+        "public_base_url": public_base_url or "—",
+        "public_port": public_port or "—",
+        "enabled_binding_count": len(enabled_bindings),
+        "last_verification": verify_logs[0] if verify_logs else None,
+        "last_password_reset": reset_logs[0] if reset_logs else None,
+        "missing": missing,
     }
 
 
@@ -411,6 +478,7 @@ def build_config_page_context(
     )
     sspr_settings = SSPRSettings.load(repositories.settings_repo, org_id=current_org.org_id)
     editable.setdefault("sspr_enabled", sspr_settings.enabled)
+    editable.setdefault("sspr_dingtalk_corp_id", sspr_settings.dingtalk_corp_id)
     editable.setdefault("sspr_min_password_length", sspr_settings.min_password_length)
     editable.setdefault("sspr_unlock_account_default", sspr_settings.unlock_account_default)
     editable.setdefault("sspr_verification_session_ttl_seconds", sspr_settings.verification_session_ttl_seconds)
@@ -430,7 +498,11 @@ def build_config_page_context(
         org_id=current_org.org_id,
     )
     config_rollout_status = _build_config_rollout_status(request, current_org)
-    sspr_status = _build_sspr_status_context(editable)
+    sspr_status = _build_sspr_status_context(
+        editable,
+        repositories=repositories,
+        org_id=current_org.org_id,
+    )
     return {
         "page": "config",
         "title": support.request_support.translate_text(

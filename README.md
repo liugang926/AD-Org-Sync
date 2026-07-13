@@ -35,7 +35,7 @@ The codebase has already been refactored away from a simple `WeCom -> AD` utilit
 - Advanced group lifecycle management
 - Audit logs, operation logs, retention cleanup, and backup rotation
 - Web console, CLI, import/export bundle, and bilingual UI
-- SSPR bounded-context service foundation, public Web adapter, organization-scoped operations settings, and source-provider OAuth launch
+- Production-ready DingTalk SSPR bounded context with passwordless employee verification, persistent one-time sessions, exact AD binding authorization, mobile Web UI, and security audit events
 
 ## Architecture
 
@@ -133,7 +133,7 @@ python -m venv .venv
 After installation:
 
 - Web console: `http://127.0.0.1:8010`
-- Employee SSPR portal: `http://127.0.0.1:8010/sspr` (disabled by default until enabled from `/config`)
+- Employee SSPR portal: `/sspr` (disabled by default and requires an externally reachable HTTPS URL because employee cookies are always `Secure`)
 - Health probe: `http://127.0.0.1:8010/healthz`
 - Readiness probe: `http://127.0.0.1:8010/readyz`
 - Service management: `.\manage_web_service.ps1 -Action status`
@@ -243,6 +243,7 @@ Architecture and extension docs:
 - [Bounded Context Entry Points](docs/architecture/bounded-context-entrypoints.md)
 - [Architecture Optimization Completion Plan](docs/plan/architecture-optimization-completion-plan.md)
 - [SSPR Bounded Context Execution Plan](docs/plan/sspr-bounded-context-execution-plan.md)
+- [DingTalk SSPR Administration and Troubleshooting](docs/guides/dingtalk-sspr.md)
 - [Technical Optimization Roadmap](docs/plan/technical-optimization-roadmap.md)
 - [Architecture Decision Records](docs/adr/)
 
@@ -347,8 +348,8 @@ Use these entry points for new work:
 - Source provider: add an adapter under `sync_app/providers/source/<provider>/` or `sync_app/providers/source/<provider>.py`, then register it through `sync_app.providers.source.registry`.
 - Target provider: add an adapter under `sync_app/providers/target/`, then register it through `sync_app.providers.target.registry`.
 - Product module: add a bounded context under `sync_app/modules/<context>/`; Web routes and CLI handlers should call that module's service layer only.
-- SSPR: continue from `sync_app/modules/sspr/`; `/sspr` and `/sspr/callback/{provider_id}` are only Web adapters, while employee verification sessions stay separate from administrator Web sessions and the sync runtime.
-- SSPR operations: enable per organization from `/config`, set `sspr_min_password_length`, choose the default unlock behavior, and register provider callbacks such as `/sspr/callback/wecom` or `/sspr/callback/dingtalk`; the employee portal can launch WeCom or DingTalk OAuth through `/sspr/oauth/start`.
+- SSPR: the domain and persistence logic live under `sync_app/modules/sspr/`; `/sspr`, `/sspr/oauth/start`, and the DingTalk callback/auth endpoints are thin Web adapters. Employee verification cookies and database sessions are completely separate from administrator sessions and the sync runtime.
+- SSPR operations: configure a DingTalk source provider, the separate organization CorpId, an HTTPS public base URL, an exact DingTalk-to-AD binding, minimum password length, and default unlock behavior under `/config`. Use `/sspr?corpid=$CORPID$` as the DingTalk micro-app homepage.
 
 Before adding a new feature, run the architecture guard tests to confirm the dependency direction remains clean.
 
@@ -388,6 +389,21 @@ Before adding a new feature, run the architecture guard tests to confirm the dep
 - Keep LDAPS certificate validation enabled in production
 - Use reverse proxy / TLS termination settings explicitly when deploying behind a gateway
 - Review `SECURITY.md` before production rollout
+
+## DingTalk Employee SSPR
+
+The employee flow uses the current DingTalk `requestAuthCode` JSAPI. The browser posts the one-time code to `/sspr/auth/dingtalk`; the server exchanges it for the trusted DingTalk `userId` and resolves exactly one enabled binding by `org_id + source_provider + connector_id + source_user_id`. The browser never submits a trusted employee ID or AD username.
+
+The production-facing application values are:
+
+- public base URL: `https://it-service.tianjizn.com:9443`
+- DingTalk homepage: `https://it-service.tianjizn.com:9443/sspr?corpid=$CORPID$`
+- safe fallback callback: `https://it-service.tianjizn.com:9443/sspr/callback/dingtalk`
+- server-side code exchange: `POST /sspr/auth/dingtalk`
+
+SSPR is disabled by default. Enabling it requires a unique CorpId mapping, the DingTalk AppKey/AppSecret, a working AD/LDAPS target, an HTTPS public URL, and at least one enabled DingTalk-to-AD binding. Employee session, OAuth state, CSRF, and result capabilities are stored only as hashes in SQLite and expire after a short interval. A successful password change consumes the employee session immediately.
+
+See [DingTalk SSPR Administration and Troubleshooting](docs/guides/dingtalk-sspr.md) for permissions, safe-domain settings, audit events, 9443 troubleshooting, and non-destructive production acceptance.
 
 ## Repository Notes
 

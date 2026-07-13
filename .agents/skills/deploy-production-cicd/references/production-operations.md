@@ -10,9 +10,10 @@ Use this reference only for AD Org Sync production and CI/CD work. Do not store 
 - Deployment entry point: `scripts/deploy-production.sh`
 - Compose definition: `docker-compose.yml`
 - Nginx definition: `deploy/nginx/default.conf`
-- Production URL: `http://10.106.1.122`
+- Production URL: `https://it-service.tianjizn.com:9443`
+- Production runner/private host identity: `10.106.1.122`
 
-Production currently uses private-network HTTP. Do not claim HTTPS protection until a domain and trusted certificate are configured and verified.
+The public acceptance origin is HTTPS on port `9443`. The private host address is not a substitute for external acceptance evidence, and public URLs must retain `:9443`.
 
 ## Runner
 
@@ -43,7 +44,8 @@ The running Docker image tag and `last_successful_image_tag` are authoritative f
 - `AD_ORG_SYNC_HTTP_BIND` and `AD_ORG_SYNC_HTTP_PORT` define the Nginx listener.
 - `AD_ORG_SYNC_ADMIN_USERNAME` must match the intended bootstrap administrator.
 - `AD_ORG_SYNC_ADMIN_PASSWORD_FILE` must point to the protected host password file.
-- Secure cookies may be disabled only while the private endpoint is HTTP; enable them when HTTPS is introduced.
+- `AD_ORG_SYNC_PUBLIC_BASE_URL` must be `https://it-service.tianjizn.com:9443` for the current production deployment.
+- Keep secure cookies enabled; employee SSPR cookies are always secure and will not operate over private HTTP.
 
 Do not print the environment file because it may acquire secrets over time. Select only non-secret keys when diagnosing configuration.
 
@@ -69,10 +71,14 @@ curl --fail --silent --show-error http://127.0.0.1/readyz
 From a separate client, verify:
 
 ```text
-GET http://10.106.1.122/healthz -> 200 and status=ok
-GET http://10.106.1.122/readyz  -> 200, status=ready, all checks=true
-GET http://10.106.1.122/login   -> 200
+GET https://it-service.tianjizn.com:9443/healthz -> 200 and status=ok
+GET https://it-service.tianjizn.com:9443/readyz  -> 200, status=ready, all checks=true
+GET https://it-service.tianjizn.com:9443/login   -> 200
+GET https://it-service.tianjizn.com:9443/sspr    -> never redirects to administrator /login
+GET https://it-service.tianjizn.com:9443/sspr/callback/dingtalk -> not 404
 ```
+
+For an SSPR release, also confirm that `/sspr/oauth/start` reaches the employee verification UI, an unverified browser cannot view an account, and disabled SSPR does not start DingTalk verification. Do not reset a real employee account without explicit authorization for that exact test account.
 
 ## Rollback evidence
 

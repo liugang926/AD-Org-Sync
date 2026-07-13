@@ -38,6 +38,9 @@ class ADLDAPSTargetProvider(TargetDirectoryProvider):
     def get_user_details(self, username: str) -> dict[str, Any]:
         return self.client.get_user_details(username)
 
+    def get_user_account_state(self, username: str) -> dict[str, Any]:
+        return self.client.get_user_account_state(username)
+
     def search_users(self, query: str, *, limit: int = 20):
         return self.client.search_users(query, limit=limit)
 

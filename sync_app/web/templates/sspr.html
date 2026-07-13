@@ -1,0 +1,207 @@
+{% import "components/ui.html" as ui %}
+<!doctype html>
+<html lang="{{ 'zh-CN' if ui_language == 'zh-CN' else 'en' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <title>{{ t("Employee Password Reset") }} | {{ brand_display_name }}</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="stylesheet" href="/static/app.css?v={{ static_asset_version }}">
+  <link rel="stylesheet" href="/static/sspr.css?v={{ static_asset_version }}">
+  {% if state == "authenticating" %}
+  <script src="https://g.alicdn.com/dingding/dingtalk-jsapi/3.2.9/dingtalk.open.js" defer></script>
+  {% endif %}
+  <script src="/static/sspr.js?v={{ static_asset_version }}" defer></script>
+</head>
+<body class="sspr-page">
+  <main class="sspr-shell">
+    <header class="sspr-header">
+      <div class="sspr-brand" aria-hidden="true">AD</div>
+      <div>
+        <p class="sspr-eyebrow">{{ brand_display_name }}</p>
+        <h1>{{ t("Employee Password Reset") }}</h1>
+      </div>
+      <nav class="sspr-language" aria-label="{{ t('Language') }}">
+        <a href="{{ language_urls['zh-CN'] }}" lang="zh-CN" {% if ui_language == 'zh-CN' %}aria-current="page"{% endif %}>中文</a>
+        <span aria-hidden="true">/</span>
+        <a href="{{ language_urls['en'] }}" lang="en" {% if ui_language == 'en' %}aria-current="page"{% endif %}>EN</a>
+      </nav>
+    </header>
+
+    <section class="sspr-card" aria-labelledby="sspr-card-title">
+      <div id="sspr-live" class="sspr-live sr-only" aria-live="polite" aria-atomic="true"></div>
+      {% if status_message %}
+      <div class="sspr-notice sspr-notice--info" role="status">{{ status_message }}</div>
+      {% endif %}
+
+      {% if state == "initializing" %}
+      <div
+        class="sspr-state sspr-state--center"
+        data-sspr-start
+        data-next-url="{{ oauth_start_url }}"
+        data-submitting-message="{{ t('Preparing secure verification…') }}"
+      >
+        <div class="sspr-spinner" aria-hidden="true"></div>
+        <h2 id="sspr-card-title">{{ t("Preparing secure verification…") }}</h2>
+        <p>{{ t("Do not close this page while the secure verification is in progress.") }}</p>
+        <a class="sspr-button sspr-button--secondary" href="{{ oauth_start_url }}">{{ t("Continue to DingTalk verification") }}</a>
+      </div>
+
+      {% elif state == "authenticating" %}
+      <div
+        id="sspr-auth"
+        class="sspr-state sspr-state--center"
+        data-sspr-auth
+        data-corp-id="{{ dingtalk_corp_id }}"
+        data-client-id="{{ dingtalk_client_id }}"
+        data-state="{{ oauth_state }}"
+        data-auth-url="/sspr/auth/dingtalk"
+        data-error-title="{{ t('DingTalk verification failed') }}"
+        data-error-message="{{ t('Could not verify your DingTalk identity. Try again from the DingTalk workbench.') }}"
+        data-submitting-message="{{ t('Verifying your DingTalk identity, please wait…') }}"
+      >
+        <div class="sspr-spinner" aria-hidden="true"></div>
+        <h2 id="sspr-card-title">{{ t("Verifying your DingTalk identity, please wait…") }}</h2>
+        <p>{{ t("Do not close this page while the secure verification is in progress.") }}</p>
+        <a class="sspr-button sspr-button--secondary" href="/sspr" data-sspr-retry hidden>{{ t("Try Again") }}</a>
+      </div>
+
+      {% elif state == "ready" %}
+      <div class="sspr-state">
+        <div class="sspr-person-row">
+          <div>
+            <p class="sspr-eyebrow">{{ t("DingTalk identity") }}</p>
+            <h2 id="sspr-card-title">{{ account.display_name or t("Verified employee") }}</h2>
+          </div>
+          <span class="sspr-badge sspr-badge--success"><span aria-hidden="true">✓</span> {{ t("DingTalk Verified") }}</span>
+        </div>
+        <dl class="sspr-account-summary">
+          <div>
+            <dt>{{ t("AD Login Account") }}</dt>
+            <dd>{% if account.directory_domain %}{{ account.directory_domain }}\{% endif %}{{ account.ad_username }}</dd>
+          </div>
+          {% if account.directory_domain %}
+          <div>
+            <dt>{{ t("Directory Domain") }}</dt>
+            <dd>{{ account.directory_domain }}</dd>
+          </div>
+          {% endif %}
+          {% if account.locked is not none %}
+          <div>
+            <dt>{{ t("Account Status") }}</dt>
+            <dd>{{ t("Locked") if account.locked else t("Active") }}</dd>
+          </div>
+          {% endif %}
+        </dl>
+
+        {% if error_category %}
+        <div class="sspr-notice sspr-notice--error" role="alert">
+          <strong>{{ t("Password reset could not be completed.") }}</strong>
+          <span>{{ t(message) }}</span>
+        </div>
+        {% endif %}
+
+        <form
+          method="post"
+          action="/sspr/password/reset"
+          class="sspr-form"
+          data-sspr-reset-form
+          data-min-length="{{ min_password_length }}"
+          data-identity-values="{{ account.display_name }} {{ account.ad_username }}"
+          data-submitting-message="{{ t('Securely resetting your password…') }}"
+        >
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="sspr-field">
+            <label for="new_password">{{ t("New Password") }}</label>
+            <div class="sspr-password-control">
+              <input id="new_password" name="new_password" type="password" autocomplete="new-password" required minlength="{{ min_password_length }}" aria-describedby="password-rules">
+              {{ ui.button(t("Show"), type="button", class_name="sspr-password-toggle", attrs='data-password-toggle="new_password" data-show-label="' ~ t('Show') ~ '" data-hide-label="' ~ t('Hide') ~ '" aria-label="' ~ t('Show password') ~ '"') }}
+            </div>
+          </div>
+          <div class="sspr-field">
+            <label for="confirm_password">{{ t("Confirm New Password") }}</label>
+            <div class="sspr-password-control">
+              <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" required minlength="{{ min_password_length }}">
+              {{ ui.button(t("Show"), type="button", class_name="sspr-password-toggle", attrs='data-password-toggle="confirm_password" data-show-label="' ~ t('Show') ~ '" data-hide-label="' ~ t('Hide') ~ '" aria-label="' ~ t('Show password') ~ '"') }}
+            </div>
+          </div>
+
+          <ul id="password-rules" class="sspr-rules" aria-live="polite">
+            <li data-password-rule="length"><span aria-hidden="true">○</span> {{ t("At least {min_password_length} characters", min_password_length=min_password_length) }}</li>
+            <li data-password-rule="complexity"><span aria-hidden="true">○</span> {{ t("Use uppercase, lowercase, numbers, and symbols") }}</li>
+            <li data-password-rule="identity"><span aria-hidden="true">○</span> {{ t("Must not contain your name or login account") }}</li>
+            <li data-password-rule="match"><span aria-hidden="true">○</span> {{ t("Both password entries match") }}</li>
+          </ul>
+
+          {% if account.locked is true or account.locked is none %}
+          <label class="sspr-checkbox">
+            <input type="checkbox" name="unlock_account" value="true" {% if unlock_default or account.locked is true %}checked{% endif %}>
+            <span>{{ t("Unlock the account after resetting the password") }}</span>
+          </label>
+          {% endif %}
+
+          {{ ui.button(t("Confirm Password Reset"), type="submit", class_name="sspr-button", attrs="data-sspr-submit") }}
+        </form>
+
+        <form method="post" action="/sspr/logout" class="sspr-logout-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          {{ ui.button(t("Clear verification and exit"), type="submit", class_name="sspr-link-button") }}
+        </form>
+      </div>
+
+      {% elif state == "success" %}
+      <div class="sspr-state sspr-state--center sspr-success">
+        <div class="sspr-success-icon" aria-hidden="true">✓</div>
+        <h2 id="sspr-card-title">{{ t("Password reset completed.") }}</h2>
+        <p>{{ t("Your new password is active. Use it the next time you sign in to AD services.") }}</p>
+        <dl class="sspr-account-summary">
+          <div><dt>{{ t("AD Login Account") }}</dt><dd>{{ receipt.ad_username }}</dd></div>
+          <div><dt>{{ t("Completed At") }}</dt><dd>{{ receipt.completed_at.astimezone().strftime('%Y-%m-%d %H:%M:%S') }}</dd></div>
+          {% if receipt.unlock_requested %}
+          <div><dt>{{ t("Account Unlock") }}</dt><dd>{{ t("Completed") if receipt.unlock_succeeded else t("Not completed; contact the IT service desk if sign-in remains blocked.") }}</dd></div>
+          {% endif %}
+        </dl>
+        <a class="sspr-button sspr-button--secondary" href="/sspr?logged_out=1">{{ t("Done") }}</a>
+      </div>
+
+      {% elif state == "logged_out" %}
+      <div class="sspr-state sspr-state--center">
+        <div class="sspr-state-icon" aria-hidden="true">✓</div>
+        <h2 id="sspr-card-title">{{ t("Verification cleared") }}</h2>
+        <p>{{ t(message) }}</p>
+        <a class="sspr-button" href="/sspr">{{ t("Verify Again") }}</a>
+      </div>
+
+      {% elif state in ["unbound", "protected_account", "account_not_found", "account_disabled", "directory_unavailable"] %}
+      <div class="sspr-state sspr-state--center">
+        <div class="sspr-state-icon sspr-state-icon--warning" aria-hidden="true">!</div>
+        <h2 id="sspr-card-title">{{ t("Password reset is unavailable") }}</h2>
+        <p>{{ t(message) }}</p>
+        <p class="sspr-help">{{ t("Contact the IT service desk if you need help.") }}</p>
+        {% if csrf_token %}
+        <form method="post" action="/sspr/logout">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          {{ ui.button(t("Clear verification and exit"), type="submit", class_name="sspr-button sspr-button--secondary") }}
+        </form>
+        {% endif %}
+      </div>
+
+      {% else %}
+      <div class="sspr-state sspr-state--center">
+        <div class="sspr-state-icon sspr-state-icon--error" aria-hidden="true">!</div>
+        <h2 id="sspr-card-title">{{ t("Password reset is unavailable") }}</h2>
+        <p>{{ t(message) }}</p>
+        <a class="sspr-button sspr-button--secondary" href="/sspr">{{ t("Try Again") }}</a>
+      </div>
+      {% endif %}
+    </section>
+
+    <footer class="sspr-footer">
+      <span>{{ t("Protected by short-lived employee verification") }}</span>
+      <span aria-hidden="true">·</span>
+      <span>v{{ app_version }}</span>
+    </footer>
+  </main>
+</body>
+</html>

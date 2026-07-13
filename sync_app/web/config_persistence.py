@@ -73,6 +73,9 @@ def apply_config_submission(
             "web_trust_proxy_headers": bool(submission["settings_values"]["web_trust_proxy_headers"]),
             "web_forwarded_allow_ips": submission["settings_values"]["web_forwarded_allow_ips"],
             "sspr_enabled": bool(submission["settings_values"]["sspr_enabled"]),
+            "sspr_dingtalk_corp_id_configured": bool(
+                submission["settings_values"]["sspr_dingtalk_corp_id"]
+            ),
             "sspr_min_password_length": int(submission["settings_values"]["sspr_min_password_length"]),
             "sspr_unlock_account_default": bool(submission["settings_values"]["sspr_unlock_account_default"]),
             "sspr_verification_session_ttl_seconds": int(
