@@ -199,7 +199,7 @@
         <td><a href="/jobs/{{ item.job_id }}">{{ item.job_id }}</a></td>
         <td>{{ ui.badge(t(item.status), "warning") }}</td>
         <td>{{ item.high_risk_operation_count }}</td>
-        <td>{{ item.created_at or "-" }}</td>
+        <td>{{ ui.local_time(item.created_at) }}</td>
       </tr>
       {% endfor %}
     </tbody>

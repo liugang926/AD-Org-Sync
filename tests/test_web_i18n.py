@@ -22,6 +22,12 @@ class WebI18NTests(unittest.TestCase):
         self.assertIn("Dashboard", TRANSLATIONS["zh-CN"])
         self.assertEqual(SUPPORTED_UI_LANGUAGES["en"], "English")
 
+    def test_english_and_chinese_catalogs_have_identical_keys(self):
+        self.assertEqual(
+            set(TRANSLATIONS["en"]),
+            set(TRANSLATIONS["zh-CN"]),
+        )
+
     def test_normalize_and_detect_language(self):
         self.assertEqual(normalize_ui_language("zh"), "zh-CN")
         self.assertEqual(normalize_ui_language("en-US"), "en")
@@ -106,7 +112,14 @@ class WebI18NTests(unittest.TestCase):
     ):
         english_catalog = TRANSLATIONS["en"]
         chinese_catalog = TRANSLATIONS["zh-CN"]
-        code_prefixes = ("preflight.", "jobs.", "conflicts.recommendation.")
+        code_prefixes = (
+            "preflight.",
+            "jobs.",
+            "config.rollout.",
+            "metadata.",
+            "conflicts.decision.",
+            "conflicts.recommendation.",
+        )
         stable_codes = {
             key
             for catalog in (english_catalog, chinese_catalog)
@@ -121,10 +134,14 @@ class WebI18NTests(unittest.TestCase):
                 self.assertIn(code, chinese_catalog)
 
     def test_dynamic_job_messages_use_registered_message_codes(self):
-        code_pattern = re.compile(r"[\"']((?:jobs|preflight)\.[a-z0-9_.]+)[\"']")
+        code_pattern = re.compile(
+            r"[\"']((?:jobs|preflight|config\.rollout|metadata)\.[a-z0-9_.]+)[\"']"
+        )
         source_paths = [
             WEB_DIR / "services" / "jobs.py",
             WEB_DIR / "preflight_support.py",
+            WEB_DIR / "config_preview.py",
+            WEB_DIR / "routes_metadata.py",
         ]
         message_codes = {
             match.group(1)

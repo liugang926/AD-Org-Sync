@@ -229,7 +229,7 @@
               <div><strong>{{ t("Owner") }}:</strong> {{ item.rule_owner or "-" }}</div>
               <div><strong>{{ t("Reason") }}:</strong> {{ item.effective_reason or item.notes or "-" }}</div>
               <div class="muted">{{ t("Next Review") }}: {{ item.next_review_at or "-" }}</div>
-              <div class="muted">{{ t("Last Reviewed") }}: {{ item.last_reviewed_at or item.updated_at or item.created_at or "-" }}</div>
+              <div class="muted">{{ t("Last Reviewed") }}: {{ ui.local_time(item.last_reviewed_at or item.updated_at or item.created_at) }}</div>
               <div class="muted">{{ t("Hits") }}: {{ item.hit_count or 0 }}{% if item.last_hit_at or item.last_matched_at %} · {{ t("Last Hit") }}: {{ item.last_hit_at or item.last_matched_at }}{% endif %}</div>
               {% if item.notes and item.effective_reason and item.notes != item.effective_reason %}
               <div class="muted">{{ t("Notes") }}: {{ item.notes }}</div>
@@ -239,7 +239,7 @@
             <td>{{ item.expires_at or "-" }}</td>
             <td>{{ item.last_matched_at or "-" }}</td>
             <td>{{ t("Enabled") if item.is_enabled else t("Disabled") }}</td>
-            <td>{{ item.updated_at or item.created_at or "-" }}</td>
+            <td>{{ ui.local_time(item.updated_at or item.created_at) }}</td>
             <td>
               {% if can("exceptions.write") %}
               <div class="actions flush-top">

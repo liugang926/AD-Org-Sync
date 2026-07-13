@@ -65,7 +65,7 @@
   {% call ui.panel(t("Selected Snapshot"), description=t("Review the current quality posture for the selected snapshot. Use the history table below to jump across older runs."), class_name="toolbar-card") %}
     <div class="detail-grid">
       <div class="detail-item"><div class="label">{{ t("Snapshot") }}</div><div class="value">{{ selected_snapshot_title or "-" }}</div></div>
-      <div class="detail-item"><div class="label">{{ t("Generated At") }}</div><div class="value">{{ selected_snapshot.created_at or "-" }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Generated At") }}</div><div class="value">{{ ui.local_time(selected_snapshot.created_at) }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Created By") }}</div><div class="value">{{ selected_snapshot.created_by or "-" }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Trigger") }}</div><div class="value">{{ selected_snapshot.trigger_action or "-" }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Users Missing Email") }}</div><div class="value">{{ selected_summary.users_missing_email or 0 }}</div></div>
@@ -109,7 +109,7 @@
             <div class="muted">{{ t("Selected") }}</div>
             {% endif %}
           </td>
-          <td>{{ row.snapshot.created_at or "-" }}</td>
+          <td>{{ ui.local_time(row.snapshot.created_at) }}</td>
           <td>{{ row.summary.total_users or 0 }}</td>
           <td>{{ row.summary.users_missing_email or 0 }}</td>
           <td>{{ row.summary.users_missing_employee_id or 0 }}</td>

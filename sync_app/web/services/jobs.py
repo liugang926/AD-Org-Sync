@@ -112,7 +112,7 @@ class WebJobService:
         if previous_successful_dry_run is not None:
             sections.append(
                 {
-                    "label": "Compared With Previous Successful Dry Run",
+                    "label_code": "jobs.comparison.previous_successful_dry_run",
                     "comparison": build_job_comparison_summary(
                         current_job=job,
                         baseline_job=previous_successful_dry_run,
@@ -126,7 +126,7 @@ class WebJobService:
         if previous_successful_apply is not None:
             sections.append(
                 {
-                    "label": "Compared With Previous Apply",
+                    "label_code": "jobs.comparison.previous_apply",
                     "comparison": build_job_comparison_summary(
                         current_job=job,
                         baseline_job=previous_successful_apply,
@@ -228,6 +228,16 @@ class WebJobService:
             else {}
         )
         disabled_operation_count = int(impact_operation_counts.get("disable_user") or 0)
+        added_operation_count = sum(
+            count
+            for operation_type, count in impact_operation_counts.items()
+            if operation_type.startswith(("create_", "add_"))
+        )
+        modified_operation_count = sum(
+            count
+            for operation_type, count in impact_operation_counts.items()
+            if operation_type.startswith(("update_", "move_", "rename_", "bind_"))
+        )
         delete_operation_count = sum(
             count
             for operation_type, count in impact_operation_counts.items()
@@ -253,6 +263,8 @@ class WebJobService:
                     or 0
                 ),
                 "high_risk_operation_count": int(impact_summary.get("high_risk_operation_count") or 0),
+                "added_operation_count": added_operation_count,
+                "modified_operation_count": modified_operation_count,
                 "disabled_operation_count": disabled_operation_count,
                 "delete_operation_count": delete_operation_count,
                 "conflict_count": int(impact_summary.get("conflict_count") or 0),

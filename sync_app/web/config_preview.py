@@ -68,6 +68,10 @@ def _is_successful_dry_run(job: Any) -> bool:
     )
 
 
+def _message(code: str, **params: Any) -> dict[str, Any]:
+    return {"code": code, "params": params}
+
+
 def _build_config_rollout_status(request: Request, current_org: Any) -> dict[str, Any]:
     repositories = get_web_repositories(request)
     recent_jobs = repositories.job_repo.list_recent_job_records(limit=20, org_id=current_org.org_id)
@@ -99,11 +103,11 @@ def _build_config_rollout_status(request: Request, current_org: Any) -> dict[str
     if active_job:
         return {
             "phase": "active_job",
-            "title": "Synchronization in Progress",
-            "description": "A background job is already active for this organization. Let it finish before starting another run.",
-            "badge_text": "Active",
+            "title_message": _message("config.rollout.active_job.title"),
+            "description_message": _message("config.rollout.active_job.description"),
+            "badge_message": _message("config.rollout.active_job.badge"),
             "badge_level": "info",
-            "primary_action_label": "Open Active Job",
+            "primary_action_message": _message("config.rollout.active_job.action"),
             "primary_action_url": f"/jobs/{active_job.job_id}",
             "show_run_dry_run": False,
             "open_conflict_count": int(open_conflict_count or 0),
@@ -116,11 +120,11 @@ def _build_config_rollout_status(request: Request, current_org: Any) -> dict[str
     if not latest_successful_dry_run:
         return {
             "phase": "first_dry_run",
-            "title": "Next Step: Run The First Dry Run",
-            "description": "After the configuration is saved, start with a dry run so you can inspect identity matches, planned changes, and conflicts before the first apply.",
-            "badge_text": "Recommended",
+            "title_message": _message("config.rollout.first_dry_run.title"),
+            "description_message": _message("config.rollout.first_dry_run.description"),
+            "badge_message": _message("config.rollout.first_dry_run.badge"),
             "badge_level": "warning",
-            "primary_action_label": "Open Job Center",
+            "primary_action_message": _message("config.rollout.first_dry_run.action"),
             "primary_action_url": "/jobs",
             "show_run_dry_run": True,
             "open_conflict_count": int(open_conflict_count or 0),
@@ -133,11 +137,11 @@ def _build_config_rollout_status(request: Request, current_org: Any) -> dict[str
     if int(open_conflict_count or 0) > 0:
         return {
             "phase": "review_conflicts",
-            "title": "Next Step: Resolve Identity Conflicts",
-            "description": "A successful dry run already exists. Clear the open conflict queue before the first apply so account ownership decisions stay explicit.",
-            "badge_text": "Needs Review",
+            "title_message": _message("config.rollout.review_conflicts.title"),
+            "description_message": _message("config.rollout.review_conflicts.description"),
+            "badge_message": _message("config.rollout.review_conflicts.badge"),
             "badge_level": "warning",
-            "primary_action_label": "Open Conflict Queue",
+            "primary_action_message": _message("config.rollout.review_conflicts.action"),
             "primary_action_url": "/conflicts",
             "show_run_dry_run": False,
             "open_conflict_count": int(open_conflict_count or 0),
@@ -150,11 +154,11 @@ def _build_config_rollout_status(request: Request, current_org: Any) -> dict[str
     if not latest_apply:
         return {
             "phase": "ready_for_apply",
-            "title": "Next Step: Review Apply Readiness",
-            "description": "The first dry run is complete and no open conflicts are blocking the rollout. Review the Job Center before the first apply.",
-            "badge_text": "Ready",
+            "title_message": _message("config.rollout.ready_for_apply.title"),
+            "description_message": _message("config.rollout.ready_for_apply.description"),
+            "badge_message": _message("config.rollout.ready_for_apply.badge"),
             "badge_level": "success",
-            "primary_action_label": "Open Job Center",
+            "primary_action_message": _message("config.rollout.ready_for_apply.action"),
             "primary_action_url": "/jobs",
             "show_run_dry_run": False,
             "open_conflict_count": int(open_conflict_count or 0),
@@ -166,11 +170,11 @@ def _build_config_rollout_status(request: Request, current_org: Any) -> dict[str
 
     return {
         "phase": "review_latest",
-        "title": "Rollout State",
-        "description": "This organization already has dry run and apply history. Review the latest jobs before changing routing, naming, or exception rules.",
-        "badge_text": "Tracked",
+        "title_message": _message("config.rollout.review_latest.title"),
+        "description_message": _message("config.rollout.review_latest.description"),
+        "badge_message": _message("config.rollout.review_latest.badge"),
         "badge_level": "info",
-        "primary_action_label": "Open Job Center",
+        "primary_action_message": _message("config.rollout.review_latest.action"),
         "primary_action_url": "/jobs",
         "show_run_dry_run": False,
         "open_conflict_count": int(open_conflict_count or 0),

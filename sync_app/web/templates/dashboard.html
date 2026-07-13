@@ -3,12 +3,7 @@
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Control Tower"), t("One operating surface for rollout safety, blockers, dry run freshness, and the next best action for the current organization."), eyebrow=t("Operations"), badge_text=(current_org.name if current_org else "-"), badge_level="info") %}
-    <div class="surface-inline">
-      {{ ui.badge(t("Basic") if ui_mode == "basic" else t("Advanced"), "info") }}
-      <span class="muted">{{ t("Current organization") }}: {{ current_org.name if current_org else "-" }}</span>
-    </div>
-  {% endcall %}
+  {{ ui.page_header(t("Control Tower"), t("One operating surface for rollout safety, blockers, dry run freshness, and the next best action for the current organization."), eyebrow=t("Operations")) }}
 
   <section class="control-tower control-tower--{{ job_center_summary.overall_status }}">
     <div class="control-tower__layout">
@@ -31,7 +26,7 @@
         <div class="control-gate-card__label">{{ t("Latest Apply") }}</div>
         <div class="control-gate-card__status">
           {% if job_center_summary.latest_apply %}
-          <a href="/jobs/{{ job_center_summary.latest_apply.job_id }}" class="cell-mono cell-strong">{{ job_center_summary.latest_apply.job_id }}</a>
+          {{ ui.identifier(job_center_summary.latest_apply.job_id, t("Copy Job ID"), t("Job ID copied"), "/jobs/" ~ job_center_summary.latest_apply.job_id) }}
           {% else %}
           <strong>-</strong>
           {% endif %}
@@ -52,7 +47,7 @@
         <span>{{ t("Latest Dry Run") }}</span>
         <strong>
           {% if job_center_summary.latest_dry_run %}
-          <a href="/jobs/{{ job_center_summary.latest_dry_run.job_id }}">{{ job_center_summary.latest_dry_run.job_id }}</a>
+          {{ ui.identifier(job_center_summary.latest_dry_run.job_id, t("Copy Dry Run ID"), t("Dry Run ID copied"), "/jobs/" ~ job_center_summary.latest_dry_run.job_id) }}
           {% else %}
           -
           {% endif %}
@@ -129,7 +124,7 @@
           </ul>
         {% endcall %}
         <div class="actions">
-          {{ ui.button(t("Open Guided Setup"), href="/getting-started") }}
+          {{ ui.button(t("Open Guided Setup"), href="/getting-started", variant="secondary") }}
           {% if can("config.read") %}
           {{ ui.button(t("Open Organization Config"), href="/config", variant="secondary") }}
           {% endif %}
@@ -281,13 +276,13 @@
         <tbody>
           {% for job in recent_jobs %}
           <tr>
-            <td><a href="/jobs/{{ job.job_id }}">{{ job.job_id }}</a></td>
+            <td>{{ ui.identifier(job.job_id, t("Copy Job ID"), t("Job ID copied"), "/jobs/" ~ job.job_id) }}</td>
             <td>{{ t(job.execution_mode) }}</td>
             <td>{{ ui.badge(t(job.status), 'success' if job.status == 'success' else 'error') }}</td>
             <td>{{ job.planned_operation_count }}</td>
             <td>{{ job.executed_operation_count }}</td>
             <td>{{ job.error_count }}</td>
-            <td>{{ job.started_at }}</td>
+            <td>{{ ui.local_time(job.started_at) }}</td>
           </tr>
           {% else %}
           <tr><td class="table-empty" colspan="7">{{ t("No job history yet.") }}</td></tr>

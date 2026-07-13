@@ -141,19 +141,36 @@ class SyncConflictSupportMixin:
         self, request: Request, ad_username: str
     ) -> dict[str, Any]:
         normalized_ad_username = str(ad_username or "").strip()
+        empty_summary = {
+            "username": normalized_ad_username,
+            "exists": False,
+            "enabled": None,
+            "display_name": "",
+            "mail": "",
+            "title": "",
+            "description": "",
+            "telephone_number": "",
+            "last_logon": "",
+            "distinguished_name": "",
+            "ou_path": "",
+            "availability_code": "",
+        }
         if not normalized_ad_username:
+            return empty_summary
+
+        config = self._get_org_app_config(request)
+        if not all(
+            str(value or "").strip()
+            for value in (
+                config.ldap.server,
+                config.ldap.domain,
+                config.ldap.username,
+                config.ldap.password,
+            )
+        ):
             return {
-                "username": "",
-                "exists": False,
-                "enabled": None,
-                "display_name": "",
-                "mail": "",
-                "title": "",
-                "description": "",
-                "telephone_number": "",
-                "last_logon": "",
-                "distinguished_name": "",
-                "ou_path": "",
+                **empty_summary,
+                "availability_code": "conflicts.decision.target_directory_unavailable",
             }
 
         user_details: dict[str, Any] = {}
@@ -190,6 +207,9 @@ class SyncConflictSupportMixin:
                 normalized_ad_username,
                 exc,
             )
+            empty_summary["availability_code"] = (
+                "conflicts.decision.target_directory_unavailable"
+            )
 
         exists = bool(user_details) or batch_record is not None
         distinguished_name = str(
@@ -215,6 +235,7 @@ class SyncConflictSupportMixin:
             "last_logon": str(user_details.get("LastLogonDate") or ""),
             "distinguished_name": distinguished_name,
             "ou_path": self._normalize_ou_path(distinguished_name),
+            "availability_code": empty_summary["availability_code"],
         }
 
     def _build_conflict_field_updates(
@@ -288,7 +309,16 @@ class SyncConflictSupportMixin:
         recommendation = self.recommend_conflict_resolution(conflict)
         explanation = None
         explanation_error = ""
-        if str(getattr(conflict, "source_id", "") or "").strip():
+        config = self._get_org_app_config(request)
+        source_connector = getattr(config, "source_connector", None)
+        source_credentials_ready = bool(
+            str(getattr(source_connector, "corpid", "") or "").strip()
+            and str(getattr(source_connector, "corpsecret", "") or "").strip()
+        )
+        if (
+            str(getattr(conflict, "source_id", "") or "").strip()
+            and source_credentials_ready
+        ):
             try:
                 explanation = self.explain_identity_routing(
                     request, str(conflict.source_id)
@@ -300,6 +330,8 @@ class SyncConflictSupportMixin:
                     exc,
                 )
                 explanation_error = "conflicts.decision.routing_unavailable"
+        elif str(getattr(conflict, "source_id", "") or "").strip():
+            explanation_error = "conflicts.decision.routing_unavailable"
 
         candidate_options = self._build_conflict_candidate_options(
             conflict, recommendation
@@ -356,7 +388,6 @@ class SyncConflictSupportMixin:
             request,
             connector_id=connector_id,
         )
-        config = self._get_org_app_config(request)
         shared_source_user_ids = [
             str(item or "").strip()
             for item in list(

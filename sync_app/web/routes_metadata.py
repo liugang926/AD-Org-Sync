@@ -10,6 +10,25 @@ from sync_app.providers.source import build_source_provider
 from sync_app.storage.local_db import OrganizationConfigRepository
 
 
+def _message_response(code: str, *, status_code: int = 200) -> JSONResponse:
+    return JSONResponse(
+        {
+            "ok": False,
+            "message": {"code": code, "params": {}},
+            "options": [],
+        },
+        status_code=status_code,
+    )
+
+
+def _source_credentials_configured(config: Any) -> bool:
+    source_connector = getattr(config, "source_connector", None)
+    return bool(
+        str(getattr(source_connector, "corpid", "") or "").strip()
+        and str(getattr(source_connector, "corpsecret", "") or "").strip()
+    )
+
+
 def register_metadata_routes(
     app: FastAPI,
     *,
@@ -23,10 +42,12 @@ def register_metadata_routes(
     def metadata_departments(request: Request):
         user = require_capability(request, "config.read")
         if isinstance(user, RedirectResponse):
-            return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
+            return _message_response("metadata.access_denied", status_code=403)
 
         org_id = request.session.get("selected_org_id", "default")
         config = org_config_repo.get_app_config(org_id)
+        if not _source_credentials_configured(config):
+            return _message_response("metadata.source_credentials_required")
         
         try:
             provider = build_source_provider(app_config=config)
@@ -38,16 +59,18 @@ def register_metadata_routes(
                 provider.close()
         except Exception as exc:
             logging.warning("Failed to fetch departments metadata: %s", exc)
-            return JSONResponse({"ok": False, "error": str(exc), "options": []})
+            return _message_response("metadata.departments_unavailable")
 
     @app.get("/api/metadata/tags")
     def metadata_tags(request: Request):
         user = require_capability(request, "config.read")
         if isinstance(user, RedirectResponse):
-            return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
+            return _message_response("metadata.access_denied", status_code=403)
 
         org_id = request.session.get("selected_org_id", "default")
         config = org_config_repo.get_app_config(org_id)
+        if not _source_credentials_configured(config):
+            return _message_response("metadata.source_credentials_required")
         
         try:
             provider = build_source_provider(app_config=config)
@@ -63,16 +86,18 @@ def register_metadata_routes(
                 provider.close()
         except Exception as exc:
             logging.warning("Failed to fetch tags metadata: %s", exc)
-            return JSONResponse({"ok": False, "error": str(exc), "options": []})
+            return _message_response("metadata.tags_unavailable")
 
     @app.get("/api/metadata/external-chats")
     def metadata_external_chats(request: Request):
         user = require_capability(request, "config.read")
         if isinstance(user, RedirectResponse):
-            return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
+            return _message_response("metadata.access_denied", status_code=403)
 
         org_id = request.session.get("selected_org_id", "default")
         config = org_config_repo.get_app_config(org_id)
+        if not _source_credentials_configured(config):
+            return _message_response("metadata.source_credentials_required")
         
         try:
             provider = build_source_provider(app_config=config)
@@ -88,13 +113,13 @@ def register_metadata_routes(
                 provider.close()
         except Exception as exc:
             logging.warning("Failed to fetch external chats metadata: %s", exc)
-            return JSONResponse({"ok": False, "error": str(exc), "options": []})
+            return _message_response("metadata.external_chats_unavailable")
 
     @app.get("/api/metadata/source-users")
     def metadata_source_users(request: Request):
         user = require_capability(request, "mappings.read")
         if isinstance(user, RedirectResponse):
-            return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
+            return _message_response("metadata.access_denied", status_code=403)
 
         query = str(request.query_params.get("q") or "").strip()
         limit = max(min(int(request.query_params.get("limit") or 20), 50), 1)
@@ -105,7 +130,7 @@ def register_metadata_routes(
     def metadata_source_user_departments(request: Request):
         user = require_capability(request, "mappings.read")
         if isinstance(user, RedirectResponse):
-            return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
+            return _message_response("metadata.access_denied", status_code=403)
 
         source_user_id = str(request.query_params.get("user_id") or "").strip()
         if not source_user_id:
@@ -117,7 +142,7 @@ def register_metadata_routes(
     def metadata_ad_users(request: Request):
         user = require_capability(request, "mappings.read")
         if isinstance(user, RedirectResponse):
-            return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
+            return _message_response("metadata.access_denied", status_code=403)
 
         query = str(request.query_params.get("q") or "").strip()
         limit = max(min(int(request.query_params.get("limit") or 20), 50), 1)

@@ -83,11 +83,11 @@
 {% set field_id = id or name %}
 {% set summary_value = display_value or placeholder %}
 <div class="form-group picker-field {{ class_name }}" id="group-{{ field_id }}">
-  <input type="hidden" id="{{ field_id }}" name="{{ name }}" value="{{ value }}" {{ attrs|safe }}>
+  <input type="hidden" id="{{ field_id }}" name="{{ name }}" value="{{ value }}" {% if help_text %}aria-describedby="{{ field_id }}-help"{% endif %} {{ attrs|safe }}>
   {% if label %}
-  <label for="{{ field_id }}">{{ label }}</label>
+  <label for="{{ field_id }}" id="{{ field_id }}-label">{{ label }}</label>
   {% endif %}
-  <div class="picker-field__surface" data-picker-surface-for="{{ field_id }}">
+  <div class="picker-field__surface" data-picker-surface-for="{{ field_id }}" role="group" {% if label %}aria-labelledby="{{ field_id }}-label"{% endif %} {% if help_text %}aria-describedby="{{ field_id }}-help"{% endif %}>
     <div class="picker-field__summary-shell">
       <div
         class="picker-field__summary {% if not display_value %}is-placeholder{% endif %}"
@@ -104,7 +104,7 @@
     {% endif %}
   </div>
   {% if help_text %}
-  <div class="form-help">{{ help_text }}</div>
+  <div class="form-help" id="{{ field_id }}-help">{{ help_text }}</div>
   {% endif %}
 </div>
 {% endmacro %}

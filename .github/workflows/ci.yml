@@ -185,3 +185,30 @@ jobs:
           if-no-files-found: warn
           path: |
             test_artifacts/browser/*.png
+
+  deploy-production:
+    name: Deploy / Production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - windows
+      - container
+      - package-supply-chain
+      - browser-regression
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout verified revision
+        uses: actions/checkout@v4
+
+      - name: Deploy verified containers
+        env:
+          AD_ORG_SYNC_IMAGE_TAG: ${{ github.sha }}
+          PRODUCTION_ENV_FILE: /opt/ad-org-sync/shared/.env
+          PRODUCTION_STATE_DIR: /opt/ad-org-sync/shared
+        run: bash scripts/deploy-production.sh

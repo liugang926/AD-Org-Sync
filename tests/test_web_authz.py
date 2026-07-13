@@ -1463,6 +1463,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("job-dryrun-001", body)
         self.assertIn("Open Conflicts", body)
         self.assertIn("Planned Changes", body)
+        self.assertIn("Apply 12 Changes", body)
+        self.assertIn('data-confirm-detail-2-label="Environment"', body)
+        self.assertIn('data-confirm-detail-3-label="User Role"', body)
+        self.assertIn('data-confirm-detail-13-label="Reversible"', body)
         self.assertIn(
             "Latest high-risk dry run still needs review approval before apply can continue.",
             body,

@@ -53,7 +53,8 @@
   <section class="config-brief">
     <div class="config-brief__main">
       <div class="config-brief__eyebrow">{{ t("Shared Page, Provider-Specific Fields") }}</div>
-      <h2>{{ t(config_rollout_status.title) }}</h2>
+      <h2>{{ t(config_rollout_status.title_message.code, **config_rollout_status.title_message.params) }}</h2>
+      <div class="config-brief__description">{{ t(config_rollout_status.description_message.code, **config_rollout_status.description_message.params) }}</div>
       <p>
         <strong>{{ t("Current provider") }}</strong>:
         <span data-config-provider-current>{{ t(source_provider_name) }}</span>
@@ -63,60 +64,17 @@
       </p>
     </div>
     <div class="config-brief__status">
-      {{ ui.badge(t(config_rollout_status.badge_text), config_rollout_status.badge_level) }}
+      {{ ui.badge(t(config_rollout_status.badge_message.code, **config_rollout_status.badge_message.params), config_rollout_status.badge_level) }}
       <span>{{ t("Open Conflicts") }}: <strong>{{ config_rollout_status.open_conflict_count }}</strong></span>
-      <span>{{ t("Latest Dry Run") }}: <strong>{{ config_rollout_status.latest_dry_run.job_id if config_rollout_status.latest_dry_run else "-" }}</strong></span>
-    </div>
-  </section>
-
-  <section class="config-action-row">
-    <div class="config-action-row__copy">
-      <strong>{{ t("Fill These First") }}</strong>
-      <span data-config-provider-guidance>{{ t("Select the source provider and complete the credentials required by {provider}.", provider=t(source_provider_name)) }}</span>
-      <span>{{ t("LDAP Server, LDAP Domain, LDAP Username, and LDAP Password") }}</span>
-      <span>{{ t("Default Password before the first apply run") }}</span>
-      <span>{{ t("Fill the source root unit IDs and the target AD root OU path or DN before the first apply.") }}</span>
-    </div>
-    <div class="config-action-row__actions">
-      {% if config_rollout_status.show_run_dry_run and can("jobs.run") %}
-      <form class="inline" method="post" action="/jobs/run">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="mode" value="dry_run">
-        {{ ui.button(t("Run First Dry Run"), type="submit", variant="secondary", size="sm", icon="play") }}
-      </form>
-      {% endif %}
-      {{ ui.button(t(config_rollout_status.primary_action_label), href=config_rollout_status.primary_action_url, variant="ghost", size="sm", icon="arrow-right") }}
-      {% if config_rollout_status.primary_action_url != "/jobs" %}
-      {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost", size="sm", icon="refresh-cw") }}
-      {% endif %}
-      {% if config_rollout_status.open_conflict_count > 0 %}
-      {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost", size="sm", icon="shield-alert") }}
-      {% endif %}
-    </div>
-  </section>
-
-  <section class="config-shortcuts">
-    {% if can("mappings.read") %}
-    <div class="config-shortcut">
-      <div>
-        <strong>{{ t("Need Manual Identity Binding Or Per-User Placement?") }}</strong>
-        <span>{{ t("Manual source-user to AD bindings are configured on the Identity Overrides page, not inside the base connection form below.") }}</span>
-      </div>
-      <div class="config-shortcut__actions">
-        {{ ui.button(t("Open Identity Overrides"), href="/mappings#mapping-create", variant="ghost", size="sm", icon="layers") }}
-        {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost", size="sm", icon="shield-alert") }}
-      </div>
-    </div>
-    {% endif %}
-    <div class="config-shortcut">
-      <div>
-        <strong>{{ t("Need Account Creation Rules Or Department Routing?") }}</strong>
-        <span>{{ t("Open Advanced Sync when you need connector-level account naming, duplicate handling, source-branch routing, or explicit source-department to AD OU mapping.") }}</span>
-      </div>
-      <div class="config-shortcut__actions">
-        {{ ui.button(t("Open Account Creation Rules"), href="/advanced-sync#account-creation-rules", variant="ghost", size="sm", icon="settings-2") }}
-        {{ ui.button(t("Open Department Routing"), href="/advanced-sync#department-ou-routing", variant="ghost", size="sm", icon="waypoints") }}
-      </div>
+      <span class="config-brief__fact">
+        <span>{{ t("Latest Dry Run") }}:</span>
+        {% if config_rollout_status.latest_dry_run %}
+        {{ ui.identifier(config_rollout_status.latest_dry_run.job_id, t("Copy Dry Run ID"), t("Dry Run ID copied")) }}
+        {% else %}
+        <strong>-</strong>
+        {% endif %}
+      </span>
+      {{ ui.button(t(config_rollout_status.primary_action_message.code, **config_rollout_status.primary_action_message.params), href=config_rollout_status.primary_action_url, variant="secondary", size="sm", icon="arrow-right") }}
     </div>
   </section>
 
@@ -206,6 +164,10 @@
     data-message-target-loaded="{{ t('Choose an OU row. The selected target field updates immediately.') }}"
   >
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-error-summary" role="alert" aria-live="assertive" tabindex="-1" data-config-error-summary hidden>
+      <strong>{{ t("Fix the highlighted fields before saving.") }}</strong>
+      <ul data-config-error-list></ul>
+    </div>
 
     <section class="config-form-workbench" data-config-section-workbench>
       <nav class="config-section-nav" aria-label="{{ t('Configuration sections') }}" data-config-section-nav>
@@ -486,6 +448,57 @@
       </div>
     </div>
   </form>
+
+  <details class="config-supporting-help">
+    <summary>{{ t("Additional configuration guidance") }}</summary>
+    <div class="page-stack tight">
+      <section class="config-action-row">
+        <div class="config-action-row__copy">
+          <strong>{{ t("Fill These First") }}</strong>
+          <span data-config-provider-guidance>{{ t("Select the source provider and complete the credentials required by {provider}.", provider=t(source_provider_name)) }}</span>
+          <span>{{ t("LDAP Server, LDAP Domain, LDAP Username, and LDAP Password") }}</span>
+          <span>{{ t("Default Password before the first apply run") }}</span>
+          <span>{{ t("Fill the source root unit IDs and the target AD root OU path or DN before the first apply.") }}</span>
+        </div>
+        <div class="config-action-row__actions">
+          {% if config_rollout_status.show_run_dry_run and can("jobs.run") %}
+          <form class="inline" method="post" action="/jobs/run">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="mode" value="dry_run">
+            {{ ui.button(t("Run First Dry Run"), type="submit", variant="secondary", size="sm", icon="play") }}
+          </form>
+          {% endif %}
+          {% if config_rollout_status.open_conflict_count > 0 %}
+          {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost", size="sm", icon="shield-alert") }}
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="config-shortcuts">
+        {% if can("mappings.read") %}
+        <div class="config-shortcut">
+          <div>
+            <strong>{{ t("Need Manual Identity Binding Or Per-User Placement?") }}</strong>
+            <span>{{ t("Manual source-user to AD bindings are configured on the Identity Overrides page, not inside the base connection form below.") }}</span>
+          </div>
+          <div class="config-shortcut__actions">
+            {{ ui.button(t("Open Identity Overrides"), href="/mappings#mapping-create", variant="ghost", size="sm", icon="layers") }}
+          </div>
+        </div>
+        {% endif %}
+        <div class="config-shortcut">
+          <div>
+            <strong>{{ t("Need Account Creation Rules Or Department Routing?") }}</strong>
+            <span>{{ t("Open Advanced Sync when you need connector-level account naming, duplicate handling, source-branch routing, or explicit source-department to AD OU mapping.") }}</span>
+          </div>
+          <div class="config-shortcut__actions">
+            {{ ui.button(t("Open Account Creation Rules"), href="/advanced-sync#account-creation-rules", variant="ghost", size="sm", icon="settings-2") }}
+            {{ ui.button(t("Open Department Routing"), href="/advanced-sync#department-ou-routing", variant="ghost", size="sm", icon="waypoints") }}
+          </div>
+        </div>
+      </section>
+    </div>
+  </details>
 </div>
 <script id="source-provider-ui-catalog" type="application/json">{{ source_provider_ui_catalog | tojson }}</script>
 {% endblock %}

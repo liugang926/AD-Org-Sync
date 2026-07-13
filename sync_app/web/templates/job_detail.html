@@ -23,7 +23,7 @@
 
     <div class="job-review-hero__facts">
       <div class="dense-meta">
-        <div><strong>{{ t("Started At") }}</strong><br>{{ job.started_at }}</div>
+        <div><strong>{{ t("Started At") }}</strong><br>{{ ui.local_time(job.started_at) }}</div>
         <div><strong>{{ t("Ended At") }}</strong><br>{{ job.ended_at or "-" }}</div>
         <div><strong>{{ t("Mode") }}</strong><br>{{ t(job.execution_mode) }}</div>
         <div><strong>{{ t("Status") }}</strong><br>{{ t(job.status) }}</div>
@@ -165,14 +165,14 @@
     <section class="subcard stack-md">
       <div class="section-header">
         <div class="section-header__copy">
-          <h3 class="section-header__title">{{ t(section.label) }}</h3>
+          <h3 class="section-header__title">{{ t(section.label_code) }}</h3>
           <p class="section-header__description">
             {% if diff.baseline_job_id %}
             <a href="/jobs/{{ diff.baseline_job_id }}">{{ diff.baseline_job_id }}</a>
             {% else %}
             -
             {% endif %}
-            / {{ diff.baseline_started_at or "-" }}
+            / {{ ui.local_time(diff.baseline_started_at) }}
           </p>
         </div>
         {{ ui.badge(t("Changed") if diff.changed else t("No Material Change"), ("warning" if diff.changed else "success")) }}
@@ -274,7 +274,7 @@
             <td class="muted cell-mono">{{ item.source_id or "-" }}</td>
             <td class="cell-truncate" title="{{ item.target_dn }}">{{ item.target_dn or "-" }}</td>
             <td class="table-center">{{ ui.badge(item.risk_level, 'error' if item.risk_level == 'high' else 'info') }}</td>
-            <td class="muted">{{ item.created_at }}</td>
+            <td class="muted">{{ ui.local_time(item.created_at) }}</td>
           </tr>
           {% else %}
           <tr><td class="table-empty" colspan="6">{{ t("No planned operations.") }}</td></tr>
@@ -373,7 +373,7 @@
           <tbody>
             {% for item in events %}
             <tr>
-              <td class="muted">{{ item.created_at.split(' ')[1] }}</td>
+              <td class="muted">{{ ui.local_time(item.created_at) }}</td>
               <td>{{ ui.badge(t(item.level), 'error' if item.level == 'error' else ('warning' if item.level == 'warning' else 'info')) }}</td>
               <td>{{ item.event_type or "-" }}</td>
               <td>{{ item.message }}</td>

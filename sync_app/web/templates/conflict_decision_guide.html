@@ -72,7 +72,15 @@
     <div class="decision-step {% if decision_guide.target_account.exists %}is-complete{% else %}is-warning{% endif %}">
       <span>3</span>
       <strong>{{ t("Target Account State") }}</strong>
-      <small>{{ t("Found") if decision_guide.target_account.exists else t("Not found") }}</small>
+      <small>
+        {% if decision_guide.target_account.exists %}
+        {{ t("Found") }}
+        {% elif decision_guide.target_account.availability_code %}
+        {{ t(decision_guide.target_account.availability_code) }}
+        {% else %}
+        {{ t("Not found") }}
+        {% endif %}
+      </small>
     </div>
     <div class="decision-step is-complete">
       <span>4</span>
@@ -135,7 +143,7 @@
         {% else %}
         {{ ui.badge(t("Unknown"), "info") }}
         {% endif %}
-        <span>{{ t("Last Logon") }}: {{ decision_guide.target_account.last_logon or "-" }}</span>
+        <span>{{ t("Last Logon") }}: {{ ui.local_time(decision_guide.target_account.last_logon) }}</span>
       </div>
       <div class="detail-grid">
         <div class="detail-item">
@@ -157,7 +165,11 @@
       </div>
       {% else %}
       <div class="panel-note warning">
+        {% if decision_guide.target_account.availability_code %}
+        {{ t(decision_guide.target_account.availability_code) }}
+        {% else %}
         {{ t("The selected AD account was not found in the configured directory.") }}
+        {% endif %}
       </div>
       {% endif %}
       {% if decision_guide.target_account.distinguished_name %}

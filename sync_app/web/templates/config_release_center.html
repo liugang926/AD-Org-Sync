@@ -168,7 +168,7 @@
             </td>
             <td>
               <div class="stack-tight">
-                <div>{{ row.snapshot.created_at or "-" }}</div>
+                <div>{{ ui.local_time(row.snapshot.created_at) }}</div>
                 <div class="muted">{{ row.snapshot.created_by or "-" }}</div>
               </div>
             </td>

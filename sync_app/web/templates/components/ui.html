@@ -102,9 +102,28 @@
 {% endmacro %}
 
 {% macro table_shell(class_name='') %}
-<div class="card table-shell {{ class_name }}">
+<div class="card table-shell {{ class_name }}" tabindex="0">
   {{ caller() }}
 </div>
+{% endmacro %}
+
+{% macro identifier(value, copy_label='Copy identifier', copied_label='Identifier copied', href='') %}
+<span class="identifier">
+  {% if href %}<a class="identifier__link" href="{{ href }}">{% endif %}<code class="identifier__value" title="{{ value }}">{{ value }}</code>{% if href %}</a>{% endif %}
+  <button
+    class="button ghost sm identifier__copy"
+    type="button"
+    data-copy-value="{{ value }}"
+    data-copied-label="{{ copied_label }}"
+    aria-label="{{ copy_label }}"
+  >
+    <i data-lucide="copy" class="icon icon-xs" aria-hidden="true"></i>
+  </button>
+</span>
+{% endmacro %}
+
+{% macro local_time(value, empty='-') %}
+{% if value %}<time datetime="{{ value }}" title="{{ value }}" data-local-time>{{ value }}</time>{% else %}{{ empty }}{% endif %}
 {% endmacro %}
 
 {% macro helper_block(title, description='', level='info', badge_text='', class_name='') %}
