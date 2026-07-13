@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from sync_app.storage.local_db import DatabaseManager
 from sync_app.storage.schema import MIGRATIONS
@@ -51,6 +52,37 @@ class MigrationIntegrityTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "unexpected versions"):
             manager.initialize(create_startup_snapshot=False, verify_integrity=False)
+
+    def test_version_30_database_upgrades_to_source_directory_schema_without_data_loss(self) -> None:
+        with patch("sync_app.storage.local_db.MIGRATIONS", MIGRATIONS[:30]):
+            legacy_manager = DatabaseManager(db_path=self.db_path)
+            legacy_manager.initialize(create_startup_snapshot=False)
+            with legacy_manager.transaction() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO user_identity_bindings (
+                      org_id, source_user_id, connector_id, ad_username, source, is_enabled, updated_at
+                    ) VALUES ('default', 'alice', 'default', 'alice', 'manual', 1, '2026-01-01T00:00:00+00:00')
+                    """
+                )
+
+        manager = DatabaseManager(db_path=self.db_path)
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        with manager.connection() as connection:
+            applied = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+            binding = connection.execute(
+                "SELECT source_provider, source_user_id, ad_username FROM user_identity_bindings"
+            ).fetchone()
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+        self.assertEqual(applied, 31)
+        self.assertEqual((binding["source_provider"], binding["source_user_id"], binding["ad_username"]), ("wecom", "alice", "alice"))
+        self.assertIn("source_directory_snapshots", tables)
+        self.assertIn("sync_scope_selections", tables)
 
 
 if __name__ == "__main__":

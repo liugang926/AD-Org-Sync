@@ -11,6 +11,41 @@ class WeComSourceProvider(SourceDirectoryProvider):
     provider_id = "wecom"
     display_name = "WeCom"
 
+    @staticmethod
+    def _extension_fields(payload: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        extattr = payload.get("extattr")
+        attrs = extattr.get("attrs") if isinstance(extattr, dict) else []
+        for item in attrs or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            value = item.get("value")
+            if isinstance(value, dict):
+                value = value.get("text") or value.get("value")
+            if name and value not in (None, ""):
+                result[name] = value
+                normalized_name = "".join(char.lower() for char in name if char.isalnum() or char == "_")
+                result.setdefault(normalized_name, value)
+        return result
+
+    def normalize_user(self, payload: dict[str, Any]) -> SourceDirectoryUser:
+        enriched = dict(payload or {})
+        extension_fields = self._extension_fields(enriched)
+        enriched.update(extension_fields)
+        configured_name = str(getattr(self, "employee_id_attribute", "") or "").strip().lower()
+        for name, value in extension_fields.items():
+            normalized_name = str(name or "").strip().lower()
+            compact_name = "".join(char for char in normalized_name if char.isalnum() or char == "_")
+            if (
+                (configured_name and normalized_name == configured_name)
+                or compact_name in {"employee_id", "employeeid", "employee_no", "employeeno", "job_number", "jobnumber", "staff_no", "staffno", "staff_id", "workcode", "work_code"}
+                or normalized_name in {"工号", "员工工号", "员工编号", "职工编号"}
+            ):
+                enriched["employee_id"] = value
+                break
+        return super().normalize_user(enriched)
+
     def __init__(
         self,
         corpid: str,
@@ -23,6 +58,7 @@ class WeComSourceProvider(SourceDirectoryProvider):
         self.corpid = corpid
         self.corpsecret = corpsecret
         self.agentid = agentid
+        self.employee_id_attribute = ""
         self._api_factory = api_factory or WeComAPI
         self._api = instantiate_source_api_client(
             self._api_factory,
@@ -37,12 +73,15 @@ class WeComSourceProvider(SourceDirectoryProvider):
 
     def list_department_users(self, department_id: int) -> list[SourceDirectoryUser]:
         return [
-            SourceDirectoryUser.from_source_payload(item)
+            self.normalize_user(item)
             for item in self._api.get_department_users(int(department_id))
         ]
 
     def get_user_detail(self, user_id: str) -> dict[str, Any]:
-        return dict(self._api.get_user_detail(user_id) or {})
+        payload = dict(self._api.get_user_detail(user_id) or {})
+        if payload:
+            payload = self.normalize_user(payload).to_state_payload()
+        return payload
 
     def update_user(self, user_id: str, updates: dict[str, Any]) -> bool:
         return bool(self._api.update_user(user_id, updates))

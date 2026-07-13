@@ -4,7 +4,43 @@ from typing import Any, Optional
 
 from fastapi import Request
 
+from sync_app.clients.dingtalk import DingTalkAPIError
 from sync_app.providers.source import get_source_provider_display_name, get_source_provider_schema
+
+
+_DINGTALK_ERROR_HINTS = {
+    "invalid_credentials": (
+        "Check that AppKey / Client ID and AppSecret / Client Secret belong to the same "
+        "DingTalk internal application, then save the configuration and retry."
+    ),
+    "permission_denied": (
+        "Check the DingTalk application's contact permissions, authorization status, and data scope."
+    ),
+    "network_error": "Check this server's network, DNS, proxy, and TLS access to api.dingtalk.com.",
+    "invalid_response": "Retry once; if the error persists, check the DingTalk application status.",
+    "authentication_failed": "Check the DingTalk application credentials and application status, then retry.",
+}
+
+
+def _build_dingtalk_catalog_error(support: Any, request: Request, exc: DingTalkAPIError) -> dict[str, Any]:
+    ui_language = support.request_support.get_ui_language(request)
+    payload: dict[str, Any] = {
+        "ok": False,
+        "error": support.translate(ui_language, str(exc)),
+        "error_hint": support.translate(
+            ui_language,
+            _DINGTALK_ERROR_HINTS.get(exc.category, _DINGTALK_ERROR_HINTS["authentication_failed"]),
+        ),
+    }
+    if exc.detail:
+        payload["error_detail"] = exc.detail
+    if exc.code:
+        payload["error_code"] = exc.code
+    if exc.status_code is not None:
+        payload["http_status"] = exc.status_code
+    if exc.request_id:
+        payload["request_id"] = exc.request_id
+    return payload
 
 
 def build_source_unit_catalog(
@@ -45,6 +81,9 @@ def build_source_unit_catalog(
             departments = source_provider_client.list_departments()
         finally:
             source_provider_client.close()
+    except DingTalkAPIError as exc:
+        support.logger.warning("failed to load source unit catalog: %s", exc)
+        return _build_dingtalk_catalog_error(support, request, exc)
     except Exception as exc:
         support.logger.warning("failed to load source unit catalog: %s", exc)
         return {

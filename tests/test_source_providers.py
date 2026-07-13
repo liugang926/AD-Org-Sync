@@ -136,7 +136,7 @@ class SourceProviderTests(unittest.TestCase):
         self.assertIn("feishu", options)
         self.assertTrue(get_source_provider_schema("wecom").implemented)
         self.assertTrue(get_source_provider_schema("dingtalk").implemented)
-        self.assertFalse(get_source_provider_schema("feishu").implemented)
+        self.assertTrue(get_source_provider_schema("feishu").implemented)
 
     def test_build_source_provider_wraps_wecom_client_with_generic_interface(self):
         config = AppConfig(
@@ -174,15 +174,16 @@ class SourceProviderTests(unittest.TestCase):
                 api_factory=FakeWeComClient,
             )
 
-    def test_build_source_provider_rejects_not_implemented_provider(self):
+    def test_build_source_provider_builds_implemented_feishu_provider(self):
         config = AppConfig(
             wecom=WeComConfig(corpid="corp-id", corpsecret="secret"),
             ldap=LDAPConfig(server="dc.example.com", domain="example.com", username="svc", password="secret"),
             domain="example.com",
             source_provider="feishu",
         )
-        with self.assertRaisesRegex(ValueError, "not implemented in this build"):
-            build_source_provider(app_config=config, api_factory=FakeWeComClient)
+        provider = build_source_provider(app_config=config, api_factory=FakeWeComClient)
+        self.assertEqual(provider.provider_id, "feishu")
+        provider.close()
 
     def test_build_source_provider_uses_app_config_provider_type(self):
         config = AppConfig(

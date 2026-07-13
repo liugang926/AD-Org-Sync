@@ -1,11 +1,13 @@
 import json
 import os
 import re
+import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from sync_app.clients.dingtalk import DingTalkAPIError
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
 from sync_app.services.config_store import save_editable_config
 from sync_app.web.app import resolve_web_runtime_settings
@@ -3376,6 +3378,42 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         payload = json.loads(self._text(response))
         self.assertFalse(payload["ok"])
         self.assertIn("AppSecret / Client Secret", payload["error"])
+
+    def test_config_source_unit_catalog_returns_actionable_dingtalk_error(self):
+        self._login("superadmin")
+        config_page = self._route("/config", "GET")(self._request("/config"))
+        csrf_match = re.search(
+            r'name="csrf_token" value="([^"]+)"', self._text(config_page)
+        )
+        self.assertIsNotNone(csrf_match)
+
+        error = DingTalkAPIError(
+            "DingTalk rejected the AppKey or AppSecret.",
+            category="invalid_credentials",
+            detail="Specified appKey or appSecret is invalid.",
+            code="InvalidParameter",
+            request_id="ding-request-1",
+            status_code=400,
+        )
+        with patch("sync_app.web.app.build_source_provider", side_effect=error):
+            response = self._route("/config/source-units/catalog", "POST")(
+                self._request("/config/source-units/catalog", "POST"),
+                csrf_token=csrf_match.group(1),
+                source_provider="dingtalk",
+                corpid="ding-app-key",
+                agentid="50001",
+                corpsecret="ding-secret",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(self._text(response))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"], "DingTalk rejected the AppKey or AppSecret.")
+        self.assertIn("same DingTalk internal application", payload["error_hint"])
+        self.assertEqual(payload["error_detail"], "Specified appKey or appSecret is invalid.")
+        self.assertEqual(payload["error_code"], "InvalidParameter")
+        self.assertEqual(payload["http_status"], 400)
+        self.assertEqual(payload["request_id"], "ding-request-1")
 
     def test_config_submission_keeps_existing_corpsecret_when_other_values_change(self):
         self._login("superadmin")

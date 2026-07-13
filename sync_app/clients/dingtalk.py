@@ -7,6 +7,27 @@ from sync_app.core.value_coercion import coerce_int_list
 from sync_app.infra.requests_compat import ensure_requests_available, requests
 
 
+class DingTalkAPIError(RuntimeError):
+    """A redacted DingTalk API failure safe for administrator responses."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str = "api_error",
+        detail: str = "",
+        code: str = "",
+        request_id: str = "",
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.category = str(category or "api_error")
+        self.detail = str(detail or "")
+        self.code = str(code or "")
+        self.request_id = str(request_id or "")
+        self.status_code = status_code
+
+
 class DingTalkAPI:
     """DingTalk API client for internal application directory access."""
 
@@ -40,6 +61,63 @@ class DingTalkAPI:
 
         self._refresh_access_token()
 
+    def _redact(self, value: Any) -> str:
+        text = str(value or "")
+        for secret in (self.app_secret, self.access_token):
+            if secret:
+                text = text.replace(str(secret), "***")
+        return text[:500]
+
+    @staticmethod
+    def _response_payload(response: Any) -> Dict[str, Any]:
+        try:
+            payload = response.json()
+        except (TypeError, ValueError):
+            return {}
+        return dict(payload) if isinstance(payload, dict) else {}
+
+    def _authentication_error(self, response: Any, payload: Dict[str, Any]) -> DingTalkAPIError:
+        status_code = getattr(response, "status_code", None)
+        code = str(payload.get("code") or payload.get("errcode") or "").strip()
+        detail = self._redact(payload.get("message") or payload.get("errmsg") or "")
+        request_id = self._redact(
+            payload.get("requestid")
+            or payload.get("requestId")
+            or payload.get("request_id")
+            or ""
+        )
+        normalized = f"{code} {detail}".lower()
+        invalid_credentials = status_code == 400 or any(
+            marker in normalized
+            for marker in ("appkey", "appsecret", "client id", "client secret", "invalidparameter")
+        )
+        if invalid_credentials:
+            return DingTalkAPIError(
+                "DingTalk rejected the AppKey or AppSecret.",
+                category="invalid_credentials",
+                detail=detail,
+                code=code,
+                request_id=request_id,
+                status_code=status_code,
+            )
+        if status_code in {401, 403}:
+            return DingTalkAPIError(
+                "DingTalk denied the authentication request.",
+                category="permission_denied",
+                detail=detail,
+                code=code,
+                request_id=request_id,
+                status_code=status_code,
+            )
+        return DingTalkAPIError(
+            "DingTalk authentication request failed.",
+            category="authentication_failed",
+            detail=detail,
+            code=code,
+            request_id=request_id,
+            status_code=status_code,
+        )
+
     def _refresh_access_token(self) -> None:
         payload = {
             "appKey": self.app_key,
@@ -47,20 +125,38 @@ class DingTalkAPI:
         }
         try:
             response = self.session.post(self.AUTH_URL, json=payload, timeout=self.timeout)
+            result = self._response_payload(response)
+            if int(getattr(response, "status_code", 200) or 200) >= 400:
+                raise self._authentication_error(response, result)
             response.raise_for_status()
-            result = response.json()
-        except requests.RequestException as exc:
-            self.logger.error("failed to get DingTalk access token: %s", exc)
+            if not result:
+                result = self._response_payload(response)
+        except DingTalkAPIError as exc:
+            self.logger.warning("failed to get DingTalk access token: %s", exc)
             raise
+        except requests.RequestException as exc:
+            safe_error = self._redact(exc)
+            self.logger.warning("failed to get DingTalk access token: %s", safe_error)
+            raise DingTalkAPIError(
+                "DingTalk authentication request could not be completed.",
+                category="network_error",
+                detail=safe_error,
+            ) from exc
 
         access_token = str(result.get("accessToken") or result.get("access_token") or "").strip()
         if not access_token:
-            error_msg = (
-                "failed to get DingTalk access token: "
-                f"code={result.get('code')}, message={result.get('message') or result.get('errmsg')}"
+            raise DingTalkAPIError(
+                "DingTalk authentication succeeded without returning an access token.",
+                category="invalid_response",
+                detail=self._redact(result.get("message") or result.get("errmsg") or ""),
+                code=str(result.get("code") or result.get("errcode") or ""),
+                request_id=self._redact(
+                    result.get("requestid")
+                    or result.get("requestId")
+                    or result.get("request_id")
+                    or ""
+                ),
             )
-            self.logger.error(error_msg)
-            raise Exception(error_msg)
 
         expires_in = int(result.get("expireIn") or result.get("expires_in") or 7200)
         self.access_token = access_token
@@ -310,3 +406,6 @@ class DingTalkAPI:
             self.close()
         except Exception:
             pass
+
+
+__all__ = ["DingTalkAPI", "DingTalkAPIError"]

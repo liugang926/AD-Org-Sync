@@ -178,6 +178,19 @@ class WebBrowserRegressionTests(unittest.TestCase):
             )
         ).strip()
 
+    def test_source_directory_page_renders_paginated_scope_workflow_without_secrets(self):
+        self._login()
+        self.page.goto(f"{self.base_url}/source-directory", wait_until="networkidle")
+        self.assertTrue(self.page.get_by_role("heading", name="WeCom Users").is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="Test Connection").is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="Refresh Directory").is_visible())
+        self.assertTrue(self.page.get_by_text("Partial sync safety", exact=True).is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="Select Current Page").is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="Select All Filtered Results").is_visible())
+        self.assertEqual(self.page.locator('select[name="scope_type"]').count(), 1)
+        self.assertEqual(self.page.locator('select[name="source_field"]').count(), 1)
+        self.assertNotIn("corpsecret", self.page.content().lower())
+
     def _assert_page_has_no_horizontal_overflow(self) -> None:
         dimensions = self.page.evaluate(
             """() => ({

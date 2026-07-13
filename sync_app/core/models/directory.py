@@ -62,6 +62,14 @@ class SourceDirectoryUser:
     email: str = ""
     departments: list[int] = field(default_factory=list)
     raw_payload: Dict[str, Any] = field(default_factory=dict)
+    provider_id: str = ""
+    employee_id: str = ""
+    mobile: str = ""
+    position: str = ""
+    department_names: list[str] = field(default_factory=list)
+    primary_department_id: Optional[int] = None
+    account_status: str = "active"
+    is_active: bool = True
 
     @classmethod
     def from_wecom_payload(cls, payload: Dict[str, Any]) -> "SourceDirectoryUser":
@@ -83,6 +91,16 @@ class SourceDirectoryUser:
         normalized_departments = _coerce_int_list(departments)
         if normalized_departments:
             self.departments = normalized_departments
+        normalized = self.from_source_payload(payload)
+        for field_name in ("provider_id", "employee_id", "mobile", "position", "account_status"):
+            value = getattr(normalized, field_name)
+            if value not in (None, ""):
+                setattr(self, field_name, value)
+        if normalized.department_names:
+            self.department_names = list(normalized.department_names)
+        if normalized.primary_department_id is not None:
+            self.primary_department_id = normalized.primary_department_id
+        self.is_active = normalized.is_active
         self.raw_payload.update(payload)
 
     def to_state_payload(self) -> Dict[str, Any]:
@@ -93,6 +111,14 @@ class SourceDirectoryUser:
                 "name": self.name,
                 "email": self.email,
                 "department": list(self.departments),
+                "provider_id": self.provider_id,
+                "employee_id": self.employee_id,
+                "mobile": self.mobile,
+                "position": self.position,
+                "department_names": list(self.department_names),
+                "primary_department_id": self.primary_department_id,
+                "account_status": self.account_status,
+                "is_active": self.is_active,
             }
         )
         return payload
@@ -145,12 +171,58 @@ class SourceDirectoryUser:
             or payload_copy.get("workEmail")
             or ""
         )
+        employee_id = ""
+        for key in (
+            "employee_id", "employeeid", "employee_no", "employee_number",
+            "job_number", "jobnumber", "staff_no", "staffno", "staff_id",
+            "workcode", "work_code", "employeeNo", "employeeNumber", "jobNumber",
+        ):
+            if payload_copy.get(key) not in (None, ""):
+                employee_id = str(payload_copy[key]).strip()
+                break
+        status_payload = payload_copy.get("status")
+        if isinstance(status_payload, dict):
+            is_active = not bool(
+                status_payload.get("is_resigned")
+                or status_payload.get("is_frozen")
+                or status_payload.get("is_unjoin")
+            ) and bool(status_payload.get("is_activated", True))
+            account_status = "active" if is_active else "inactive"
+        else:
+            raw_active = payload_copy.get("is_active", payload_copy.get("active", True))
+            is_active = raw_active if isinstance(raw_active, bool) else str(raw_active).strip().lower() not in {
+                "0", "false", "inactive", "disabled", "resigned", "terminated"
+            }
+            account_status = str(status_payload or ("active" if is_active else "inactive"))
+        department_names_raw = payload_copy.get("department_names") or payload_copy.get("departmentNames") or []
+        if isinstance(department_names_raw, str):
+            department_names = [item.strip() for item in department_names_raw.split(",") if item.strip()]
+        else:
+            department_names = [str(item).strip() for item in department_names_raw if str(item).strip()]
+        primary_department_id = None
+        for key in ("primary_department_id", "main_department", "mainDepartment", "primaryDepartmentId"):
+            value = payload_copy.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                primary_department_id = int(value)
+                break
+            except (TypeError, ValueError):
+                continue
         return cls(
             userid=str(userid or ""),
             name=str(payload_copy.get("name") or payload_copy.get("nick") or payload_copy.get("displayName") or ""),
             email=str(email or ""),
             departments=_extract_department_ids(payload_copy),
             raw_payload=payload_copy,
+            provider_id=str(payload_copy.get("provider_id") or ""),
+            employee_id=employee_id,
+            mobile=str(payload_copy.get("mobile") or payload_copy.get("phone") or ""),
+            position=str(payload_copy.get("position") or payload_copy.get("title") or ""),
+            department_names=department_names,
+            primary_department_id=primary_department_id,
+            account_status=account_status,
+            is_active=is_active,
         )
 
 SourceUser = SourceDirectoryUser

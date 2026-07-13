@@ -10,12 +10,14 @@ from sync_app.providers.source.base import (
     validate_source_provider_contract,
 )
 from sync_app.providers.source.dingtalk import DingTalkSourceProvider
+from sync_app.providers.source.feishu import FeishuSourceProvider
 from sync_app.providers.source.wecom import WeComSourceProvider
 
 
 SOURCE_PROVIDER_FACTORIES: dict[str, Callable[..., SourceDirectoryProvider]] = {
     "wecom": WeComSourceProvider,
     "dingtalk": DingTalkSourceProvider,
+    "feishu": FeishuSourceProvider,
 }
 _BUILTIN_SOURCE_PROVIDERS = frozenset(SOURCE_PROVIDER_FACTORIES)
 

@@ -78,8 +78,9 @@ def handle_plan_review_gate(
     mark_job: Callable[..., None],
     record_event: Callable[..., None],
     record_operation: Callable[..., None],
+    force_review: bool = False,
 ) -> tuple[Any | None, dict[str, Any] | None, bool]:
-    review_required_for_high_risk = settings_repo.get_bool('high_risk_apply_requires_review', True)
+    review_required_for_high_risk = settings_repo.get_bool('high_risk_apply_requires_review', True) or force_review
     approved_review = None
 
     if disable_breaker_triggered and disable_breaker_requires_approval:
@@ -127,7 +128,7 @@ def handle_plan_review_gate(
                 )
             return None, sync_stats.to_dict(), review_required_for_high_risk
 
-    if high_risk_operation_count and review_required_for_high_risk:
+    if (high_risk_operation_count or force_review) and review_required_for_high_risk:
         sync_stats['review_required'] = True
         if execution_mode == 'dry_run':
             review_repo.upsert_review_request(
@@ -139,7 +140,7 @@ def handle_plan_review_gate(
             record_event(
                 'WARNING',
                 'high_risk_review_pending',
-                f"dry-run generated {high_risk_operation_count} high-risk operations and requires approval before apply",
+                f"dry-run generated a scoped plan with {high_risk_operation_count} high-risk operations and requires approval before apply",
                 stage_name='plan',
                 payload={
                     'plan_fingerprint': plan_fingerprint,
@@ -151,7 +152,7 @@ def handle_plan_review_gate(
                 object_type='review',
                 operation_type='require_high_risk_review',
                 status='pending',
-                message='dry-run generated high-risk operations and created a pending review request',
+                message='dry-run created a fingerprint-bound review request',
                 source_id=job_id,
                 risk_level='high',
                 reason_code='high_risk_review_required',
@@ -187,7 +188,7 @@ def handle_plan_review_gate(
                 record_event(
                     'WARNING',
                     'review_required',
-                    f"apply blocked: {high_risk_operation_count} high-risk operations require approved dry-run review",
+                    f"apply blocked: the scoped plan requires an approved matching dry-run review ({high_risk_operation_count} high-risk operations)",
                     stage_name='plan',
                     payload={
                         'plan_fingerprint': plan_fingerprint,
@@ -239,7 +240,7 @@ def complete_dry_run(
     mark_job: Callable[..., None],
 ) -> dict[str, Any]:
     sync_stats['skip_detail_report'] = generate_skip_detail_report(sync_stats)
-    sync_stats['review_required'] = bool(high_risk_operation_count and review_required_for_high_risk)
+    sync_stats['review_required'] = bool(sync_stats.get('review_required'))
     summary = {
         'org_id': organization.org_id,
         'organization_name': organization.name,
@@ -260,6 +261,15 @@ def complete_dry_run(
         'field_ownership_policy': dict(field_ownership_policy),
         'skipped_operation_count': sync_stats['skipped_operations']['total'],
         'skipped_by_action': dict(sync_stats['skipped_operations']['by_action']),
+        'scope_type': str(sync_stats.get('scope_type') or 'full'),
+        'selected_user_count': len(sync_stats.get('selected_source_user_ids') or []),
+        'selected_department_count': len(sync_stats.get('selected_department_ids') or []),
+        'source_snapshot_id': int(sync_stats.get('source_snapshot_id') or 0),
+        'source_snapshot_fingerprint': str(sync_stats.get('source_snapshot_fingerprint') or ''),
+        'selection_fingerprint': str(sync_stats.get('selection_fingerprint') or ''),
+        'source_field': str(sync_stats.get('source_field') or ''),
+        'username_strategy': str(sync_stats.get('username_strategy') or ''),
+        'username_template': str(sync_stats.get('username_template') or ''),
     }
     sync_stats['summary'] = summary
     sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(sync_stats).to_dict()
@@ -292,6 +302,7 @@ def complete_plan_phase(ctx: SyncContext) -> dict[str, Any] | None:
         mark_job=ctx.hooks.mark_job,
         record_event=ctx.hooks.record_event,
         record_operation=ctx.hooks.record_operation,
+        force_review=bool(ctx.environment.source_scope),
     )
     if early_response is not None:
         return early_response

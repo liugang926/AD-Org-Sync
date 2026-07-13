@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import button %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <div class="eyebrow">{{ t("Source Directory") }}</div>
+    <h1>{{ provider_name }} {{ t("Users") }}</h1>
+    <p>{{ t("Review the cached organization directory, choose the AD account source, and save an explicit synchronization scope.") }}</p>
+  </div>
+  <div class="page-actions">
+    <form method="post" action="/source-directory/test">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {{ button(t("Test Connection"), type="submit", variant="secondary", icon="plug-zap") }}
+    </form>
+    <form method="post" action="/source-directory/refresh">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {{ button(t("Refresh Directory"), type="submit", variant="primary", icon="refresh-cw") }}
+    </form>
+  </div>
+</section>
+
+{% if latest_refresh and latest_refresh.status == 'failed' %}
+<div class="callout callout--danger" role="alert">
+  <strong>{{ t("The latest refresh failed.") }}</strong>
+  <span>{{ latest_refresh.error_summary }}</span>
+  {% if snapshot %}<span>{{ t("The previous successful snapshot is still being used.") }}</span>{% endif %}
+</div>
+{% elif latest_refresh and latest_refresh.status == 'refreshing' %}
+<div class="callout callout--info" role="status">{{ t("Directory refresh is in progress. The last successful snapshot remains available.") }}</div>
+{% endif %}
+{% if snapshot_expired %}
+<div class="callout callout--warning" role="status">{{ t("This source snapshot is stale. Refresh it before starting a new Dry Run.") }}</div>
+{% endif %}
+
+<div class="stat-grid">
+  <article class="stat-card"><span>{{ t("Provider") }}</span><strong>{{ provider_name }}</strong></article>
+  <article class="stat-card"><span>{{ t("Users") }}</span><strong>{{ snapshot.user_count if snapshot else 0 }}</strong></article>
+  <article class="stat-card"><span>{{ t("Missing Employee ID") }}</span><strong>{{ snapshot.missing_employee_id_count if snapshot else 0 }}</strong></article>
+  <article class="stat-card"><span>{{ t("Duplicate Employee ID") }}</span><strong>{{ snapshot.duplicate_employee_id_count if snapshot else 0 }}</strong></article>
+  <article class="stat-card"><span>{{ t("Mapping Coverage") }}</span><strong>{{ mapping_quality.mapping_coverage_percent if mapping_quality else 0 }}%</strong></article>
+  <article class="stat-card"><span>{{ t("Username Collisions") }}</span><strong>{{ mapping_quality.normalized_username_collision_count if mapping_quality else 0 }}</strong></article>
+</div>
+
+<section class="card">
+  <div class="card-header">
+    <div>
+      <h2>{{ t("Preview and Filter") }}</h2>
+      <p>{{ t("All user lists are server-paginated. Mobile values are masked in the snapshot.") }}</p>
+    </div>
+    {% if snapshot %}<span class="badge">{{ t("Updated") }} {{ snapshot.completed_at }}</span>{% endif %}
+  </div>
+  <form method="get" action="/source-directory" class="filter-bar">
+    <label>{{ t("Search") }}<input type="search" name="search" value="{{ search }}" placeholder="{{ t('Name, user ID, employee ID, email') }}"></label>
+    <label>{{ t("Department") }}
+      <select name="department_id">
+        <option value="">{{ t("All departments") }}</option>
+        {% for department in departments %}<option value="{{ department.source_department_id }}" {% if selected_department_id == department.source_department_id %}selected{% endif %}>{{ department.path_names|join(' / ') }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>{{ t("Status") }}
+      <select name="status"><option value="">{{ t("All statuses") }}</option><option value="active" {% if selected_status == 'active' %}selected{% endif %}>{{ t("Active") }}</option><option value="inactive" {% if selected_status == 'inactive' %}selected{% endif %}>{{ t("Inactive") }}</option></select>
+    </label>
+    <label>{{ t("Employee ID") }}
+      <select name="employee_id_state"><option value="">{{ t("Any") }}</option><option value="present" {% if selected_employee_id_state == 'present' %}selected{% endif %}>{{ t("Present") }}</option><option value="missing" {% if selected_employee_id_state == 'missing' %}selected{% endif %}>{{ t("Missing") }}</option></select>
+    </label>
+    {{ button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
+  </form>
+
+  <form method="post" action="/source-directory/scope">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="selection_mode" value="explicit" data-selection-mode>
+    <input type="hidden" name="selection_search" value="{{ search }}">
+    <input type="hidden" name="selection_department_id" value="{{ selected_department_id }}">
+    <input type="hidden" name="selection_status" value="{{ selected_status }}">
+    <input type="hidden" name="selection_employee_id_state" value="{{ selected_employee_id_state }}">
+    <div class="form-actions">
+      {{ button(t("Select Current Page"), type="button", variant="secondary", icon="check-square", attrs='data-select-current-page') }}
+      {{ button(t("Select All Filtered Results"), type="button", variant="secondary", icon="list-checks", attrs='data-select-all-filtered') }}
+      {{ button(t("Clear Selection"), type="button", variant="ghost", icon="x", attrs='data-clear-source-selection') }}
+      <span class="form-help" data-source-selection-status aria-live="polite"></span>
+    </div>
+    <div class="table-scroll" tabindex="0">
+      <table>
+        <thead><tr><th><input type="checkbox" data-select-page-checkbox aria-label="{{ t('Select Current Page') }}"></th><th>{{ t("Name") }}</th><th>{{ t("Platform User ID") }}</th><th>{{ t("Employee ID") }}</th><th>{{ t("Email") }}</th><th>{{ t("Mobile") }}</th><th>{{ t("Position") }}</th><th>{{ t("Primary Department") }}</th><th>{{ t("Status") }}</th><th>{{ t("Mapping Preview") }}</th><th>{{ t("Risk") }}</th></tr></thead>
+        <tbody>
+        {% for item in users %}
+          <tr>
+            <td><input type="checkbox" name="selected_source_user_ids" value="{{ item.source_user_id }}" data-source-user-checkbox aria-label="{{ t('Select {name}', name=item.display_name or item.source_user_id) }}"></td>
+            <td><strong>{{ item.display_name or '-' }}</strong></td>
+            <td class="cell-mono">{{ item.source_user_id }}</td>
+            <td class="cell-mono">{{ item.employee_id or '-' }}</td>
+            <td>{{ item.email or '-' }}</td><td>{{ item.mobile_masked or '-' }}</td><td>{{ item.position or '-' }}</td>
+            <td>{{ item.department_names[0] if item.department_names else '-' }}</td>
+            <td><span class="badge {% if not item.is_active %}badge--muted{% endif %}">{{ item.account_status }}</span></td>
+            <td class="cell-mono">{{ item.mapping_preview or '-' }}</td>
+            <td>{% if item.mapping_risks %}<span class="badge badge--warning">{{ item.mapping_risks|join(', ') }}</span>{% else %}<span class="badge badge--success">{{ t("Ready") }}</span>{% endif %}</td>
+          </tr>
+        {% else %}<tr><td colspan="11" class="empty-state">{{ t("No cached users match the current filters.") }}</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pagination-bar">
+      <span>{{ t("{count} matching users", count=total_users) }}</span>
+      <div>
+        {% if page_number > 1 %}{{ button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state, variant="secondary") }}{% endif %}
+        <span>{{ page_number }} / {{ total_pages }}</span>
+        {% if page_number < total_pages %}{{ button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state, variant="secondary") }}{% endif %}
+      </div>
+    </div>
+
+    <div class="form-grid">
+      <label>{{ t("Sync Scope") }}
+        <select name="scope_type">
+          {% for value, label in [('full', 'All active users'), ('department', 'Selected departments and descendants'), ('selected_users', 'Checked users only'), ('source_user', 'Single user replay')] %}<option value="{{ value }}" {% if scope and scope.scope_type == value %}selected{% endif %}>{{ t(label) }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>{{ t("Departments in Scope") }}
+        <select name="selected_department_ids" multiple size="4">
+          {% for department in departments %}<option value="{{ department.source_department_id }}" {% if scope and department.source_department_id in scope.selected_department_ids %}selected{% endif %}>{{ department.path_names|join(' / ') }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>{{ t("AD Account Source") }}
+        <select name="source_field">
+          {% set selected_field = scope.source_field if scope else 'source_user_id' %}
+          <optgroup label="{{ t('Recommended account sources') }}">
+            {% for value, label in [('source_user_id','Platform User ID'),('employee_id','Employee ID'),('email_localpart','Email local part'),('pinyin_initials_employee_id','Pinyin initials + employee ID'),('pinyin_full_employee_id','Full pinyin + employee ID'),('family_name_pinyin_given_initials','Family pinyin + given initials'),('family_name_pinyin_given_name_pinyin','Full romanized name'),('custom_template','Custom template')] %}<option value="{{ value }}" {% if selected_field == value %}selected{% endif %}>{{ t(label) }} ({{ value }})</option>{% endfor %}
+          </optgroup>
+          {% if fields %}<optgroup label="{{ t('Fields detected in current snapshot') }}">
+            {% for field in fields %}{% if field.field_name not in ['source_user_id','employee_id','email','display_name','position','account_status'] %}<option value="{{ field.field_name }}" {% if selected_field == field.field_name %}selected{% endif %}>{{ t(field.field_label) }} ({{ field.field_name }}) · {{ t("Coverage") }} {{ field.coverage_count }}/{{ snapshot.user_count }}</option>{% endif %}{% endfor %}
+          </optgroup>{% endif %}
+        </select>
+        <span class="form-help">{{ t("Options show the business name and the actual source field name. Prefer the normalized Employee ID option for employee-number mapping.") }}</span>
+      </label>
+      <label>{{ t("Custom Username Template") }}<input type="text" name="username_template" value="{{ scope.username_template if scope else '' }}" placeholder="{employee_id}"></label>
+      {% if provider_id == 'wecom' %}<label>{{ t("WeCom Employee ID Extended Attribute") }}<input type="text" name="employee_id_attribute" value="{{ employee_id_attribute }}" placeholder="{{ t('For example: Employee ID or 工号') }}"><span class="form-help">{{ t("Leave empty to auto-detect common employee ID attribute names.") }}</span></label>{% endif %}
+    </div>
+    <div class="callout callout--warning"><strong>{{ t("Partial sync safety") }}</strong><span>{{ t("Partial synchronization will not process offboarding for unselected or out-of-scope users.") }}</span></div>
+    <div class="form-actions">{{ button(t("Save Scope and Mapping"), type="submit", variant="primary", icon="save") }}</div>
+  </form>
+</section>
+{% endblock %}

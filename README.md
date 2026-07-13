@@ -5,8 +5,8 @@
 The current production-ready target is:
 
 - Source side: provider-based source connector framework
-- Implemented live adapters in this build: WeCom, DingTalk
-- Planned source schemas / contexts already reserved: Feishu, HR master data
+- Implemented live adapters in this build: WeCom, DingTalk, Feishu
+- Planned source schemas / contexts already reserved: HR master data
 - Target side: provider-based target connector framework with Active Directory / LDAPS
 - Control plane: FastAPI Web console + CLI
 - Local state: SQLite
@@ -18,6 +18,9 @@ The codebase has already been refactored away from a simple `WeCom -> AD` utilit
 
 - Multi-organization management
 - Source connector abstraction with provider-aware runtime
+- Organization-scoped source-directory snapshots with server-side pagination, search, filters, field discovery, and refresh retention
+- Full, department, selected-user, and single-user replay scopes with partial-sync offboarding protection
+- Source-field-driven AD account mapping with coverage/collision preview and snapshot-bound Dry Run approval
 - AD connector routing and multi-domain support
 - Department to OU synchronization
 - User provisioning, update, reactivation, and disable workflows
@@ -233,6 +236,7 @@ Current `v1` operational docs:
 - [External Integrations API v1](docs/api/external-integrations-v1.md)
 - [V1 Go-Live Checklist](docs/runbooks/v1-go-live-checklist.md)
 - [Full Feature Execution Roadmap](docs/plan/full-feature-execution-roadmap.md)
+- [Source Directory and AD Account Mapping Guide](docs/guides/source-directory-ad-account-mapping.md)
 
 Architecture and extension docs:
 

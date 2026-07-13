@@ -82,11 +82,21 @@ class SyncOperationCounters(MappingLikeModel):
 @dataclass(slots=True)
 class SyncRunStats(MappingLikeModel):
     execution_mode: str = "apply"
+    requested_by: str = ""
     org_id: str = "default"
     organization_name: str = ""
     organization_config_path: str = ""
     config_source_kind: str = ""
     config_resolved_file_path: str = ""
+    scope_type: str = "full"
+    selected_department_ids: list[str] = field(default_factory=list)
+    selected_source_user_ids: list[str] = field(default_factory=list)
+    source_snapshot_id: int = 0
+    source_snapshot_fingerprint: str = ""
+    selection_fingerprint: str = ""
+    source_field: str = ""
+    username_strategy: str = ""
+    username_template: str = ""
     total_users: int = 0
     processed_users: int = 0
     disabled_users: list[str] = field(default_factory=list)
@@ -126,11 +136,21 @@ class SyncRunStats(MappingLikeModel):
             return cls()
         return cls(
             execution_mode=str(value.get("execution_mode") or "apply"),
+            requested_by=str(value.get("requested_by") or ""),
             org_id=str(value.get("org_id") or "default"),
             organization_name=str(value.get("organization_name") or ""),
             organization_config_path=str(value.get("organization_config_path") or ""),
             config_source_kind=str(value.get("config_source_kind") or ""),
             config_resolved_file_path=str(value.get("config_resolved_file_path") or ""),
+            scope_type=str(value.get("scope_type") or "full"),
+            selected_department_ids=[str(item) for item in value.get("selected_department_ids") or []],
+            selected_source_user_ids=[str(item) for item in value.get("selected_source_user_ids") or []],
+            source_snapshot_id=int(value.get("source_snapshot_id") or 0),
+            source_snapshot_fingerprint=str(value.get("source_snapshot_fingerprint") or ""),
+            selection_fingerprint=str(value.get("selection_fingerprint") or ""),
+            source_field=str(value.get("source_field") or ""),
+            username_strategy=str(value.get("username_strategy") or ""),
+            username_template=str(value.get("username_template") or ""),
             total_users=int(value.get("total_users") or 0),
             processed_users=int(value.get("processed_users") or value.get("users_processed") or 0),
             disabled_users=list(value.get("disabled_users") or []),

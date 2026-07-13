@@ -1015,5 +1015,15 @@ def apply_group_cleanup_actions(
 
 def apply_final_state_updates(ctx: SyncContext) -> None:
     state_manager = ctx.repositories.state_manager
-    state_manager.cleanup_old_users(ctx.working.source_user_ids)
-    state_manager.set_sync_complete(ctx.sync_stats["error_count"] == 0)
+    source_scope = getattr(ctx.environment, "source_scope", None)
+    if not source_scope or source_scope.get("scope_type") == "full":
+        state_manager.cleanup_old_users(ctx.working.source_user_ids)
+        state_manager.set_sync_complete(ctx.sync_stats["error_count"] == 0)
+    else:
+        ctx.hooks.record_event(
+            "INFO",
+            "partial_scope_global_cleanup_suppressed",
+            "global missing-user cleanup and full-directory success marker were not updated",
+            stage_name="finalize",
+            payload={"scope_type": source_scope.get("scope_type")},
+        )

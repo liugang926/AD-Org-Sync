@@ -32,6 +32,7 @@ from sync_app.storage.local_db import (
     SyncOperationLogRepository,
     SyncPlanReviewRepository,
     SyncReplayRequestRepository,
+    SourceDirectoryRepository,
     UserDepartmentOverrideRepository,
     UserIdentityBindingRepository,
     UserLifecycleQueueRepository,
@@ -63,6 +64,7 @@ class RuntimeRepositories:
     state_repo: ObjectStateRepository
     exception_rule_repo: SyncExceptionRuleRepository
     state_manager: SyncStateManager
+    source_directory_repo: SourceDirectoryRepository
 
 
 @dataclass(frozen=True)
@@ -351,6 +353,7 @@ def bootstrap_sync_runtime(
     state_repo = ObjectStateRepository(db_manager, default_org_id=organization.org_id)
     exception_rule_repo = SyncExceptionRuleRepository(db_manager, default_org_id=organization.org_id)
     state_manager = SyncStateManager(db_manager=db_manager, org_id=organization.org_id)
+    source_directory_repo = SourceDirectoryRepository(db_manager, default_org_id=organization.org_id)
 
     active_job = job_repo.get_execution_job_record()
     if active_job and str(active_job.job_id or "").strip() != str(active_job_guard_id or "").strip():
@@ -398,6 +401,7 @@ def bootstrap_sync_runtime(
         state_repo=state_repo,
         exception_rule_repo=exception_rule_repo,
         state_manager=state_manager,
+        source_directory_repo=source_directory_repo,
     )
     config_hash = _build_config_hash(
         config=config,

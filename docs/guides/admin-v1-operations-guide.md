@@ -1,5 +1,7 @@
 # V1 Admin Operations Guide
 
+For WeCom, DingTalk, and Feishu source-user preview, employee-ID/custom-field account mapping, scoped Dry Run/Apply, provider permissions, snapshot migration, and troubleshooting, also follow the [Source Directory and AD Account Mapping Guide](source-directory-ad-account-mapping.md).
+
 ## Scope
 
 This guide is the operator-facing manual for the current `v1` control plane.

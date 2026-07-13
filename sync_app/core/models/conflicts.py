@@ -106,6 +106,7 @@ class UserIdentityBindingRecord(MappingLikeModel):
     id: Optional[int] = None
     org_id: str = "default"
     source_user_id: str = ""
+    source_provider: str = "wecom"
     source_display_name: str = ""
     connector_id: str = "default"
     ad_username: str = ""
@@ -134,6 +135,7 @@ class UserIdentityBindingRecord(MappingLikeModel):
             id=int(row["id"]) if row["id"] is not None else None,
             org_id=str(row["org_id"] or "default") if "org_id" in row.keys() else "default",
             source_user_id=str(source_user_id or ""),
+            source_provider=str(row["source_provider"] or "wecom") if "source_provider" in row.keys() else "wecom",
             source_display_name=str(row["source_display_name"] or "") if "source_display_name" in row.keys() else "",
             connector_id=str(row["connector_id"] or "default"),
             ad_username=str(row["ad_username"] or ""),
