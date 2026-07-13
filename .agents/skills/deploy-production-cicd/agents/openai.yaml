@@ -1,0 +1,4 @@
+interface:
+  display_name: "Production CI/CD"
+  short_description: "Gate, deploy, verify, and roll back production"
+  default_prompt: "使用 $deploy-production-cicd 按门禁发布本次变更，并验证 Docker 正式环境。"
