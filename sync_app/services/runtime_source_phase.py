@@ -42,6 +42,65 @@ def collect_source_user_departments(
     user_departments.clear()
     ctx.working.source_user_ids.clear()
 
+    source_scope = ctx.environment.source_scope
+    if source_scope:
+        selected_user_ids = set(source_scope.get('selected_source_user_ids') or [])
+        selected_department_ids = {str(value) for value in source_scope.get('selected_department_ids') or []}
+        allowed_department_ids: set[str] = set()
+        if source_scope.get('scope_type') == 'department':
+            for department in ctx.repositories.source_directory_repo.list_departments(
+                int(source_scope['snapshot_id']), org_id=ctx.organization.org_id
+            ):
+                path_ids = {str(value) for value in department.get('path_ids') or []}
+                if path_ids & selected_department_ids:
+                    allowed_department_ids.add(str(department['source_department_id']))
+        offset = 0
+        selected_rows: list[dict[str, Any]] = []
+        while True:
+            page = ctx.repositories.source_directory_repo.list_users(
+                int(source_scope['snapshot_id']),
+                org_id=ctx.organization.org_id,
+                provider_id=source_scope['provider_id'],
+                source_user_ids=selected_user_ids if source_scope.get('scope_type') in {'selected_users', 'source_user'} else None,
+                status='active',
+                limit=200,
+                offset=offset,
+            )
+            selected_rows.extend(page['items'])
+            offset += len(page['items'])
+            if offset >= int(page['total']) or not page['items']:
+                break
+        for row in selected_rows:
+            row_department_ids = {str(value) for value in row.get('department_ids') or []}
+            if source_scope.get('scope_type') == 'department' and not (row_department_ids & allowed_department_ids):
+                continue
+            payload = dict(row.get('raw_payload') or {})
+            payload.update(
+                {
+                    'userid': row['source_user_id'], 'name': row['display_name'],
+                    'employee_id': row['employee_id'], 'email': row['email'],
+                    'position': row['position'], 'department': [int(value) for value in row_department_ids],
+                    'department_names': row.get('department_names') or [],
+                    'primary_department_id': row.get('primary_department_id') or None,
+                    'account_status': row.get('account_status') or 'active', 'is_active': bool(row.get('is_active')),
+                    'provider_id': source_scope['provider_id'],
+                }
+            )
+            user = ctx.environment.source_provider.normalize_user(payload)
+            userid = user.userid
+            ctx.working.source_user_ids.add(userid)
+            bundle = UserDepartmentBundle(user=user)
+            for department_id in user.departments:
+                department = ctx.environment.dept_tree.get(int(department_id))
+                if department:
+                    bundle.add_department(department)
+                    department.users.append(user)
+            user_departments[userid] = bundle
+        ctx.sync_stats['total_users'] = len(ctx.working.source_user_ids)
+        if ctx.hooks.stats_callback:
+            ctx.hooks.stats_callback('total_users', len(ctx.working.source_user_ids))
+        return user_departments
+
     for dept_id, dept_info in ctx.environment.dept_tree.items():
         if ctx.hooks.is_cancelled():
             raise InterruptedError("sync cancelled by user")
@@ -111,6 +170,8 @@ def resolve_identity_bindings_phase(
     def get_source_user_detail_cached(
         userid: str, user: Optional[Any] = None
     ) -> dict[str, Any]:
+        if userid not in source_user_detail_cache and ctx.environment.source_scope:
+            source_user_detail_cache[userid] = user.to_state_payload() if user else {}
         if userid not in source_user_detail_cache:
             try:
                 source_user_detail_cache[userid] = (
@@ -131,6 +192,7 @@ def resolve_identity_bindings_phase(
 
     preloaded_binding_records = ctx.repositories.user_binding_repo.list_binding_records(
         org_id=ctx.organization.org_id,
+        source_provider=str(getattr(ctx.config, "source_provider", "wecom") or "wecom"),
     )
     for record in preloaded_binding_records:
         binding_records_by_source_user_id[record.source_user_id] = record
@@ -724,6 +786,7 @@ def resolve_identity_bindings_phase(
             source=resolution["binding_record_source"],
             notes=resolution["explanation"],
             preserve_manual=True,
+            source_provider=str(getattr(ctx.config, "source_provider", "wecom") or "wecom"),
         )
         active_user_bindings[userid] = resolved_username
         binding_resolution_details[userid] = resolution

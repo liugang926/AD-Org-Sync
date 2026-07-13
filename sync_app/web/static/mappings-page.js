@@ -192,13 +192,15 @@
         buildOptionText: (item) => `${item.name || item.id || ""} [${item.id || ""}]`,
         renderOption: (item) => {
           const departments =
-            Array.isArray(item.departments) && item.departments.length
-              ? `${item.departments.length} departments`
-              : "";
-          const email = item.email ? ` · ${item.email}` : "";
+            Array.isArray(item.department_names) && item.department_names.length
+              ? item.department_names.join(" / ")
+              : Array.isArray(item.departments) && item.departments.length
+                ? `${item.departments.length} departments`
+                : "";
+          const contactParts = [item.provider_id, item.employee_id, item.email].filter(Boolean);
           return renderMappingOptionShell({
             title: `${item.name || item.id || ""} [${item.id || ""}]`,
-            detail: `${item.id || ""}${email}`,
+            detail: contactParts.join(" · ") || item.id || "",
             meta: departments,
           });
         },

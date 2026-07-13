@@ -4,6 +4,7 @@
 {% set load_advanced_sync_page_script = (not is_lightweight_shell) and page == 'advanced-sync' %}
 {% set load_config_page_script = (not is_lightweight_shell) and page == 'config' %}
 {% set load_mappings_page_script = (not is_lightweight_shell) and page == 'mappings' %}
+{% set load_source_directory_page_script = (not is_lightweight_shell) and page == 'source-directory' %}
 <!DOCTYPE html>
 <html lang="{{ ui_language if ui_language == 'zh-CN' else 'en' }}">
 <head>
@@ -59,10 +60,11 @@
         </div>
       </details>
 
-      <details class="sidebar-nav-group" {% if page in ['config', 'advanced-sync'] %}open{% endif %}>
+      <details class="sidebar-nav-group" {% if page in ['config', 'source-directory', 'advanced-sync'] %}open{% endif %}>
         <summary><span class="sidebar-nav-group__label">{{ t("Rule Configuration") }}</span><i data-lucide="chevron-down" class="icon icon-xs sidebar-nav-group__chevron"></i></summary>
         <div class="sidebar-nav-group__links">
           {% if can("config.read") %}<a href="/config" class="{% if page == 'config' %}active{% endif %}"><i data-lucide="settings-2" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Config") }}</span></a>{% endif %}
+          {% if can("config.read") %}<a href="/source-directory" class="{% if page == 'source-directory' %}active{% endif %}"><i data-lucide="users-round" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Source Directory") }}</span></a>{% endif %}
           {% if show_advanced_navigation and can("config.read") %}<a href="/advanced-sync" class="{% if page == 'advanced-sync' %}active{% endif %}"><i data-lucide="waypoints" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Advanced Sync") }}</span></a>{% endif %}
         </div>
       </details>
@@ -233,6 +235,9 @@
   {% endif %}
   {% if load_mappings_page_script %}
   <script src="/static/mappings-page.js?v={{ static_asset_version }}" defer></script>
+  {% endif %}
+  {% if load_source_directory_page_script %}
+  <script src="/static/source-directory-page.js?v={{ static_asset_version }}" defer></script>
   {% endif %}
   <script src="/static/app.js?v={{ static_asset_version }}" defer></script>
   {% endif %}

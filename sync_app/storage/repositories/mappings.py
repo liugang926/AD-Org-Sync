@@ -13,9 +13,24 @@ from sync_app.storage.local_db import BaseRepository, utcnow_iso
 
 
 class UserIdentityBindingRepository(BaseRepository):
-    def get_by_source_user_id(self, source_user_id: str, *, org_id: Optional[str] = None):
+    def get_by_source_user_id(
+        self,
+        source_user_id: str,
+        *,
+        org_id: Optional[str] = None,
+        source_provider: str | None = None,
+    ):
         normalized_org_id = self._resolve_org_id(org_id)
+        normalized_provider = str(source_provider or "").strip().lower()
         if normalized_org_id:
+            if normalized_provider:
+                return self._fetchone(
+                    """
+                    SELECT * FROM user_identity_bindings
+                    WHERE org_id = ? AND source_provider = ? AND source_user_id = ? LIMIT 1
+                    """,
+                    (normalized_org_id, normalized_provider, source_user_id),
+                )
             return self._fetchone(
                 """
                 SELECT * FROM user_identity_bindings
@@ -43,8 +58,9 @@ class UserIdentityBindingRepository(BaseRepository):
         source_user_id: str,
         *,
         org_id: Optional[str] = None,
+        source_provider: str | None = None,
     ) -> Optional[UserIdentityBindingRecord]:
-        row = self.get_by_source_user_id(source_user_id, org_id=org_id)
+        row = self.get_by_source_user_id(source_user_id, org_id=org_id, source_provider=source_provider)
         if not row:
             return None
         return UserIdentityBindingRecord.from_row(row)
@@ -121,9 +137,22 @@ class UserIdentityBindingRepository(BaseRepository):
             return None
         return UserIdentityBindingRecord.from_row(row)
 
-    def list_enabled_binding_records(self, *, org_id: Optional[str] = None) -> list[UserIdentityBindingRecord]:
+    def list_enabled_binding_records(
+        self, *, org_id: Optional[str] = None, source_provider: str | None = None
+    ) -> list[UserIdentityBindingRecord]:
         normalized_org_id = self._resolve_org_id(org_id)
+        normalized_provider = str(source_provider or "").strip().lower()
         if normalized_org_id:
+            if normalized_provider:
+                rows = self._fetchall(
+                    """
+                    SELECT * FROM user_identity_bindings
+                    WHERE org_id = ? AND source_provider = ? AND is_enabled = 1
+                    ORDER BY source_user_id ASC
+                    """,
+                    (normalized_org_id, normalized_provider),
+                )
+                return [UserIdentityBindingRecord.from_row(row) for row in rows]
             rows = self._fetchall(
                 """
                 SELECT * FROM user_identity_bindings
@@ -143,9 +172,22 @@ class UserIdentityBindingRepository(BaseRepository):
             )
         return [UserIdentityBindingRecord.from_row(row) for row in rows]
 
-    def list_binding_records(self, *, org_id: Optional[str] = None) -> list[UserIdentityBindingRecord]:
+    def list_binding_records(
+        self, *, org_id: Optional[str] = None, source_provider: str | None = None
+    ) -> list[UserIdentityBindingRecord]:
         normalized_org_id = self._resolve_org_id(org_id)
+        normalized_provider = str(source_provider or "").strip().lower()
         if normalized_org_id:
+            if normalized_provider:
+                rows = self._fetchall(
+                    """
+                    SELECT * FROM user_identity_bindings
+                    WHERE org_id = ? AND source_provider = ?
+                    ORDER BY is_enabled DESC, source_user_id ASC
+                    """,
+                    (normalized_org_id, normalized_provider),
+                )
+                return [UserIdentityBindingRecord.from_row(row) for row in rows]
             rows = self._fetchall(
                 """
                 SELECT * FROM user_identity_bindings
@@ -233,16 +275,20 @@ class UserIdentityBindingRepository(BaseRepository):
         notes: str = "",
         is_enabled: bool = True,
         preserve_manual: bool = True,
+        source_provider: str = "wecom",
     ) -> None:
         source_user_id = str(source_user_id).strip()
         ad_username = str(ad_username).strip()
         connector_id = str(connector_id or "default").strip() or "default"
         normalized_org_id = self._resolve_org_id(org_id) or "default"
+        source_provider = str(source_provider or "wecom").strip().lower() or "wecom"
         if not source_user_id or not ad_username:
             raise ValueError("source_user_id and ad_username are required")
 
         now = utcnow_iso()
-        existing = self.get_binding_record_by_source_user_id(source_user_id, org_id=normalized_org_id)
+        existing = self.get_binding_record_by_source_user_id(
+            source_user_id, org_id=normalized_org_id, source_provider=source_provider
+        )
         if existing and preserve_manual and existing.source == "manual":
             return
 
@@ -250,11 +296,11 @@ class UserIdentityBindingRepository(BaseRepository):
             conn.execute(
                 """
                 INSERT INTO user_identity_bindings (
-                  org_id, source_user_id, source_display_name, connector_id, ad_username,
+                  org_id, source_provider, source_user_id, source_display_name, connector_id, ad_username,
                   target_object_guid, target_object_dn, managed_username_base,
                   source, notes, is_enabled, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(org_id, source_user_id) DO UPDATE SET
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(org_id, source_provider, source_user_id) DO UPDATE SET
                   source_display_name = excluded.source_display_name,
                   connector_id = excluded.connector_id,
                   ad_username = excluded.ad_username,
@@ -268,6 +314,7 @@ class UserIdentityBindingRepository(BaseRepository):
                 """,
                 (
                     normalized_org_id,
+                    source_provider,
                     source_user_id,
                     str(source_display_name or "").strip(),
                     connector_id,
@@ -297,6 +344,7 @@ class UserIdentityBindingRepository(BaseRepository):
         is_enabled: bool = True,
         preserve_manual: bool = True,
         org_id: Optional[str] = None,
+        source_provider: str = "wecom",
     ) -> None:
         self.upsert_binding(
             source_user_id=source_user_id,
@@ -311,6 +359,7 @@ class UserIdentityBindingRepository(BaseRepository):
             is_enabled=is_enabled,
             preserve_manual=preserve_manual,
             org_id=org_id,
+            source_provider=source_provider,
         )
 
     def update_governance_metadata_for_source_user(

@@ -346,6 +346,36 @@ class SyncDirectorySupportMixin:
         normalized_query = str(query or "").strip()
         if not normalized_query:
             return []
+        repositories = get_web_repositories(request)
+        current_org = self.request_support.get_current_org(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path or get_web_runtime_state(request).config_path,
+        )
+        snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=config.source_provider,
+        )
+        if snapshot:
+            page = repositories.source_directory_repo.list_users(
+                int(snapshot["id"]),
+                org_id=current_org.org_id,
+                provider_id=config.source_provider,
+                search=normalized_query,
+                limit=limit,
+            )
+            return [
+                {
+                    "id": row["source_user_id"],
+                    "name": row["display_name"] or row["source_user_id"],
+                    "provider_id": config.source_provider,
+                    "employee_id": row["employee_id"],
+                    "email": row["email"],
+                    "departments": row["department_ids"],
+                    "department_names": row["department_names"],
+                }
+                for row in page["items"]
+            ]
         try:
             _config, source_provider = self._get_source_provider(request)
             try:
@@ -374,6 +404,40 @@ class SyncDirectorySupportMixin:
         normalized_source_user_id = str(source_user_id or "").strip()
         if not normalized_source_user_id:
             return []
+        repositories = get_web_repositories(request)
+        current_org = self.request_support.get_current_org(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path or get_web_runtime_state(request).config_path,
+        )
+        snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=config.source_provider,
+        )
+        if snapshot:
+            users = repositories.source_directory_repo.list_users(
+                int(snapshot["id"]),
+                org_id=current_org.org_id,
+                provider_id=config.source_provider,
+                source_user_ids=[normalized_source_user_id],
+                limit=1,
+            )["items"]
+            department_map = {
+                str(row["source_department_id"]): row
+                for row in repositories.source_directory_repo.list_departments(
+                    int(snapshot["id"]), org_id=current_org.org_id
+                )
+            }
+            if users:
+                return [
+                    {
+                        "id": department_id,
+                        "name": str(department_map.get(department_id, {}).get("name") or department_id),
+                        "path_display": " / ".join(department_map.get(department_id, {}).get("path_names") or []),
+                        "level": max(len(department_map.get(department_id, {}).get("path_names") or []) - 1, 0),
+                    }
+                    for department_id in users[0]["department_ids"]
+                ]
         try:
             _config, source_provider = self._get_source_provider(request)
             try:
@@ -716,6 +780,28 @@ class SyncDirectorySupportMixin:
         normalized_source_user_id = str(source_user_id or "").strip()
         if not normalized_source_user_id:
             return False, "Source user ID is required"
+        repositories = get_web_repositories(request)
+        current_org = self.request_support.get_current_org(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path or get_web_runtime_state(request).config_path,
+        )
+        snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=config.source_provider,
+        )
+        if snapshot:
+            result = repositories.source_directory_repo.list_users(
+                int(snapshot["id"]),
+                org_id=current_org.org_id,
+                provider_id=config.source_provider,
+                source_user_ids=[normalized_source_user_id],
+                limit=1,
+            )
+            return (True, None) if result["total"] == 1 else (
+                False,
+                f"Source user {normalized_source_user_id} does not exist in the active source snapshot",
+            )
         try:
             _config, source_provider = self._get_source_provider(request)
             try:
@@ -729,7 +815,7 @@ class SyncDirectorySupportMixin:
                 return True, None
         except Exception as exc:
             self.logger.warning("failed to validate source user existence: %s", exc)
-            return True, None
+            return False, "Source user validation failed; refresh the source snapshot and try again"
         return False, f"Source user {normalized_source_user_id} does not exist in the configured source directory"
 
     def source_user_has_department(
@@ -764,7 +850,7 @@ class SyncDirectorySupportMixin:
                 return True, None
         except Exception as exc:
             self.logger.warning("failed to validate AD user existence: %s", exc)
-            return True, None
+            return False, "AD user validation failed; verify LDAP connectivity and try again"
         return False, f"AD account {normalized_ad_username} does not exist in the configured directory"
 
     def department_exists_in_source_provider(self, request: Request, department_id: str) -> tuple[bool, Optional[str]]:

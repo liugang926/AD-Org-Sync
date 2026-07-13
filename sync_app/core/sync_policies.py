@@ -61,10 +61,13 @@ COMPOUND_CHINESE_SURNAMES = (
 EMPLOYEE_ID_FIELD_CANDIDATES = (
     "employee_id",
     "employeeid",
+    "employee_no",
+    "employee_number",
     "job_number",
     "jobnumber",
     "staff_no",
     "staffno",
+    "staff_id",
     "workcode",
     "work_code",
 )

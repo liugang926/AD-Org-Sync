@@ -25,6 +25,7 @@ from sync_app.storage.repositories.groups import (
 )
 from sync_app.storage.repositories.lifecycle import OffboardingQueueRepository, UserLifecycleQueueRepository
 from sync_app.storage.repositories.state import ObjectStateRepository
+from sync_app.storage.repositories.source_directory import SourceDirectoryRepository
 from sync_app.storage.repositories.system import (
     ConfigReleaseSnapshotRepository,
     DataQualitySnapshotRepository,
@@ -56,6 +57,7 @@ __all__ = [
     "OffboardingQueueRepository",
     "UserLifecycleQueueRepository",
     "ObjectStateRepository",
+    "SourceDirectoryRepository",
     "SettingsRepository",
     "SyncReplayRequestRepository",
     "WebAuditLogRepository",

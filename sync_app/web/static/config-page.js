@@ -249,6 +249,41 @@
       }
       target.textContent = message || "";
       target.classList.toggle("config-browser__status--error", Boolean(isError));
+      target.classList.remove("config-browser__status--detailed");
+      target.removeAttribute("role");
+    };
+
+    const setCatalogError = (target, error) => {
+      if (!target) {
+        return;
+      }
+      target.replaceChildren();
+      target.classList.add("config-browser__status--error", "config-browser__status--detailed");
+      target.setAttribute("role", "alert");
+
+      const title = document.createElement("strong");
+      title.className = "config-browser__error-title";
+      title.textContent = error.message || labels.sourceHint;
+      target.appendChild(title);
+
+      if (error.detail) {
+        const detail = document.createElement("span");
+        detail.className = "config-browser__error-detail";
+        detail.textContent = error.detail;
+        target.appendChild(detail);
+      }
+      if (error.hint) {
+        const hint = document.createElement("span");
+        hint.className = "config-browser__error-hint";
+        hint.textContent = error.hint;
+        target.appendChild(hint);
+      }
+      if (error.diagnostic) {
+        const diagnostic = document.createElement("span");
+        diagnostic.className = "config-browser__error-diagnostic";
+        diagnostic.textContent = error.diagnostic;
+        target.appendChild(diagnostic);
+      }
     };
 
     const setPickerMeta = (fieldName, text = "") => {
@@ -646,7 +681,17 @@
       });
       const payload = await response.json().catch(() => ({ ok: false, error: "Request failed" }));
       if (!response.ok || payload.ok === false) {
-        throw new Error(payload.error || "Request failed");
+        const error = new Error(payload.error || "Request failed");
+        error.detail = payload.error_detail || "";
+        error.hint = payload.error_hint || "";
+        error.diagnostic = [
+          payload.error_code ? `Code: ${payload.error_code}` : "",
+          payload.http_status ? `HTTP: ${payload.http_status}` : "",
+          payload.request_id ? `Request ID: ${payload.request_id}` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        throw error;
       }
       return payload;
     };
@@ -669,7 +714,7 @@
         setStatus(status, labels.sourceLoaded, false);
       } catch (error) {
         renderSourceUnits(sourcePickerField, { items: [] }, "");
-        setStatus(status, error.message || labels.sourceHint, true);
+        setCatalogError(status, error);
       } finally {
         loadButton.disabled = false;
       }
@@ -693,7 +738,7 @@
         setStatus(status, labels.targetLoaded, false);
       } catch (error) {
         renderTargetOus(panel, { items: [] }, "");
-        setStatus(status, error.message || labels.targetHint, true);
+        setCatalogError(status, error);
       } finally {
         loadButton.disabled = false;
       }

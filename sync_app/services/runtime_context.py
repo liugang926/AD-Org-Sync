@@ -26,6 +26,7 @@ class SyncEnvironmentState:
     policy_skip_markers: set[tuple[Any, ...]] = field(default_factory=set)
     placement_blocked_department_ids: set[int] = field(default_factory=set)
     department_ou_mappings_by_connector: dict[str, list[Any]] = field(default_factory=dict)
+    source_scope: dict[str, Any] | None = None
 
 
 @dataclass

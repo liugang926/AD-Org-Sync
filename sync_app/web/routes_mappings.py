@@ -200,11 +200,6 @@ def register_mapping_routes(
             flash(request, "error", "Source user ID and AD username are required")
             return RedirectResponse(url="/mappings", status_code=303)
 
-        source_exists, source_error = source_user_exists_in_source_provider(request, source_user_id)
-        if not source_exists:
-            flash(request, "error", source_error or "Source user validation failed")
-            return RedirectResponse(url="/mappings", status_code=303)
-
         conflict_message = validate_binding_target(request, source_user_id, ad_username)
         if conflict_message:
             flash(request, "error", conflict_message)
@@ -219,6 +214,9 @@ def register_mapping_routes(
         current_org = get_current_org(request)
         reviewed_at = utcnow_iso()
         repositories = get_web_repositories(request)
+        source_provider = repositories.org_config_repo.get_app_config(
+            current_org.org_id, config_path=current_org.config_path
+        ).source_provider
         repositories.user_binding_repo.upsert_binding_for_source_user(
             source_user_id,
             ad_username,
@@ -226,6 +224,7 @@ def register_mapping_routes(
             source="manual",
             notes=notes.strip(),
             preserve_manual=False,
+            source_provider=source_provider,
         )
         repositories.user_binding_repo.update_governance_metadata_for_source_user(
             source_user_id,
@@ -279,6 +278,9 @@ def register_mapping_routes(
         current_org = get_current_org(request)
         reviewed_at = utcnow_iso()
         repositories = get_web_repositories(request)
+        source_provider = repositories.org_config_repo.get_app_config(
+            current_org.org_id, config_path=current_org.config_path
+        ).source_provider
         for row in rows:
             conflict_message = validate_binding_target(request, row["source_user_id"], row["ad_username"])
             if conflict_message:
@@ -296,6 +298,7 @@ def register_mapping_routes(
                 source="manual",
                 notes=row["notes"],
                 preserve_manual=False,
+                source_provider=source_provider,
             )
             repositories.user_binding_repo.update_governance_metadata_for_source_user(
                 row["source_user_id"],

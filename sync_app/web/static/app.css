@@ -3797,6 +3797,42 @@ pre {
   color: var(--danger);
 }
 
+.config-browser__status--detailed {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--danger-border);
+  border-radius: 10px;
+  background: var(--danger-bg);
+}
+
+.config-browser__error-title,
+.config-browser__error-detail,
+.config-browser__error-hint,
+.config-browser__error-diagnostic {
+  display: block;
+}
+
+.config-browser__error-title {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.config-browser__error-detail {
+  color: var(--text);
+}
+
+.config-browser__error-hint {
+  color: var(--text-muted);
+}
+
+.config-browser__error-diagnostic {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .picker-browser-results {
   display: inline-flex;
   align-items: center;

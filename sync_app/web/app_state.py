@@ -30,6 +30,7 @@ from sync_app.storage.local_db import (
     SyncOperationLogRepository,
     SyncPlanReviewRepository,
     SyncReplayRequestRepository,
+    SourceDirectoryRepository,
     UserDepartmentOverrideRepository,
     UserIdentityBindingRepository,
     UserLifecycleQueueRepository,
@@ -74,6 +75,7 @@ class WebRepositoryState:
     integration_webhook_subscription_repo: IntegrationWebhookSubscriptionRepository
     user_binding_repo: UserIdentityBindingRepository
     department_override_repo: UserDepartmentOverrideRepository
+    source_directory_repo: SourceDirectoryRepository
 
 
 @dataclass(slots=True)
@@ -172,6 +174,7 @@ def initialize_web_app_state(
         integration_webhook_subscription_repo=IntegrationWebhookSubscriptionRepository(db_manager),
         user_binding_repo=UserIdentityBindingRepository(db_manager),
         department_override_repo=UserDepartmentOverrideRepository(db_manager),
+        source_directory_repo=SourceDirectoryRepository(db_manager),
     )
 
     repositories.organization_repo.ensure_default(config_path=config_path)

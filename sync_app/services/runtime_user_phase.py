@@ -520,7 +520,19 @@ def plan_disable_actions(
     record_exception_skip: Callable[..., None],
     record_protected_account_skip: Callable[..., None],
 ) -> None:
-    all_enabled_binding_records = ctx.repositories.user_binding_repo.list_enabled_binding_records()
+    if ctx.environment.source_scope and ctx.environment.source_scope.get("scope_type") != "full":
+        ctx.actions.disable_actions.clear()
+        ctx.hooks.record_event(
+            "INFO",
+            "partial_scope_offboarding_suppressed",
+            "partial synchronization does not process offboarding outside the selected scope",
+            stage_name="plan",
+            payload={"scope_type": ctx.environment.source_scope.get("scope_type")},
+        )
+        return
+    all_enabled_binding_records = ctx.repositories.user_binding_repo.list_enabled_binding_records(
+        source_provider=str(getattr(ctx.config, "source_provider", "wecom") or "wecom")
+    )
     all_enabled_binding_source_user_id_by_identity = {
         (record.connector_id or "default", record.ad_username): record.source_user_id
         for record in all_enabled_binding_records

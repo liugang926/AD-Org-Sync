@@ -59,6 +59,20 @@
     </div>
   </section>
 
+  {% if summary.get("source_snapshot_id") %}
+  {% call ui.panel(t("Source Scope and Mapping")) %}
+    <div class="detail-grid">
+      <div><div class="label">{{ t("Scope") }}</div><div class="value">{{ summary.get("scope_type", "full") }}</div></div>
+      <div><div class="label">{{ t("Selected Users") }}</div><div class="value">{{ summary.get("selected_user_count", 0) }}</div></div>
+      <div><div class="label">{{ t("Selected Departments") }}</div><div class="value">{{ summary.get("selected_department_count", 0) }}</div></div>
+      <div><div class="label">{{ t("Snapshot") }}</div><div class="value cell-mono">#{{ summary.get("source_snapshot_id") }}</div></div>
+      <div><div class="label">{{ t("AD Account Source") }}</div><div class="value cell-mono">{{ summary.get("source_field") or summary.get("username_strategy") or "-" }}</div></div>
+      <div><div class="label">{{ t("Snapshot Fingerprint") }}</div><div class="value cell-mono">{{ summary.get("source_snapshot_fingerprint") }}</div></div>
+    </div>
+    {% if summary.get("scope_type") != "full" %}<div class="panel-note warning">{{ t("Partial synchronization did not process offboarding or global missing-user cleanup outside the selected scope.") }}</div>{% endif %}
+  {% endcall %}
+  {% endif %}
+
   {% if job.summary and (job.summary.get("error") or job.summary.get("error_traceback") or job.summary.get("log_file")) %}
   {% call ui.panel(t("Failure Diagnostics")) %}
     {% if job.summary.get("diagnostic_summary") %}

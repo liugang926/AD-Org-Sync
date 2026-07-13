@@ -2,33 +2,32 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from sync_app.clients.dingtalk import DingTalkAPI
+from sync_app.clients.feishu import FeishuAPI
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
 from sync_app.providers.source.base import SourceDirectoryProvider, instantiate_source_api_client
 
 
-class DingTalkSourceProvider(SourceDirectoryProvider):
-    provider_id = "dingtalk"
-    display_name = "DingTalk"
+class FeishuSourceProvider(SourceDirectoryProvider):
+    provider_id = "feishu"
+    display_name = "Feishu"
 
     def __init__(
         self,
-        app_key: str,
+        app_id: str,
         app_secret: str,
-        agentid: str | None = None,
+        tenant_key: str | None = None,
         *,
         logger=None,
         api_factory: Callable[..., Any] | None = None,
     ) -> None:
-        self.app_key = app_key
+        self.app_id = app_id
         self.app_secret = app_secret
-        self.agentid = agentid
-        self._api_factory = api_factory or DingTalkAPI
+        self.tenant_key = tenant_key
         self._api = instantiate_source_api_client(
-            self._api_factory,
-            app_key,
+            api_factory or FeishuAPI,
+            app_id,
             app_secret,
-            agentid,
+            tenant_key,
             logger=logger,
         )
 
@@ -36,19 +35,11 @@ class DingTalkSourceProvider(SourceDirectoryProvider):
         return [DepartmentNode.from_source_payload(item) for item in self._api.get_department_list()]
 
     def list_department_users(self, department_id: int) -> list[SourceDirectoryUser]:
-        return [
-            self.normalize_user(item)
-            for item in self._api.get_department_users(int(department_id))
-        ]
+        return [self.normalize_user(item) for item in self._api.get_department_users(department_id)]
 
     def get_user_detail(self, user_id: str) -> dict[str, Any]:
         payload = dict(self._api.get_user_detail(user_id) or {})
-        if payload:
-            payload = self.normalize_user(payload).to_state_payload()
-        return payload
-
-    def update_user(self, user_id: str, updates: dict[str, Any]) -> bool:
-        return bool(self._api.update_user(user_id, updates))
+        return self.normalize_user(payload).to_state_payload() if payload else {}
 
     def close(self) -> None:
         close_method = getattr(self._api, "close", None)

@@ -151,6 +151,31 @@ def _prepare_sync_environment(ctx: SyncContext) -> None:
     connector_repo = ctx.repositories.connector_repo
     source_provider_name = get_source_provider_display_name(getattr(config, 'source_provider', 'wecom'))
     ctx.environment.source_provider_name = source_provider_name
+    provider_id = str(getattr(config, 'source_provider', 'wecom') or 'wecom').strip().lower()
+    source_scope = ctx.repositories.source_directory_repo.get_scope_selection(
+        org_id=organization.org_id,
+        provider_id=provider_id,
+        connector_id='default',
+    )
+    if source_scope:
+        snapshot = ctx.repositories.source_directory_repo.get_snapshot(
+            int(source_scope['snapshot_id']),
+            org_id=organization.org_id,
+        )
+        if not snapshot or str(snapshot['status'] or '') != 'succeeded':
+            raise RuntimeError('The selected source directory snapshot is no longer available. Refresh and save the scope again.')
+        if str(snapshot['snapshot_fingerprint'] or '') != str(source_scope['source_snapshot_fingerprint'] or ''):
+            raise RuntimeError('The source directory snapshot fingerprint changed. Run a new Dry Run.')
+        ctx.environment.source_scope = source_scope
+        ctx.sync_stats['scope_type'] = source_scope['scope_type']
+        ctx.sync_stats['selected_department_ids'] = list(source_scope['selected_department_ids'])
+        ctx.sync_stats['selected_source_user_ids'] = list(source_scope['selected_source_user_ids'])
+        ctx.sync_stats['source_snapshot_fingerprint'] = source_scope['source_snapshot_fingerprint']
+        ctx.sync_stats['selection_fingerprint'] = source_scope['selection_fingerprint']
+        ctx.sync_stats['source_snapshot_id'] = int(source_scope['snapshot_id'])
+        ctx.sync_stats['source_field'] = source_scope['source_field']
+        ctx.sync_stats['username_strategy'] = source_scope['username_strategy']
+        ctx.sync_stats['username_template'] = source_scope['username_template']
 
     is_valid, validation_errors = validate_config(config)
     if not is_valid:
@@ -176,6 +201,12 @@ def _prepare_sync_environment(ctx: SyncContext) -> None:
         default_user_root_ou_path=policy_settings.default_directory_root_ou_path,
         load_sync_config_fn=load_sync_config,
     )
+    if source_scope:
+        for connector_spec in connector_specs:
+            if str(connector_spec.get('connector_id') or 'default') != str(source_scope.get('connector_id') or 'default'):
+                continue
+            connector_spec['username_strategy'] = source_scope.get('username_strategy') or 'userid'
+            connector_spec['username_template'] = source_scope.get('username_template') or ''
     for connector_spec in connector_specs:
         connector_config = connector_spec['config']
         ldap_success, ldap_msg = test_ldap_connection(
@@ -210,6 +241,10 @@ def _prepare_sync_environment(ctx: SyncContext) -> None:
         app_config=config,
         logger=logger,
     )
+    if hasattr(ctx.environment.source_provider, 'employee_id_attribute'):
+        ctx.environment.source_provider.employee_id_attribute = ctx.repositories.settings_repo.get_value(
+            'source_employee_id_attribute', '', org_id=organization.org_id
+        ) or ''
     for connector_spec in connector_specs:
         connector_config = connector_spec['config']
         ctx.environment.ad_sync_clients[connector_spec['connector_id']] = build_target_provider(
@@ -246,7 +281,48 @@ def _prepare_sync_environment(ctx: SyncContext) -> None:
         for connector_spec in connector_specs
     }
 
-    departments = ctx.environment.source_provider.list_departments()
+    if source_scope:
+        snapshot_departments = ctx.repositories.source_directory_repo.list_departments(
+            int(source_scope['snapshot_id']),
+            org_id=organization.org_id,
+        )
+        departments = [
+            DepartmentNode(
+                department_id=int(row['source_department_id']),
+                name=str(row['name'] or ''),
+                parent_id=int(row['parent_department_id'] or 0),
+                path=list(row.get('path_names') or []),
+                path_ids=[int(value) for value in row.get('path_ids') or []],
+            )
+            for row in snapshot_departments
+        ]
+        ctx.repositories.source_directory_repo.bind_job_scope(
+            job_id=ctx.job_id,
+            execution_mode=ctx.execution_mode,
+            config_fingerprint=ctx.config_hash,
+            selection=source_scope,
+            requested_by=str(ctx.sync_stats.get('requested_by') or ''),
+        )
+        ctx.plan.plan_fingerprint_items.append(
+            {
+                'object_type': 'source_scope',
+                'operation_type': 'select_source_snapshot',
+                'source_id': str(source_scope['snapshot_id']),
+                'risk_level': 'normal',
+                'desired_state': {
+                    'scope_type': source_scope['scope_type'],
+                    'selected_department_ids': source_scope['selected_department_ids'],
+                    'selected_source_user_ids': source_scope['selected_source_user_ids'],
+                    'source_snapshot_fingerprint': source_scope['source_snapshot_fingerprint'],
+                    'selection_fingerprint': source_scope['selection_fingerprint'],
+                    'username_strategy': source_scope['username_strategy'],
+                    'username_template': source_scope['username_template'],
+                    'source_field': source_scope['source_field'],
+                },
+            }
+        )
+    else:
+        departments = ctx.environment.source_provider.list_departments()
     dept_tree: Dict[int, DepartmentNode] = {
         dept.department_id: dept for dept in departments if dept.department_id
     }
@@ -456,6 +532,7 @@ def run_sync_job(
         return bool(cancel_flag and getattr(cancel_flag, 'is_cancelled', False))
 
     sync_stats = SyncRunStats(execution_mode=execution_mode)
+    sync_stats.requested_by = str(requested_by or '')
     sync_stats['field_ownership_policy'] = dict(FIELD_OWNERSHIP_POLICY)
 
     bootstrap = bootstrap_sync_runtime(

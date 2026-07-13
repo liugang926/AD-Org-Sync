@@ -64,6 +64,7 @@ from sync_app.web.routes_mappings import register_mapping_routes
 from sync_app.web.routes_metadata import register_metadata_routes
 from sync_app.web.routes_organizations import register_organization_routes
 from sync_app.web.routes_public import register_public_routes
+from sync_app.web.routes_source_directory import register_source_directory_routes
 from sync_app.web.runtime import (
     resolve_web_runtime_settings as resolve_web_runtime_settings,
     web_runtime_requires_restart as web_runtime_requires_restart,
@@ -509,6 +510,15 @@ def create_app(
         config_preview_session_key=CONFIG_PREVIEW_SESSION_KEY,
         flash=request_support.flash,
         flash_t=request_support.flash_t,
+        get_current_org=request_support.get_current_org,
+        reject_invalid_csrf=request_support.reject_invalid_csrf,
+        render=request_support.render,
+        require_capability=request_support.require_capability,
+    )
+
+    register_source_directory_routes(
+        app,
+        flash=request_support.flash,
         get_current_org=request_support.get_current_org,
         reject_invalid_csrf=request_support.reject_invalid_csrf,
         render=request_support.render,

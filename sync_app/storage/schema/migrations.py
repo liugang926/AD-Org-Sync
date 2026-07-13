@@ -1336,4 +1336,131 @@ MIGRATIONS = [
         ALTER TABLE schema_migrations ADD COLUMN checksum TEXT NOT NULL DEFAULT '';
         """,
     ),
+    (
+        31,
+        "add source directory snapshots, field catalogs, sync scopes, and provider-aware identities",
+        """
+        ALTER TABLE user_identity_bindings ADD COLUMN source_provider TEXT NOT NULL DEFAULT 'wecom';
+        DROP INDEX IF EXISTS idx_user_identity_bindings_userid;
+        CREATE UNIQUE INDEX idx_user_identity_bindings_source_identity
+        ON user_identity_bindings (org_id, source_provider, source_user_id);
+
+        CREATE TABLE source_directory_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          connector_id TEXT NOT NULL DEFAULT 'default',
+          status TEXT NOT NULL DEFAULT 'refreshing',
+          started_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT '',
+          last_success_at TEXT NOT NULL DEFAULT '',
+          expires_at TEXT NOT NULL DEFAULT '',
+          error_summary TEXT NOT NULL DEFAULT '',
+          warning_summary TEXT NOT NULL DEFAULT '',
+          department_count INTEGER NOT NULL DEFAULT 0,
+          user_count INTEGER NOT NULL DEFAULT 0,
+          field_count INTEGER NOT NULL DEFAULT 0,
+          missing_employee_id_count INTEGER NOT NULL DEFAULT 0,
+          duplicate_employee_id_count INTEGER NOT NULL DEFAULT 0,
+          snapshot_fingerprint TEXT NOT NULL DEFAULT '',
+          created_by TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT
+        );
+        CREATE INDEX idx_source_directory_snapshots_latest
+        ON source_directory_snapshots (org_id, provider_id, connector_id, status, completed_at DESC, id DESC);
+
+        CREATE TABLE source_department_snapshots (
+          snapshot_id INTEGER NOT NULL,
+          org_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          source_department_id TEXT NOT NULL,
+          name TEXT NOT NULL DEFAULT '',
+          parent_department_id TEXT NOT NULL DEFAULT '',
+          path_names_json TEXT NOT NULL DEFAULT '[]',
+          path_ids_json TEXT NOT NULL DEFAULT '[]',
+          PRIMARY KEY (snapshot_id, source_department_id),
+          FOREIGN KEY(snapshot_id) REFERENCES source_directory_snapshots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX idx_source_department_snapshots_lookup
+        ON source_department_snapshots (org_id, provider_id, snapshot_id, parent_department_id);
+
+        CREATE TABLE source_user_snapshots (
+          snapshot_id INTEGER NOT NULL,
+          org_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          source_user_id TEXT NOT NULL,
+          display_name TEXT NOT NULL DEFAULT '',
+          employee_id TEXT NOT NULL DEFAULT '',
+          email TEXT NOT NULL DEFAULT '',
+          mobile_masked TEXT NOT NULL DEFAULT '',
+          position TEXT NOT NULL DEFAULT '',
+          department_ids_json TEXT NOT NULL DEFAULT '[]',
+          department_names_json TEXT NOT NULL DEFAULT '[]',
+          primary_department_id TEXT NOT NULL DEFAULT '',
+          account_status TEXT NOT NULL DEFAULT 'active',
+          is_active INTEGER NOT NULL DEFAULT 1,
+          raw_payload_json TEXT NOT NULL DEFAULT '{}',
+          search_text TEXT NOT NULL DEFAULT '',
+          PRIMARY KEY (snapshot_id, source_user_id),
+          FOREIGN KEY(snapshot_id) REFERENCES source_directory_snapshots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX idx_source_user_snapshots_lookup
+        ON source_user_snapshots (org_id, provider_id, snapshot_id, is_active, employee_id, source_user_id);
+        CREATE INDEX idx_source_user_snapshots_department
+        ON source_user_snapshots (snapshot_id, primary_department_id, is_active);
+
+        CREATE TABLE source_field_catalogs (
+          snapshot_id INTEGER NOT NULL,
+          org_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          field_name TEXT NOT NULL,
+          field_label TEXT NOT NULL DEFAULT '',
+          data_type TEXT NOT NULL DEFAULT 'string',
+          coverage_count INTEGER NOT NULL DEFAULT 0,
+          sample_values_json TEXT NOT NULL DEFAULT '[]',
+          PRIMARY KEY (snapshot_id, field_name),
+          FOREIGN KEY(snapshot_id) REFERENCES source_directory_snapshots(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE sync_scope_selections (
+          org_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          connector_id TEXT NOT NULL DEFAULT 'default',
+          scope_type TEXT NOT NULL DEFAULT 'full',
+          selected_department_ids_json TEXT NOT NULL DEFAULT '[]',
+          selected_source_user_ids_json TEXT NOT NULL DEFAULT '[]',
+          username_strategy TEXT NOT NULL DEFAULT 'userid',
+          username_template TEXT NOT NULL DEFAULT '',
+          source_field TEXT NOT NULL DEFAULT 'source_user_id',
+          snapshot_id INTEGER,
+          source_snapshot_fingerprint TEXT NOT NULL DEFAULT '',
+          selection_fingerprint TEXT NOT NULL DEFAULT '',
+          requested_by TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (org_id, provider_id, connector_id),
+          FOREIGN KEY(snapshot_id) REFERENCES source_directory_snapshots(id)
+        );
+
+        CREATE TABLE sync_job_source_scopes (
+          job_id TEXT PRIMARY KEY,
+          org_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          connector_id TEXT NOT NULL DEFAULT 'default',
+          execution_mode TEXT NOT NULL,
+          scope_type TEXT NOT NULL,
+          selected_department_ids_json TEXT NOT NULL DEFAULT '[]',
+          selected_source_user_ids_json TEXT NOT NULL DEFAULT '[]',
+          requested_by TEXT NOT NULL DEFAULT '',
+          config_fingerprint TEXT NOT NULL DEFAULT '',
+          source_snapshot_fingerprint TEXT NOT NULL DEFAULT '',
+          selection_fingerprint TEXT NOT NULL DEFAULT '',
+          snapshot_id INTEGER,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(job_id) REFERENCES sync_jobs(job_id) ON DELETE CASCADE,
+          FOREIGN KEY(snapshot_id) REFERENCES source_directory_snapshots(id)
+        );
+        CREATE INDEX idx_sync_job_source_scopes_match
+        ON sync_job_source_scopes (org_id, provider_id, connector_id, execution_mode, selection_fingerprint, created_at DESC);
+        """,
+    ),
 ]

@@ -126,8 +126,9 @@ SOURCE_PROVIDER_SCHEMAS = {
     "feishu": SourceProviderSchema(
         provider_id="feishu",
         display_name="Feishu",
-        description="Reserve the connector contract for a Feishu source adapter.",
-        implementation_status="Feishu provider schema is available, but the runtime adapter is not implemented in this build.",
+        description="Use a Feishu custom application to read departments and users.",
+        implemented=True,
+        implementation_status="Implemented with Feishu contact-v3 APIs.",
         connection_fields=(
             SourceProviderFieldDefinition(
                 "corpid",
@@ -282,6 +283,105 @@ class SourceDirectoryProvider(ABC):
                 matches.append(user)
         matches.sort(key=lambda item: (str(item.name or "").lower(), str(item.source_user_id or "").lower()))
         return matches[: max(int(limit or 20), 1)]
+
+    @property
+    def capabilities(self) -> dict[str, bool]:
+        return {
+            "departments": True,
+            "users": True,
+            "pagination": True,
+            "field_catalog": True,
+            "connection_test": True,
+            "user_update": False,
+        }
+
+    def normalize_user(self, payload: dict[str, Any]) -> SourceDirectoryUser:
+        normalized = SourceDirectoryUser.from_source_payload(payload)
+        normalized.provider_id = self.provider_id
+        normalized.raw_payload.setdefault("provider_id", self.provider_id)
+        return normalized
+
+    def list_all_users(self) -> list[SourceDirectoryUser]:
+        users_by_id: dict[str, SourceDirectoryUser] = {}
+        for department in self.list_departments():
+            try:
+                users = self.list_department_users(int(department.department_id))
+            except Exception:
+                METRICS.increment(
+                    "ad_org_sync_source_provider_department_failures_total",
+                    labels={"provider": self.provider_id},
+                )
+                continue
+            for user in users:
+                if not user.source_user_id:
+                    continue
+                existing = users_by_id.get(user.source_user_id)
+                if existing is None:
+                    users_by_id[user.source_user_id] = user
+                else:
+                    existing.merge_payload(user.to_state_payload())
+        return list(users_by_id.values())
+
+    def list_users_page(
+        self,
+        *,
+        page_token: str = "",
+        page_size: int = 100,
+    ) -> dict[str, Any]:
+        users = self.list_all_users()
+        offset = max(int(page_token or 0), 0) if str(page_token or "").isdigit() else 0
+        size = min(max(int(page_size or 100), 1), 500)
+        page = users[offset : offset + size]
+        next_offset = offset + len(page)
+        return {
+            "items": page,
+            "next_page_token": str(next_offset) if next_offset < len(users) else "",
+            "has_more": next_offset < len(users),
+            "total": len(users),
+        }
+
+    def get_field_catalog(self, *, sample_limit: int = 50) -> list[dict[str, Any]]:
+        field_values: dict[str, list[str]] = {}
+        coverage: dict[str, int] = {}
+        for user in self.list_all_users()[: max(int(sample_limit or 50), 1)]:
+            for key, value in user.to_state_payload().items():
+                if isinstance(value, (dict, list, tuple, set)) or value in (None, ""):
+                    continue
+                name = str(key or "").strip()
+                if not name:
+                    continue
+                coverage[name] = coverage.get(name, 0) + 1
+                rendered = str(value).strip()
+                if rendered and rendered not in field_values.setdefault(name, []) and len(field_values[name]) < 3:
+                    field_values[name].append(rendered)
+        return [
+            {"name": name, "label": name.replace("_", " ").title(), "data_type": "string", "coverage": coverage[name], "samples": field_values.get(name, [])}
+            for name in sorted(coverage)
+        ]
+
+    def test_connection(self) -> dict[str, Any]:
+        departments = self.list_departments()
+        users: list[SourceDirectoryUser] = []
+        for department in departments[:1]:
+            users = self.list_department_users(int(department.department_id))
+            break
+        if not departments and not users:
+            raise RuntimeError("Connection succeeded but no visible departments or users were returned")
+        fields = sorted(
+            {
+                str(name)
+                for user in users[:10]
+                for name, value in user.to_state_payload().items()
+                if value not in (None, "", [], {})
+            }
+        )
+        return {
+            "ok": True,
+            "provider_id": self.provider_id,
+            "department_count": len(departments),
+            "sample_user_count": len(users),
+            "fields": fields,
+        }
 
     def update_user(self, user_id: str, updates: dict[str, Any]) -> bool:
         raise NotImplementedError(f"{self.provider_id} does not support user updates")

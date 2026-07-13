@@ -206,6 +206,15 @@ def finalize_successful_sync(ctx: SyncContext) -> dict[str, Any]:
         'skip_detail_report': str(ctx.sync_stats.get('skip_detail_report') or ''),
         'operation_log_report': str(ctx.sync_stats.get('operation_log_report') or ''),
         'validation_report': str(ctx.sync_stats.get('validation_report') or ''),
+        'scope_type': str(ctx.sync_stats.get('scope_type') or 'full'),
+        'selected_user_count': len(ctx.sync_stats.get('selected_source_user_ids') or []),
+        'selected_department_count': len(ctx.sync_stats.get('selected_department_ids') or []),
+        'source_snapshot_id': int(ctx.sync_stats.get('source_snapshot_id') or 0),
+        'source_snapshot_fingerprint': str(ctx.sync_stats.get('source_snapshot_fingerprint') or ''),
+        'selection_fingerprint': str(ctx.sync_stats.get('selection_fingerprint') or ''),
+        'source_field': str(ctx.sync_stats.get('source_field') or ''),
+        'username_strategy': str(ctx.sync_stats.get('username_strategy') or ''),
+        'username_template': str(ctx.sync_stats.get('username_template') or ''),
     }
     try:
         summary['history_cleanup'] = ctx.hooks.run_history_cleanup()
