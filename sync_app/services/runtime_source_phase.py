@@ -4,6 +4,10 @@ from typing import Any, Callable, Optional
 
 from sync_app.core.models import UserDepartmentBundle
 from sync_app.services.runtime_context import SyncContext
+from sync_app.services.identity_relationships import (
+    build_identity_preview_fingerprint,
+    build_runtime_identity_evidence,
+)
 from sync_app.services.runtime_identity import build_identity_candidates
 
 
@@ -140,6 +144,9 @@ def resolve_identity_bindings_phase(
     active_user_bindings = ctx.identity.active_user_bindings
     binding_resolution_details = ctx.identity.binding_resolution_details
     binding_records_by_source_user_id = ctx.identity.binding_records_by_source_user_id
+    binding_record_candidates_by_source_user_id = (
+        ctx.identity.binding_record_candidates_by_source_user_id
+    )
     user_connector_id_by_userid = ctx.identity.user_connector_id_by_userid
     disabled_bound_userids = ctx.identity.disabled_bound_userids
     exception_skipped_userids = ctx.identity.exception_skipped_userids
@@ -156,6 +163,7 @@ def resolve_identity_bindings_phase(
 
     active_user_bindings.clear()
     binding_records_by_source_user_id.clear()
+    binding_record_candidates_by_source_user_id.clear()
     binding_resolution_details.clear()
     user_connector_id_by_userid.clear()
     disabled_bound_userids.clear()
@@ -190,12 +198,20 @@ def resolve_identity_bindings_phase(
             user.merge_payload(detail_payload)
         return detail_payload
 
-    preloaded_binding_records = ctx.repositories.user_binding_repo.list_binding_records(
+    source_provider_id = str(
+        getattr(ctx.config, "source_provider", "wecom") or "wecom"
+    ).strip().lower()
+    preloaded_binding_records = (
+        ctx.repositories.user_binding_repo.list_binding_records_for_source_identities(
+        user_departments.keys(),
         org_id=ctx.organization.org_id,
-        source_provider=str(getattr(ctx.config, "source_provider", "wecom") or "wecom"),
+        source_provider=source_provider_id,
+        )
     )
     for record in preloaded_binding_records:
-        binding_records_by_source_user_id[record.source_user_id] = record
+        binding_record_candidates_by_source_user_id.setdefault(
+            record.source_user_id, []
+        ).append(record)
 
     identity_candidates_by_userid: dict[str, list[dict[str, str]]] = {}
     identity_candidate_usernames_by_connector: dict[str, set[str]] = {}
@@ -265,6 +281,11 @@ def resolve_identity_bindings_phase(
                     + 1
                 )
 
+    for record in preloaded_binding_records:
+        identity_candidate_usernames_by_connector.setdefault(
+            str(record.connector_id or "default"), set()
+        ).add(str(record.ad_username or ""))
+
     for connector_id, usernames in identity_candidate_usernames_by_connector.items():
         existing_users_map_by_connector[connector_id] = get_ad_sync(
             connector_id
@@ -287,7 +308,141 @@ def resolve_identity_bindings_phase(
             continue
 
         connector_id = user_connector_id_by_userid.get(userid, "default")
-        binding_record = binding_records_by_source_user_id.get(userid)
+        binding_candidates = binding_record_candidates_by_source_user_id.get(userid, [])
+        exact_binding_candidates = [
+            item for item in binding_candidates if item.connector_id == connector_id
+        ]
+        conflict_identity_evidence: dict[str, Any] = {}
+        if len(exact_binding_candidates) > 1 or (
+            not exact_binding_candidates and binding_candidates
+        ):
+            conflict_identity_evidence = build_runtime_identity_evidence(
+                user=user_departments[userid].user,
+                org_id=ctx.organization.org_id,
+                source_provider=source_provider_id,
+                connector_id=connector_id,
+                connector_spec=get_connector_spec(connector_id),
+                source_scope=ctx.environment.source_scope,
+                config_fingerprint=ctx.config_hash,
+                binding_records=binding_candidates,
+                before_ad_state={
+                    "status": "not_checked",
+                    "exists": None,
+                    "enabled": None,
+                    "locked": None,
+                    "protected": False,
+                },
+            )
+        if len(exact_binding_candidates) > 1:
+            conflict_message = (
+                f"Source user {userid} has multiple persisted identity bindings in the current connector boundary"
+            )
+            ctx.hooks.record_conflict(
+                conflict_type="multiple_identity_bindings",
+                source_id=userid,
+                target_key="identity_binding",
+                message=conflict_message,
+                resolution_hint="Keep exactly one provider and connector binding for this source identity",
+                details={
+                    "source_provider": source_provider_id,
+                    "connector_id": connector_id,
+                    "binding_connectors": sorted(
+                        {str(item.connector_id or "default") for item in exact_binding_candidates}
+                    ),
+                },
+            )
+            ctx.hooks.record_operation(
+                stage_name="plan",
+                object_type="user_binding",
+                operation_type="resolve_identity_binding",
+                status="conflict",
+                message=conflict_message,
+                source_id=userid,
+                rule_source="persisted_binding_lookup",
+                reason_code="multiple_identity_bindings",
+                details={
+                    "source_provider": source_provider_id,
+                    "connector_id": connector_id,
+                    "binding_count": len(exact_binding_candidates),
+                    "binding_connectors": sorted(
+                        {str(item.connector_id or "default") for item in exact_binding_candidates}
+                    ),
+                    **conflict_identity_evidence,
+                },
+            )
+            continue
+        if not exact_binding_candidates and binding_candidates:
+            conflict_message = (
+                f"Source user {userid} has a persisted identity binding under a different connector"
+            )
+            binding_connectors = sorted(
+                {str(item.connector_id or "default") for item in binding_candidates}
+            )
+            ctx.hooks.record_conflict(
+                conflict_type="connector_migration_required",
+                source_id=userid,
+                target_key="identity_binding",
+                message=conflict_message,
+                resolution_hint="Review and migrate the binding to the resolved connector before synchronization",
+                details={
+                    "source_provider": source_provider_id,
+                    "resolved_connector_id": connector_id,
+                    "binding_connectors": binding_connectors,
+                },
+            )
+            ctx.hooks.record_operation(
+                stage_name="plan",
+                object_type="user_binding",
+                operation_type="resolve_identity_binding",
+                status="conflict",
+                message=conflict_message,
+                source_id=userid,
+                rule_source="persisted_binding_lookup",
+                reason_code="connector_migration_required",
+                details={
+                    "source_provider": source_provider_id,
+                    "connector_id": connector_id,
+                    "binding_connectors": binding_connectors,
+                    **conflict_identity_evidence,
+                },
+            )
+            continue
+        binding_record = (
+            exact_binding_candidates[0]
+            if len(exact_binding_candidates) == 1
+            else None
+        )
+        if binding_record:
+            binding_records_by_source_user_id[userid] = binding_record
+        connector_existing_users = existing_users_map_by_connector.get(connector_id, {})
+        before_username = str(binding_record.ad_username if binding_record else "")
+        before_ad_state = {
+            "status": (
+                "exists"
+                if before_username and before_username in connector_existing_users
+                else ("missing" if before_username else "not_checked")
+            ),
+            "exists": (
+                before_username in connector_existing_users if before_username else None
+            ),
+            "enabled": None,
+            "locked": None,
+            "protected": bool(
+                before_username
+                and is_protected_ad_account(before_username, connector_id)
+            ),
+        }
+        identity_evidence = build_runtime_identity_evidence(
+            user=user_departments[userid].user,
+            org_id=ctx.organization.org_id,
+            source_provider=source_provider_id,
+            connector_id=connector_id,
+            connector_spec=get_connector_spec(connector_id),
+            source_scope=ctx.environment.source_scope,
+            config_fingerprint=ctx.config_hash,
+            binding_records=binding_candidates,
+            before_ad_state=before_ad_state,
+        )
         if binding_record:
             binding_connector_id = binding_record.connector_id or connector_id
             if is_protected_ad_account(
@@ -327,6 +482,7 @@ def resolve_identity_bindings_phase(
                     details={
                         "userid": userid,
                         "ad_username": binding_record.ad_username,
+                        **identity_evidence,
                     },
                 )
                 continue
@@ -385,6 +541,15 @@ def resolve_identity_bindings_phase(
                 "explanation": "Using the persisted identity binding",
                 "binding_record_source": binding_record.source,
                 "is_manual": binding_record.source == "manual",
+                "binding_was_persisted": True,
+                "before_state": {
+                    "bound_ad_username": binding_record.ad_username,
+                    "binding_source": binding_record.source,
+                    "binding_enabled": binding_record.is_enabled,
+                    "connector_id": binding_connector_id,
+                    "ad_account_state": before_ad_state,
+                },
+                **identity_evidence,
             }
             current_source_ad_usernames_by_connector.setdefault(
                 binding_connector_id,
@@ -394,10 +559,6 @@ def resolve_identity_bindings_phase(
                 binding_connector_id,
                 set(),
             ).add(str(binding_record.ad_username).strip().lower())
-            ctx.repositories.user_binding_repo.record_rule_hit_for_source_user(
-                userid,
-                org_id=ctx.organization.org_id,
-            )
             ctx.hooks.record_operation(
                 stage_name="plan",
                 object_type="user_binding",
@@ -593,6 +754,8 @@ def resolve_identity_bindings_phase(
                 "binding_record_source": selected_candidate["rule"],
                 "is_manual": False,
                 "claim_policy": claim_mode,
+                "binding_was_persisted": False,
+                **identity_evidence,
             }
         else:
             primary_managed_username = next(
@@ -685,6 +848,8 @@ def resolve_identity_bindings_phase(
                 "binding_record_source": "managed_generated",
                 "is_manual": False,
                 "managed_username_base": primary_managed_username,
+                "binding_was_persisted": False,
+                **identity_evidence,
             }
 
         if is_protected_ad_account(resolution["ad_username"], connector_id):
@@ -701,6 +866,44 @@ def resolve_identity_bindings_phase(
                 },
             )
             continue
+        selected_exists = (
+            resolution["ad_username"]
+            in existing_users_map_by_connector.get(connector_id, {})
+        )
+        resolution["before_state"] = {
+            "bound_ad_username": "",
+            "binding_source": "",
+            "binding_enabled": False,
+            "connector_id": connector_id,
+            "ad_account_state": {
+                "status": "exists" if selected_exists else "missing",
+                "exists": selected_exists,
+                "enabled": None,
+                "locked": None,
+                "protected": False,
+            },
+        }
+        resolution["preview_fingerprint"] = build_identity_preview_fingerprint(
+            org_id=ctx.organization.org_id,
+            source_provider=source_provider_id,
+            connector_id=connector_id,
+            source_user_id=userid,
+            source_snapshot_fingerprint=str(
+                (ctx.environment.source_scope or {}).get(
+                    "source_snapshot_fingerprint"
+                )
+                or ""
+            ),
+            selection_fingerprint=str(
+                (ctx.environment.source_scope or {}).get("selection_fingerprint")
+                or ""
+            ),
+            config_fingerprint=ctx.config_hash,
+            mapping_input=dict(resolution.get("mapping_input") or {}),
+            candidate_mapping=dict(resolution.get("candidate_mapping") or {}),
+            binding_signature=[],
+            ad_state=resolution["before_state"]["ad_account_state"],
+        )
         pending_auto_bindings[userid] = resolution
         reserved_managed_usernames_by_connector.setdefault(connector_id, set()).add(
             str(resolution["ad_username"]).strip().lower()
@@ -777,17 +980,6 @@ def resolve_identity_bindings_phase(
         resolved_connector_id = resolution.get(
             "connector_id"
         ) or user_connector_id_by_userid.get(userid, "default")
-        ctx.repositories.user_binding_repo.upsert_binding_for_source_user(
-            userid,
-            resolved_username,
-            connector_id=resolved_connector_id,
-            source_display_name=user_departments[userid].user.name,
-            managed_username_base=str(resolution.get("managed_username_base") or ""),
-            source=resolution["binding_record_source"],
-            notes=resolution["explanation"],
-            preserve_manual=True,
-            source_provider=str(getattr(ctx.config, "source_provider", "wecom") or "wecom"),
-        )
         active_user_bindings[userid] = resolved_username
         binding_resolution_details[userid] = resolution
         current_source_ad_usernames_by_connector.setdefault(
@@ -805,14 +997,26 @@ def resolve_identity_bindings_phase(
             reason_code="auto_resolution",
             details=resolution,
         )
+        ctx.hooks.add_planned_operation(
+            object_type="user_binding",
+            operation_type="propose_identity_binding",
+            source_id=userid,
+            risk_level="normal",
+            desired_state={
+                "source_provider": source_provider_id,
+                "connector_id": resolved_connector_id,
+                "ad_username": resolved_username,
+                "binding_source": resolution["binding_record_source"],
+                "preview_fingerprint": resolution.get("preview_fingerprint") or "",
+                "planned_account_state": (
+                    "existing"
+                    if resolved_username
+                    in existing_users_map_by_connector.get(resolved_connector_id, {})
+                    else "create"
+                ),
+            },
+        )
 
-    for (
-        connector_id,
-        connector_usernames,
-    ) in current_source_ad_usernames_by_connector.items():
-        existing_users_map_by_connector[connector_id] = get_ad_sync(
-            connector_id
-        ).get_users_batch(sorted(connector_usernames))
     for connector_id in ctx.environment.connector_specs_by_id.keys():
         connector_enabled_users = get_ad_sync(connector_id).get_all_enabled_users()
         enabled_ad_users_by_connector[connector_id] = connector_enabled_users

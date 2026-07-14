@@ -267,6 +267,52 @@
   {% endcall %}
   {% endif %}
 
+  {% call ui.panel(t("Identity Resolution Results")) %}
+    <div class="panel-note info">
+      {{ t("Dry Run rows are planned identity evidence only. Applied values appear only for a completed Apply job with a successful user operation.") }}
+    </div>
+    {% call ui.table_shell() %}
+      <table class="table-sm identity-resolution-results">
+        <thead>
+          <tr>
+            <th>{{ t("Source user") }}</th><th>{{ t("Provider / Connector") }}</th><th>{{ t("Referenced field") }}</th><th>{{ t("Field value") }}</th><th>{{ t("Candidate") }}</th><th>{{ t("Before binding") }}</th><th>{{ t("Before AD state") }}</th><th>{{ t("Expected AD username") }}</th><th>{{ t("Resolution source") }}</th><th>{{ t("Planned operation") }}</th><th>{{ t("Resolution result") }}</th><th>{{ t("Actual execution") }}</th><th>{{ t("Post-Apply AD state") }}</th><th>{{ t("Risk or conflict") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in identity_resolutions %}
+          <tr>
+            <td><strong>{{ item.source_display_name or '-' }}</strong><div class="cell-mono muted">{{ item.source_user_id }}</div></td>
+            <td>{{ item.source_provider or '-' }}<div class="cell-mono muted">{{ item.connector_id }}</div></td>
+            <td>{{ item.mapping_input.field_label or item.mapping_input.field_name or '-' }}<div class="cell-mono muted">{{ item.mapping_input.field_name or '-' }}</div><div class="muted">{{ item.mapping_input.method or '-' }}</div></td>
+            <td class="cell-mono">{{ item.mapping_input.value or '-' }}</td>
+            <td class="cell-mono">{{ item.candidate_mapping.ad_username or '-' }}</td>
+            <td class="cell-mono">{{ item.before_state.bound_ad_username or '-' }}<div class="muted">{{ item.before_state.binding_source or t('No binding') }}</div></td>
+            <td>{{ t(item.before_state.ad_account_state.status or 'not_checked') if item.before_state.ad_account_state else t('not_checked') }}</td>
+            <td class="cell-mono">{{ item.expected_ad_username or '-' }}</td>
+            <td>{{ t(item.resolution_source) if item.resolution_source else '-' }}</td>
+            <td>{{ t(item.planned_operation) if item.planned_operation else '-' }}</td>
+            <td>{{ ui.badge(t(item.result_status or 'unknown'), 'error' if item.result_status in ['conflict','error','skipped'] else 'info') }}</td>
+            <td>{% if item.apply_result == 'succeeded' %}<span class="cell-mono">{{ item.actual_ad_username }}</span><div>{{ t(item.actual_operation) }}</div><div class="muted">{{ item.completed_at }}</div>{% else %}{{ t(item.apply_result) }}{% endif %}</td>
+            <td>{{ t(item.post_apply_ad_account_state.status or 'not_checked') if item.post_apply_ad_account_state else t('not_checked') }}</td>
+            <td>{% if item.risks %}{% for risk in item.risks %}{{ ui.badge(t(risk), 'error') }}{% endfor %}{% else %}-{% endif %}</td>
+          </tr>
+          {% else %}
+          <tr><td class="table-empty" colspan="14">{{ t("No structured identity resolution evidence was recorded for this job.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    {% set i_data = identity_resolutions_page_data %}
+    {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=i_data.total_items, page=i_data.page, pages=i_data.total_pages)) %}
+      {% if i_data.has_previous %}
+      {{ ui.button(t("Previous"), href="/jobs/" ~ job.job_id ~ "?identity_page=" ~ i_data.previous_page, variant="secondary", size="small") }}
+      {% endif %}
+      {% if i_data.has_next %}
+      {{ ui.button(t("Next"), href="/jobs/" ~ job.job_id ~ "?identity_page=" ~ i_data.next_page, variant="secondary", size="small") }}
+      {% endif %}
+    {% endcall %}
+  {% endcall %}
+
   {% call ui.panel(t("Planned Operations")) %}
     {% call ui.table_shell() %}
       <table class="table-sm">

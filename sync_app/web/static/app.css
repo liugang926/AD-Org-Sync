@@ -1560,6 +1560,170 @@ form.inline { display: inline-flex; margin: 0; }
   min-width: max-content;
 }
 
+.table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.page-heading,
+.page-actions,
+.card-header,
+.form-actions,
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+}
+
+.page-heading,
+.card-header,
+.pagination-bar {
+  justify-content: space-between;
+}
+
+.page-heading > div,
+.card-header > div,
+.pagination-bar > * {
+  min-width: 0;
+}
+
+.page-actions,
+.page-actions form,
+.form-actions {
+  max-width: 100%;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-block: 18px;
+}
+
+.stat-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.stat-card span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.stat-card strong {
+  color: var(--text);
+  font-size: 22px;
+}
+
+.filter-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: end;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 16px;
+}
+
+.filter-bar label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.card-header > .badge {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.identity-relationship-table table {
+  min-width: 3220px;
+}
+
+.identity-relationship-table thead tr:first-child th {
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--primary-soft);
+  color: var(--primary);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.identity-relationship-table th,
+.identity-relationship-table td {
+  min-width: 112px;
+  vertical-align: top;
+}
+
+.identity-relationship-table th:nth-child(2),
+.identity-relationship-table td:nth-child(2),
+.identity-relationship-table th:nth-child(7),
+.identity-relationship-table td:nth-child(7) {
+  min-width: 210px;
+}
+
+@media (max-width: 720px) {
+  .page-heading,
+  .card-header,
+  .pagination-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .page-actions,
+  .page-actions form,
+  .page-actions .button,
+  .form-actions,
+  .form-actions .button,
+  .pagination-bar > * {
+    width: 100%;
+  }
+
+  .page-actions .button,
+  .form-actions .button {
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .filter-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-relationship-table table {
+    min-width: 2920px;
+  }
+
+  .identity-relationship-table th,
+  .identity-relationship-table td {
+    padding: 8px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .header-leading .topbar-environment-chip {
+    display: none;
+  }
+}
+
 .identifier {
   display: inline-flex;
   align-items: center;

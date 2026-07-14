@@ -99,6 +99,7 @@ class ADSyncLDAPS:
         self.use_ssl = use_ssl
         self.exclude_departments = exclude_departments or []
         self.exclude_accounts = exclude_accounts or []
+        self.last_batch_lookup_failed = False
         self.default_password = default_password.strip()
         self.force_change_password = force_change_password
         self.password_complexity = (password_complexity or "strong").strip().lower()
@@ -664,6 +665,7 @@ class ADSyncLDAPS:
         返回:
             字典 {username: user_info}
         """
+        self.last_batch_lookup_failed = False
         try:
             if not usernames:
                 return {}
@@ -681,7 +683,15 @@ class ADSyncLDAPS:
             self.connection.search(
                 self.base_dn,
                 search_filter,
-                attributes=['sAMAccountName', 'distinguishedName', 'displayName', 'mail', 'userPrincipalName']
+                attributes=[
+                    'sAMAccountName',
+                    'distinguishedName',
+                    'displayName',
+                    'mail',
+                    'userPrincipalName',
+                    'userAccountControl',
+                    'lockoutTime',
+                ]
             )
             
             # 构建结果字典
@@ -695,7 +705,10 @@ class ADSyncLDAPS:
             return result
             
         except Exception as e:
-            self.logger.error(f"批量获取用户信息失败: {str(e)}")
+            self.last_batch_lookup_failed = True
+            self.logger.error(
+                "AD batch user lookup failed (%s)", type(e).__name__
+            )
             return {}
     
     def check_email_exists(self, email: str, exclude_user: str = None) -> bool:

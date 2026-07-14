@@ -250,15 +250,27 @@ def finalize_successful_sync(ctx: SyncContext) -> dict[str, Any]:
 
     ctx.sync_stats['summary'] = summary
     ctx.sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(ctx.sync_stats).to_dict()
+    METRICS.increment(
+        "ad_org_sync_runs_total",
+        labels={"status": "succeeded" if ctx.sync_stats['error_count'] == 0 else "completed_with_errors"},
+    )
     ctx.hooks.mark_job(
         'COMPLETED' if ctx.sync_stats['error_count'] == 0 else 'COMPLETED_WITH_ERRORS',
         ended=True,
         summary=summary,
     )
-    METRICS.increment(
-        "ad_org_sync_runs_total",
-        labels={"status": "succeeded" if ctx.sync_stats['error_count'] == 0 else "completed_with_errors"},
-    )
+    if (
+        ctx.execution_mode == "apply"
+        and ctx.sync_stats["error_count"] == 0
+        and ctx.identity.successful_apply_bindings
+    ):
+        ctx.repositories.user_binding_repo.apply_successful_identity_bindings(
+            ctx.identity.successful_apply_bindings,
+            org_id=ctx.organization.org_id,
+            source_provider=str(
+                getattr(ctx.config, "source_provider", "wecom") or "wecom"
+            ),
+        )
     return ctx.sync_stats.to_dict()
 
 

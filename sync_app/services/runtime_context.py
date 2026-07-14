@@ -66,6 +66,7 @@ class SyncIdentityState:
     user_departments: dict[str, Any] = field(default_factory=dict)
     active_user_bindings: dict[str, str] = field(default_factory=dict)
     binding_records_by_source_user_id: dict[str, Any] = field(default_factory=dict)
+    binding_record_candidates_by_source_user_id: dict[str, list[Any]] = field(default_factory=dict)
     binding_resolution_details: dict[str, dict[str, Any]] = field(default_factory=dict)
     user_connector_id_by_userid: dict[str, str] = field(default_factory=dict)
     disabled_bound_userids: set[str] = field(default_factory=set)
@@ -73,6 +74,7 @@ class SyncIdentityState:
     source_user_detail_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
     existing_users_map_by_connector: dict[str, dict[str, Any]] = field(default_factory=dict)
     reserved_managed_usernames_by_connector: dict[str, set[str]] = field(default_factory=dict)
+    successful_apply_bindings: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

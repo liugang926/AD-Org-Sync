@@ -119,6 +119,95 @@ class SourceDirectorySnapshotTests(unittest.TestCase):
         self.assertIn("illegal_characters_removed", preview["risks"])
         self.assertIn("username_truncated", preview["risks"])
 
+    def test_mapping_preview_uses_unified_strategies_and_stable_collision_candidates(self):
+        row = {
+            "source_user_id": "ding/user-001",
+            "display_name": "张三",
+            "employee_id": "E001",
+            "email": "Alice.Team@example.com",
+            "position": "Engineer",
+            "department_ids": ["2"],
+            "raw_payload": {"custom_badge": "Badge-77"},
+        }
+        expectations = {
+            "source_user_id": "dinguser-001",
+            "employee_id": "E001",
+            "email_localpart": "Alice.Team",
+            "pinyin_initials_employee_id": "zsE001",
+            "pinyin_full_employee_id": "zhangsanE001",
+            "family_name_pinyin_given_initials": "zhangs",
+            "family_name_pinyin_given_name_pinyin": "zhangsan",
+        }
+        for source_field, expected in expectations.items():
+            with self.subTest(source_field=source_field):
+                preview = self.service.preview_username(
+                    row,
+                    username_strategy=source_field,
+                    source_field=source_field,
+                )
+                self.assertEqual(preview["username"], expected)
+                self.assertEqual(preview["candidate_mapping"]["ad_username"], expected)
+                self.assertEqual(
+                    preview["mapping_input"]["method"],
+                    "userid" if source_field == "source_user_id" else source_field,
+                )
+                self.assertTrue(preview["mapping_input"]["value"])
+
+        custom_field = self.service.preview_username(
+            row,
+            username_strategy="custom_template",
+            source_field="custom_badge",
+        )
+        custom_template = self.service.preview_username(
+            row,
+            username_strategy="custom_template",
+            username_template="{family_name_pinyin}.{given_initials}-{employee_id}",
+            source_field="custom_template",
+        )
+        self.assertEqual(custom_field["username"], "Badge-77")
+        self.assertEqual(custom_field["mapping_input"]["value"], "Badge-77")
+        self.assertEqual(custom_template["username"], "zhang.s-E001")
+
+        sensitive_custom_field = self.service.preview_username(
+            {
+                **row,
+                "raw_payload": {**row["raw_payload"], "custom_secret": "private-value"},
+            },
+            username_strategy="custom_template",
+            source_field="custom_secret",
+        )
+        self.assertNotEqual(
+            sensitive_custom_field["mapping_input"]["value"], "private-value"
+        )
+
+        first_hash = self.service.preview_username(
+            row,
+            username_strategy="employee_id",
+            source_field="employee_id",
+            username_collision_policy="append_hash",
+        )
+        second_hash = self.service.preview_username(
+            row,
+            username_strategy="employee_id",
+            source_field="employee_id",
+            username_collision_policy="append_hash",
+        )
+        self.assertEqual(first_hash["candidates"], second_hash["candidates"])
+        self.assertTrue(
+            any(
+                item["rule"] == "managed_username_hash_suffix"
+                for item in first_hash["candidates"]
+            )
+        )
+
+        missing = self.service.preview_username(
+            {**row, "employee_id": ""},
+            username_strategy="employee_id",
+            source_field="employee_id",
+        )
+        self.assertEqual(missing["username"], "")
+        self.assertIn("mapping_field_missing", missing["risks"])
+
     def test_wecom_extended_employee_id_auto_detection_and_configured_name(self):
         class FakeAPI:
             def __init__(self, *_args, **_kwargs):

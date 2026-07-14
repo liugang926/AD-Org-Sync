@@ -9,11 +9,14 @@
 
   const updateStatus = () => {
     if (modeInput.value === "all_filtered") {
-      status.textContent = "All filtered results will be selected on the server.";
+      status.textContent = status.dataset.allFilteredText || "";
       return;
     }
     const count = checkboxes.filter((item) => item.checked).length;
-    status.textContent = `${count} user${count === 1 ? "" : "s"} selected on this page.`;
+    const template = count === 1
+      ? status.dataset.oneSelectedTemplate
+      : status.dataset.manySelectedTemplate;
+    status.textContent = (template || "").replace("{count}", String(count));
     if (pageCheckbox) {
       pageCheckbox.checked = Boolean(checkboxes.length) && count === checkboxes.length;
       pageCheckbox.indeterminate = count > 0 && count < checkboxes.length;

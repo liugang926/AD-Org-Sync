@@ -63,8 +63,27 @@
     <label>{{ t("Employee ID") }}
       <select name="employee_id_state"><option value="">{{ t("Any") }}</option><option value="present" {% if selected_employee_id_state == 'present' %}selected{% endif %}>{{ t("Present") }}</option><option value="missing" {% if selected_employee_id_state == 'missing' %}selected{% endif %}>{{ t("Missing") }}</option></select>
     </label>
+    <label>{{ t("Identity relationship") }}
+      <select name="relationship_status">
+        {% for value, label in [('all','All relationships'),('bound','Bound'),('unbound','Unbound'),('candidate_only','Candidate only'),('manual','Manual binding'),('automatic','Automatic binding'),('disabled','Binding disabled'),('ad_exists','AD exists'),('ad_missing','AD missing'),('ad_unknown','AD status unknown'),('planned_change','Has planned change'),('not_applied','Not applied'),('apply_success','Apply succeeded'),('apply_failed','Apply failed'),('conflict','Conflicts')] %}
+        <option value="{{ value }}" {% if selected_relationship_status == value %}selected{% endif %}>{{ t(label) }}</option>
+        {% endfor %}
+      </select>
+    </label>
     {{ button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
   </form>
+
+  <div class="callout callout--info" role="note">
+    <strong>{{ t("Candidate, Before, Planned, and Applied are different evidence states.") }}</strong>
+    <span>{{ t("Candidate is calculated from the saved field rule. Before is the persisted binding and verified AD state. Planned is the latest Dry Run expectation. Applied requires a successful Apply operation and a matching persisted binding.") }}</span>
+  </div>
+  <div class="form-actions">
+    {% if ad_verified %}
+    <span class="badge badge--success" role="status">{{ t("Current-page AD accounts verified") }}</span>
+    {% else %}
+    {{ button(t("Verify current-page AD status"), href="?page_number=" ~ page_number ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state ~ "&relationship_status=" ~ selected_relationship_status ~ "&verify_ad=true", variant="secondary", icon="shield-check") }}
+    {% endif %}
+  </div>
 
   <form method="post" action="/source-directory/scope">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -77,25 +96,76 @@
       {{ button(t("Select Current Page"), type="button", variant="secondary", icon="check-square", attrs='data-select-current-page') }}
       {{ button(t("Select All Filtered Results"), type="button", variant="secondary", icon="list-checks", attrs='data-select-all-filtered') }}
       {{ button(t("Clear Selection"), type="button", variant="ghost", icon="x", attrs='data-clear-source-selection') }}
-      <span class="form-help" data-source-selection-status aria-live="polite"></span>
+      <span
+        class="form-help"
+        data-source-selection-status
+        data-all-filtered-text="{{ t('All filtered results will be selected on the server.') }}"
+        data-one-selected-template="{{ t('{count} user selected on this page.', count='{count}') }}"
+        data-many-selected-template="{{ t('{count} users selected on this page.', count='{count}') }}"
+        aria-live="polite"
+      ></span>
     </div>
-    <div class="table-scroll" tabindex="0">
+    <div class="table-scroll identity-relationship-table" tabindex="0" role="region" aria-label="{{ t('Identity relationship and synchronization preview') }}">
       <table>
-        <thead><tr><th><input type="checkbox" data-select-page-checkbox aria-label="{{ t('Select Current Page') }}"></th><th>{{ t("Name") }}</th><th>{{ t("Platform User ID") }}</th><th>{{ t("Employee ID") }}</th><th>{{ t("Email") }}</th><th>{{ t("Mobile") }}</th><th>{{ t("Position") }}</th><th>{{ t("Primary Department") }}</th><th>{{ t("Status") }}</th><th>{{ t("Mapping Preview") }}</th><th>{{ t("Risk") }}</th></tr></thead>
+        <thead>
+          <tr>
+            <th rowspan="2"><input type="checkbox" data-select-page-checkbox aria-label="{{ t('Select Current Page') }}"></th>
+            <th colspan="7" scope="colgroup">{{ t("Source and mapping method") }}</th>
+            <th colspan="5" scope="colgroup">{{ t("Before synchronization") }}</th>
+            <th colspan="5" scope="colgroup">{{ t("Planned after Dry Run") }}</th>
+            <th colspan="6" scope="colgroup">{{ t("Applied result") }}</th>
+            <th colspan="3" scope="colgroup">{{ t("Difference and risk") }}</th>
+          </tr>
+          <tr>
+            <th>{{ t("Name") }}</th><th>{{ t("Platform User ID") }}</th><th>{{ t("Employee ID") }}</th><th>{{ t("Provider") }}</th><th>{{ t("Connector") }}</th><th>{{ t("Referenced field and method") }}</th><th>{{ t("Candidate AD username") }}</th>
+            <th>{{ t("Actual binding") }}</th><th>{{ t("Binding source") }}</th><th>{{ t("Enabled") }}</th><th>{{ t("AD state") }}</th><th>{{ t("Verified at") }}</th>
+            <th>{{ t("Expected AD username") }}</th><th>{{ t("Operation") }}</th><th>{{ t("Resolution source") }}</th><th>{{ t("Dry Run job") }}</th><th>{{ t("Freshness") }}</th>
+            <th>{{ t("Actual AD username") }}</th><th>{{ t("Operation") }}</th><th>{{ t("Result") }}</th><th>{{ t("Apply job") }}</th><th>{{ t("Completed at") }}</th><th>{{ t("Post-Apply AD state") }}</th>
+            <th>{{ t("Difference") }}</th><th>{{ t("Risks") }}</th><th>{{ t("Actions") }}</th>
+          </tr>
+        </thead>
         <tbody>
         {% for item in users %}
           <tr>
-            <td><input type="checkbox" name="selected_source_user_ids" value="{{ item.source_user_id }}" data-source-user-checkbox aria-label="{{ t('Select {name}', name=item.display_name or item.source_user_id) }}"></td>
-            <td><strong>{{ item.display_name or '-' }}</strong></td>
+            <td><input type="checkbox" name="selected_source_user_ids" value="{{ item.source_user_id }}" data-source-user-checkbox aria-label="{{ t('Select {name}', name=item.source_display_name or item.source_user_id) }}"></td>
+            <td><strong>{{ item.source_display_name or '-' }}</strong><div class="muted">{{ item.source_user.account_status or '-' }}</div></td>
             <td class="cell-mono">{{ item.source_user_id }}</td>
             <td class="cell-mono">{{ item.employee_id or '-' }}</td>
-            <td>{{ item.email or '-' }}</td><td>{{ item.mobile_masked or '-' }}</td><td>{{ item.position or '-' }}</td>
-            <td>{{ item.department_names[0] if item.department_names else '-' }}</td>
-            <td><span class="badge {% if not item.is_active %}badge--muted{% endif %}">{{ item.account_status }}</span></td>
-            <td class="cell-mono">{{ item.mapping_preview or '-' }}</td>
-            <td>{% if item.mapping_risks %}<span class="badge badge--warning">{{ item.mapping_risks|join(', ') }}</span>{% else %}<span class="badge badge--success">{{ t("Ready") }}</span>{% endif %}</td>
+            <td>{{ item.source_provider }}</td>
+            <td class="cell-mono">{{ item.connector_id }}</td>
+            <td>
+              <div><strong>{{ item.mapping_input.field_label or item.mapping_input.field_name }}</strong> <span class="cell-mono">({{ item.mapping_input.field_name }})</span></div>
+              <div class="muted">{{ t("Value") }}: <span class="cell-mono">{{ item.mapping_input.value or '-' }}</span></div>
+              <div class="muted">{{ t("Method") }}: {{ item.mapping_input.method }}</div>
+              <div class="muted">{{ t("Template") }}: <span class="cell-mono">{{ item.mapping_input.template or '-' }}</span></div>
+            </td>
+            <td>
+              <div class="cell-mono cell-strong">{{ item.candidate_mapping.ad_username or '-' }}</div>
+              <div class="muted">{{ t(item.candidate_mapping.source) if item.candidate_mapping.source else '-' }}</div>
+              {% if item.candidate_mapping.illegal_characters_removed %}<span class="badge badge--warning">{{ t("Characters removed") }}</span>{% endif %}
+              {% if item.candidate_mapping.truncated %}<span class="badge badge--warning">{{ t("Truncated") }}</span>{% endif %}
+            </td>
+            <td class="cell-mono">{{ item.before_state.bound_ad_username or '-' }}</td>
+            <td>{{ t(item.before_state.binding_source) if item.before_state.binding_source else t("No binding") }}</td>
+            <td>{{ t("Enabled") if item.before_state.binding_enabled else (t("Disabled") if item.before_state.bound_ad_username else '-') }}</td>
+            <td><span class="badge {% if item.before_state.ad_account_state.status in ['missing','unavailable'] %}badge--warning{% elif item.before_state.ad_account_state.status in ['exists','enabled'] %}badge--success{% else %}badge--muted{% endif %}">{{ t(item.before_state.ad_account_state.status or 'not_checked') }}</span></td>
+            <td>{{ item.before_state.verified_at or '-' }}</td>
+            <td class="cell-mono">{{ item.planned_after_state.ad_username or '-' }}</td>
+            <td>{{ t(item.planned_after_state.operation) if item.planned_after_state.operation else '-' }}</td>
+            <td>{{ t(item.planned_after_state.binding_source) if item.planned_after_state.binding_source else '-' }}</td>
+            <td>{% if item.planned_after_state.job_id %}<a href="/jobs/{{ item.planned_after_state.job_id }}" class="cell-mono">{{ item.planned_after_state.job_id }}</a>{% else %}{{ t("Not run") }}{% endif %}</td>
+            <td>{% if item.planned_after_state.is_stale %}<span class="badge badge--warning">{{ t("Stale") }}</span>{% elif item.planned_after_state.job_id %}<span class="badge badge--success">{{ t("Current") }}</span>{% else %}-{% endif %}</td>
+            <td class="cell-mono">{{ item.applied_after_state.ad_username or '-' }}</td>
+            <td>{{ t(item.applied_after_state.operation) if item.applied_after_state.operation else '-' }}</td>
+            <td>{{ t(item.applied_after_state.result) }}</td>
+            <td>{% if item.applied_after_state.job_id %}<a href="/jobs/{{ item.applied_after_state.job_id }}" class="cell-mono">{{ item.applied_after_state.job_id }}</a>{% else %}-{% endif %}</td>
+            <td>{{ item.applied_after_state.applied_at or '-' }}</td>
+            <td><span class="badge {% if item.applied_after_state.post_apply_ad_account_state.status in ['missing','unavailable'] %}badge--warning{% elif item.applied_after_state.post_apply_ad_account_state.status in ['exists','enabled'] %}badge--success{% else %}badge--muted{% endif %}">{{ t(item.applied_after_state.post_apply_ad_account_state.status or 'not_checked') }}</span></td>
+            <td><span class="badge {% if 'conflict' in item.difference.status or 'failed' in item.difference.status %}badge--warning{% elif item.difference.changed %}badge--info{% else %}badge--muted{% endif %}">{{ t(item.difference.status) }}</span><div class="muted">{{ t(item.resolution_reason) }}</div></td>
+            <td>{% if item.risks %}{% for risk in item.risks %}<span class="badge badge--warning">{{ t(risk) }}</span>{% endfor %}{% else %}<span class="badge badge--success">{{ t("No identified risk") }}</span>{% endif %}</td>
+            <td><a href="/mappings?q={{ item.source_user_id|urlencode }}">{{ t("Open binding") }}</a>{% if item.planned_after_state.job_id %}<br><a href="/jobs/{{ item.planned_after_state.job_id }}">{{ t("View Dry Run") }}</a>{% endif %}{% if item.applied_after_state.job_id %}<br><a href="/jobs/{{ item.applied_after_state.job_id }}">{{ t("View Apply") }}</a>{% endif %}<br><a href="/conflicts?q={{ item.source_user_id|urlencode }}">{{ t("View conflicts") }}</a></td>
           </tr>
-        {% else %}<tr><td colspan="11" class="empty-state">{{ t("No cached users match the current filters.") }}</td></tr>{% endfor %}
+        {% else %}<tr><td colspan="27" class="empty-state">{{ t("No cached users match the current filters.") }}</td></tr>{% endfor %}
         </tbody>
       </table>
     </div>
@@ -103,9 +173,9 @@
     <div class="pagination-bar">
       <span>{{ t("{count} matching users", count=total_users) }}</span>
       <div>
-        {% if page_number > 1 %}{{ button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state, variant="secondary") }}{% endif %}
+        {% if page_number > 1 %}{{ button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state ~ "&relationship_status=" ~ selected_relationship_status, variant="secondary") }}{% endif %}
         <span>{{ page_number }} / {{ total_pages }}</span>
-        {% if page_number < total_pages %}{{ button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state, variant="secondary") }}{% endif %}
+        {% if page_number < total_pages %}{{ button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state ~ "&relationship_status=" ~ selected_relationship_status, variant="secondary") }}{% endif %}
       </div>
     </div>
 

@@ -6,6 +6,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from sync_app.storage.local_db import utcnow_iso
+from sync_app.services.source_directory import SourceDirectoryService
 from sync_app.web.app_state import get_web_repositories
 from sync_app.core.rule_governance import build_rule_governance_summary
 
@@ -32,6 +33,9 @@ def register_mapping_routes(
     stream_csv: Callable[..., Any],
     to_bool: Callable[[str | None, bool], bool],
     validate_binding_target: Callable[[Request, str, str], str | None],
+    build_identity_preview_connector_specs: Callable[
+        [Request], dict[str, dict[str, Any]]
+    ] | None = None,
 ) -> None:
     @app.get("/mappings", response_class=HTMLResponse)
     def mappings_page(request: Request):
@@ -43,10 +47,25 @@ def register_mapping_routes(
         remembered_filters = resolve_remembered_filters(
             request,
             page_name="mappings",
-            defaults={"q": "", "status": "all"},
+            defaults={
+                "q": "",
+                "status": "all",
+                "provider": "",
+                "connector": "",
+                "binding_source": "",
+                "apply_status": "",
+            },
         )
         query = str(remembered_filters["q"])
         status = str(remembered_filters["status"] or "all").strip().lower()
+        provider_filter = str(remembered_filters.get("provider") or "").strip().lower()
+        connector_filter = str(remembered_filters.get("connector") or "").strip()
+        binding_source_filter = str(
+            remembered_filters.get("binding_source") or ""
+        ).strip().lower()
+        apply_status_filter = str(
+            remembered_filters.get("apply_status") or ""
+        ).strip().lower()
         binding_page = parse_page_number(request.query_params.get("binding_page"), 1)
         override_page = parse_page_number(request.query_params.get("override_page"), 1)
         repositories = get_web_repositories(request)
@@ -56,6 +75,10 @@ def register_mapping_routes(
                 offset=offset,
                 query=query,
                 status=status,
+                source_provider=provider_filter,
+                connector_id=connector_filter,
+                binding_source=binding_source_filter,
+                apply_status=apply_status_filter,
                 org_id=current_org.org_id,
             ),
             page=binding_page,
@@ -76,18 +99,237 @@ def register_mapping_routes(
             overrides=repositories.department_override_repo.list_override_records(org_id=current_org.org_id),
             exception_rules=repositories.exception_rule_repo.list_rule_records(org_id=current_org.org_id),
         )
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path,
+        )
+        current_provider = str(config.source_provider or "").strip().lower()
+        providers = sorted(
+            {
+                str(item.source_provider or current_provider).strip().lower()
+                for item in bindings
+            }
+            | {current_provider}
+        )
+        source_rows_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        fields_by_provider: dict[str, dict[str, str]] = {}
+        scopes_by_provider: dict[str, dict[str, Any]] = {}
+        snapshot_department_names: dict[str, str] = {}
+        for source_provider in providers:
+            scope = repositories.source_directory_repo.get_scope_selection(
+                org_id=current_org.org_id,
+                provider_id=source_provider,
+            ) or {}
+            scopes_by_provider[source_provider] = scope
+            snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+                org_id=current_org.org_id,
+                provider_id=source_provider,
+            )
+            provider_bindings = [
+                item for item in bindings if item.source_provider == source_provider
+            ]
+            if not snapshot or not provider_bindings:
+                if snapshot and source_provider == current_provider:
+                    snapshot_department_names = {
+                        str(item["source_department_id"]): str(item["name"] or "")
+                        for item in repositories.source_directory_repo.list_departments(
+                            int(snapshot["id"]), org_id=current_org.org_id
+                        )
+                    }
+                continue
+            if source_provider == current_provider:
+                snapshot_department_names = {
+                    str(item["source_department_id"]): str(item["name"] or "")
+                    for item in repositories.source_directory_repo.list_departments(
+                        int(snapshot["id"]), org_id=current_org.org_id
+                    )
+                }
+            source_result = repositories.source_directory_repo.list_users(
+                int(snapshot["id"]),
+                org_id=current_org.org_id,
+                provider_id=source_provider,
+                source_user_ids=[item.source_user_id for item in provider_bindings],
+                limit=min(max(len(provider_bindings), 1), 200),
+            )
+            source_rows_by_key.update(
+                {
+                    (source_provider, str(item["source_user_id"])): item
+                    for item in source_result["items"]
+                }
+            )
+            fields_by_provider[source_provider] = {
+                str(item["field_name"]): str(
+                    item["field_label"] or item["field_name"]
+                )
+                for item in repositories.source_directory_repo.list_field_catalog(
+                    int(snapshot["id"]), org_id=current_org.org_id
+                )
+            }
+        connector_specs = (
+            build_identity_preview_connector_specs(request)
+            if build_identity_preview_connector_specs
+            else {"default": {}}
+        )
+        apply_resolution_rows: list[dict[str, Any]] = []
+        for source_provider in providers:
+            provider_bindings = [
+                item for item in bindings if item.source_provider == source_provider
+            ]
+            apply_resolution_rows.extend(
+                repositories.operation_log_repo.list_latest_identity_resolution_evidence(
+                    [item.source_user_id for item in provider_bindings],
+                    org_id=current_org.org_id,
+                    source_provider=source_provider,
+                    connector_ids=[item.connector_id for item in provider_bindings],
+                    execution_mode="apply",
+                    successful_only=False,
+                )
+            )
+        latest_apply_resolution: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for item in apply_resolution_rows:
+            key = (
+                str(item.get("provider_id") or "").strip().lower(),
+                str(item.get("source_id") or ""),
+                str(item.get("resolved_connector_id") or "default"),
+            )
+            if key not in latest_apply_resolution:
+                latest_apply_resolution[key] = item
+        apply_job_ids = {
+            str(item.get("job_id") or "")
+            for item in latest_apply_resolution.values()
+            if str(item.get("job_id") or "")
+        }
+        apply_operations = repositories.operation_log_repo.list_user_operation_evidence_for_jobs(
+            apply_job_ids,
+            org_id=current_org.org_id,
+            source_user_ids=[item.source_user_id for item in bindings],
+        )
+        apply_operation_by_key = {
+            (
+                str(item.get("job_id") or ""),
+                str(item.get("source_id") or ""),
+                str((item.get("details") or {}).get("connector_id") or "default"),
+            ): item
+            for item in apply_operations
+        }
+        binding_rows: list[dict[str, Any]] = []
+        for binding in bindings:
+            source_provider = str(binding.source_provider or current_provider).lower()
+            source_row = source_rows_by_key.get(
+                (source_provider, binding.source_user_id)
+            )
+            scope = scopes_by_provider.get(source_provider, {})
+            fields_by_name = fields_by_provider.get(source_provider, {})
+            connector_spec = connector_specs.get(binding.connector_id) or connector_specs.get(
+                "default", {}
+            )
+            preview = None
+            if source_row:
+                source_field = str(
+                    scope.get("source_field")
+                    or connector_spec.get("username_strategy")
+                    or "source_user_id"
+                )
+                preview = SourceDirectoryService.preview_username(
+                    source_row,
+                    username_strategy=str(
+                        connector_spec.get("username_strategy")
+                        or scope.get("username_strategy")
+                        or "userid"
+                    ),
+                    username_template=str(
+                        connector_spec.get("username_template")
+                        or scope.get("username_template")
+                        or ""
+                    ),
+                    source_field=source_field,
+                    username_collision_policy=str(
+                        connector_spec.get("username_collision_policy")
+                        or "append_employee_id"
+                    ),
+                    username_collision_template=str(
+                        connector_spec.get("username_collision_template") or ""
+                    ),
+                    field_label=fields_by_name.get(source_field, source_field),
+                )
+            apply_resolution = latest_apply_resolution.get(
+                (source_provider, binding.source_user_id, binding.connector_id)
+            )
+            apply_job_id = str((apply_resolution or {}).get("job_id") or "")
+            apply_operation = apply_operation_by_key.get(
+                (apply_job_id, binding.source_user_id, binding.connector_id), {}
+            )
+            apply_succeeded = bool(
+                apply_operation
+                and str((apply_resolution or {}).get("job_status") or "")
+                == "COMPLETED"
+                and str(apply_operation.get("status") or "") == "succeeded"
+                and str(apply_operation.get("target_id") or "").lower()
+                == str(binding.ad_username or "").lower()
+            )
+            health = (
+                "source_missing"
+                if source_row is None
+                else (
+                    "binding_disabled"
+                    if not binding.is_enabled
+                    else ("apply_succeeded" if apply_succeeded else "not_recently_applied")
+                )
+            )
+            binding_rows.append(
+                {
+                    "record": binding,
+                    "source_display_name": str(
+                        (source_row or {}).get("display_name")
+                        or binding.source_display_name
+                        or ""
+                    ),
+                    "source_in_snapshot": source_row is not None,
+                    "mapping_input": dict((preview or {}).get("mapping_input") or {}),
+                    "candidate_mapping": dict(
+                        (preview or {}).get("candidate_mapping") or {}
+                    ),
+                    "last_verified_at": str(
+                        (
+                            ((apply_resolution or {}).get("details") or {}).get(
+                                "before_state"
+                            )
+                            or {}
+                        ).get("verified_at")
+                        or (apply_resolution or {}).get("created_at")
+                        or ""
+                    ),
+                    "last_apply_status": "succeeded"
+                    if apply_succeeded
+                    else (
+                        "failed"
+                        if apply_operation
+                        and str(apply_operation.get("status") or "") != "succeeded"
+                        else "not_applied"
+                    ),
+                    "last_apply_job_id": apply_job_id,
+                    "health": health,
+                }
+            )
         return render(
             request,
             "mappings.html",
             page="mappings",
             title="Identity Overrides",
             bindings=bindings,
+            binding_rows=binding_rows,
             overrides=overrides,
             mapping_query=query,
             mapping_status=status,
+            mapping_provider=provider_filter,
+            mapping_connector=connector_filter,
+            mapping_binding_source=binding_source_filter,
+            mapping_apply_status=apply_status_filter,
+            available_connectors=sorted(connector_specs),
             binding_page_data=binding_page_data,
             override_page_data=override_page_data,
-            department_name_map=load_department_name_map(request),
+            department_name_map=snapshot_department_names
+            or load_department_name_map(request),
             filters_are_remembered=True,
             rule_governance_summary=rule_governance_summary,
         )
@@ -233,6 +475,8 @@ def register_mapping_routes(
             effective_reason=effective_reason,
             next_review_at=normalized_next_review_at,
             last_reviewed_at=reviewed_at,
+            source_provider=source_provider,
+            connector_id="default",
         )
         repositories.audit_repo.add_log(
             org_id=current_org.org_id,
@@ -307,6 +551,8 @@ def register_mapping_routes(
                 effective_reason=row.get("effective_reason"),
                 next_review_at=normalized_next_review_at,
                 last_reviewed_at=reviewed_at,
+                source_provider=source_provider,
+                connector_id="default",
             )
             imported_count += 1
 
@@ -337,6 +583,8 @@ def register_mapping_routes(
         source_user_id: str,
         csrf_token: str = Form(""),
         enabled: str = Form(...),
+        source_provider: str = Form(""),
+        connector_id: str = Form(""),
     ):
         user = require_capability(request, "mappings.write")
         if isinstance(user, RedirectResponse):
@@ -350,6 +598,8 @@ def register_mapping_routes(
         binding = repositories.user_binding_repo.get_binding_record_by_source_user_id(
             source_user_id,
             org_id=current_org.org_id,
+            source_provider=source_provider,
+            connector_id=connector_id,
         )
         if not binding:
             flash_t(request, "error", "Binding not found: {source_user_id}", source_user_id=source_user_id)
@@ -360,6 +610,8 @@ def register_mapping_routes(
             source_user_id,
             new_state,
             org_id=current_org.org_id,
+            source_provider=source_provider,
+            connector_id=connector_id,
         )
         repositories.audit_repo.add_log(
             org_id=current_org.org_id,
@@ -369,7 +621,12 @@ def register_mapping_routes(
             target_id=source_user_id,
             result="success",
             message=f"{'Enabled' if new_state else 'Disabled'} identity binding",
-            payload={"source_user_id": source_user_id, "ad_username": binding.ad_username},
+            payload={
+                "source_user_id": source_user_id,
+                "source_provider": binding.source_provider,
+                "connector_id": binding.connector_id,
+                "ad_username": binding.ad_username,
+            },
         )
         flash_t(
             request,

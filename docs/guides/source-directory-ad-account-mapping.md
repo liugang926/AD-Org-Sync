@@ -4,11 +4,29 @@ This guide covers the end-to-end administrator flow for selecting users from WeC
 
 ## Identity model
 
-The durable source identity anchor is always:
+The durable source identity anchor and binding lookup boundary is always:
 
-`organization + source_provider + source_user_id`
+`organization + source_provider + connector + source_user_id`
 
-Employee ID is not an identity primary key. Employee IDs can be empty, changed, duplicated, or reassigned. Employee ID, email local part, romanized name, and custom scalar fields are used only to generate or match an AD username. The resulting `source_user_id -> ad_username` binding is persisted, and a manual binding always takes precedence over an automatic naming rule.
+Employee ID is not an identity primary key. Employee IDs can be empty, changed, duplicated, or reassigned. Employee ID, email local part, romanized name, and custom scalar fields are used only to generate or match an AD username. The resulting binding is persisted inside the complete four-part boundary, and a manual binding always takes precedence over an automatic naming rule. Identical source user IDs from DingTalk, WeCom, or Feishu, or from different organizations/connectors, are independent identities. An ambiguous provider, connector, or multiple exact binding is reported as a conflict instead of selecting the first row.
+
+## Understand the four relationship states
+
+The Web console deliberately avoids the old catch-all term “Mapping Preview.”
+
+| State | Meaning | Evidence |
+| --- | --- | --- |
+| Field mapping candidate | The username produced by the saved referenced field, naming strategy/template, and normalization rules. It is not a binding. | Current source snapshot and mapping configuration |
+| Before synchronization | The persisted binding that existed before the run and its verified or historical AD state. | `user_identity_bindings`, connector boundary, and bounded AD lookup |
+| Planned after Dry Run | What the latest matching Dry Run intends to create, update, or bind. It is a proposal and can become stale. | Structured `resolve_identity_binding` evidence and planned operations |
+| Applied actual state | The account actually written by an error-free completed Apply, with a successful user operation and a matching enabled persisted binding. | Completed Apply job, operation details, and confirmed binding |
+
+A failed, canceled, or partially failed Apply never qualifies as an applied
+actual state. Candidate generation, a planned operation, and a Dry Run alone do
+not qualify either. The relationship page shows those distinctions side by side.
+The successful AD operation proves the post-Apply account exists; enabled and
+locked flags remain unknown unless a bounded AD verification actually reads
+them. Use **Verify current-page AD status** for that batch check.
 
 ## Configure and verify a provider
 
@@ -73,6 +91,13 @@ Migration 31 adds:
 - `sync_job_source_scopes`
 - provider-aware identity binding uniqueness
 
+Migration 32 extends binding uniqueness to
+`(org_id, source_provider, connector_id, source_user_id)`. The relationship
+preview itself needs no new migration: it reuses source snapshots,
+`user_identity_bindings`, `sync_job_source_scopes`, `planned_operations`, and
+structured `sync_operation_logs`. Existing databases therefore retain their
+normal migration checksum and backup/restore guarantees.
+
 Run the normal application startup or `python -m sync_app.cli db-check`; do not edit old migrations. Existing databases are upgraded in place and migration checksums remain enforced.
 
 ## Choose the AD account source
@@ -81,7 +106,13 @@ Available strategies are platform user ID, employee ID, email local part, pinyin
 
 The selector renders each option as `business label (actual source field name)`. Business labels for discovered fields come from the current snapshot's normalization metadata rather than a UI-side provider field-name table. A raw field is labeled as employee ID, platform user ID, email, display name, position, primary department, status, or provider only when its values feed that normalized field in the current snapshot. Provider-specific or tenant-defined fields retain their provider label (or their raw field name when no label is available). Refresh the source directory after changing provider fields so the catalog and coverage counts are rebuilt.
 
-The preview applies AD account rules before Dry Run:
+The referenced field is the saved source of the field mapping calculation. The
+page displays its business label, actual field name, value (masked only for
+email, mobile, and sensitive tenant fields), mapping
+method, resolved template, normalized candidate, and whether illegal characters
+were removed or the 20-character limit caused truncation. Email, mobile, and
+sensitive tenant-defined fields remain masked. The preview applies AD account
+rules before Dry Run:
 
 - empty mapping fields are reported;
 - illegal characters are removed;
@@ -112,9 +143,47 @@ For every partial scope, the runtime records `partial_scope_offboarding_suppress
 
 Scoped plans always require a matching approved Dry Run. The plan fingerprint includes the selected scope, selected department/user IDs, source field, naming strategy/template, source snapshot fingerprint, and normalized planned operations. Approval lookup also includes the configuration fingerprint. Changing configuration, scope, selected users, mapping, or snapshot blocks Apply and requires a new Dry Run.
 
+Dry Run identity resolution is read-only with respect to active bindings. An
+automatic resolution is stored as a structured `propose_identity_binding`
+planned operation. Apply collects successful per-user confirmations in memory
+and commits them atomically only when the whole Apply finishes without errors.
+Failed, canceled, and partially failed runs leave no newly confirmed automatic
+binding. Manual and previously confirmed bindings remain readable before either
+mode starts.
+
+The relationship fingerprint includes organization, provider, connector,
+source snapshot, saved selection, referenced field/template result, current
+runtime configuration, exact binding signature, and verified AD state when
+available. A new snapshot, mapping/template or naming-policy change, connector
+change, manual binding change, AD state change, scope change, or organization
+configuration change marks older Dry Run evidence stale. Run a fresh Dry Run
+before approval or Apply.
+
 ## Manual binding
 
-Use **Identity Overrides** (`/mappings`) to bind a real source user to an existing AD `sAMAccountName`. The page validates that the source user and AD user exist, blocks one AD user from being assigned to multiple source identities, records `source_provider`, and writes audit events. Bulk import uses the same validation. Binding sources distinguish manual, employee-ID, user-ID, email-local-part, and generated decisions.
+Use **Identity Overrides** (`/mappings`) to bind a real source user to an existing AD `sAMAccountName`. The page validates that the source user and AD user exist, blocks one AD user from being assigned to multiple source identities, records provider and connector, and writes audit events. Bulk import uses the same validation. Binding sources distinguish manual, employee-ID, user-ID, email-local-part, existing-AD-match, and generated decisions. The list retains orphaned bindings when a source user leaves the current snapshot and labels them “Not in current snapshot.” Filters cover source display name/ID, AD username, provider, connector, binding source, enabled state, and Apply status with server-side totals.
+
+## Review the complete relationship
+
+1. Open **Source Directory** and use the **Identity relationship** filter for
+   bound, unbound, candidate-only, manual, automatic, disabled, AD-state,
+   planned, Apply, or conflict views.
+2. Read the grouped columns from left to right: source/mapping, before sync,
+   planned after Dry Run, applied result, then difference/risk.
+3. Use **Verify current-page AD status** when live evidence is necessary. Only
+   server-computed candidates and bindings on the current page are queried.
+4. Follow the safe row links to the binding editor, Dry Run, Apply, or conflict
+   record. On mobile, the grouped table scrolls horizontally and remains
+   keyboard focusable.
+5. Open the corresponding job. **Identity Resolution Results** presents the
+   structured per-user decision without requiring the raw JSON details panel.
+
+AD verification uses one batch request per connector and deduplicates account
+names. It never loads the full AD directory and never accepts an arbitrary AD
+username from the browser. If AD is unavailable, source and binding evidence
+still renders, the state says temporarily unavailable, the response remains
+successful, and LDAP exception text, DN, SID, host details, and credentials are
+not returned. The verification time identifies live or historical evidence.
 
 ## API and security boundaries
 
@@ -125,11 +194,21 @@ Authenticated organization-scoped endpoints include:
 - `POST /source-directory/refresh`
 - `GET /api/source-directory/status`
 - `GET /api/source-directory/users`
+- `GET /api/source-directory/relationships`
 - `GET /api/source-directory/fields`
 - `GET /api/source-directory/preview?source_user_id=...`
+- `GET /api/jobs/{job_id}/identity-resolutions`
 - `POST /source-directory/scope`
 
-Writes require the existing `config.write` capability and CSRF validation, and they create audit records without credential payloads. Reads require `config.read` and apply the selected organization on every repository query.
+Relationship APIs return separate `source_user`, `mapping_input`,
+`candidate_mapping`, `before_state`, `planned_after_state`,
+`applied_after_state`, `difference`, `risks`, and `evidence` objects. They use the
+current authenticated organization/provider and server-side connector routing;
+client-supplied organization/provider/connector or arbitrary AD enumeration is
+not accepted. Pagination and relationship filters are applied on the server,
+and the browser never receives the complete source or AD directory.
+
+Writes require the existing `config.write` capability and CSRF validation, and they create audit records without credential payloads. Reads require `config.read` (job evidence uses `jobs.read`) and apply the selected organization on every repository query. GET previews do not create, update, disable, or delete a binding and never write to AD.
 
 ## Troubleshooting
 
@@ -139,5 +218,13 @@ Writes require the existing `config.write` capability and CSRF validation, and t
 - **Snapshot stale:** refresh and save the scope again. A stale or changed fingerprint cannot reuse old approval.
 - **Apply says review required:** approve the exact latest Dry Run. Any configuration, scope, or snapshot change intentionally invalidates the previous approval.
 - **Duplicate account preview:** correct the source data, select a safer field/collision policy, or create a reviewed manual binding. Never bypass the conflict queue by overwriting an AD account.
+- **DingTalk user has only a candidate:** this is normal before the first Dry Run/Apply. Confirm the referenced field and candidate, run Dry Run, review the proposed binding, then run the approved Apply.
+- **Source user has no binding:** filter **Unbound** or **Candidate only**, check for an empty/duplicate referenced field or conflict, and run a new Dry Run after correction.
+- **Bound AD account is missing:** verify the current page, confirm the correct connector, then repair or review the binding; do not assume a same-named account is the bound account.
+- **Duplicate or ambiguous binding:** use the complete organization/provider/connector/source-user boundary. Disable or remove the incorrect reviewed rule; the service will not silently choose one.
+- **Connector conflict:** correct department-root routing or move the binding to the connector selected by the existing runtime router, then run Dry Run again.
+- **Dry Run is stale:** refresh/save the source scope and rerun Dry Run. Do not approve or Apply an older plan.
+- **Check the latest Apply:** use the Apply link in Source Directory, the latest Apply status in Identity Overrides, or the job’s Identity Resolution Results table. Only `succeeded` is an applied actual state.
+- **AD verification is unavailable:** keep using the source/binding evidence, fix target connectivity or certificate/authentication configuration, and retry current-page verification. “Unavailable” is not the same as “missing.”
 
 Automated tests use fake providers and mock HTTP/LDAP clients. Production connectivity must still be verified with real tenant and AD credentials in the deployment environment.

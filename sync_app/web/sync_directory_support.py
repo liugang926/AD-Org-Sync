@@ -311,6 +311,71 @@ class SyncDirectorySupportMixin:
         )
         return config, provider
 
+    def build_identity_preview_target_provider(
+        self,
+        request: Request,
+        connector_id: str,
+    ) -> Any:
+        """Build one read-only preview client for a server-resolved connector."""
+
+        config = self._get_org_app_config(request)
+        context = self._build_runtime_connector_context(
+            request,
+            config=config,
+            department_tree={},
+        )
+        normalized_connector_id = str(connector_id or "default").strip() or "default"
+        connector_spec = context["connector_specs_by_id"].get(normalized_connector_id)
+        if connector_spec is None:
+            raise ValueError("The resolved connector is not available")
+        connector_config = connector_spec["config"]
+        return self.build_target_provider(
+            server=connector_config.ldap.server,
+            domain=connector_config.ldap.domain,
+            username=connector_config.ldap.username,
+            password=connector_config.ldap.password,
+            use_ssl=connector_config.ldap.use_ssl,
+            port=connector_config.ldap.port,
+            validate_cert=connector_config.ldap.validate_cert,
+            ca_cert_path=connector_config.ldap.ca_cert_path,
+            default_password=connector_config.account.default_password,
+            force_change_password=connector_config.account.force_change_password,
+            password_complexity=connector_config.account.password_complexity,
+            exclude_accounts=connector_config.exclude_accounts,
+            disabled_users_ou_name=connector_spec.get("disabled_users_ou") or "Disabled Users",
+            managed_group_type=connector_spec.get("group_type") or "security",
+            managed_group_mail_domain=connector_spec.get("group_mail_domain") or "",
+            custom_group_ou_path=connector_spec.get("custom_group_ou_path") or "Managed Groups",
+            user_root_ou_path=connector_spec.get("user_root_ou_path") or "",
+        )
+
+    def build_identity_preview_connector_specs(
+        self,
+        request: Request,
+    ) -> dict[str, dict[str, Any]]:
+        config = self._get_org_app_config(request)
+        context = self._build_runtime_connector_context(
+            request,
+            config=config,
+            department_tree={},
+        )
+        specs = dict(context["connector_specs_by_id"])
+        current_org = self.request_support.get_current_org(request)
+        scope = get_web_repositories(request).source_directory_repo.get_scope_selection(
+            org_id=current_org.org_id,
+            provider_id=str(getattr(config, "source_provider", "wecom") or "wecom"),
+        )
+        if scope:
+            scope_connector_id = str(scope.get("connector_id") or "default")
+            if scope_connector_id in specs:
+                specs[scope_connector_id]["username_strategy"] = (
+                    scope.get("username_strategy") or "userid"
+                )
+                specs[scope_connector_id]["username_template"] = (
+                    scope.get("username_template") or ""
+                )
+        return specs
+
     def validate_binding_target(
         self,
         request: Request,
@@ -329,7 +394,12 @@ class SyncDirectorySupportMixin:
             ad_username,
             org_id=current_org.org_id,
         )
-        if existing_by_ad and existing_by_ad.source_user_id != source_user_id:
+        if existing_by_ad and (
+            existing_by_ad.source_user_id != source_user_id
+            or existing_by_ad.source_provider
+            != str(getattr(config, "source_provider", "wecom") or "wecom").strip().lower()
+            or str(existing_by_ad.connector_id or "default") != "default"
+        ):
             return (
                 f"AD account {ad_username} is already bound to source user "
                 f"{existing_by_ad.source_user_id}. Resolve the existing binding first."

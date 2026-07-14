@@ -310,6 +310,41 @@ def _build_config_hash(
     return fingerprint_json(config_snapshot_payload, namespace="sync-config")
 
 
+def build_runtime_config_fingerprint(
+    *,
+    config: AppConfig,
+    organization: OrganizationRecord,
+    settings_repo: SettingsRepository,
+    exclusion_repo: GroupExclusionRuleRepository,
+    exception_rule_repo: SyncExceptionRuleRepository,
+    mapping_rule_repo: AttributeMappingRuleRepository,
+    department_ou_mapping_repo: DepartmentOuMappingRepository,
+    connector_repo: SyncConnectorRepository,
+) -> str:
+    """Build the same configuration fingerprint used by sync jobs.
+
+    Web previews use this public helper so a configuration change invalidates
+    historical Dry Run evidence with exactly the same boundary as Apply review.
+    """
+
+    policy_settings = _build_policy_settings(
+        settings_repo=settings_repo,
+        exclusion_repo=exclusion_repo,
+        exception_rule_repo=exception_rule_repo,
+        mapping_rule_repo=mapping_rule_repo,
+        department_ou_mapping_repo=department_ou_mapping_repo,
+        organization=organization,
+    )
+    return _build_config_hash(
+        config=config,
+        connector_repo=connector_repo,
+        enabled_mapping_rules=policy_settings.enabled_mapping_rules,
+        enabled_department_ou_mappings=policy_settings.enabled_department_ou_mappings,
+        organization=organization,
+        policy_settings=policy_settings,
+    )
+
+
 def bootstrap_sync_runtime(
     *,
     config_path: str = "config.ini",
