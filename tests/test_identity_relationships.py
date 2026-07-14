@@ -1,6 +1,5 @@
 import os
 import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from sync_app.core.models import DirectoryUserRecord, SourceDirectoryUser
@@ -317,6 +316,93 @@ class IdentityRelationshipTests(unittest.TestCase):
         self.assertEqual(enabled_state["status"], "enabled")
         self.assertEqual(locked_state["status"], "locked")
         self.assertFalse(locked_state["enabled"])
+
+    def test_account_creation_requires_verified_missing_candidate_without_binding_conflict(self):
+        snapshot, selection = self._snapshot()
+        users = self.source.list_users(
+            int(snapshot["id"]),
+            org_id="default",
+            provider_id="dingtalk",
+            limit=20,
+        )["items"]
+        specs = {
+            "default": {
+                "username_strategy": "employee_id",
+                "username_template": "",
+                "username_collision_policy": "append_employee_id",
+                "username_collision_template": "",
+            }
+        }
+        missing = {
+            "status": "missing",
+            "exists": False,
+            "enabled": None,
+            "locked": None,
+            "protected": False,
+            "verified_at": "2026-07-14T01:00:00+00:00",
+        }
+        exists = missing | {"status": "enabled", "exists": True, "enabled": True}
+
+        verified = self.service.build_relationships(
+            users,
+            org_id="default",
+            source_provider="dingtalk",
+            snapshot=snapshot,
+            scope=selection,
+            connector_specs_by_id=specs,
+            connector_ids_by_source_user={
+                "ding-001": "default",
+                "ding-002": "default",
+            },
+            ad_states={
+                ("default", "tj001"): missing,
+                ("default", "tj002"): missing,
+            },
+        )
+        bob = next(item for item in verified if item.source_user_id == "ding-002")
+        self.assertEqual(bob.candidate_ad_state["status"], "missing")
+        self.assertTrue(bob.creation_eligibility["eligible"])
+        self.assertEqual(bob.creation_eligibility["status"], "eligible")
+
+        existing = self.service.build_relationships(
+            [next(item for item in users if item["source_user_id"] == "ding-002")],
+            org_id="default",
+            source_provider="dingtalk",
+            snapshot=snapshot,
+            scope=selection,
+            connector_specs_by_id=specs,
+            connector_ids_by_source_user={"ding-002": "default"},
+            ad_states={("default", "tj002"): exists},
+        )[0]
+        self.assertFalse(existing.creation_eligibility["eligible"])
+        self.assertEqual(existing.creation_eligibility["status"], "candidate_exists")
+
+        self.bindings.upsert_binding(
+            "ding-001",
+            "legacy.alice",
+            org_id="default",
+            source_provider="dingtalk",
+            connector_id="default",
+            source="manual",
+        )
+        mismatched_binding = self.service.build_relationships(
+            [next(item for item in users if item["source_user_id"] == "ding-001")],
+            org_id="default",
+            source_provider="dingtalk",
+            snapshot=snapshot,
+            scope=selection,
+            connector_specs_by_id=specs,
+            connector_ids_by_source_user={"ding-001": "default"},
+            ad_states={
+                ("default", "tj001"): missing,
+                ("default", "legacy.alice"): missing,
+            },
+        )[0]
+        self.assertFalse(mismatched_binding.creation_eligibility["eligible"])
+        self.assertEqual(
+            mismatched_binding.creation_eligibility["status"],
+            "binding_review_required",
+        )
 
     def test_connector_boundaries_never_reuse_another_connector_binding(self):
         snapshot, selection = self._snapshot()
@@ -725,6 +811,10 @@ class IdentityRelationshipTests(unittest.TestCase):
         self.assertEqual(safe_match.effective_resolution_source, "existing_ad_match")
         self.assertEqual(
             safe_match.before_state["checked_ad_username"], "ding-001"
+        )
+        self.assertFalse(safe_match.creation_eligibility["eligible"])
+        self.assertEqual(
+            safe_match.creation_eligibility["status"], "existing_identity_match"
         )
 
         ambiguous = self.service.build_relationships(

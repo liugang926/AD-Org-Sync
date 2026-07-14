@@ -98,6 +98,8 @@
   <div class="form-actions">
     {% if ad_verified %}
     <span class="badge badge--success" role="status">{{ t("Current-page AD accounts verified") }}</span>
+    <span class="badge badge--warning">{{ t("{count} candidate AD accounts not found", count=candidate_missing_count) }}</span>
+    <span class="badge badge--success">{{ t("{count} candidates eligible for creation", count=creation_eligible_count) }}</span>
     {% elif not snapshot %}
     {{ button(t("Verify current-page AD status"), type="button", variant="secondary", icon="shield-check", disabled=True) }}
     <span class="form-help">{{ t("AD verification becomes available after a successful source directory refresh.") }}</span>
@@ -116,6 +118,7 @@
     <div class="form-actions">
       {{ button(t("Select Current Page"), type="button", variant="secondary", icon="check-square", attrs='data-select-current-page', disabled=(not snapshot)) }}
       {{ button(t("Select All Filtered Results"), type="button", variant="secondary", icon="list-checks", attrs='data-select-all-filtered', disabled=(not snapshot)) }}
+      {% if ad_verified %}{{ button(t("Select verified missing candidates"), type="button", variant="secondary", icon="user-plus", attrs='data-select-create-candidates', disabled=(creation_eligible_count == 0)) }}{% endif %}
       {{ button(t("Clear Selection"), type="button", variant="ghost", icon="x", attrs='data-clear-source-selection', disabled=(not snapshot)) }}
       <span
         class="form-help"
@@ -139,7 +142,7 @@
           </tr>
           <tr>
             <th>{{ t("Name") }}</th><th>{{ t("Platform User ID") }}</th><th>{{ t("Employee ID") }}</th><th>{{ t("Provider") }}</th><th>{{ t("Connector") }}</th><th>{{ t("Referenced field and method") }}</th><th>{{ t("Candidate AD username") }}</th>
-            <th>{{ t("Actual binding") }}</th><th>{{ t("Binding source") }}</th><th>{{ t("Enabled") }}</th><th>{{ t("AD state") }}</th><th>{{ t("Verified at") }}</th>
+            <th>{{ t("Saved binding") }}</th><th>{{ t("Binding source") }}</th><th>{{ t("Enabled") }}</th><th>{{ t("AD state") }}</th><th>{{ t("Verified at") }}</th>
             <th>{{ t("Expected AD username") }}</th><th>{{ t("Operation") }}</th><th>{{ t("Resolution source") }}</th><th>{{ t("Dry Run job") }}</th><th>{{ t("Freshness") }}</th>
             <th>{{ t("Actual AD username") }}</th><th>{{ t("Operation") }}</th><th>{{ t("Result") }}</th><th>{{ t("Apply job") }}</th><th>{{ t("Completed at") }}</th><th>{{ t("Post-Apply AD state") }}</th>
             <th>{{ t("Difference") }}</th><th>{{ t("Risks") }}</th><th>{{ t("Actions") }}</th>
@@ -165,6 +168,18 @@
               <div class="muted">{{ t(item.candidate_mapping.source) if item.candidate_mapping.source else '-' }}</div>
               {% if item.candidate_mapping.illegal_characters_removed %}<span class="badge badge--warning">{{ t("Characters removed") }}</span>{% endif %}
               {% if item.candidate_mapping.truncated %}<span class="badge badge--warning">{{ t("Truncated") }}</span>{% endif %}
+              {% set candidate_status = item.candidate_ad_state.status or 'not_checked' %}
+              {% if candidate_status == 'missing' %}
+              <span class="badge badge--warning">{{ t("Candidate AD account not found") }}</span>
+              {% elif candidate_status == 'not_checked' %}
+              <span class="badge badge--muted">{{ t("Candidate AD account not verified") }}</span>
+              {% elif candidate_status == 'unavailable' %}
+              <span class="badge badge--warning">{{ t("Candidate AD account could not be verified") }}</span>
+              {% elif candidate_status == 'protected' %}
+              <span class="badge badge--warning">{{ t("Candidate AD account is protected") }}</span>
+              {% else %}
+              <span class="badge badge--success">{{ t("Candidate AD account exists ({status})", status=t(candidate_status)) }}</span>
+              {% endif %}
             </td>
             <td class="cell-mono">{{ item.before_state.bound_ad_username or '-' }}</td>
             <td>{{ t(item.before_state.binding_source) if item.before_state.binding_source else t("No binding") }}</td>
@@ -184,7 +199,17 @@
             <td><span class="badge {% if item.applied_after_state.post_apply_ad_account_state.status in ['missing','unavailable'] %}badge--warning{% elif item.applied_after_state.post_apply_ad_account_state.status in ['exists','enabled'] %}badge--success{% else %}badge--muted{% endif %}">{{ t(item.applied_after_state.post_apply_ad_account_state.status or 'not_checked') }}</span></td>
             <td><span class="badge {% if 'conflict' in item.difference.status or 'failed' in item.difference.status %}badge--warning{% elif item.difference.changed %}badge--info{% else %}badge--muted{% endif %}">{{ t(item.difference.status) }}</span><div class="muted">{{ t(item.resolution_reason) }}</div></td>
             <td>{% if item.risks %}{% for risk in item.risks %}<span class="badge badge--warning">{{ t(risk) }}</span>{% endfor %}{% else %}<span class="badge badge--success">{{ t("No identified risk") }}</span>{% endif %}</td>
-            <td><a href="/mappings?q={{ item.source_user_id|urlencode }}">{{ t("Open binding") }}</a>{% if item.planned_after_state.job_id %}<br><a href="/jobs/{{ item.planned_after_state.job_id }}">{{ t("View Dry Run") }}</a>{% endif %}{% if item.applied_after_state.job_id %}<br><a href="/jobs/{{ item.applied_after_state.job_id }}">{{ t("View Apply") }}</a>{% endif %}<br><a href="/conflicts?q={{ item.source_user_id|urlencode }}">{{ t("View conflicts") }}</a></td>
+            <td>
+              {% if item.creation_eligibility.eligible %}
+              {% set create_candidate_attrs %}data-select-create-candidate="{{ item.source_user_id }}" data-selected-text="{{ t('Selected for creation') }}"{% endset %}
+              {{ button(t("Select for creation"), type="button", variant="secondary", size="sm", attrs=create_candidate_attrs) }}<br>
+              {% elif ad_verified and item.creation_eligibility.status == 'binding_review_required' %}
+              <a href="/mappings?q={{ item.source_user_id|urlencode }}">{{ t("Review saved binding before creation") }}</a><br>
+              {% elif ad_verified and item.candidate_ad_state.status == 'missing' %}
+              <span class="badge badge--warning">{{ t(item.creation_eligibility.reason) }}</span><br>
+              {% endif %}
+              <a href="/mappings?q={{ item.source_user_id|urlencode }}">{{ t("Open binding") }}</a>{% if item.planned_after_state.job_id %}<br><a href="/jobs/{{ item.planned_after_state.job_id }}">{{ t("View Dry Run") }}</a>{% endif %}{% if item.applied_after_state.job_id %}<br><a href="/jobs/{{ item.applied_after_state.job_id }}">{{ t("View Apply") }}</a>{% endif %}<br><a href="/conflicts?q={{ item.source_user_id|urlencode }}">{{ t("View conflicts") }}</a>
+            </td>
           </tr>
         {% else %}<tr><td colspan="27" class="empty-state">{{ t("No cached users match the current filters.") if snapshot else t("No successful source snapshot is available. Refresh the directory to load users.") }}</td></tr>{% endfor %}
         </tbody>
@@ -232,6 +257,10 @@
     </div>
     <div class="form-actions">
       {{ button(t("Save Scope and Mapping"), type="submit", variant="primary", icon="save", disabled=(not snapshot)) }}
+      {% if ad_verified %}
+      {{ button(t("Prepare selected account creations"), type="submit", variant="secondary", icon="user-plus", attrs='formaction="/source-directory/create-selection" formmethod="post" data-prepare-account-creations', disabled=True) }}
+      <span class="form-help">{{ t("Preparation re-verifies every candidate and saves an exact Dry Run scope. It does not write to AD.") }}</span>
+      {% endif %}
       {% if not snapshot %}<span class="form-help">{{ t("Scope and mapping can be saved after a successful source directory refresh.") }}</span>{% endif %}
     </div>
   </form>

@@ -238,6 +238,8 @@ def register_source_directory_routes(
                 "relationships": [],
                 "total": 0,
                 "ad_verified": False,
+                "candidate_missing_count": 0,
+                "creation_eligible_count": 0,
                 "mapping_quality": {},
             }
         scope = repositories.source_directory_repo.get_scope_selection(
@@ -406,6 +408,15 @@ def register_source_directory_routes(
             )
             ad_verified = True
 
+        candidate_missing_count = sum(
+            1
+            for item in relationships
+            if item.candidate_ad_state.get("status") == "missing"
+        )
+        creation_eligible_count = sum(
+            1 for item in relationships if item.creation_eligibility.get("eligible")
+        )
+
         return {
             "config": config,
             "provider_id": provider_id,
@@ -416,6 +427,8 @@ def register_source_directory_routes(
             "relationships": relationships,
             "total": total,
             "ad_verified": ad_verified,
+            "candidate_missing_count": candidate_missing_count,
+            "creation_eligible_count": creation_eligible_count,
             "mapping_quality": mapping_quality,
         }
 
@@ -479,6 +492,8 @@ def register_source_directory_routes(
             selected_employee_id_state=employee_id_state,
             selected_relationship_status=relationship_status,
             ad_verified=page_data["ad_verified"],
+            candidate_missing_count=page_data["candidate_missing_count"],
+            creation_eligible_count=page_data["creation_eligible_count"],
             mapping_quality=page_data["mapping_quality"],
             employee_id_attribute=repositories.settings_repo.get_value(
                 "source_employee_id_attribute", "", org_id=current_org.org_id
@@ -652,6 +667,134 @@ def register_source_directory_routes(
         flash(request, "success", "Sync scope saved. Run a new Dry Run before Apply.")
         return RedirectResponse(url="/source-directory", status_code=303)
 
+    @app.post("/source-directory/create-selection")
+    def prepare_source_directory_account_creations(
+        request: Request,
+        csrf_token: str = Form(""),
+        selected_source_user_ids: list[str] = Form(default=[]),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        csrf_error = reject_invalid_csrf(request, csrf_token, "/source-directory")
+        if csrf_error:
+            return csrf_error
+
+        normalized_source_user_ids = list(
+            dict.fromkeys(
+                str(value).strip()
+                for value in selected_source_user_ids
+                if str(value).strip()
+            )
+        )
+        if not normalized_source_user_ids:
+            flash(
+                request,
+                "error",
+                "Select at least one verified missing candidate account.",
+            )
+            return RedirectResponse(url="/source-directory", status_code=303)
+        if len(normalized_source_user_ids) > 100:
+            flash(
+                request,
+                "error",
+                "Prepare no more than 100 candidate accounts at a time.",
+            )
+            return RedirectResponse(url="/source-directory", status_code=303)
+
+        page_data = build_relationship_page(
+            request,
+            page_number=1,
+            page_size=len(normalized_source_user_ids),
+            search="",
+            department_id="",
+            status="",
+            employee_id_state="",
+            relationship_status="all",
+            verify_ad=True,
+            source_user_ids=normalized_source_user_ids,
+        )
+        relationships_by_id = {
+            item.source_user_id: item for item in page_data["relationships"]
+        }
+        missing_source_user_ids = sorted(
+            set(normalized_source_user_ids) - set(relationships_by_id)
+        )
+        ineligible = [
+            item
+            for item in relationships_by_id.values()
+            if not item.creation_eligibility.get("eligible")
+        ]
+        if (
+            not page_data["snapshot"]
+            or not page_data["ad_verified"]
+            or missing_source_user_ids
+            or ineligible
+        ):
+            blocked_reasons = sorted(
+                {
+                    str(item.creation_eligibility.get("reason") or "").strip()
+                    for item in ineligible
+                    if str(item.creation_eligibility.get("reason") or "").strip()
+                }
+            )
+            message = (
+                blocked_reasons[0]
+                if len(blocked_reasons) == 1
+                else "One or more selected candidates are no longer eligible for account creation. Verify the page and review their bindings."
+            )
+            flash(request, "error", message)
+            return RedirectResponse(
+                url="/source-directory?verify_ad=true",
+                status_code=303,
+            )
+
+        repositories = get_web_repositories(request)
+        current_org = get_current_org(request)
+        snapshot = page_data["snapshot"]
+        scope = page_data["scope"] or {}
+        provider_id = page_data["provider_id"]
+        try:
+            selection = repositories.source_directory_repo.save_scope_selection(
+                org_id=current_org.org_id,
+                provider_id=provider_id,
+                connector_id=str(scope.get("connector_id") or "default"),
+                scope_type="selected_users",
+                selected_source_user_ids=normalized_source_user_ids,
+                username_strategy=str(scope.get("username_strategy") or "userid"),
+                username_template=str(scope.get("username_template") or ""),
+                source_field=str(scope.get("source_field") or "source_user_id"),
+                snapshot_id=int(snapshot["id"]),
+                requested_by=user.username,
+            )
+        except ValueError as exc:
+            flash(request, "error", str(exc))
+            return RedirectResponse(
+                url="/source-directory?verify_ad=true",
+                status_code=303,
+            )
+
+        repositories.audit_repo.add_log(
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            action_type="source_directory.creation_selection.prepare",
+            target_type="sync_scope",
+            target_id=provider_id,
+            result="success",
+            message="Verified missing candidate accounts were prepared as an exact Dry Run scope",
+            payload={
+                "selected_user_count": len(normalized_source_user_ids),
+                "selection_fingerprint": selection["selection_fingerprint"],
+                "source_field": selection["source_field"],
+            },
+        )
+        flash(
+            request,
+            "success",
+            "Verified missing accounts are selected. Start a Dry Run to review the create operations; no AD changes have been made.",
+        )
+        return RedirectResponse(url="/jobs", status_code=303)
+
     @app.get("/api/source-directory/status")
     def source_directory_status(request: Request):
         user = require_capability(request, "config.read")
@@ -750,6 +893,8 @@ def register_source_directory_routes(
                 "page_number": max(int(page_number or 1), 1),
                 "page_size": bounded_page_size,
                 "ad_verified": bool(page_data["ad_verified"]),
+                "candidate_missing_count": int(page_data["candidate_missing_count"]),
+                "creation_eligible_count": int(page_data["creation_eligible_count"]),
                 "snapshot_fingerprint": str(snapshot["snapshot_fingerprint"] or "")
                 if snapshot
                 else "",

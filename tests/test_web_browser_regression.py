@@ -43,6 +43,14 @@ except ImportError:  # pragma: no cover - exercised when browser tooling is abse
 ARTIFACT_DIR = Path.cwd() / "test_artifacts" / "browser"
 
 
+class _MissingAccountPreviewProvider:
+    def get_users_batch(self, _usernames):
+        return {}
+
+    def close(self):
+        return None
+
+
 def _reserve_port() -> int:
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
@@ -800,6 +808,45 @@ class WebBrowserRegressionTests(unittest.TestCase):
             0,
         )
         self._capture("identity-relationship-evidence-desktop-en.png")
+
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_MissingAccountPreviewProvider(),
+        ):
+            self.page.goto(
+                f"{self.base_url}/source-directory?lang=en&verify_ad=true",
+                wait_until="networkidle",
+            )
+        self.assertIn(
+            "candidate ad account not found",
+            self.page.locator("body").inner_text().lower(),
+        )
+        self.assertTrue(
+            self.page.get_by_text(
+                "1 candidates eligible for creation", exact=True
+            ).is_visible()
+        )
+        alice_row = self.page.locator("tbody tr").filter(has_text="browser-alice")
+        self.assertTrue(
+            alice_row.get_by_text(
+                "Review saved binding before creation", exact=True
+            ).is_visible()
+        )
+        bob_row = self.page.locator("tbody tr").filter(has_text="browser-bob")
+        bob_row.get_by_role("button", name="Select for creation").click()
+        self.assertTrue(
+            bob_row.locator('input[name="selected_source_user_ids"]').is_checked()
+        )
+        self.assertEqual(
+            self.page.locator('select[name="scope_type"]').input_value(),
+            "selected_users",
+        )
+        self.assertTrue(
+            self.page.get_by_role(
+                "button", name="Prepare selected account creations"
+            ).is_enabled()
+        )
+        self._capture("identity-relationship-create-selection-desktop-en.png")
 
         self.page.select_option('select[name="relationship_status"]', "manual")
         self.page.get_by_role("button", name="Apply Filters").click()
