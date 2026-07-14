@@ -17,7 +17,10 @@ from sync_app.storage.local_db import (
     OrganizationRepository,
     SyncConflictRepository,
     SyncJobRepository,
+    SyncOperationLogRepository,
+    PlannedOperationRepository,
     SyncReplayRequestRepository,
+    SourceDirectoryRepository,
     SettingsRepository,
     UserIdentityBindingRepository,
     UserLifecycleQueueRepository,
@@ -416,9 +419,335 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self._capture("sspr-auth-error-mobile-zh.png")
 
     def test_source_directory_page_renders_paginated_scope_workflow_without_secrets(self):
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        source_repo = SourceDirectoryRepository(manager)
+        jobs = SyncJobRepository(manager)
+        operations = SyncOperationLogRepository(manager)
+        plans = PlannedOperationRepository(manager)
+        bindings = UserIdentityBindingRepository(manager)
+        config_repo = OrganizationConfigRepository(manager)
+        previous_config = config_repo.get_raw_config(
+            "default", config_path="config.ini"
+        )
+        config_repo.save_config(
+            "default",
+            {**previous_config, "source_provider": "dingtalk"},
+            config_path="config.ini",
+        )
+        self.addCleanup(
+            config_repo.save_config,
+            "default",
+            previous_config,
+            config_path="config.ini",
+        )
+        snapshot_id = source_repo.start_refresh(
+            org_id="default", provider_id="dingtalk", created_by="browser"
+        )
+        source_repo.replace_snapshot(
+            snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "1",
+                    "name": "Headquarters",
+                    "parent_department_id": "0",
+                    "path_ids": ["1"],
+                    "path_names": ["Headquarters"],
+                }
+            ],
+            users=[
+                {
+                    "source_user_id": "browser-alice",
+                    "display_name": "Alice Zhang",
+                    "employee_id": "TJ001",
+                    "email": "alice@example.com",
+                    "department_ids": ["1"],
+                    "department_names": ["Headquarters"],
+                    "is_active": True,
+                    "raw_payload": {"userid": "browser-alice", "employee_id": "TJ001"},
+                    "search_text": "Alice Zhang TJ001",
+                },
+                {
+                    "source_user_id": "browser-bob",
+                    "display_name": "Bob Li",
+                    "employee_id": "TJ002",
+                    "email": "bob@example.com",
+                    "department_ids": ["1"],
+                    "department_names": ["Headquarters"],
+                    "is_active": True,
+                    "raw_payload": {"userid": "browser-bob", "employee_id": "TJ002"},
+                    "search_text": "Bob Li TJ002",
+                },
+                {
+                    "source_user_id": "browser-carol",
+                    "display_name": "Carol Wu",
+                    "employee_id": "",
+                    "department_ids": ["1"],
+                    "department_names": ["Headquarters"],
+                    "is_active": True,
+                    "raw_payload": {"userid": "browser-carol"},
+                    "search_text": "Carol Wu",
+                },
+            ],
+            fields=[
+                {
+                    "name": "employee_id",
+                    "label": "Employee ID",
+                    "coverage": 2,
+                    "samples": ["TJ001", "TJ002"],
+                }
+            ],
+            fingerprint="browser-identity-snapshot-v1",
+        )
+        selection = source_repo.save_scope_selection(
+            org_id="default",
+            provider_id="dingtalk",
+            scope_type="full",
+            username_strategy="employee_id",
+            source_field="employee_id",
+            snapshot_id=snapshot_id,
+            requested_by="browser",
+        )
+        compatibility_snapshot_id = source_repo.start_refresh(
+            org_id="default", provider_id="wecom", created_by="browser"
+        )
+        source_repo.replace_snapshot(
+            compatibility_snapshot_id,
+            departments=source_repo.list_departments(
+                snapshot_id, org_id="default"
+            ),
+            users=source_repo.list_users(
+                snapshot_id,
+                org_id="default",
+                provider_id="dingtalk",
+                limit=100,
+            )["items"],
+            fields=[
+                {
+                    "name": item["field_name"],
+                    "label": item["field_label"],
+                    "coverage": item["coverage_count"],
+                    "samples": item["samples"],
+                }
+                for item in source_repo.list_field_catalog(
+                    snapshot_id, org_id="default"
+                )
+            ],
+            fingerprint="browser-identity-snapshot-wecom-compat-v1",
+        )
+        source_repo.save_scope_selection(
+            org_id="default",
+            provider_id="wecom",
+            scope_type="full",
+            username_strategy="employee_id",
+            source_field="employee_id",
+            snapshot_id=compatibility_snapshot_id,
+            requested_by="browser",
+        )
+        bindings.upsert_binding(
+            "browser-alice",
+            "alice.manual",
+            org_id="default",
+            source_provider="dingtalk",
+            connector_id="default",
+            source="manual",
+        )
+        bindings.upsert_binding(
+            "browser-carol",
+            "carol.disabled",
+            org_id="default",
+            source_provider="dingtalk",
+            connector_id="default",
+            source="managed_generated",
+            is_enabled=False,
+        )
+        resolution = {
+            "source_provider": "dingtalk",
+            "connector_id": "default",
+            "source_display_name": "Alice Zhang",
+            "source": "manual_binding",
+            "ad_username": "alice.manual",
+            "mapping_input": {
+                "field_name": "employee_id",
+                "field_label": "Employee ID",
+                "value": "TJ001",
+                "method": "employee_id",
+                "template": "{employee_id}",
+            },
+            "candidate_mapping": {
+                "ad_username": "TJ001",
+                "source": "managed_username_primary",
+                "risks": [],
+            },
+            "before_state": {
+                "bound_ad_username": "alice.manual",
+                "binding_source": "manual",
+                "binding_enabled": True,
+                "connector_id": "default",
+                "ad_account_state": {
+                    "status": "unavailable",
+                    "exists": None,
+                    "enabled": None,
+                    "locked": None,
+                    "protected": False,
+                },
+                "verified_at": "2026-07-14T01:00:00+00:00",
+            },
+            "rule_hits": ["manual_binding"],
+            "explanation": "Manual binding overrides the field-generated candidate",
+        }
+        jobs.create_job(
+            "browser-identity-dry",
+            "browser_regression",
+            "dry_run",
+            "COMPLETED",
+            org_id="default",
+        )
+        jobs.update_job(
+            "browser-identity-dry",
+            summary={"plan_fingerprint": "browser-plan-1"},
+            ended=True,
+        )
+        source_repo.bind_job_scope(
+            job_id="browser-identity-dry",
+            execution_mode="dry_run",
+            config_fingerprint="browser-config-1",
+            selection=selection,
+        )
+        operations.add_record(
+            job_id="browser-identity-dry",
+            stage_name="plan",
+            object_type="user_binding",
+            operation_type="resolve_identity_binding",
+            status="selected",
+            message="structured resolution",
+            source_id="browser-alice",
+            target_id="alice.manual",
+            details=resolution,
+        )
+        plans.add_operation(
+            "browser-identity-dry",
+            "user",
+            "update_user",
+            source_id="browser-alice",
+            desired_state={"connector_id": "default", "ad_username": "alice.manual"},
+        )
+        jobs.create_job(
+            "browser-identity-apply",
+            "browser_regression",
+            "apply",
+            "COMPLETED",
+            org_id="default",
+        )
+        jobs.update_job(
+            "browser-identity-apply",
+            summary={"plan_fingerprint": "browser-plan-1"},
+            ended=True,
+        )
+        source_repo.bind_job_scope(
+            job_id="browser-identity-apply",
+            execution_mode="apply",
+            config_fingerprint="browser-config-1",
+            selection=selection,
+        )
+        operations.add_record(
+            job_id="browser-identity-apply",
+            stage_name="plan",
+            object_type="user_binding",
+            operation_type="resolve_identity_binding",
+            status="selected",
+            message="structured resolution",
+            source_id="browser-alice",
+            target_id="alice.manual",
+            details=resolution,
+        )
+        operations.add_record(
+            job_id="browser-identity-apply",
+            stage_name="apply",
+            object_type="user",
+            operation_type="update_user",
+            status="succeeded",
+            message="updated",
+            source_id="browser-alice",
+            target_id="alice.manual",
+            details={
+                "connector_id": "default",
+                "binding_resolution": resolution,
+                "post_apply_ad_account_state": {
+                    "status": "exists",
+                    "exists": True,
+                    "enabled": True,
+                },
+            },
+        )
+        failed_resolution = {
+            **resolution,
+            "source_display_name": "Bob Li",
+            "source": "generated_username",
+            "ad_username": "TJ002",
+            "mapping_input": {
+                **resolution["mapping_input"],
+                "value": "TJ002",
+            },
+            "candidate_mapping": {
+                **resolution["candidate_mapping"],
+                "ad_username": "TJ002",
+            },
+            "before_state": {
+                **resolution["before_state"],
+                "bound_ad_username": "",
+                "binding_source": "",
+            },
+            "rule_hits": ["managed_username_primary"],
+            "explanation": "Field mapping candidate selected for Apply",
+        }
+        jobs.create_job(
+            "browser-identity-failed",
+            "browser_regression",
+            "apply",
+            "FAILED",
+            org_id="default",
+        )
+        jobs.update_job(
+            "browser-identity-failed",
+            summary={"plan_fingerprint": "browser-plan-1"},
+            ended=True,
+        )
+        source_repo.bind_job_scope(
+            job_id="browser-identity-failed",
+            execution_mode="apply",
+            config_fingerprint="browser-config-1",
+            selection=selection,
+        )
+        operations.add_record(
+            job_id="browser-identity-failed",
+            stage_name="plan",
+            object_type="user_binding",
+            operation_type="resolve_identity_binding",
+            status="selected",
+            message="structured resolution",
+            source_id="browser-bob",
+            target_id="TJ002",
+            details=failed_resolution,
+        )
+        operations.add_record(
+            job_id="browser-identity-failed",
+            stage_name="apply",
+            object_type="user",
+            operation_type="create_user",
+            status="failed",
+            message="simulated browser evidence only",
+            source_id="browser-bob",
+            target_id="TJ002",
+            details={
+                "connector_id": "default",
+                "binding_resolution": failed_resolution,
+            },
+        )
+
         self._login()
         self.page.goto(f"{self.base_url}/source-directory", wait_until="networkidle")
-        self.assertTrue(self.page.get_by_role("heading", name="WeCom Users").is_visible())
+        self.assertTrue(self.page.get_by_role("heading", name="DingTalk Users").is_visible())
         self.assertTrue(self.page.get_by_role("button", name="Test Connection").is_visible())
         self.assertTrue(self.page.get_by_role("button", name="Refresh Directory").is_visible())
         self.assertTrue(self.page.get_by_text("Partial sync safety", exact=True).is_visible())
@@ -426,7 +755,80 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(self.page.get_by_role("button", name="Select All Filtered Results").is_visible())
         self.assertEqual(self.page.locator('select[name="scope_type"]').count(), 1)
         self.assertEqual(self.page.locator('select[name="source_field"]').count(), 1)
+        self.assertEqual(self.page.locator("thead tr").count(), 2)
+        relationship_table = self.page.locator(".identity-relationship-table")
+        self.assertTrue(relationship_table.is_visible())
+        self.assertEqual(relationship_table.get_attribute("tabindex"), "0")
+        self.assertGreater(
+            relationship_table.evaluate("element => element.scrollWidth"),
+            relationship_table.evaluate("element => element.clientWidth"),
+        )
+        page_text = relationship_table.inner_text()
+        for expected in (
+            "Alice Zhang",
+            "browser-alice",
+            "TJ001",
+            "alice.manual",
+            "Manual binding overrides the field-generated candidate",
+            "Temporarily unavailable",
+            "browser-identity-dry",
+            "browser-identity-apply",
+            "Apply failed",
+            "carol.disabled",
+            "Binding disabled",
+            "Post-Apply AD state",
+        ):
+            self.assertIn(expected.lower(), page_text.lower())
         self.assertNotIn("corpsecret", self.page.content().lower())
+        self.assertNotIn("distinguishedname", self.page.content().lower())
+        self._capture("identity-relationship-desktop-en.png")
+        relationship_table.evaluate(
+            "element => { element.scrollLeft = element.scrollWidth; }"
+        )
+        self.assertGreater(
+            relationship_table.evaluate("element => element.scrollLeft"),
+            0,
+        )
+        self._capture("identity-relationship-evidence-desktop-en.png")
+
+        self.page.select_option('select[name="relationship_status"]', "manual")
+        self.page.get_by_role("button", name="Apply Filters").click()
+        self.page.wait_for_load_state("networkidle")
+        self.assertIn("1 matching users", self.page.locator(".pagination-bar").inner_text())
+        self.assertIn("Alice Zhang", relationship_table.inner_text())
+
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.page.goto(
+            f"{self.base_url}/source-directory?lang=zh-CN",
+            wait_until="networkidle",
+        )
+        self._assert_page_has_no_horizontal_overflow()
+        self.assertEqual(
+            relationship_table.get_attribute("aria-label"),
+            "身份关联及同步前后预览",
+        )
+        self.assertIn("暂时无法验证", self.page.locator("body").inner_text())
+        self.assertEqual(
+            self.page.locator("[data-source-selection-status]").inner_text(),
+            "当前页已选择 0 个用户。",
+        )
+        self._capture("identity-relationship-mobile-zh.png")
+
+        self.page.set_viewport_size({"width": 1440, "height": 1100})
+        self.page.goto(
+            f"{self.base_url}/jobs/browser-identity-apply?lang=zh-CN",
+            wait_until="networkidle",
+        )
+        self.assertIn("身份解析结果", self.page.locator("body").inner_text())
+        self.assertIn("Alice Zhang", self.page.locator("body").inner_text())
+        self._capture("identity-resolution-job-detail-zh.png")
+
+        self.page.goto(
+            f"{self.base_url}/source-directory?lang=en&search=no-such-browser-user",
+            wait_until="networkidle",
+        )
+        self.assertIn("No cached users match", self.page.locator("body").inner_text())
+        self._capture("identity-relationship-empty-state.png")
 
     def _assert_page_has_no_horizontal_overflow(self) -> None:
         dimensions = self.page.evaluate(
@@ -434,6 +836,21 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 viewportWidth: document.documentElement.clientWidth,
                 documentWidth: document.documentElement.scrollWidth,
                 bodyWidth: document.body.scrollWidth,
+                overflowing: Array.from(document.querySelectorAll('body *'))
+                    .filter(element => {
+                        const rect = element.getBoundingClientRect();
+                        const style = getComputedStyle(element);
+                        return style.position !== 'fixed'
+                            && rect.width > 0
+                            && (rect.right > innerWidth + 1 || rect.left < -1);
+                    })
+                    .slice(0, 12)
+                    .map(element => ({
+                        tag: element.tagName,
+                        className: String(element.className || ''),
+                        id: element.id || '',
+                        rect: element.getBoundingClientRect().toJSON(),
+                    })),
             })"""
         )
         self.assertLessEqual(
@@ -1348,6 +1765,15 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "audit": ("/audit?lang=zh-CN", ".table-shell"),
             "organizations": ("/organizations?lang=zh-CN", ".table-shell"),
             "connectors": ("/advanced-sync?lang=zh-CN", ".page-header"),
+            "source-directory": (
+                "/source-directory?lang=zh-CN",
+                ".identity-relationship-table",
+            ),
+            "mappings": ("/mappings?lang=zh-CN", ".table-shell"),
+            "identity-job": (
+                "/jobs/browser-identity-apply?lang=zh-CN",
+                ".identity-resolution-results",
+            ),
         }
         records: list[dict[str, object]] = []
         console_errors: list[dict[str, str]] = []

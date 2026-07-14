@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Iterable
 
@@ -400,7 +401,10 @@ def build_managed_username_candidates(
                 "Fallback candidate appends a stable three-digit sequence suffix",
             )
     if collision_policy == "append_hash":
-        hash_suffix = f"{abs(hash(f'{userid}:{employee_id}:{user.name}')) % 10000:04d}"
+        digest = hashlib.sha256(
+            f"{userid}:{employee_id}:{user.name}".encode("utf-8")
+        ).hexdigest()
+        hash_suffix = f"{int(digest[:8], 16) % 10000:04d}"
         add_candidate(
             "managed_username_hash_suffix",
             _with_username_suffix(base_candidate or userid or email_localpart, hash_suffix),

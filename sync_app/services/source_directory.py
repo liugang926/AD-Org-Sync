@@ -6,7 +6,16 @@ from typing import Any
 
 from sync_app.core.fingerprints import fingerprint_json
 from sync_app.core.models import SourceDirectoryUser
-from sync_app.core.sync_policies import AD_USERNAME_MAX_LENGTH, build_managed_username_candidates
+from sync_app.core.sync_policies import (
+    AD_USERNAME_MAX_LENGTH,
+    build_identity_candidates,
+    build_managed_username_candidates,
+    build_template_context,
+    normalize_username_collision_policy,
+    normalize_username_strategy,
+    render_template,
+    resolve_username_template,
+)
 from sync_app.storage.repositories.source_directory import SourceDirectoryRepository
 
 
@@ -402,7 +411,7 @@ class SourceDirectoryService:
     def _mask_field_sample(cls, field_name: str, value: str) -> str:
         text = str(value or "")[:80]
         lowered = str(field_name or "").lower()
-        if "email" in lowered:
+        if "email" in lowered and "@" in text:
             return cls._mask_email(text)
         if lowered in {"display_name", "name"}:
             return text[:1] + ("***" if len(text) > 1 else "")
@@ -412,13 +421,17 @@ class SourceDirectoryService:
             return f"{text[:1]}***{text[-1:]}"
         return f"{text[:2]}***{text[-2:]}"
 
-    @staticmethod
+    @classmethod
     def preview_username(
+        cls,
         row: dict[str, Any],
         *,
         username_strategy: str,
         username_template: str = "",
         source_field: str = "",
+        username_collision_policy: str = "append_employee_id",
+        username_collision_template: str = "",
+        field_label: str = "",
     ) -> dict[str, Any]:
         raw_payload = dict(row.get("raw_payload") or {})
         raw_payload.update(
@@ -431,27 +444,124 @@ class SourceDirectoryService:
                 "department": row.get("department_ids") or [],
             }
         )
-        strategy = username_strategy
+        strategy = normalize_username_strategy(
+            "userid" if username_strategy == "source_user_id" else username_strategy
+        )
         template = username_template
-        if source_field and source_field not in {"source_user_id", "employee_id", "email_localpart"}:
+        normalized_source_field = str(source_field or "").strip()
+        if normalized_source_field and normalized_source_field not in {
+            "source_user_id",
+            "employee_id",
+            "email_localpart",
+            "pinyin_initials_employee_id",
+            "pinyin_full_employee_id",
+            "family_name_pinyin_given_initials",
+            "family_name_pinyin_given_name_pinyin",
+            "custom_template",
+        }:
             strategy = "custom_template"
-            template = "{" + source_field + "}"
+            template = "{" + normalized_source_field + "}"
         user = SourceDirectoryUser.from_source_payload(raw_payload)
+        template_context = build_template_context(user)
+        resolved_template = resolve_username_template(strategy, template)
+        rendered_value = render_template(resolved_template, template_context)
         candidates = build_managed_username_candidates(
             user,
             username_strategy=strategy,
             username_template=template,
+            username_collision_policy=normalize_username_collision_policy(
+                username_collision_policy
+            ),
+            username_collision_template=username_collision_template,
         )
-        username = str(candidates[0]["username"] if candidates else "")
-        source_value = str(raw_payload.get(source_field) or "") if source_field else ""
+        resolution_candidates = build_identity_candidates(
+            user,
+            username_strategy=strategy,
+            username_template=template,
+            username_collision_policy=normalize_username_collision_policy(
+                username_collision_policy
+            ),
+            username_collision_template=username_collision_template,
+        )
+        primary_candidate = next(
+            (
+                item
+                for item in candidates
+                if item.get("rule") == "managed_username_primary"
+            ),
+            None,
+        )
+        username = str((primary_candidate or {}).get("username") or "")
+        field_context_key = {
+            "source_user_id": "userid",
+            "employee_id": "employee_id",
+            "email_localpart": "email_localpart",
+        }.get(normalized_source_field, normalized_source_field)
+        source_value = str(template_context.get(field_context_key) or "") if field_context_key else ""
+        if normalized_source_field in {
+            "pinyin_initials_employee_id",
+            "pinyin_full_employee_id",
+            "family_name_pinyin_given_initials",
+            "family_name_pinyin_given_name_pinyin",
+            "custom_template",
+        }:
+            source_value = rendered_value
+        cleaned_value = re.sub(r"[^A-Za-z0-9._-]+", "", rendered_value.strip())
         risks: list[str] = []
         if not username:
             risks.append("mapping_field_missing")
-        if source_value and len(re.sub(r"[^A-Za-z0-9._-]+", "", source_value)) > AD_USERNAME_MAX_LENGTH:
+        if cleaned_value and len(cleaned_value) > AD_USERNAME_MAX_LENGTH:
             risks.append("username_truncated")
-        if source_value and re.sub(r"[^A-Za-z0-9._-]+", "", source_value) != source_value:
+        if rendered_value and cleaned_value != rendered_value.strip():
             risks.append("illegal_characters_removed")
-        return {"username": username, "risks": risks, "candidates": candidates[:5]}
+        case_normalized = bool(username and rendered_value and username != rendered_value and username.lower() == rendered_value.lower())
+        masked_value = source_value
+        lowered_field = normalized_source_field.lower()
+        if lowered_field == "email_localpart":
+            masked_value = cls._mask_field_sample(
+                normalized_source_field, source_value
+            )
+        elif "email" in lowered_field:
+            masked_value = cls._mask_email(source_value)
+        elif any(token in lowered_field for token in ("mobile", "phone", "telephone", "secret", "token", "password")):
+            masked_value = cls._mask_field_sample(normalized_source_field, source_value)
+        rendered_display_value = rendered_value
+        if lowered_field == "email_localpart":
+            rendered_display_value = cls._mask_field_sample(
+                normalized_source_field, rendered_value
+            )
+        elif "email" in lowered_field:
+            rendered_display_value = cls._mask_email(rendered_value)
+        elif any(
+            token in lowered_field
+            for token in ("mobile", "phone", "telephone", "secret", "token", "password")
+        ):
+            rendered_display_value = cls._mask_field_sample(
+                normalized_source_field, rendered_value
+            )
+        return {
+            "username": username,
+            "risks": risks,
+            "candidates": candidates[:5],
+            "resolution_candidates": resolution_candidates,
+            "mapping_input": {
+                "field_name": normalized_source_field or strategy,
+                "field_label": field_label or normalized_source_field or strategy,
+                "value": masked_value,
+                "method": strategy,
+                "template": resolved_template,
+            },
+            "candidate_mapping": {
+                "ad_username": username,
+                "source": str((primary_candidate or {}).get("rule") or "unresolved"),
+                "normalized_value": username,
+                "raw_rendered_value": rendered_display_value,
+                "illegal_characters_removed": "illegal_characters_removed" in risks,
+                "truncated": "username_truncated" in risks,
+                "case_normalized": case_normalized,
+                "risks": list(risks),
+            },
+        }
 
 
 __all__ = ["SourceDirectoryService", "bounded_scalar_payload", "mask_mobile"]

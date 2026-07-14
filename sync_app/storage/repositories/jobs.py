@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from sync_app.core.models import SyncJobRecord, SyncOperationRecord
 from sync_app.storage.local_db import BaseRepository, dumps_json, utcnow_iso
@@ -652,6 +652,58 @@ class PlannedOperationRepository(BaseRepository):
             )
         return result, total
 
+    def list_user_operations_for_jobs(
+        self,
+        job_ids: Iterable[str],
+        *,
+        source_user_ids: Iterable[str] = (),
+    ) -> list[dict[str, Any]]:
+        normalized_jobs = sorted(
+            {str(value or "").strip() for value in job_ids if str(value or "").strip()}
+        )
+        if not normalized_jobs:
+            return []
+        normalized_users = sorted(
+            {str(value or "").strip() for value in source_user_ids if str(value or "").strip()}
+        )
+        rows: list[Any] = []
+        user_chunks = [normalized_users[index : index + 300] for index in range(0, len(normalized_users), 300)] or [[]]
+        for job_index in range(0, len(normalized_jobs), 200):
+            job_chunk = normalized_jobs[job_index : job_index + 200]
+            for user_chunk in user_chunks:
+                clauses = [
+                    f"job_id IN ({','.join('?' for _ in job_chunk)})",
+                    "object_type IN ('user', 'user_binding')",
+                ]
+                params: list[Any] = [*job_chunk]
+                if user_chunk:
+                    clauses.append(
+                        f"source_id IN ({','.join('?' for _ in user_chunk)})"
+                    )
+                    params.extend(user_chunk)
+                rows.extend(
+                    self._fetchall(
+                        f"""
+                        SELECT * FROM planned_operations
+                        WHERE {" AND ".join(clauses)}
+                        ORDER BY created_at ASC, id ASC
+                        """,
+                        tuple(params),
+                    )
+                )
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            desired_state = item.pop("desired_state_json", None)
+            if isinstance(desired_state, str) and desired_state:
+                try:
+                    desired_state = json.loads(desired_state)
+                except json.JSONDecodeError:
+                    desired_state = {}
+            item["desired_state"] = desired_state if isinstance(desired_state, dict) else {}
+            result.append(item)
+        return result
+
 
 class SyncOperationLogRepository(BaseRepository):
     def add_record(
@@ -731,3 +783,182 @@ class SyncOperationLogRepository(BaseRepository):
             (job_id, int(limit), max(int(offset), 0)),
         )
         return [SyncOperationRecord.from_row(row) for row in rows], total
+
+    @staticmethod
+    def _identity_evidence_row(row: Any) -> dict[str, Any]:
+        item = dict(row)
+        details = item.pop("details_json", None)
+        summary = item.pop("summary_json", None)
+        for key, value in (("details", details), ("job_summary", summary)):
+            if isinstance(value, str) and value:
+                try:
+                    value = json.loads(value)
+                except json.JSONDecodeError:
+                    value = {}
+            item[key] = value if isinstance(value, dict) else {}
+        return item
+
+    def list_identity_resolution_evidence_for_job(
+        self,
+        job_id: str,
+        *,
+        org_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = self._fetchall(
+            """
+            SELECT l.*, j.org_id, j.execution_mode, j.status AS job_status,
+                   j.started_at AS job_started_at, j.ended_at AS job_ended_at,
+                   j.config_snapshot_hash, j.summary_json,
+                   COALESCE(s.provider_id, '') AS provider_id,
+                   COALESCE(s.connector_id, '') AS scope_connector_id,
+                   COALESCE(s.source_snapshot_fingerprint, '') AS source_snapshot_fingerprint,
+                   COALESCE(s.selection_fingerprint, '') AS selection_fingerprint
+            FROM sync_operation_logs AS l
+            JOIN sync_jobs AS j ON j.job_id = l.job_id
+            LEFT JOIN sync_job_source_scopes AS s ON s.job_id = l.job_id
+            WHERE l.job_id = ?
+              AND j.org_id = ?
+              AND l.operation_type = 'resolve_identity_binding'
+            ORDER BY l.created_at ASC, l.id ASC
+            """,
+            (str(job_id or "").strip(), self._resolve_org_id(org_id) or "default"),
+        )
+        return [self._identity_evidence_row(row) for row in rows]
+
+    def list_latest_identity_resolution_evidence(
+        self,
+        source_user_ids: Iterable[str],
+        *,
+        org_id: str,
+        source_provider: str,
+        connector_ids: Iterable[str] = (),
+        execution_mode: str | None = None,
+        successful_only: bool = False,
+        chunk_size: int = 350,
+    ) -> list[dict[str, Any]]:
+        """Return structured resolution rows for bounded source identities.
+
+        Results include all recent candidates so the presentation service can
+        detect ambiguity and choose the newest admissible job without parsing
+        human-readable log messages.
+        """
+
+        normalized_ids = sorted(
+            {str(value or "").strip() for value in source_user_ids if str(value or "").strip()}
+        )
+        if not normalized_ids:
+            return []
+        normalized_connectors = {
+            str(value or "").strip() for value in connector_ids if str(value or "").strip()
+        }
+        normalized_mode = str(execution_mode or "").strip().lower()
+        provider = str(source_provider or "").strip().lower()
+        safe_chunk_size = min(max(int(chunk_size or 350), 1), 350)
+        evidence: list[dict[str, Any]] = []
+        for index in range(0, len(normalized_ids), safe_chunk_size):
+            chunk = normalized_ids[index : index + safe_chunk_size]
+            clauses = [
+                "j.org_id = ?",
+                "l.operation_type = 'resolve_identity_binding'",
+                f"l.source_id IN ({','.join('?' for _ in chunk)})",
+            ]
+            params: list[Any] = [self._resolve_org_id(org_id) or "default", *chunk]
+            if normalized_mode:
+                clauses.append("LOWER(j.execution_mode) = ?")
+                params.append(normalized_mode)
+            if successful_only:
+                clauses.append("j.status = 'COMPLETED'")
+            rows = self._fetchall(
+                f"""
+                SELECT l.*, j.org_id, j.execution_mode, j.status AS job_status,
+                       j.started_at AS job_started_at, j.ended_at AS job_ended_at,
+                       j.config_snapshot_hash, j.summary_json,
+                       COALESCE(s.provider_id, '') AS provider_id,
+                       COALESCE(s.connector_id, '') AS scope_connector_id,
+                       COALESCE(s.source_snapshot_fingerprint, '') AS source_snapshot_fingerprint,
+                       COALESCE(s.selection_fingerprint, '') AS selection_fingerprint
+                FROM sync_operation_logs AS l
+                JOIN sync_jobs AS j ON j.job_id = l.job_id
+                LEFT JOIN sync_job_source_scopes AS s ON s.job_id = l.job_id
+                WHERE {" AND ".join(clauses)}
+                ORDER BY j.started_at DESC, l.created_at DESC, l.id DESC
+                """,
+                tuple(params),
+            )
+            for row in rows:
+                item = self._identity_evidence_row(row)
+                details = dict(item.get("details") or {})
+                item_provider = str(
+                    item.get("provider_id") or details.get("source_provider") or ""
+                ).strip().lower()
+                item_connector = str(
+                    details.get("connector_id")
+                    or item.get("scope_connector_id")
+                    or "default"
+                ).strip()
+                if provider and item_provider != provider:
+                    continue
+                if normalized_connectors and item_connector not in normalized_connectors:
+                    continue
+                item["resolved_connector_id"] = item_connector
+                evidence.append(item)
+        return evidence
+
+    def list_user_operation_evidence_for_jobs(
+        self,
+        job_ids: Iterable[str],
+        *,
+        org_id: str,
+        source_user_ids: Iterable[str] = (),
+    ) -> list[dict[str, Any]]:
+        normalized_jobs = sorted(
+            {str(value or "").strip() for value in job_ids if str(value or "").strip()}
+        )
+        if not normalized_jobs:
+            return []
+        normalized_users = sorted(
+            {str(value or "").strip() for value in source_user_ids if str(value or "").strip()}
+        )
+        rows: list[Any] = []
+        user_chunks = [normalized_users[index : index + 300] for index in range(0, len(normalized_users), 300)] or [[]]
+        for job_index in range(0, len(normalized_jobs), 200):
+            job_chunk = normalized_jobs[job_index : job_index + 200]
+            for user_chunk in user_chunks:
+                clauses = [
+                    "j.org_id = ?",
+                    f"l.job_id IN ({','.join('?' for _ in job_chunk)})",
+                    "l.object_type = 'user'",
+                    "l.stage_name = 'apply'",
+                ]
+                params: list[Any] = [
+                    self._resolve_org_id(org_id) or "default",
+                    *job_chunk,
+                ]
+                if user_chunk:
+                    clauses.append(
+                        f"l.source_id IN ({','.join('?' for _ in user_chunk)})"
+                    )
+                    params.extend(user_chunk)
+                rows.extend(
+                    self._fetchall(
+                        f"""
+                        SELECT l.*, j.execution_mode, j.status AS job_status,
+                               j.started_at AS job_started_at, j.ended_at AS job_ended_at,
+                               j.summary_json
+                        FROM sync_operation_logs AS l
+                        JOIN sync_jobs AS j ON j.job_id = l.job_id
+                        WHERE {" AND ".join(clauses)}
+                        ORDER BY j.started_at DESC, l.created_at DESC, l.id DESC
+                        """,
+                        tuple(params),
+                    )
+                )
+        rows.sort(
+            key=lambda row: (
+                str(row["job_started_at"] or ""),
+                str(row["created_at"] or ""),
+                int(row["id"] or 0),
+            ),
+            reverse=True,
+        )
+        return [self._identity_evidence_row(row) for row in rows]

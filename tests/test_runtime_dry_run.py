@@ -233,8 +233,16 @@ class RunSyncDryRunTests(unittest.TestCase):
         manager = DatabaseManager(db_path=db_path)
         manager.initialize(create_startup_snapshot=False, verify_integrity=True)
         binding = UserIdentityBindingRepository(manager).get_binding_record_by_source_user_id("alice")
-        self.assertIsNotNone(binding)
-        self.assertEqual(binding.ad_username, "alice")
+        self.assertIsNone(binding)
+        proposed_bindings = [
+            item
+            for item in PlannedOperationRepository(manager).list_operations_for_job(
+                result["job_id"]
+            )
+            if item["operation_type"] == "propose_identity_binding"
+        ]
+        self.assertEqual(len(proposed_bindings), 1)
+        self.assertEqual(proposed_bindings[0]["desired_state"]["ad_username"], "alice")
 
     def test_run_sync_job_applies_basic_scope_and_directory_root_ou_settings(self):
         config = AppConfig(
@@ -2520,8 +2528,7 @@ class RunSyncDryRunTests(unittest.TestCase):
             "alice.wecom",
             org_id="default",
         )
-        self.assertIsNotNone(asia_binding)
-        self.assertEqual(asia_binding.ad_username, "2001")
+        self.assertIsNone(asia_binding)
         self.assertIsNotNone(default_binding)
         self.assertEqual(default_binding.ad_username, "legacy.default")
 

@@ -4,8 +4,9 @@ import json
 from typing import Any, Callable
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from sync_app.services.identity_relationships import IdentityRelationshipPreviewService
 from sync_app.web.app_state import get_web_repositories, get_web_runtime_state, get_web_services
 
 
@@ -131,6 +132,24 @@ def register_job_routes(
         if job.org_id and job.org_id != current_org.org_id:
             flash(request, "error", "Job does not belong to the current organization")
             return RedirectResponse(url="/jobs", status_code=303)
+        identity_service = IdentityRelationshipPreviewService(
+            source_directory_repo=repositories.source_directory_repo,
+            user_binding_repo=repositories.user_binding_repo,
+            operation_log_repo=repositories.operation_log_repo,
+            planned_operation_repo=repositories.planned_operation_repo,
+        )
+        identity_rows = identity_service.build_job_identity_resolutions(
+            job_id,
+            org_id=current_org.org_id,
+        )
+        identity_result = fetch_page(
+            lambda *, limit, offset: (
+                identity_rows[offset : offset + limit],
+                len(identity_rows),
+            ),
+            page=parse_page_number(request.query_params.get("identity_page"), 1),
+            page_size=25,
+        )
         return render(
             request,
             "job_detail.html",
@@ -142,6 +161,8 @@ def register_job_routes(
                 org_id=current_org.org_id,
                 job=job,
             ),
+            identity_resolutions=identity_result[0],
+            identity_resolutions_page_data=identity_result[1],
             events=(events_result := fetch_page(
                 lambda *, limit, offset: repositories.event_repo.list_events_for_job_page(
                     job_id,
@@ -184,6 +205,46 @@ def register_job_routes(
             job_conflicts_page_data=conflicts_result[1],
             review_record=services.jobs.get_review_record(job_id),
             summary_json=json.dumps(job.summary or {}, ensure_ascii=False, indent=2),
+        )
+
+    @app.get("/api/jobs/{job_id}/identity-resolutions")
+    def job_identity_resolutions_api(
+        request: Request,
+        job_id: str,
+        page_number: int = 1,
+        page_size: int = 100,
+    ):
+        user = require_capability(request, "jobs.read")
+        if isinstance(user, RedirectResponse):
+            return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
+        services = get_web_services(request)
+        repositories = get_web_repositories(request)
+        current_org = get_current_org(request)
+        job = services.jobs.get_job_record(job_id)
+        if not job or (job.org_id and job.org_id != current_org.org_id):
+            return JSONResponse({"ok": False, "error": "Job not found"}, status_code=404)
+        identity_service = IdentityRelationshipPreviewService(
+            source_directory_repo=repositories.source_directory_repo,
+            user_binding_repo=repositories.user_binding_repo,
+            operation_log_repo=repositories.operation_log_repo,
+            planned_operation_repo=repositories.planned_operation_repo,
+        )
+        items = identity_service.build_job_identity_resolutions(
+            job_id,
+            org_id=current_org.org_id,
+        )
+        bounded_page = max(int(page_number or 1), 1)
+        bounded_size = min(max(int(page_size or 100), 1), 100)
+        offset = (bounded_page - 1) * bounded_size
+        return JSONResponse(
+            {
+                "ok": True,
+                "job_id": job_id,
+                "items": items[offset : offset + bounded_size],
+                "total": len(items),
+                "page_number": bounded_page,
+                "page_size": bounded_size,
+            }
         )
 
     @app.get("/database", response_class=HTMLResponse)

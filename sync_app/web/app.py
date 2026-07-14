@@ -574,6 +574,9 @@ def create_app(
 
     register_source_directory_routes(
         app,
+        build_target_provider_for_connector=sync_support_call(
+            "build_identity_preview_target_provider"
+        ),
         flash=request_support.flash,
         get_current_org=request_support.get_current_org,
         reject_invalid_csrf=request_support.reject_invalid_csrf,
@@ -583,6 +586,9 @@ def create_app(
 
     register_mapping_routes(
         app,
+        build_identity_preview_connector_specs=sync_support_call(
+            "build_identity_preview_connector_specs"
+        ),
         department_exists_in_source_provider=sync_support_call("department_exists_in_source_provider"),
         fetch_page=fetch_page,
         flash=request_support.flash,
