@@ -755,6 +755,16 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(self.page.get_by_role("button", name="Select All Filtered Results").is_visible())
         self.assertEqual(self.page.locator('select[name="scope_type"]').count(), 1)
         self.assertEqual(self.page.locator('select[name="source_field"]').count(), 1)
+        self.page.select_option('select[name="source_field"]', "source_user_id")
+        self.assertEqual(
+            self.page.locator('select[name="source_field"]').input_value(),
+            "source_user_id",
+        )
+        self.page.select_option('select[name="source_field"]', "employee_id")
+        self.assertEqual(
+            self.page.locator('select[name="source_field"]').input_value(),
+            "employee_id",
+        )
         self.assertEqual(self.page.locator("thead tr").count(), 2)
         relationship_table = self.page.locator(".identity-relationship-table")
         self.assertTrue(relationship_table.is_visible())
@@ -829,6 +839,67 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.assertIn("No cached users match", self.page.locator("body").inner_text())
         self._capture("identity-relationship-empty-state.png")
+
+        polling_snapshot_id = source_repo.start_refresh(
+            org_id="default", provider_id="dingtalk", created_by="browser-poll"
+        )
+        self.page.goto(
+            f"{self.base_url}/source-directory?lang=en",
+            wait_until="networkidle",
+        )
+        self.assertTrue(self.page.locator("[data-source-refresh-poll]").is_visible())
+        self.assertTrue(
+            self.page.get_by_text(
+                "This page will update automatically.", exact=False
+            ).is_visible()
+        )
+        self._capture("source-directory-refreshing-auto-update-en.png")
+        source_repo.replace_snapshot(
+            polling_snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "1",
+                    "name": "Headquarters",
+                    "parent_department_id": "0",
+                    "path_ids": ["1"],
+                    "path_names": ["Headquarters"],
+                }
+            ],
+            users=[
+                {
+                    "source_user_id": "browser-refresh-result",
+                    "display_name": "Refresh Result",
+                    "employee_id": "TJ900",
+                    "department_ids": ["1"],
+                    "department_names": ["Headquarters"],
+                    "is_active": True,
+                    "raw_payload": {
+                        "userid": "browser-refresh-result",
+                        "employee_id": "TJ900",
+                    },
+                    "search_text": "Refresh Result TJ900",
+                }
+            ],
+            fields=[
+                {
+                    "name": "employee_id",
+                    "label": "Employee ID",
+                    "coverage": 1,
+                    "samples": ["TJ900"],
+                }
+            ],
+            fingerprint="browser-refresh-poll-v1",
+        )
+        self.page.locator("[data-source-refresh-poll]").wait_for(
+            state="detached", timeout=8000
+        )
+        self.assertIn("Refresh Result", self.page.locator("body").inner_text())
+        self.page.select_option('select[name="source_field"]', "employee_id")
+        self.assertEqual(
+            self.page.locator('select[name="source_field"]').input_value(),
+            "employee_id",
+        )
+        self._capture("source-directory-refresh-complete-mapping-en.png")
 
     def _assert_page_has_no_horizontal_overflow(self) -> None:
         dimensions = self.page.evaluate(

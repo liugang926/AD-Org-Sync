@@ -16,6 +16,39 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertNotIn("secret-001", body)
         self.assertIn("Partial synchronization will not process offboarding", body)
 
+    def test_empty_directory_explains_refresh_prerequisite_and_keeps_employee_id_visible(self):
+        self._login("superadmin")
+        self.session["ui_language"] = "zh-CN"
+
+        response = self._route("/source-directory", "GET")(
+            self._request("/source-directory")
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("当前还没有成功的来源目录快照", body)
+        self.assertIn("工号 / 员工 ID (employee_id)", body)
+        self.assertIn("工号始终可选", body)
+        self.assertIn("disabled aria-disabled=\"true\"", body)
+        self.assertNotIn("verify_ad=true", body)
+
+    def test_refreshing_directory_renders_automatic_status_poll(self):
+        self._login("superadmin")
+        self.app.state.source_directory_repo.start_refresh(
+            org_id="default", provider_id="wecom", created_by="superadmin"
+        )
+
+        response = self._route("/source-directory", "GET")(
+            self._request("/source-directory")
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("data-source-refresh-poll", body)
+        self.assertIn('data-status-url="/api/source-directory/status"', body)
+        self.assertIn("This page will update automatically", body)
+        self.assertIn("disabled aria-disabled=\"true\"", body)
+
     def test_operator_cannot_open_or_modify_source_directory(self):
         self._login("operator1")
         response = self._route("/source-directory", "GET")(

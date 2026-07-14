@@ -14,7 +14,7 @@
     </form>
     <form method="post" action="/source-directory/refresh">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ button(t("Refresh Directory"), type="submit", variant="primary", icon="refresh-cw") }}
+      {{ button(t("Refresh Directory"), type="submit", variant="primary", icon="refresh-cw", disabled=(latest_refresh and latest_refresh.status == 'refreshing')) }}
     </form>
   </div>
 </section>
@@ -26,7 +26,25 @@
   {% if snapshot %}<span>{{ t("The previous successful snapshot is still being used.") }}</span>{% endif %}
 </div>
 {% elif latest_refresh and latest_refresh.status == 'refreshing' %}
-<div class="callout callout--info" role="status">{{ t("Directory refresh is in progress. The last successful snapshot remains available.") }}</div>
+<div
+  class="callout callout--info"
+  role="status"
+  aria-live="polite"
+  data-source-refresh-poll
+  data-status-url="/api/source-directory/status"
+  data-refreshing-text="{{ t('Directory refresh is in progress. This page will update automatically.') }}"
+  data-long-running-text="{{ t('Directory refresh is taking longer than expected, but it is still running. You can leave this page and return later.') }}"
+  data-succeeded-text="{{ t('Directory refresh completed. Reloading the latest users and mapping fields.') }}"
+  data-failed-text="{{ t('Directory refresh failed. Reloading the failure details.') }}"
+>
+  <strong>{{ t("Directory refresh is in progress.") }}</strong>
+  <span data-source-refresh-message>{{ t("Directory refresh is in progress. This page will update automatically.") }}</span>
+</div>
+{% elif not snapshot %}
+<div class="callout callout--warning" role="status">
+  <strong>{{ t("No successful source directory snapshot is available yet.") }}</strong>
+  <span>{{ t("Test the connection, then refresh the directory. Users and discovered mapping fields appear after the refresh succeeds.") }}</span>
+</div>
 {% endif %}
 {% if snapshot_expired %}
 <div class="callout callout--warning" role="status">{{ t("This source snapshot is stale. Refresh it before starting a new Dry Run.") }}</div>
@@ -80,6 +98,9 @@
   <div class="form-actions">
     {% if ad_verified %}
     <span class="badge badge--success" role="status">{{ t("Current-page AD accounts verified") }}</span>
+    {% elif not snapshot %}
+    {{ button(t("Verify current-page AD status"), type="button", variant="secondary", icon="shield-check", disabled=True) }}
+    <span class="form-help">{{ t("AD verification becomes available after a successful source directory refresh.") }}</span>
     {% else %}
     {{ button(t("Verify current-page AD status"), href="?page_number=" ~ page_number ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state ~ "&relationship_status=" ~ selected_relationship_status ~ "&verify_ad=true", variant="secondary", icon="shield-check") }}
     {% endif %}
@@ -93,9 +114,9 @@
     <input type="hidden" name="selection_status" value="{{ selected_status }}">
     <input type="hidden" name="selection_employee_id_state" value="{{ selected_employee_id_state }}">
     <div class="form-actions">
-      {{ button(t("Select Current Page"), type="button", variant="secondary", icon="check-square", attrs='data-select-current-page') }}
-      {{ button(t("Select All Filtered Results"), type="button", variant="secondary", icon="list-checks", attrs='data-select-all-filtered') }}
-      {{ button(t("Clear Selection"), type="button", variant="ghost", icon="x", attrs='data-clear-source-selection') }}
+      {{ button(t("Select Current Page"), type="button", variant="secondary", icon="check-square", attrs='data-select-current-page', disabled=(not snapshot)) }}
+      {{ button(t("Select All Filtered Results"), type="button", variant="secondary", icon="list-checks", attrs='data-select-all-filtered', disabled=(not snapshot)) }}
+      {{ button(t("Clear Selection"), type="button", variant="ghost", icon="x", attrs='data-clear-source-selection', disabled=(not snapshot)) }}
       <span
         class="form-help"
         data-source-selection-status
@@ -165,7 +186,7 @@
             <td>{% if item.risks %}{% for risk in item.risks %}<span class="badge badge--warning">{{ t(risk) }}</span>{% endfor %}{% else %}<span class="badge badge--success">{{ t("No identified risk") }}</span>{% endif %}</td>
             <td><a href="/mappings?q={{ item.source_user_id|urlencode }}">{{ t("Open binding") }}</a>{% if item.planned_after_state.job_id %}<br><a href="/jobs/{{ item.planned_after_state.job_id }}">{{ t("View Dry Run") }}</a>{% endif %}{% if item.applied_after_state.job_id %}<br><a href="/jobs/{{ item.applied_after_state.job_id }}">{{ t("View Apply") }}</a>{% endif %}<br><a href="/conflicts?q={{ item.source_user_id|urlencode }}">{{ t("View conflicts") }}</a></td>
           </tr>
-        {% else %}<tr><td colspan="27" class="empty-state">{{ t("No cached users match the current filters.") }}</td></tr>{% endfor %}
+        {% else %}<tr><td colspan="27" class="empty-state">{{ t("No cached users match the current filters.") if snapshot else t("No successful source snapshot is available. Refresh the directory to load users.") }}</td></tr>{% endfor %}
         </tbody>
       </table>
     </div>
@@ -200,13 +221,19 @@
             {% for field in fields %}{% if field.field_name not in ['source_user_id','employee_id','email','display_name','position','account_status'] %}<option value="{{ field.field_name }}" {% if selected_field == field.field_name %}selected{% endif %}>{{ t(field.field_label) }} ({{ field.field_name }}) · {{ t("Coverage") }} {{ field.coverage_count }}/{{ snapshot.user_count }}</option>{% endif %}{% endfor %}
           </optgroup>{% endif %}
         </select>
-        <span class="form-help">{{ t("Options show the business name and the actual source field name. Prefer the normalized Employee ID option for employee-number mapping.") }}</span>
+        <span class="form-help">{{ t("Options show the business name and the actual source field name. Employee ID is always available; custom fields appear after a successful refresh.") }}</span>
       </label>
       <label>{{ t("Custom Username Template") }}<input type="text" name="username_template" value="{{ scope.username_template if scope else '' }}" placeholder="{employee_id}"></label>
       {% if provider_id == 'wecom' %}<label>{{ t("WeCom Employee ID Extended Attribute") }}<input type="text" name="employee_id_attribute" value="{{ employee_id_attribute }}" placeholder="{{ t('For example: Employee ID or 工号') }}"><span class="form-help">{{ t("Leave empty to auto-detect common employee ID attribute names.") }}</span></label>{% endif %}
     </div>
-    <div class="callout callout--warning"><strong>{{ t("Partial sync safety") }}</strong><span>{{ t("Partial synchronization will not process offboarding for unselected or out-of-scope users.") }}</span></div>
-    <div class="form-actions">{{ button(t("Save Scope and Mapping"), type="submit", variant="primary", icon="save") }}</div>
+    <div class="callout callout--warning">
+      <strong>{{ t("Partial sync safety") }}</strong>
+      <span>{{ t("Partial synchronization will not process offboarding for unselected or out-of-scope users.") }}</span>
+    </div>
+    <div class="form-actions">
+      {{ button(t("Save Scope and Mapping"), type="submit", variant="primary", icon="save", disabled=(not snapshot)) }}
+      {% if not snapshot %}<span class="form-help">{{ t("Scope and mapping can be saved after a successful source directory refresh.") }}</span>{% endif %}
+    </div>
   </form>
 </section>
 {% endblock %}
