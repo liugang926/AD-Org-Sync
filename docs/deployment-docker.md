@@ -15,6 +15,7 @@ New-Item -ItemType Directory -Force secrets | Out-Null
 Set-Content -NoNewline -Encoding UTF8 secrets/admin_password.txt "<strong-password>"
 $env:AD_ORG_SYNC_ADMIN_PASSWORD_FILE = (Resolve-Path secrets/admin_password.txt)
 $env:AD_ORG_SYNC_PUBLIC_BASE_URL = "https://sync.example.com"
+$env:AD_ORG_SYNC_ENVIRONMENT_LABEL = "Production"
 docker compose up -d --build
 ```
 
@@ -26,6 +27,7 @@ printf '%s' '<strong-password>' > secrets/admin_password.txt
 chmod 600 secrets/admin_password.txt
 export AD_ORG_SYNC_ADMIN_PASSWORD_FILE="$PWD/secrets/admin_password.txt"
 export AD_ORG_SYNC_PUBLIC_BASE_URL="https://sync.example.com"
+export AD_ORG_SYNC_ENVIRONMENT_LABEL="Production"
 docker compose up -d --build
 ```
 
@@ -45,6 +47,10 @@ The application container is available only to the Compose network. The Nginx co
 - `GET /readyz` for readiness.
 
 Do not expose application port 8010 directly. Keep `AD_ORG_SYNC_SECURE_COOKIES=always` when the public URL uses HTTPS; use `never` only for an explicitly approved private HTTP deployment.
+
+Set `AD_ORG_SYNC_ENVIRONMENT_LABEL` to a stable name such as `Staging`, `UAT`, or `Production` for every non-local deployment. When it is empty, health checks, read-only pages, scans, previews, and Dry Run remain available, but Apply and destructive high-risk operations are intentionally blocked.
+
+每个非本地部署都必须将 `AD_ORG_SYNC_ENVIRONMENT_LABEL` 设置为稳定名称，例如 `Staging`、`UAT` 或 `Production`。该值为空时，健康检查、只读页面、扫描、预览和 Dry Run 仍然可用，但 Apply 与破坏性高风险操作会被主动阻断。
 
 ## Upgrade
 

@@ -6,6 +6,11 @@ from typing import Any, Callable
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from sync_app.services.high_risk_operations import (
+    HighRiskOperationContext,
+    HighRiskOperationPolicy,
+    high_risk_audit_payload,
+)
 from sync_app.services.identity_relationships import IdentityRelationshipPreviewService
 from sync_app.web.app_state import get_web_repositories, get_web_runtime_state, get_web_services
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
@@ -27,6 +32,83 @@ def register_job_routes(
     require_capability: Callable[[Request, str], Any],
     translate_text: Callable[..., str],
 ) -> None:
+    def build_job_center_state(
+        request: Request,
+        current_org: Any,
+    ) -> tuple[dict[str, Any], HighRiskOperationContext]:
+        services = get_web_services(request)
+        preflight_summary = merge_saved_preflight_snapshot_data(
+            request.session.get("_preflight_snapshot"),
+            build_preflight_snapshot(
+                request,
+                include_live=False,
+                current_org=current_org,
+            ),
+        )
+        summary = services.jobs.build_job_center_summary(
+            org_id=current_org.org_id,
+            preflight_summary=preflight_summary,
+        )
+        impact_preview = summary["impact_preview"]
+        snapshot_id = int(impact_preview.get("source_snapshot_id") or 0)
+        context = HighRiskOperationContext.create(
+            operation_code="sync.apply",
+            organization_id=current_org.org_id,
+            organization_name=current_org.name,
+            environment_label=getattr(
+                request.app.state,
+                "environment_label",
+                "Unlabeled environment",
+            ),
+            snapshot_version=f"#{snapshot_id}" if snapshot_id else "Not available",
+            impact_count=int(impact_preview.get("planned_operation_count") or 0),
+            preview_id=str(impact_preview.get("job_id") or ""),
+        )
+        gate = HighRiskOperationPolicy.evaluate(context)
+        if not gate.allowed:
+            summary["blocked_reasons"] = [
+                {
+                    "message_code": gate.reason_code,
+                    "params": {},
+                },
+                *summary["blocked_reasons"],
+            ]
+            summary["overall_status"] = "error"
+            summary["overall_label_code"] = "jobs.status.blocked"
+            summary["next_action_url"] = "/config"
+            summary["next_action_label_code"] = gate.next_action_code
+
+        latest_apply = summary.get("latest_apply")
+        apply_status = str(getattr(latest_apply, "status", "") or "").upper()
+        preview_complete = bool(summary.get("latest_successful_dry_run"))
+        confirmation_ready = preview_complete and not summary["blocked_reasons"]
+        summary["high_risk_context"] = context.to_dict()
+        summary["high_risk_gate"] = gate.to_dict()
+        summary["high_risk_workflow"] = HighRiskOperationPolicy.workflow(
+            scan_state=(
+                "complete"
+                if str(preflight_summary.get("overall_status") or "") != "error"
+                else "blocked"
+            ),
+            preview_state="complete" if preview_complete else "pending",
+            confirm_state=(
+                "complete"
+                if apply_status in {"COMPLETED", "FAILED"}
+                else (
+                    "current"
+                    if confirmation_ready
+                    else ("blocked" if preview_complete else "pending")
+                )
+            ),
+            execute_state=(
+                "complete"
+                if apply_status == "COMPLETED"
+                else ("blocked" if apply_status == "FAILED" else ("current" if confirmation_ready else "pending"))
+            ),
+            audit_state="complete" if apply_status in {"COMPLETED", "FAILED"} else "pending",
+        )
+        return summary, context
+
     @app.get(CANONICAL_ROUTE_PATHS["jobs"], response_class=HTMLResponse)
     @app.get("/jobs", response_class=HTMLResponse)
     def jobs_page(request: Request):
@@ -36,13 +118,9 @@ def register_job_routes(
         services = get_web_services(request)
         runtime_state = get_web_runtime_state(request)
         current_org = get_current_org(request)
-        preflight_summary = merge_saved_preflight_snapshot_data(
-            request.session.get("_preflight_snapshot"),
-            build_preflight_snapshot(
-                request,
-                include_live=False,
-                current_org=current_org,
-            ),
+        job_center_summary, _high_risk_context = build_job_center_state(
+            request,
+            current_org,
         )
         return render(
             request,
@@ -50,10 +128,7 @@ def register_job_routes(
             page="jobs",
             title="Job Center",
             jobs=services.jobs.list_recent_jobs(org_id=current_org.org_id, limit=30),
-            job_center_summary=services.jobs.build_job_center_summary(
-                org_id=current_org.org_id,
-                preflight_summary=preflight_summary,
-            ),
+            job_center_summary=job_center_summary,
             active_job=services.jobs.get_active_job(org_id=current_org.org_id),
             sync_runner_error=runtime_state.sync_runner.last_error,
             current_org=current_org,
@@ -98,6 +173,12 @@ def register_job_routes(
         request: Request,
         csrf_token: str = Form(""),
         mode: str = Form(...),
+        operation_code: str = Form(""),
+        organization_id: str = Form(""),
+        environment_label: str = Form(""),
+        snapshot_version: str = Form(""),
+        impact_count: str = Form(""),
+        preview_id: str = Form(""),
     ):
         user = require_capability(request, "jobs.run")
         if isinstance(user, RedirectResponse):
@@ -106,15 +187,64 @@ def register_job_routes(
         if csrf_error:
             return csrf_error
 
-        normalized_mode = "dry_run" if mode == "dry_run" else "apply"
+        normalized_mode = str(mode or "").strip().lower()
+        if normalized_mode not in {"dry_run", "apply"}:
+            flash_t(request, "error", "Unsupported synchronization mode")
+            return RedirectResponse(url="/jobs", status_code=303)
         runtime_state = get_web_runtime_state(request)
         current_org = get_current_org(request)
+        high_risk_context: HighRiskOperationContext | None = None
+        repositories = get_web_repositories(request)
+        if normalized_mode == "apply":
+            job_center_summary, high_risk_context = build_job_center_state(
+                request,
+                current_org,
+            )
+            confirmation = HighRiskOperationPolicy.validate_confirmation(
+                high_risk_context,
+                {
+                    "operation_code": operation_code,
+                    "organization_id": organization_id,
+                    "environment_label": environment_label,
+                    "snapshot_version": snapshot_version,
+                    "impact_count": impact_count,
+                    "preview_id": preview_id,
+                },
+            )
+            if not confirmation.allowed or job_center_summary["blocked_reasons"]:
+                reason_code = confirmation.reason_code or "high_risk.blocker.apply_gate_not_ready"
+                repositories.audit_repo.add_log(
+                    org_id=current_org.org_id,
+                    actor_username=user.username,
+                    action_type="high_risk.apply.blocked",
+                    target_type="sync_apply",
+                    target_id=high_risk_context.preview_id or current_org.org_id,
+                    result="blocked",
+                    message="Apply confirmation was blocked by the high-risk operation gate",
+                    payload=high_risk_audit_payload(
+                        high_risk_context,
+                        reason_code=reason_code,
+                    ),
+                )
+                flash_t(request, "error", reason_code)
+                return RedirectResponse(url="/jobs", status_code=303)
         ok, message = runtime_state.sync_runner.launch(
             mode=normalized_mode,
             actor_username=user.username,
             org_id=current_org.org_id,
             config_path=current_org.config_path or runtime_state.config_path,
         )
+        if high_risk_context is not None:
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="high_risk.apply.requested",
+                target_type="sync_apply",
+                target_id=high_risk_context.preview_id or current_org.org_id,
+                result="success" if ok else "blocked",
+                message=message,
+                payload=high_risk_audit_payload(high_risk_context),
+            )
         flash(request, "success" if ok else "error", message)
         return RedirectResponse(url="/jobs", status_code=303)
 

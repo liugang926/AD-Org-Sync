@@ -10,6 +10,10 @@ from sync_app.services.config_release import (
     publish_current_config_release_snapshot,
     rollback_config_release_snapshot,
 )
+from sync_app.services.high_risk_operations import (
+    HighRiskOperationContext,
+    high_risk_audit_payload,
+)
 from sync_app.storage.local_db import (
     ConfigReleaseSnapshotRepository,
     DatabaseManager,
@@ -136,6 +140,39 @@ class WebConfigService:
             },
         )
         return result
+
+    def record_high_risk_rollback_audit(
+        self,
+        *,
+        org_id: str,
+        actor_username: str,
+        snapshot_id: int,
+        context: HighRiskOperationContext,
+        result: str,
+        reason_code: str = "",
+    ) -> None:
+        normalized_result = str(result or "blocked").strip().lower()
+        self.audit_repo.add_log(
+            org_id=org_id,
+            actor_username=actor_username,
+            action_type=(
+                "high_risk.config_rollback.execute"
+                if normalized_result == "success"
+                else "high_risk.config_rollback.blocked"
+            ),
+            target_type="config_release_snapshot",
+            target_id=str(snapshot_id),
+            result=normalized_result,
+            message=(
+                "Configuration rollback passed high-risk validation"
+                if normalized_result == "success"
+                else "Configuration rollback was blocked by high-risk validation"
+            ),
+            payload=high_risk_audit_payload(
+                context,
+                **({"reason_code": reason_code} if reason_code else {}),
+            ),
+        )
 
     def build_release_download(self, *, org_id: str, snapshot_id: int) -> dict[str, Any] | None:
         snapshot = self.config_release_snapshot_repo.get_snapshot_record(

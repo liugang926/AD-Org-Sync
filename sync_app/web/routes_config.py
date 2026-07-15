@@ -6,6 +6,10 @@ from typing import Any, Callable, Optional
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from sync_app.services.high_risk_operations import (
+    HighRiskOperationContext,
+    HighRiskOperationPolicy,
+)
 from sync_app.web.app_state import get_web_runtime_state, get_web_services
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
@@ -181,6 +185,12 @@ def register_config_routes(
         request: Request,
         snapshot_id: int,
         csrf_token: str = Form(""),
+        operation_code: str = Form(""),
+        organization_id: str = Form(""),
+        environment_label: str = Form(""),
+        snapshot_version: str = Form(""),
+        impact_count: str = Form(""),
+        preview_id: str = Form(""),
     ):
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
@@ -189,8 +199,44 @@ def register_config_routes(
         if csrf_error:
             return csrf_error
         current_org = get_current_org(request)
+        context = HighRiskOperationContext.create(
+            operation_code="config.rollback",
+            organization_id=current_org.org_id,
+            organization_name=current_org.name,
+            environment_label=getattr(
+                request.app.state,
+                "environment_label",
+                "Unlabeled environment",
+            ),
+            snapshot_version=f"#{snapshot_id}",
+            impact_count=1,
+            preview_id=str(snapshot_id),
+        )
+        gate = HighRiskOperationPolicy.validate_confirmation(
+            context,
+            {
+                "operation_code": operation_code,
+                "organization_id": organization_id,
+                "environment_label": environment_label,
+                "snapshot_version": snapshot_version,
+                "impact_count": impact_count,
+                "preview_id": preview_id,
+            },
+        )
+        config_service = get_web_services(request).config
+        if not gate.allowed:
+            config_service.record_high_risk_rollback_audit(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                snapshot_id=snapshot_id,
+                context=context,
+                result="blocked",
+                reason_code=gate.reason_code,
+            )
+            flash_t(request, "error", gate.reason_code)
+            return RedirectResponse(url="/config/releases", status_code=303)
         try:
-            get_web_services(request).config.rollback_release_snapshot(
+            config_service.rollback_release_snapshot(
                 org_id=current_org.org_id,
                 actor_username=user.username,
                 snapshot_id=snapshot_id,
@@ -198,6 +244,13 @@ def register_config_routes(
         except ValueError as exc:
             flash(request, "error", str(exc))
             return RedirectResponse(url="/config/releases", status_code=303)
+        config_service.record_high_risk_rollback_audit(
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            snapshot_id=snapshot_id,
+            context=context,
+            result="success",
+        )
         flash_t(
             request,
             "success",

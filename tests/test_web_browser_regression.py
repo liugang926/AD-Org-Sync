@@ -848,15 +848,38 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self._capture("identity-relationship-create-selection-desktop-en.png")
 
-        cleanup_button = self.page.get_by_role(
-            "button", name="Verify AD and clean stale bindings"
-        )
+        cleanup_button = self.page.get_by_role("button", name="Scan stale bindings")
         self.assertTrue(cleanup_button.is_visible())
-        cleanup_button.click()
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_MissingAccountPreviewProvider(),
+        ):
+            cleanup_button.click()
+            self.page.wait_for_url("**/source-directory?**cleanup_preview=true")
+
+        self.assertTrue(
+            self.page.get_by_role("heading", name="Binding Cleanup Preview").is_visible()
+        )
+        self.assertEqual(self.page.locator("[data-high-risk-step]").count(), 5)
+        preview_text = self.page.locator("[data-high-risk-context]").inner_text().lower()
+        self.assertIn("organization", preview_text)
+        self.assertIn("environment", preview_text)
+        self.assertIn("snapshot version", preview_text)
+        self.assertIn("impact count", preview_text)
+        self.assertTrue(
+            self.page.locator("tbody tr")
+            .filter(has_text="browser-alice")
+            .get_by_text("Review saved binding before creation", exact=True)
+            .is_visible()
+        )
+
+        self.page.get_by_role(
+            "button", name="Confirm and remove 2 binding(s)"
+        ).click()
         cleanup_dialog = self.page.locator("[data-confirm-dialog]")
         self.assertTrue(cleanup_dialog.is_visible())
         self.assertIn(
-            "only when their exact target account is confirmed missing",
+            "Live AD must again confirm each exact target account is missing",
             cleanup_dialog.inner_text(),
         )
         with patch(
@@ -864,7 +887,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             return_value=_MissingAccountPreviewProvider(),
         ):
             cleanup_dialog.locator("[data-confirm-approve]").click()
-            self.page.wait_for_url("**/source-directory?**verify_ad=true")
+            self.page.wait_for_url("**/source-directory?**cleanup_preview=true")
         self.assertIn(
             "Removed 2 verified stale binding(s)",
             self.page.locator("body").inner_text(),
@@ -1127,9 +1150,9 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.page.reload(wait_until="networkidle")
         self.assertEqual(self._style(".sticky-submit-bar", "position"), "sticky")
 
-    def test_execution_flow_uses_six_three_two_and_one_column_layouts(self):
+    def test_high_risk_flow_uses_five_three_two_and_one_column_layouts(self):
         self._login()
-        expected_columns = {390: 1, 768: 2, 1024: 3, 1366: 6, 1440: 6}
+        expected_columns = {390: 1, 768: 2, 1024: 3, 1366: 5, 1440: 5}
         for width, expected in expected_columns.items():
             with self.subTest(width=width):
                 self.page.set_viewport_size({"width": width, "height": 900})
@@ -1540,6 +1563,8 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self._login()
         self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
         self.assertTrue(self.page.locator(".run-review").is_visible())
+        self.assertEqual(self.page.locator("[data-high-risk-step]").count(), 5)
+        self.assertTrue(self.page.locator("[data-high-risk-context]").is_visible())
         self.assertIn(
             "execution readiness and impact preview",
             self.page.locator(".run-review").inner_text().lower(),
@@ -1631,6 +1656,8 @@ class WebBrowserRegressionTests(unittest.TestCase):
         details = dialog.locator("[data-confirm-details]").inner_text()
         self.assertIn("Browser Delete Org", details)
         self.assertIn("Environment", details)
+        self.assertIn("Snapshot Version", details)
+        self.assertIn("Impact Count", details)
         self.assertIn("Reversible", details)
         approve = dialog.locator("[data-confirm-approve]")
         self.assertTrue(approve.is_disabled())
@@ -1816,6 +1843,8 @@ class WebBrowserRegressionTests(unittest.TestCase):
             for expected in (
                 "Default Organization",
                 "Local environment",
+                "Snapshot Version\nNot available",
+                "Impact Count\n126",
                 "browser-apply-ready-001",
                 "Planned Changes\n126",
                 "High-Risk Changes\n3",

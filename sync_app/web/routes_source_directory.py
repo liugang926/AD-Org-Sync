@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlencode
@@ -11,6 +12,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sync_app.providers.source import build_source_provider, get_source_provider_display_name
 from sync_app.core.models import DepartmentNode
 from sync_app.services.identity_relationships import IdentityRelationshipPreviewService
+from sync_app.services.high_risk_operations import (
+    HighRiskOperationContext,
+    HighRiskOperationPolicy,
+    high_risk_audit_payload,
+)
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 from sync_app.services.runtime_connectors import (
     build_department_connector_map,
@@ -22,6 +28,8 @@ from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
 
 
 LOGGER = logging.getLogger(__name__)
+BINDING_CLEANUP_PREVIEW_SESSION_KEY = "_binding_cleanup_preview"
+BINDING_CLEANUP_PREVIEW_MAX_AGE_SECONDS = 900
 STRATEGY_BY_SOURCE_FIELD = {
     "source_user_id": "userid",
     "employee_id": "employee_id",
@@ -61,6 +69,83 @@ def register_source_directory_routes(
     require_capability: Callable[[Request, str], Any],
     build_target_provider_for_connector: Callable[[Request, str], Any] | None = None,
 ) -> None:
+    def current_environment_label(request: Request) -> str:
+        return str(
+            getattr(
+                request.app.state,
+                "environment_label",
+                "Unlabeled environment",
+            )
+            or "Unlabeled environment"
+        )
+
+    def cleanup_context(
+        request: Request,
+        *,
+        current_org: Any,
+        snapshot: Any,
+        impact_count: int,
+        preview_id: str,
+    ) -> HighRiskOperationContext:
+        snapshot_id = int(snapshot["id"] or 0) if snapshot is not None else 0
+        return HighRiskOperationContext.create(
+            operation_code="binding.cleanup",
+            organization_id=current_org.org_id,
+            organization_name=current_org.name,
+            environment_label=current_environment_label(request),
+            snapshot_version=f"#{snapshot_id}" if snapshot_id else "Not available",
+            impact_count=impact_count,
+            preview_id=preview_id,
+        )
+
+    def context_from_preview(
+        request: Request,
+        *,
+        current_org: Any,
+        preview: dict[str, Any],
+    ) -> HighRiskOperationContext:
+        stored = dict(preview.get("context") or {})
+        return HighRiskOperationContext.create(
+            operation_code="binding.cleanup",
+            organization_id=current_org.org_id,
+            organization_name=current_org.name,
+            environment_label=current_environment_label(request),
+            snapshot_version=stored.get("snapshot_version") or "Not available",
+            impact_count=int(stored.get("impact_count") or 0),
+            preview_id=str(stored.get("preview_id") or ""),
+        )
+
+    def cleanup_workflow(preview: dict[str, Any] | None) -> list[dict[str, str]]:
+        if not preview:
+            return HighRiskOperationPolicy.workflow(scan_state="current")
+        status = str(preview.get("status") or "").strip().lower()
+        blocked_stage = str(preview.get("blocked_stage") or "").strip().lower()
+        if status == "completed":
+            return HighRiskOperationPolicy.workflow(
+                scan_state="complete",
+                preview_state="complete",
+                confirm_state="complete",
+                execute_state="complete",
+                audit_state="complete",
+            )
+        if status == "blocked":
+            return HighRiskOperationPolicy.workflow(
+                scan_state="blocked" if blocked_stage == "scan" else "complete",
+                preview_state="blocked" if blocked_stage == "preview" else "pending",
+                confirm_state="blocked" if blocked_stage == "confirm" else "pending",
+                execute_state="blocked" if blocked_stage == "execute" else "pending",
+                audit_state="complete" if preview.get("audit_recorded") else "pending",
+            )
+        context = dict(preview.get("context") or {})
+        confirmation_allowed = bool(context.get("environment_marked")) and int(
+            context.get("impact_count") or 0
+        ) > 0
+        return HighRiskOperationPolicy.workflow(
+            scan_state="complete",
+            preview_state="complete",
+            confirm_state="current" if confirmation_allowed else "blocked",
+        )
+
     def provider_for_current_config(request: Request, provider_type: str = ""):
         repositories = get_web_repositories(request)
         current_org = get_current_org(request)
@@ -472,6 +557,26 @@ def register_source_directory_routes(
         )
         scope = page_data["scope"]
         total_pages = max((int(page_data["total"]) + page_size - 1) // page_size, 1)
+        stored_cleanup_preview = dict(
+            request.session.get(BINDING_CLEANUP_PREVIEW_SESSION_KEY) or {}
+        )
+        binding_cleanup_preview: dict[str, Any] | None = None
+        if (
+            str(stored_cleanup_preview.get("organization_id") or "")
+            == current_org.org_id
+            and str(stored_cleanup_preview.get("provider_id") or "") == provider_id
+        ):
+            binding_cleanup_preview = stored_cleanup_preview
+            preview_context = context_from_preview(
+                request,
+                current_org=current_org,
+                preview=binding_cleanup_preview,
+            )
+            binding_cleanup_preview["context"] = preview_context.to_dict()
+            binding_cleanup_preview["gate"] = HighRiskOperationPolicy.evaluate(
+                preview_context
+            ).to_dict()
+        binding_cleanup_workflow = cleanup_workflow(binding_cleanup_preview)
         return render(
             request,
             "source_directory.html",
@@ -499,6 +604,8 @@ def register_source_directory_routes(
             candidate_missing_count=page_data["candidate_missing_count"],
             creation_eligible_count=page_data["creation_eligible_count"],
             mapping_quality=page_data["mapping_quality"],
+            binding_cleanup_preview=binding_cleanup_preview,
+            binding_cleanup_workflow=binding_cleanup_workflow,
             employee_id_attribute=repositories.settings_repo.get_value(
                 "source_employee_id_attribute", "", org_id=current_org.org_id
             ) or "",
@@ -522,16 +629,22 @@ def register_source_directory_routes(
         if csrf_error:
             return csrf_error
 
+        repositories = get_web_repositories(request)
+        current_org = get_current_org(request)
         normalized_page_number = max(int(page_number or 1), 1)
+        filters = {
+            "page_number": normalized_page_number,
+            "search": search,
+            "department_id": department_id,
+            "status": status,
+            "employee_id_state": employee_id_state,
+            "relationship_status": relationship_status or "all",
+        }
         redirect_url = "/source-directory?" + urlencode(
             {
-                "page_number": normalized_page_number,
-                "search": search,
-                "department_id": department_id,
-                "status": status,
-                "employee_id_state": employee_id_state,
-                "relationship_status": relationship_status or "all",
+                **filters,
                 "verify_ad": "true",
+                "cleanup_preview": "true",
             }
         )
         page_data = build_relationship_page(
@@ -545,7 +658,44 @@ def register_source_directory_routes(
             relationship_status=relationship_status,
             verify_ad=True,
         )
+        snapshot = page_data["snapshot"]
+        preview_id = secrets.token_urlsafe(18)
         if not page_data["snapshot"] or not page_data["ad_verified"]:
+            context = cleanup_context(
+                request,
+                current_org=current_org,
+                snapshot=snapshot,
+                impact_count=0,
+                preview_id=preview_id,
+            )
+            request.session[BINDING_CLEANUP_PREVIEW_SESSION_KEY] = {
+                "status": "blocked",
+                "blocked_stage": "scan",
+                "reason_code": "high_risk.blocker.ad_verification_unavailable",
+                "audit_recorded": True,
+                "organization_id": current_org.org_id,
+                "provider_id": page_data["provider_id"],
+                "snapshot_id": int(snapshot["id"] or 0) if snapshot else 0,
+                "snapshot_fingerprint": str(snapshot["snapshot_fingerprint"] or "")
+                if snapshot
+                else "",
+                "filters": filters,
+                "context": context.to_dict(),
+                "scanned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="high_risk.binding_cleanup.scan",
+                target_type="source_directory_snapshot",
+                target_id=str(int(snapshot["id"] or 0) if snapshot else 0),
+                result="blocked",
+                message="Binding cleanup scan could not verify live AD state; no bindings were removed",
+                payload=high_risk_audit_payload(
+                    context,
+                    reason_code="high_risk.blocker.ad_verification_unavailable",
+                ),
+            )
             flash_t(
                 request,
                 "error",
@@ -572,8 +722,232 @@ def register_source_directory_routes(
             )
             in {"", "not_checked", "unavailable"}
         )
+        context = cleanup_context(
+            request,
+            current_org=current_org,
+            snapshot=snapshot,
+            impact_count=len(targets),
+            preview_id=preview_id,
+        )
+        gate = HighRiskOperationPolicy.evaluate(context)
+        target_fingerprint = HighRiskOperationPolicy.target_fingerprint(targets)
+        verification_blocked = bool(unverified_binding_count and not targets)
+        reason_code = (
+            "high_risk.blocker.ad_verification_unavailable"
+            if verification_blocked
+            else gate.reason_code
+        )
+        request.session[BINDING_CLEANUP_PREVIEW_SESSION_KEY] = {
+            "status": "blocked" if verification_blocked else "preview",
+            "blocked_stage": "scan" if verification_blocked else "",
+            "reason_code": reason_code,
+            "audit_recorded": True,
+            "organization_id": current_org.org_id,
+            "provider_id": page_data["provider_id"],
+            "snapshot_id": int(snapshot["id"] or 0),
+            "snapshot_fingerprint": str(snapshot["snapshot_fingerprint"] or ""),
+            "target_fingerprint": target_fingerprint,
+            "unverified_binding_count": unverified_binding_count,
+            "filters": filters,
+            "context": context.to_dict(),
+            "gate": gate.to_dict(),
+            "scanned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        repositories.audit_repo.add_log(
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            action_type="high_risk.binding_cleanup.scan",
+            target_type="source_directory_snapshot",
+            target_id=str(snapshot["id"]),
+            result="blocked" if verification_blocked else "success",
+            message="Scanned live AD state and prepared a binding cleanup preview without deleting bindings",
+            payload=high_risk_audit_payload(
+                context,
+                target_fingerprint=target_fingerprint,
+                unverified_binding_count=unverified_binding_count,
+                gate_allowed=gate.allowed and not verification_blocked,
+                gate_reason_code=reason_code,
+            ),
+        )
+        if verification_blocked:
+            flash_t(
+                request,
+                "error",
+                "Live AD verification is unavailable. No saved bindings were removed.",
+            )
+            return RedirectResponse(url=redirect_url, status_code=303)
+        flash_t(
+            request,
+            "success" if targets else "warning",
+            "Cleanup scan completed. Review {impact_count} verified stale binding(s) before confirming execution.",
+            impact_count=len(targets),
+        )
+        return RedirectResponse(url=redirect_url, status_code=303)
+
+    @app.post("/source-directory/reconcile-stale-bindings/confirm")
+    def confirm_source_directory_stale_binding_cleanup(
+        request: Request,
+        csrf_token: str = Form(""),
+        operation_code: str = Form(""),
+        organization_id: str = Form(""),
+        environment_label: str = Form(""),
+        snapshot_version: str = Form(""),
+        impact_count: str = Form(""),
+        preview_id: str = Form(""),
+    ):
+        user = require_capability(request, "mappings.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        csrf_error = reject_invalid_csrf(request, csrf_token, "/source-directory")
+        if csrf_error:
+            return csrf_error
+
         repositories = get_web_repositories(request)
         current_org = get_current_org(request)
+        preview = dict(request.session.get(BINDING_CLEANUP_PREVIEW_SESSION_KEY) or {})
+        filters = dict(preview.get("filters") or {})
+        redirect_url = "/source-directory"
+        if filters:
+            redirect_url += "?" + urlencode(
+                {
+                    **filters,
+                    "verify_ad": "true",
+                    "cleanup_preview": "true",
+                }
+            )
+        context = context_from_preview(
+            request,
+            current_org=current_org,
+            preview=preview,
+        )
+
+        def block_execution(reason_code: str, message: str, *, stage: str = "confirm"):
+            blocked_preview = {
+                **preview,
+                "status": "blocked",
+                "blocked_stage": stage,
+                "reason_code": reason_code,
+                "audit_recorded": True,
+                "context": context.to_dict(),
+            }
+            request.session[BINDING_CLEANUP_PREVIEW_SESSION_KEY] = blocked_preview
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="high_risk.binding_cleanup.execute",
+                target_type="source_directory_snapshot",
+                target_id=str(preview.get("snapshot_id") or 0),
+                result="blocked",
+                message=message,
+                payload=high_risk_audit_payload(
+                    context,
+                    reason_code=reason_code,
+                    target_fingerprint=str(preview.get("target_fingerprint") or ""),
+                ),
+            )
+            flash_t(request, "error", reason_code)
+            return RedirectResponse(url=redirect_url, status_code=303)
+
+        if (
+            not preview
+            or str(preview.get("organization_id") or "") != current_org.org_id
+            or str(preview.get("status") or "") != "preview"
+        ):
+            return block_execution(
+                "high_risk.blocker.preview_missing",
+                "Binding cleanup confirmation was rejected because no current organization preview exists",
+            )
+
+        confirmation = HighRiskOperationPolicy.validate_confirmation(
+            context,
+            {
+                "operation_code": operation_code,
+                "organization_id": organization_id,
+                "environment_label": environment_label,
+                "snapshot_version": snapshot_version,
+                "impact_count": impact_count,
+                "preview_id": preview_id,
+            },
+        )
+        if not confirmation.allowed:
+            return block_execution(
+                confirmation.reason_code,
+                "Binding cleanup confirmation no longer matches the current high-risk context",
+            )
+        if HighRiskOperationPolicy.preview_expired(
+            str(preview.get("scanned_at") or ""),
+            max_age_seconds=BINDING_CLEANUP_PREVIEW_MAX_AGE_SECONDS,
+        ):
+            return block_execution(
+                "high_risk.blocker.preview_expired",
+                "Binding cleanup preview expired before execution",
+            )
+        if context.impact_count <= 0:
+            return block_execution(
+                "high_risk.blocker.no_impact",
+                "Binding cleanup execution was rejected because the preview contains no targets",
+            )
+
+        page_data = build_relationship_page(
+            request,
+            page_number=max(int(filters.get("page_number") or 1), 1),
+            page_size=50,
+            search=str(filters.get("search") or ""),
+            department_id=str(filters.get("department_id") or ""),
+            status=str(filters.get("status") or ""),
+            employee_id_state=str(filters.get("employee_id_state") or ""),
+            relationship_status=str(filters.get("relationship_status") or "all"),
+            verify_ad=True,
+        )
+        snapshot = page_data["snapshot"]
+        if not snapshot or not page_data["ad_verified"]:
+            return block_execution(
+                "high_risk.blocker.ad_verification_unavailable",
+                "Binding cleanup execution could not reverify live AD state; no bindings were removed",
+                stage="execute",
+            )
+        if (
+            int(snapshot["id"] or 0) != int(preview.get("snapshot_id") or 0)
+            or str(snapshot["snapshot_fingerprint"] or "")
+            != str(preview.get("snapshot_fingerprint") or "")
+        ):
+            return block_execution(
+                "high_risk.blocker.preview_changed",
+                "Source directory snapshot changed after the binding cleanup preview",
+                stage="execute",
+            )
+
+        targets = [
+            target
+            for item in page_data["relationships"]
+            if (
+                target
+                := IdentityRelationshipPreviewService.verified_stale_binding_cleanup_target(
+                    item
+                )
+            )
+        ]
+        current_target_fingerprint = HighRiskOperationPolicy.target_fingerprint(targets)
+        if (
+            len(targets) != context.impact_count
+            or current_target_fingerprint
+            != str(preview.get("target_fingerprint") or "")
+        ):
+            return block_execution(
+                "high_risk.blocker.preview_changed",
+                "Verified binding cleanup targets changed after preview; no bindings were removed",
+                stage="execute",
+            )
+
+        unverified_binding_count = sum(
+            1
+            for item in page_data["relationships"]
+            if item.before_state.get("bound_ad_username")
+            and str(
+                item.before_state.get("ad_account_state", {}).get("status") or ""
+            )
+            in {"", "not_checked", "unavailable"}
+        )
         removed_count = 0
         changed_count = 0
         for target in targets:
@@ -597,6 +971,7 @@ def register_source_directory_routes(
                 result="success",
                 message="Removed saved binding after live AD verification confirmed the target was missing",
                 payload={
+                    **high_risk_audit_payload(context),
                     "source_provider": target["source_provider"],
                     "connector_id": target["connector_id"],
                     "source_user_id": target["source_user_id"],
@@ -608,6 +983,35 @@ def register_source_directory_routes(
                 },
             )
 
+        execution_result = "success" if not changed_count else "partial"
+        repositories.audit_repo.add_log(
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            action_type="high_risk.binding_cleanup.execute",
+            target_type="source_directory_snapshot",
+            target_id=str(snapshot["id"]),
+            result=execution_result,
+            message="Executed the confirmed binding cleanup preview after live AD reverification",
+            payload=high_risk_audit_payload(
+                context,
+                removed_count=removed_count,
+                changed_count=changed_count,
+                unverified_binding_count=unverified_binding_count,
+                target_fingerprint=current_target_fingerprint,
+            ),
+        )
+        request.session[BINDING_CLEANUP_PREVIEW_SESSION_KEY] = {
+            **preview,
+            "status": "completed" if not changed_count else "blocked",
+            "blocked_stage": "" if not changed_count else "execute",
+            "reason_code": "" if not changed_count else "high_risk.blocker.preview_changed",
+            "audit_recorded": True,
+            "context": context.to_dict(),
+            "removed_count": removed_count,
+            "changed_count": changed_count,
+            "unverified_binding_count": unverified_binding_count,
+            "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
         if removed_count and unverified_binding_count:
             flash_t(
                 request,

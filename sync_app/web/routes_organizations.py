@@ -6,6 +6,11 @@ from typing import Any, Callable, Optional
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
+from sync_app.services.high_risk_operations import (
+    HighRiskOperationContext,
+    HighRiskOperationPolicy,
+    high_risk_audit_payload,
+)
 from sync_app.storage.local_db import ManagedGroupBindingRepository, ObjectStateRepository
 from sync_app.web.app_state import get_web_repositories
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
@@ -252,6 +257,12 @@ def register_organization_routes(
         request: Request,
         org_id: str,
         csrf_token: str = Form(""),
+        operation_code: str = Form(""),
+        organization_id: str = Form(""),
+        environment_label: str = Form(""),
+        snapshot_version: str = Form(""),
+        impact_count: str = Form(""),
+        preview_id: str = Form(""),
     ):
         user = require_capability(request, "organizations.manage")
         if isinstance(user, RedirectResponse):
@@ -263,6 +274,45 @@ def register_organization_routes(
         organization = repositories.organization_repo.get_organization_record(org_id)
         if not organization:
             flash(request, "error", "Organization not found")
+            return RedirectResponse(url="/organizations", status_code=303)
+        context = HighRiskOperationContext.create(
+            operation_code="organization.delete",
+            organization_id=organization.org_id,
+            organization_name=organization.name,
+            environment_label=getattr(
+                request.app.state,
+                "environment_label",
+                "Unlabeled environment",
+            ),
+            snapshot_version="Not applicable",
+            impact_count=1,
+            preview_id=organization.org_id,
+        )
+        gate = HighRiskOperationPolicy.validate_confirmation(
+            context,
+            {
+                "operation_code": operation_code,
+                "organization_id": organization_id,
+                "environment_label": environment_label,
+                "snapshot_version": snapshot_version,
+                "impact_count": impact_count,
+                "preview_id": preview_id,
+            },
+        )
+        if not gate.allowed:
+            repositories.audit_repo.add_log(
+                actor_username=user.username,
+                action_type="high_risk.organization_delete.blocked",
+                target_type="organization",
+                target_id=organization.org_id,
+                result="blocked",
+                message="Organization deletion was blocked by high-risk validation",
+                payload=high_risk_audit_payload(
+                    context,
+                    reason_code=gate.reason_code,
+                ),
+            )
+            flash_t(request, "error", gate.reason_code)
             return RedirectResponse(url="/organizations", status_code=303)
         if repositories.job_repo.count_jobs(org_id=organization.org_id):
             flash(request, "error", "Organization has job history and cannot be deleted")
@@ -296,7 +346,7 @@ def register_organization_routes(
             target_id=organization.org_id,
             result="success",
             message="Deleted organization definition",
-            payload={"name": organization.name},
+            payload=high_risk_audit_payload(context),
         )
         flash_t(request, "success", "Organization {name} deleted", name=organization.name)
         return RedirectResponse(url="/organizations", status_code=303)

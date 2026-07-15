@@ -13,6 +13,11 @@ from sync_app.providers.source import build_source_provider, get_source_provider
 from sync_app.providers.target import build_target_provider
 from sync_app.services.external_integrations import OutboxWebhookNotificationClient as WebhookNotificationClient
 from sync_app.services.external_integrations import emit_job_lifecycle_events
+from sync_app.services.high_risk_operations import (
+    HighRiskOperationPolicy,
+    build_apply_operation_context,
+    high_risk_audit_payload,
+)
 from sync_app.services.ad_sync import (
     ADSyncLDAPS,
     build_custom_group_sam,
@@ -55,6 +60,7 @@ from sync_app.services.runtime_services import (
     has_exception_rule as has_exception_rule_match,
 )
 from sync_app.core.rule_governance import build_rule_governance_summary
+from sync_app.storage.local_db import WebAuditLogRepository
 
 
 FIELD_OWNERSHIP_POLICY = {
@@ -578,6 +584,34 @@ def run_sync_job(
     sync_stats['config_resolved_file_path'] = bootstrap.config_resolved_file_path
     job_id = str(job_id or generate_job_id()).strip() or generate_job_id()
     sync_stats['job_id'] = job_id
+    if execution_mode == 'apply':
+        high_risk_context = build_apply_operation_context(
+            settings_repo=settings_repo,
+            job_repo=job_repo,
+            organization_id=organization.org_id,
+            organization_name=organization.name,
+        )
+        high_risk_gate = HighRiskOperationPolicy.evaluate(high_risk_context)
+        if not high_risk_gate.allowed:
+            WebAuditLogRepository(db_manager).add_log(
+                org_id=organization.org_id,
+                actor_username=str(requested_by or trigger_type),
+                action_type='high_risk.apply.blocked',
+                target_type='sync_apply',
+                target_id=high_risk_context.preview_id or job_id,
+                result='blocked',
+                message='Apply execution was blocked because the runtime environment is unlabeled',
+                payload=high_risk_audit_payload(
+                    high_risk_context,
+                    trigger_type=trigger_type,
+                    reason_code=high_risk_gate.reason_code,
+                    job_id=job_id,
+                ),
+            )
+            raise RuntimeError(
+                'Apply blocked: this runtime environment is unlabeled. '
+                'Set AD_ORG_SYNC_ENVIRONMENT_LABEL before retrying.'
+            )
     ctx = SyncContext(
         start_time=start_time,
         execution_mode=execution_mode,

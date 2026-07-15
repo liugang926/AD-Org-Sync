@@ -124,6 +124,8 @@
 
 ### PR 2：高风险操作安全地基
 
+实现与验收契约见 [`high-risk-operation-safety-contract.md`](high-risk-operation-safety-contract.md)。
+
 - 建立统一“扫描—预览—确认—执行—审计”组件和服务契约。
 - 所有高风险确认显示组织、环境、快照版本和影响数量。
 - 未标记环境阻止 Apply、绑定清理和其他破坏性动作。

@@ -1,5 +1,4 @@
 import json
-import os
 import re
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -1469,11 +1468,105 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("Planned Changes", body)
         self.assertIn("Apply 12 Changes", body)
         self.assertIn('data-confirm-detail-2-label="Environment"', body)
-        self.assertIn('data-confirm-detail-3-label="User Role"', body)
-        self.assertIn('data-confirm-detail-13-label="Reversible"', body)
+        self.assertIn('data-confirm-detail-3-label="Snapshot Version"', body)
+        self.assertIn('data-confirm-detail-4-label="Impact Count"', body)
+        self.assertIn('data-confirm-detail-5-label="User Role"', body)
+        self.assertIn('data-confirm-detail-15-label="Reversible"', body)
+        self.assertEqual(body.count("data-high-risk-step="), 5)
+        for step in ("scan", "preview", "confirm", "execute", "audit"):
+            self.assertIn(f'data-high-risk-step="{step}"', body)
         self.assertIn(
             "Latest high-risk dry run still needs review approval before apply can continue.",
             body,
+        )
+
+    def test_apply_requires_exact_marked_high_risk_context_and_records_blocked_audit(self):
+        self._login("superadmin")
+        self.app.state.job_repo.create_job(
+            "job-high-risk-context",
+            trigger_type="manual",
+            execution_mode="dry_run",
+            status="COMPLETED",
+            org_id="default",
+        )
+        self.app.state.job_repo.update_job(
+            "job-high-risk-context",
+            planned_operation_count=3,
+            error_count=0,
+            summary={
+                "planned_operation_count": 3,
+                "high_risk_operation_count": 0,
+                "conflict_count": 0,
+                "review_required": False,
+                "source_snapshot_id": 77,
+                "source_snapshot_fingerprint": "sha256:source-77",
+            },
+        )
+        jobs_page = self._route("/jobs", "GET")(self._request("/jobs"))
+        body = self._text(jobs_page)
+        csrf = re.search(r'name="csrf_token" value="([^"]+)"', body).group(1)
+
+        self.app.state.environment_label = "Unlabeled environment"
+        with patch.object(self.app.state.sync_runner, "launch") as launch:
+            blocked = self._route("/jobs/run", "POST")(
+                self._request("/jobs/run", "POST"),
+                csrf_token=csrf,
+                mode="apply",
+                operation_code="sync.apply",
+                organization_id="default",
+                environment_label="Unlabeled environment",
+                snapshot_version="#77",
+                impact_count="3",
+                preview_id="job-high-risk-context",
+            )
+        self.assertEqual(blocked.status_code, 303)
+        launch.assert_not_called()
+        blocked_log = next(
+            item
+            for item in self.app.state.audit_repo.list_recent_logs(20)
+            if item.action_type == "high_risk.apply.blocked"
+        )
+        self.assertEqual(
+            blocked_log.payload["reason_code"],
+            "high_risk.blocker.environment_unlabeled",
+        )
+        self.assertEqual(blocked_log.payload["organization_id"], "default")
+        self.assertEqual(blocked_log.payload["snapshot_version"], "#77")
+        self.assertEqual(blocked_log.payload["impact_count"], 3)
+
+        self.app.state.environment_label = "Local environment"
+        with patch.object(self.app.state.sync_runner, "launch") as launch:
+            changed = self._route("/jobs/run", "POST")(
+                self._request("/jobs/run", "POST"),
+                csrf_token=csrf,
+                mode="apply",
+                operation_code="sync.apply",
+                organization_id="default",
+                environment_label="Local environment",
+                snapshot_version="#tampered",
+                impact_count="3",
+                preview_id="job-high-risk-context",
+            )
+        self.assertEqual(changed.status_code, 303)
+        launch.assert_not_called()
+        self.assertEqual(
+            self.session["_flash"]["message"]["key"],
+            "high_risk.blocker.preview_changed",
+        )
+
+    def test_jobs_run_rejects_unsupported_mode_without_launching(self):
+        self._login("superadmin")
+        with patch.object(self.app.state.sync_runner, "launch") as launch:
+            response = self._route("/jobs/run", "POST")(
+                self._request("/jobs/run", "POST"),
+                csrf_token=self.session["_csrf_token"],
+                mode="unexpected",
+            )
+        self.assertEqual(response.status_code, 303)
+        launch.assert_not_called()
+        self.assertEqual(
+            self.session["_flash"]["message"]["key"],
+            "Unsupported synchronization mode",
         )
 
     def test_job_detail_shows_failure_diagnostics_and_structured_log_payloads(self):
@@ -3285,6 +3378,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             self._request(f"/config/releases/{first_snapshot.id}/rollback", "POST"),
             snapshot_id=first_snapshot.id,
             csrf_token=rollback_csrf_match.group(1),
+            operation_code="config.rollback",
+            organization_id="default",
+            environment_label="Local environment",
+            snapshot_version=f"#{first_snapshot.id}",
+            impact_count="1",
+            preview_id=str(first_snapshot.id),
         )
         self.assertEqual(rollback_response.status_code, 303)
         self.assertEqual(rollback_response.headers["location"], "/config/releases")
@@ -4019,6 +4118,114 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
                 "asia", config_path=asia_config_path
             )["corpid"],
             "corp-asia",
+        )
+
+    def test_destructive_admin_actions_require_marked_exact_high_risk_context(self):
+        self._login("superadmin")
+        self.app.state.organization_repo.upsert_organization(
+            org_id="delete-me",
+            name="Delete Me",
+            config_path=str((self.db_path.parent / "delete-me.ini").resolve()),
+            description="high-risk test",
+            is_enabled=True,
+        )
+        self.app.state.connector_repo.upsert_connector(
+            connector_id="delete-connector",
+            org_id="default",
+            name="Delete Connector",
+            config_path="config.delete.ini",
+            root_department_ids=[1],
+        )
+        csrf_token = self.session["_csrf_token"]
+        self.app.state.environment_label = "Unlabeled environment"
+
+        blocked_connector = self._route(
+            "/advanced-sync/connectors/{connector_id}/delete", "POST"
+        )(
+            self._request(
+                "/advanced-sync/connectors/delete-connector/delete", "POST"
+            ),
+            connector_id="delete-connector",
+            csrf_token=csrf_token,
+            operation_code="connector.delete",
+            organization_id="default",
+            environment_label="Unlabeled environment",
+            snapshot_version="Not applicable",
+            impact_count="1",
+            preview_id="delete-connector",
+        )
+        blocked_org = self._route("/organizations/{org_id}/delete", "POST")(
+            self._request("/organizations/delete-me/delete", "POST"),
+            org_id="delete-me",
+            csrf_token=csrf_token,
+            operation_code="organization.delete",
+            organization_id="delete-me",
+            environment_label="Unlabeled environment",
+            snapshot_version="Not applicable",
+            impact_count="1",
+            preview_id="delete-me",
+        )
+        self.assertEqual(blocked_connector.status_code, 303)
+        self.assertEqual(blocked_org.status_code, 303)
+        self.assertIsNotNone(
+            self.app.state.connector_repo.get_connector_record(
+                "delete-connector", org_id="default"
+            )
+        )
+        self.assertIsNotNone(
+            self.app.state.organization_repo.get_organization_record("delete-me")
+        )
+
+        self.app.state.environment_label = "Local environment"
+        deleted_connector = self._route(
+            "/advanced-sync/connectors/{connector_id}/delete", "POST"
+        )(
+            self._request(
+                "/advanced-sync/connectors/delete-connector/delete", "POST"
+            ),
+            connector_id="delete-connector",
+            csrf_token=csrf_token,
+            operation_code="connector.delete",
+            organization_id="default",
+            environment_label="Local environment",
+            snapshot_version="Not applicable",
+            impact_count="1",
+            preview_id="delete-connector",
+        )
+        deleted_org = self._route("/organizations/{org_id}/delete", "POST")(
+            self._request("/organizations/delete-me/delete", "POST"),
+            org_id="delete-me",
+            csrf_token=csrf_token,
+            operation_code="organization.delete",
+            organization_id="delete-me",
+            environment_label="Local environment",
+            snapshot_version="Not applicable",
+            impact_count="1",
+            preview_id="delete-me",
+        )
+        self.assertEqual(deleted_connector.status_code, 303)
+        self.assertEqual(deleted_org.status_code, 303)
+        self.assertIsNone(
+            self.app.state.connector_repo.get_connector_record(
+                "delete-connector", org_id="default"
+            )
+        )
+        self.assertIsNone(
+            self.app.state.organization_repo.get_organization_record("delete-me")
+        )
+        high_risk_logs = [
+            item
+            for item in self.app.state.audit_repo.list_recent_logs(30)
+            if item.action_type.startswith("high_risk.")
+        ]
+        self.assertTrue(
+            any(item.action_type == "high_risk.connector_delete.blocked" for item in high_risk_logs)
+        )
+        self.assertTrue(
+            any(item.action_type == "high_risk.connector_delete.execute" for item in high_risk_logs)
+        )
+        self.assertTrue(
+            any(item.action_type == "high_risk.organization_delete.blocked" for item in high_risk_logs)
         )
 
     def test_super_admin_can_export_organization_bundle(self):
