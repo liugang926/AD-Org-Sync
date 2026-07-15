@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from sync_app.storage.local_db import ManagedGroupBindingRepository, ObjectStateRepository
 from sync_app.web.app_state import get_web_repositories
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
 def register_organization_routes(
@@ -24,6 +25,7 @@ def register_organization_routes(
     safe_redirect_target: Callable[[str | None, str], str],
     to_bool: Callable[[Optional[str], bool], bool],
 ) -> None:
+    @app.get(CANONICAL_ROUTE_PATHS["organizations"], response_class=HTMLResponse)
     @app.get("/organizations", response_class=HTMLResponse)
     def organizations_page(request: Request):
         user = require_capability(request, "organizations.manage")

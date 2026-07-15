@@ -11,6 +11,8 @@ from sync_app.clients.dingtalk import DingTalkAPIError
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
 from sync_app.services.config_store import save_editable_config
 from sync_app.web.app import resolve_web_runtime_settings
+from sync_app.web.i18n import TRANSLATIONS
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
 
@@ -4649,10 +4651,18 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))
         self.assertEqual(dashboard.status_code, 200)
         text = self._text(dashboard)
-        self.assertIn(">仪表盘<", text)
-        self.assertIn(">任务<", text)
-        self.assertIn("配置校验", text)
-        self.assertIn("AD 组织同步", text)
+        for key in (
+            "Overview",
+            "Data Sources",
+            "Identity Governance",
+            "Execution Center",
+            "Control Tower",
+            "Run Review",
+            "Configuration Validation",
+            "AD Org Sync",
+        ):
+            with self.subTest(key=key):
+                self.assertIn(TRANSLATIONS["zh-CN"][key], text)
 
     def test_dashboard_defaults_to_basic_mode_and_can_switch_to_advanced_mode(self):
         self._login("superadmin")
@@ -4693,14 +4703,21 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             self._request("/dashboard")
         )
         advanced_text = self._text(advanced_dashboard)
-        self.assertIn('href="/advanced-sync"', advanced_text)
-        self.assertIn('href="/automation-center"', advanced_text)
-        self.assertIn('href="/data-quality"', advanced_text)
-        self.assertIn('href="/integrations"', advanced_text)
-        self.assertIn('href="/lifecycle"', advanced_text)
-        self.assertIn('href="/mappings"', advanced_text)
-        self.assertIn("Identity Overrides", advanced_text)
-        self.assertIn('href="/organizations"', advanced_text)
+        for page in (
+            "advanced-sync",
+            "automation-center",
+            "data-quality",
+            "integrations",
+            "lifecycle",
+            "mappings",
+            "organizations",
+        ):
+            with self.subTest(page=page):
+                self.assertIn(
+                    f'href="{CANONICAL_ROUTE_PATHS[page]}"', advanced_text
+                )
+        self.assertIn('data-route-aliases="/mappings"', advanced_text)
+        self.assertIn("Manual Overrides", advanced_text)
 
         csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', advanced_text)
         self.assertIsNotNone(csrf_match)

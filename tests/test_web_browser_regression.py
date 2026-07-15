@@ -1207,6 +1207,34 @@ class WebBrowserRegressionTests(unittest.TestCase):
             with self.subTest(selector=selector):
                 self.assertGreaterEqual(self._height(selector), 40.0)
 
+    def test_recent_navigation_never_duplicates_the_current_page_highlight(self):
+        self._login()
+        self.page.goto(f"{self.base_url}/dashboard", wait_until="networkidle")
+        self.page.evaluate(
+            """window.localStorage.setItem(
+                "ad-org-sync.recent-navigation",
+                JSON.stringify(["/dashboard", "/jobs"])
+            )"""
+        )
+
+        self.page.reload(wait_until="networkidle")
+
+        current_links = self.page.locator(
+            "[data-sidebar-nav] a[aria-current='page']"
+        )
+        recent_links = self.page.locator("[data-sidebar-recent-link]")
+        self.assertEqual(current_links.count(), 1)
+        self.assertEqual(
+            current_links.first.get_attribute("href"), "/overview/control-tower"
+        )
+        self.assertEqual(recent_links.count(), 1)
+        self.assertEqual(
+            recent_links.first.get_attribute("href"), "/execution-center/run-review"
+        )
+        self.assertEqual(
+            self.page.locator("[data-sidebar-recent-link].active").count(), 0
+        )
+
     def test_mobile_navigation_traps_focus_and_restores_the_menu_button(self):
         self.context.close()
         self.context = self.browser.new_context(

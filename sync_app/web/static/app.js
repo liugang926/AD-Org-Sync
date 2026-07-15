@@ -341,17 +341,39 @@
       return;
     }
     const links = Array.from(nav.querySelectorAll("a:not([data-sidebar-recent-link])"));
-    links.forEach((link) => {
+    const routePaths = (link) => {
       const href = link.getAttribute("href");
-      if (href === currentPath || (href !== "/" && currentPath.startsWith(href || ""))) {
-        link.classList.add("active");
+      const aliases = (link.getAttribute("data-route-aliases") || "")
+        .split(/\s+/)
+        .filter(Boolean);
+      return [href, ...aliases].filter(Boolean);
+    };
+    const pathMatches = (routePath) =>
+      routePath === currentPath ||
+      (routePath !== "/" && currentPath.startsWith(`${routePath}/`));
+    const activeLink = links
+      .filter((link) => routePaths(link).some(pathMatches))
+      .sort((left, right) => {
+        const leftLength = Math.max(...routePaths(left).filter(pathMatches).map((path) => path.length));
+        const rightLength = Math.max(...routePaths(right).filter(pathMatches).map((path) => path.length));
+        return rightLength - leftLength;
+      })[0];
+
+    links.forEach((link) => {
+      const isActive = link === activeLink;
+      link.classList.toggle("active", isActive);
+      if (isActive) {
         link.setAttribute("aria-current", "page");
-        const group = link.closest("details");
-        if (group instanceof HTMLDetailsElement) {
-          group.open = true;
-        }
+      } else {
+        link.removeAttribute("aria-current");
       }
     });
+    if (activeLink instanceof HTMLAnchorElement) {
+      const group = activeLink.closest("details");
+      if (group instanceof HTMLDetailsElement) {
+        group.open = true;
+      }
+    }
 
     const storageKey = "ad-org-sync.recent-navigation";
     const recent = nav.querySelector("[data-sidebar-recent]");
@@ -364,19 +386,29 @@
       recentPaths = [];
     }
 
+    const canonicalPath = (path) => {
+      const source = links.find((link) => routePaths(link).includes(path));
+      return source instanceof HTMLAnchorElement ? source.getAttribute("href") : null;
+    };
+    recentPaths = recentPaths
+      .map(canonicalPath)
+      .filter((path, index, items) => path && items.indexOf(path) === index);
+
     const renderRecent = () => {
       if (!(recent instanceof HTMLElement) || !(recentLinks instanceof HTMLElement)) {
         return;
       }
       recentLinks.replaceChildren();
-      recentPaths.slice(0, 3).forEach((path) => {
+      const activePath = activeLink instanceof HTMLAnchorElement ? activeLink.getAttribute("href") : null;
+      recentPaths.filter((path) => path !== activePath).slice(0, 3).forEach((path) => {
         const source = links.find((link) => link.getAttribute("href") === path);
         if (!(source instanceof HTMLAnchorElement)) {
           return;
         }
         const clone = source.cloneNode(true);
         clone.setAttribute("data-sidebar-recent-link", "true");
-        clone.classList.toggle("active", path === currentPath);
+        clone.classList.remove("active");
+        clone.removeAttribute("aria-current");
         recentLinks.appendChild(clone);
       });
       recent.hidden = recentLinks.childElementCount === 0;

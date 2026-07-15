@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sync_app.providers.source import build_source_provider, get_source_provider_display_name
 from sync_app.core.models import DepartmentNode
 from sync_app.services.identity_relationships import IdentityRelationshipPreviewService
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 from sync_app.services.runtime_connectors import (
     build_department_connector_map,
     load_connector_specs,
@@ -434,6 +435,7 @@ def register_source_directory_routes(
             "mapping_quality": mapping_quality,
         }
 
+    @app.get(CANONICAL_ROUTE_PATHS["source-directory"], response_class=HTMLResponse)
     @app.get("/source-directory", response_class=HTMLResponse)
     def source_directory_page(
         request: Request,

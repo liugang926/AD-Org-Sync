@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from sync_app.web.authz import WEB_ADMIN_ROLES, normalize_role
 from sync_app.web.app_state import get_web_repositories
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
 def register_admin_routes(
@@ -25,6 +26,7 @@ def register_admin_routes(
     validate_admin_password: Callable[[Request, str], str | None],
     verify_password: Callable[[str, str], bool],
 ) -> None:
+    @app.get(CANONICAL_ROUTE_PATHS["account"], response_class=HTMLResponse)
     @app.get("/account", response_class=HTMLResponse)
     def account_page(request: Request):
         user = require_capability(request, "account.manage")
@@ -71,6 +73,7 @@ def register_admin_routes(
         flash(request, "success", "Password updated")
         return RedirectResponse(url="/account", status_code=303)
 
+    @app.get(CANONICAL_ROUTE_PATHS["users"], response_class=HTMLResponse)
     @app.get("/users", response_class=HTMLResponse)
     def users_page(request: Request):
         user = require_capability(request, "users.manage")
@@ -169,6 +172,7 @@ def register_admin_routes(
         )
         return RedirectResponse(url="/users", status_code=303)
 
+    @app.get(CANONICAL_ROUTE_PATHS["audit"], response_class=HTMLResponse)
     @app.get("/audit", response_class=HTMLResponse)
     def audit_page(request: Request):
         user = require_capability(request, "audit.read")

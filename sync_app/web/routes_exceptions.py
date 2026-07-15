@@ -13,6 +13,7 @@ from sync_app.core.exception_rules import (
 )
 from sync_app.storage.local_db import utcnow_iso
 from sync_app.web.app_state import get_web_repositories
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 from sync_app.core.rule_governance import build_rule_governance_summary
 
 
@@ -37,6 +38,7 @@ def register_exception_routes(
     stream_csv: Callable[..., Any],
     to_bool: Callable[[str | None, bool], bool],
 ) -> None:
+    @app.get(CANONICAL_ROUTE_PATHS["exceptions"], response_class=HTMLResponse)
     @app.get("/exceptions", response_class=HTMLResponse)
     def exceptions_page(request: Request):
         user = require_capability(request, "exceptions.read")

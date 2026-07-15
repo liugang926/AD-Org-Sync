@@ -11,6 +11,7 @@ from sync_app.services.data_quality_center import (
     persist_data_quality_snapshot,
 )
 from sync_app.web.app_state import get_web_repositories
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
 def _parse_optional_int(value: str | None) -> Optional[int]:
@@ -34,6 +35,7 @@ def register_data_quality_routes(
     require_capability: Callable[[Request, str], Any],
     stream_csv: Callable[..., Any],
 ) -> None:
+    @app.get(CANONICAL_ROUTE_PATHS["data-quality"], response_class=HTMLResponse)
     @app.get("/data-quality", response_class=HTMLResponse)
     def data_quality_center_page(request: Request):
         user = require_capability(request, "config.read")

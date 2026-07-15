@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sync_app.storage.local_db import utcnow_iso
 from sync_app.services.source_directory import SourceDirectoryService
 from sync_app.web.app_state import get_web_repositories
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 from sync_app.core.rule_governance import build_rule_governance_summary
 
 
@@ -37,6 +38,7 @@ def register_mapping_routes(
         [Request], dict[str, dict[str, Any]]
     ] | None = None,
 ) -> None:
+    @app.get(CANONICAL_ROUTE_PATHS["mappings"], response_class=HTMLResponse)
     @app.get("/mappings", response_class=HTMLResponse)
     def mappings_page(request: Request):
         user = require_capability(request, "mappings.read")
