@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Snapshot History"), t("Review immutable source refresh versions, their quality counts, and changes between successful snapshots."), eyebrow=t("Data Sources"), badge_text=(t("{count} snapshots", count=total_snapshots)), badge_level="info") %}
+    {{ ui.button(t("Open Latest Snapshot"), href="/data-sources/source-directory", variant="primary", icon="users-round") }}
+  {% endcall %}
+
+  {% if not rows %}
+  <div class="callout callout--warning" role="status">
+    <strong>{{ t("No source snapshots match the current filters.") }}</strong>
+    <span>{{ t("Refresh Source Directory to create a versioned snapshot, or clear the filters.") }}</span>
+  </div>
+  {% elif selected_snapshot and selected_snapshot.status == "failed" %}
+  <div class="callout callout--danger" role="alert">
+    <strong>{{ t("The selected refresh failed.") }}</strong>
+    <span>{{ selected_snapshot.error_summary or t("No failure summary was recorded.") }}</span>
+  </div>
+  {% else %}
+  <div class="callout callout--info" role="status">
+    <strong>{{ t("Snapshot #{id} is selected.", id=selected_snapshot.id) }}</strong>
+    <span>{{ t("Use Data Quality to investigate missing or duplicate identity fields before changing synchronization scope.") }}</span>
+  </div>
+  {% endif %}
+
+  {% call ui.panel(t("Source Refresh Versions"), description=t("Times are shown in your local time zone with relative time. Counts are stored with each immutable refresh version.")) %}
+    <form method="get" action="/data-sources/snapshots" class="filter-bar">
+      <label>{{ t("Provider") }}
+        <select name="provider_id">
+          <option value="">{{ t("All providers") }}</option>
+          {% for value, label in [("dingtalk", "DingTalk"), ("feishu", "Feishu"), ("wecom", "WeCom")] %}<option value="{{ value }}" {% if selected_provider_id == value %}selected{% endif %}>{{ t(label) }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>{{ t("Status") }}
+        <select name="status">
+          <option value="">{{ t("All statuses") }}</option>
+          {% for value, label in [("succeeded", "Succeeded"), ("refreshing", "Refreshing"), ("failed", "Failed")] %}<option value="{{ value }}" {% if selected_snapshot_status == value %}selected{% endif %}>{{ t(label) }}</option>{% endfor %}
+        </select>
+      </label>
+      {{ ui.button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
+    </form>
+
+    <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Source snapshot history') }}">
+      <table>
+        <thead><tr><th>{{ t("Version") }}</th><th>{{ t("Provider") }}</th><th>{{ t("Status") }}</th><th>{{ t("Started") }}</th><th>{{ t("Completed") }}</th><th>{{ t("Counts") }}</th><th>{{ t("Change") }}</th><th>{{ t("Details") }}</th></tr></thead>
+        <tbody>
+          {% for row in rows %}
+          {% set item = row.snapshot %}
+          <tr {% if selected_snapshot and selected_snapshot.id == item.id %}aria-current="true"{% endif %}>
+            <td><strong>#{{ item.id }}</strong><div class="muted cell-mono">{{ item.snapshot_fingerprint[:12] if item.snapshot_fingerprint else "-" }}</div></td>
+            <td>{{ t(item.provider_id) }}<div class="muted cell-mono">{{ item.connector_id }}</div></td>
+            <td>{{ ui.badge(t(item.status|capitalize), "success" if item.status == "succeeded" else ("error" if item.status == "failed" else "warning")) }}</td>
+            <td>{{ ui.local_time(item.started_at) }}</td>
+            <td>{{ ui.local_time(item.completed_at) }}</td>
+            <td><strong>{{ item.user_count or 0 }}</strong> {{ t("users") }}<div class="muted">{{ item.department_count or 0 }} {{ t("departments") }} · {{ item.field_count or 0 }} {{ t("fields") }}</div></td>
+            <td>{% if row.user_delta is not none %}<strong>{{ "%+d"|format(row.user_delta) }}</strong> {{ t("users") }}<div class="muted">{{ "%+d"|format(row.department_delta) }} {{ t("departments") }}</div>{% else %}{{ t("Baseline") }}{% endif %}</td>
+            <td><a href="?snapshot_id={{ item.id }}&provider_id={{ selected_provider_id|urlencode }}&status={{ selected_snapshot_status|urlencode }}">{{ t("Inspect") }}</a><details class="detail-toggle compact-evidence"><summary>{{ t("Technical evidence") }}</summary><div>{{ t("Missing Employee ID") }}: {{ item.missing_employee_id_count or 0 }}</div><div>{{ t("Duplicate Employee ID") }}: {{ item.duplicate_employee_id_count or 0 }}</div><div>{{ t("Expires") }}: {{ ui.local_time(item.expires_at) }}</div>{% if item.warning_summary %}<div>{{ item.warning_summary }}</div>{% endif %}{% if item.error_summary %}<div>{{ item.error_summary }}</div>{% endif %}</details></td>
+          </tr>
+          {% else %}<tr><td colspan="8" class="table-empty">{{ t("No source snapshots match the current filters.") }}</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination-bar"><span>{{ t("{count} snapshots", count=total_snapshots) }}</span><div>{% if page_number > 1 %}{{ ui.button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&provider_id=" ~ selected_provider_id ~ "&status=" ~ selected_snapshot_status, variant="secondary") }}{% endif %}<span>{{ page_number }} / {{ total_pages }}</span>{% if page_number < total_pages %}{{ ui.button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&provider_id=" ~ selected_provider_id ~ "&status=" ~ selected_snapshot_status, variant="secondary") }}{% endif %}</div></div>
+  {% endcall %}
+
+  {% call ui.helper_block(t("Next step"), t("Open Data Quality when a snapshot contains missing or duplicate employee identifiers. Open Source Directory when the selected version is ready for review."), "info") %}
+    <div class="actions">{{ ui.button(t("Open Data Quality"), href="/data-sources/data-quality", variant="secondary", icon="circle-check-big") }}{{ ui.button(t("Open Source Directory"), href="/data-sources/source-directory", variant="ghost", icon="users-round") }}</div>
+  {% endcall %}
+</div>
+{% endblock %}

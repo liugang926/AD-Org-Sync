@@ -3,16 +3,16 @@
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Data Quality Center"), t("Track source-directory quality over time, keep an eye on naming and routing risk, and export a repair list that HR or source-system owners can work through."), eyebrow=t("Operations"), badge_text=t("Organization Scope"), badge_level="info") %}
-    <form method="post" action="/data-quality/run" class="inline">
+  {% call ui.page_header(t("Data Quality Center"), t("Track source-directory quality over time, keep an eye on naming and routing risk, and export a repair list that HR or source-system owners can work through."), eyebrow=t("Data Sources"), badge_text=t("Organization Scope"), badge_level="info") %}
+    {% if can("config.write") %}
+    <form method="post" action="/data-sources/data-quality/run" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ ui.button(t("Run Snapshot"), type="submit", variant="secondary", icon="refresh-cw") }}
+      {{ ui.button(t("Run Quality Scan"), type="submit", variant="primary", icon="refresh-cw") }}
     </form>
-    {% if selected_snapshot %}
-    {{ ui.button(t("Export Repair List"), href=("/data-quality/export?snapshot_id=" ~ selected_snapshot.id), variant="ghost", icon="download") }}
     {% endif %}
-    {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost", icon="waypoints") }}
-    {{ ui.button(t("Open Jobs"), href="/jobs", variant="ghost", icon="refresh-cw") }}
+    {% if selected_snapshot %}
+    {{ ui.button(t("Export Repair List"), href=("/data-sources/data-quality/export?snapshot_id=" ~ selected_snapshot.id), variant="ghost", icon="download") }}
+    {% endif %}
   {% endcall %}
 
   <section class="quality-ops-hero">
@@ -55,12 +55,7 @@
   </div>
 
   {% if not has_snapshots %}
-  {% call ui.empty_state(t("No snapshots yet"), t("Run the first snapshot to capture trend history and generate a repair list."), "warning") %}
-    <form method="post" action="/data-quality/run" class="inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ ui.button(t("Run First Snapshot"), type="submit", icon="refresh-cw") }}
-    </form>
-  {% endcall %}
+  {{ ui.empty_state(t("No snapshots yet"), t("Run the first snapshot to capture trend history and generate a repair list."), "warning") }}
   {% else %}
   {% call ui.panel(t("Selected Snapshot"), description=t("Review the current quality posture for the selected snapshot. Use the history table below to jump across older runs."), class_name="toolbar-card") %}
     <div class="detail-grid">
@@ -104,7 +99,7 @@
         {% for row in snapshots %}
         <tr>
           <td>
-            <a href="{{ '/data-quality?snapshot_id=' ~ row.snapshot.id }}">{{ row.title }}</a>
+            <a href="{{ '/data-sources/data-quality?snapshot_id=' ~ row.snapshot.id }}">{{ row.title }}</a>
             {% if row.is_selected %}
             <div class="muted">{{ t("Selected") }}</div>
             {% endif %}
@@ -186,7 +181,7 @@
   <div class="grid cols-2">
     {% call ui.panel(t("Repair Export Preview"), description=t("These rows are what the CSV export will hand to HR or source-system owners. The table below shows the first few records from the current snapshot.")) %}
       <div class="actions">
-        {{ ui.button(t("Download CSV"), href=("/data-quality/export?snapshot_id=" ~ selected_snapshot.id), variant="secondary", icon="download") }}
+        {{ ui.button(t("Download CSV"), href=("/data-sources/data-quality/export?snapshot_id=" ~ selected_snapshot.id), variant="secondary", icon="download") }}
       </div>
       {% call ui.table_shell() %}
       <table>
@@ -241,5 +236,9 @@
     {% endcall %}
   </div>
   {% endif %}
+
+  {% call ui.helper_block(t("Next step"), t("Repair source-system issues first, refresh Source Directory, then review the fixed snapshot before changing synchronization scope."), "info") %}
+    <div class="actions">{{ ui.button(t("Open Source Directory"), href="/data-sources/source-directory", variant="secondary", icon="users-round") }}{{ ui.button(t("Open Snapshot History"), href="/data-sources/snapshots", variant="ghost", icon="history") }}</div>
+  {% endcall %}
 </div>
 {% endblock %}

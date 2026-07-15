@@ -146,6 +146,27 @@ def register_source_directory_routes(
             confirm_state="current" if confirmation_allowed else "blocked",
         )
 
+    def stored_cleanup_preview(
+        request: Request,
+        *,
+        current_org: Any,
+        provider_id: str,
+    ) -> dict[str, Any] | None:
+        stored = dict(request.session.get(BINDING_CLEANUP_PREVIEW_SESSION_KEY) or {})
+        if (
+            str(stored.get("organization_id") or "") != current_org.org_id
+            or str(stored.get("provider_id") or "") != provider_id
+        ):
+            return None
+        context = context_from_preview(
+            request,
+            current_org=current_org,
+            preview=stored,
+        )
+        stored["context"] = context.to_dict()
+        stored["gate"] = HighRiskOperationPolicy.evaluate(context).to_dict()
+        return stored
+
     def provider_for_current_config(request: Request, provider_type: str = ""):
         repositories = get_web_repositories(request)
         current_org = get_current_org(request)
@@ -279,6 +300,77 @@ def register_source_directory_routes(
                 "__conflict__" if len(candidates) > 1 else next(iter(candidates or {"default"}))
             )
         return assignments
+
+    def build_source_catalog_page(
+        request: Request,
+        *,
+        page_number: int,
+        page_size: int,
+        search: str,
+        department_id: str,
+        status: str,
+        employee_id_state: str,
+    ) -> dict[str, Any]:
+        repositories = get_web_repositories(request)
+        current_org = get_current_org(request)
+        runtime_state = get_web_runtime_state(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path or runtime_state.config_path,
+        )
+        provider_id = str(config.source_provider or "").strip().lower()
+        snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=provider_id,
+        )
+        latest_refresh = repositories.source_directory_repo.get_latest_refresh(
+            org_id=current_org.org_id,
+            provider_id=provider_id,
+        )
+        if not snapshot:
+            return {
+                "provider_id": provider_id,
+                "snapshot": None,
+                "latest_refresh": latest_refresh,
+                "departments": [],
+                "users": [],
+                "total": 0,
+                "field_count": 0,
+            }
+        departments = repositories.source_directory_repo.list_departments(
+            int(snapshot["id"]),
+            org_id=current_org.org_id,
+        )
+        result = repositories.source_directory_repo.list_users(
+            int(snapshot["id"]),
+            org_id=current_org.org_id,
+            provider_id=provider_id,
+            search=search,
+            department_id=department_id,
+            status=status,
+            employee_id_state=employee_id_state,
+            limit=page_size,
+            offset=(max(int(page_number or 1), 1) - 1) * page_size,
+        )
+        users = []
+        for row in result["items"]:
+            readiness_issues = []
+            if not str(row.get("employee_id") or "").strip():
+                readiness_issues.append("Missing Employee ID")
+            if not str(row.get("email") or "").strip():
+                readiness_issues.append("Missing Email")
+            if not list(row.get("department_ids") or []):
+                readiness_issues.append("Missing Department")
+            users.append({**row, "readiness_issues": readiness_issues})
+        return {
+            "provider_id": provider_id,
+            "snapshot": snapshot,
+            "latest_refresh": latest_refresh,
+            "departments": departments,
+            "users": users,
+            "total": int(result["total"]),
+            "field_count": int(snapshot["field_count"] or 0),
+        }
 
     def build_relationship_page(
         request: Request,
@@ -529,7 +621,197 @@ def register_source_directory_routes(
         department_id: str = "",
         status: str = "",
         employee_id_state: str = "",
+    ):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        page_size = 50
+        page_number = max(int(page_number or 1), 1)
+        page_data = build_source_catalog_page(
+            request,
+            page_number=page_number,
+            page_size=page_size,
+            search=search,
+            department_id=department_id,
+            status=status,
+            employee_id_state=employee_id_state,
+        )
+        provider_id = page_data["provider_id"]
+        snapshot = page_data["snapshot"]
+        total_pages = max((int(page_data["total"]) + page_size - 1) // page_size, 1)
+        return render(
+            request,
+            "source_directory.html",
+            page="source-directory",
+            title="Source Directory",
+            current_org=current_org,
+            provider_id=provider_id,
+            provider_name=get_source_provider_display_name(provider_id),
+            snapshot=_row_dict(snapshot),
+            latest_refresh=_row_dict(page_data["latest_refresh"]),
+            snapshot_expired=_is_expired(snapshot),
+            users=page_data["users"],
+            total_users=page_data["total"],
+            departments=page_data["departments"],
+            field_count=page_data["field_count"],
+            page_number=page_number,
+            total_pages=total_pages,
+            search=search,
+            selected_department_id=department_id,
+            selected_status=status,
+            selected_employee_id_state=employee_id_state,
+        )
+
+    @app.get(CANONICAL_ROUTE_PATHS["snapshots"], response_class=HTMLResponse)
+    def source_snapshot_history_page(
+        request: Request,
+        page_number: int = 1,
+        provider_id: str = "",
+        status: str = "",
+        snapshot_id: int | None = None,
+    ):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        repositories = get_web_repositories(request)
+        current_org = get_current_org(request)
+        page_size = 30
+        page_number = max(int(page_number or 1), 1)
+        history = repositories.source_directory_repo.list_snapshots(
+            org_id=current_org.org_id,
+            provider_id=provider_id,
+            status=status,
+            limit=page_size,
+            offset=(page_number - 1) * page_size,
+        )
+        all_recent = repositories.source_directory_repo.list_snapshots(
+            org_id=current_org.org_id,
+            provider_id=provider_id,
+            limit=200,
+        )["items"]
+        previous_by_id: dict[int, dict[str, Any] | None] = {}
+        for item in all_recent:
+            previous_by_id[int(item["id"])] = next(
+                (
+                    candidate
+                    for candidate in all_recent
+                    if int(candidate["id"]) < int(item["id"])
+                    and str(candidate.get("provider_id") or "")
+                    == str(item.get("provider_id") or "")
+                    and str(candidate.get("status") or "") == "succeeded"
+                ),
+                None,
+            )
+        rows = []
+        for item in history["items"]:
+            previous = previous_by_id.get(int(item["id"]))
+            rows.append(
+                {
+                    "snapshot": item,
+                    "previous": previous,
+                    "user_delta": (
+                        int(item.get("user_count") or 0)
+                        - int(previous.get("user_count") or 0)
+                        if previous
+                        else None
+                    ),
+                    "department_delta": (
+                        int(item.get("department_count") or 0)
+                        - int(previous.get("department_count") or 0)
+                        if previous
+                        else None
+                    ),
+                }
+            )
+        requested_snapshot = (
+            repositories.source_directory_repo.get_snapshot(
+                snapshot_id,
+                org_id=current_org.org_id,
+            )
+            if snapshot_id
+            else None
+        )
+        selected_snapshot = requested_snapshot or (
+            history["items"][0] if history["items"] else None
+        )
+        return render(
+            request,
+            "source_snapshot_history.html",
+            page="snapshots",
+            title="Snapshot History",
+            current_org=current_org,
+            rows=rows,
+            selected_snapshot=_row_dict(selected_snapshot),
+            total_snapshots=int(history["total"]),
+            page_number=page_number,
+            total_pages=max((int(history["total"]) + page_size - 1) // page_size, 1),
+            selected_provider_id=provider_id,
+            selected_snapshot_status=status,
+        )
+
+    @app.get(
+        CANONICAL_ROUTE_PATHS["binding-reconciliation"],
+        response_class=HTMLResponse,
+    )
+    def binding_reconciliation_page(
+        request: Request,
+        page_number: int = 1,
+        search: str = "",
         relationship_status: str = "all",
+        verify_ad: bool = False,
+    ):
+        user = require_capability(request, "mappings.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        page_size = 50
+        page_number = max(int(page_number or 1), 1)
+        page_data = build_relationship_page(
+            request,
+            page_number=page_number,
+            page_size=page_size,
+            search=search,
+            department_id="",
+            status="",
+            employee_id_state="",
+            relationship_status=relationship_status,
+            verify_ad=verify_ad,
+        )
+        preview = stored_cleanup_preview(
+            request,
+            current_org=current_org,
+            provider_id=page_data["provider_id"],
+        )
+        return render(
+            request,
+            "binding_reconciliation.html",
+            page="binding-reconciliation",
+            title="Binding Reconciliation",
+            current_org=current_org,
+            provider_id=page_data["provider_id"],
+            provider_name=get_source_provider_display_name(page_data["provider_id"]),
+            snapshot=_row_dict(page_data["snapshot"]),
+            snapshot_expired=_is_expired(page_data["snapshot"]),
+            relationships=page_data["relationships"],
+            total_users=page_data["total"],
+            page_number=page_number,
+            total_pages=max((int(page_data["total"]) + page_size - 1) // page_size, 1),
+            search=search,
+            selected_relationship_status=relationship_status,
+            ad_verified=page_data["ad_verified"],
+            binding_cleanup_preview=preview,
+            binding_cleanup_workflow=cleanup_workflow(preview),
+        )
+
+    @app.get(CANONICAL_ROUTE_PATHS["sync-scope"], response_class=HTMLResponse)
+    def sync_scope_page(
+        request: Request,
+        page_number: int = 1,
+        search: str = "",
+        department_id: str = "",
+        status: str = "",
+        employee_id_state: str = "",
         verify_ad: bool = False,
     ):
         user = require_capability(request, "config.read")
@@ -547,68 +829,38 @@ def register_source_directory_routes(
             department_id=department_id,
             status=status,
             employee_id_state=employee_id_state,
-            relationship_status=relationship_status,
+            relationship_status="all",
             verify_ad=verify_ad,
         )
-        provider_id = page_data["provider_id"]
-        snapshot = page_data["snapshot"]
-        latest_refresh = repositories.source_directory_repo.get_latest_refresh(
-            org_id=current_org.org_id, provider_id=provider_id
-        )
-        scope = page_data["scope"]
-        total_pages = max((int(page_data["total"]) + page_size - 1) // page_size, 1)
-        stored_cleanup_preview = dict(
-            request.session.get(BINDING_CLEANUP_PREVIEW_SESSION_KEY) or {}
-        )
-        binding_cleanup_preview: dict[str, Any] | None = None
-        if (
-            str(stored_cleanup_preview.get("organization_id") or "")
-            == current_org.org_id
-            and str(stored_cleanup_preview.get("provider_id") or "") == provider_id
-        ):
-            binding_cleanup_preview = stored_cleanup_preview
-            preview_context = context_from_preview(
-                request,
-                current_org=current_org,
-                preview=binding_cleanup_preview,
-            )
-            binding_cleanup_preview["context"] = preview_context.to_dict()
-            binding_cleanup_preview["gate"] = HighRiskOperationPolicy.evaluate(
-                preview_context
-            ).to_dict()
-        binding_cleanup_workflow = cleanup_workflow(binding_cleanup_preview)
         return render(
             request,
-            "source_directory.html",
-            page="source-directory",
-            title="Source Directory",
+            "sync_scope.html",
+            page="sync-scope",
+            title="Sync Scope",
             current_org=current_org,
-            provider_id=provider_id,
-            provider_name=get_source_provider_display_name(provider_id),
-            snapshot=_row_dict(snapshot),
-            latest_refresh=_row_dict(latest_refresh),
-            snapshot_expired=_is_expired(snapshot),
-            users=page_data["relationships"],
+            provider_id=page_data["provider_id"],
+            provider_name=get_source_provider_display_name(page_data["provider_id"]),
+            snapshot=_row_dict(page_data["snapshot"]),
+            snapshot_expired=_is_expired(page_data["snapshot"]),
+            relationships=page_data["relationships"],
             total_users=page_data["total"],
             departments=page_data["departments"],
             fields=page_data["fields"],
-            scope=scope,
+            scope=page_data["scope"],
             page_number=page_number,
-            total_pages=total_pages,
+            total_pages=max((int(page_data["total"]) + page_size - 1) // page_size, 1),
             search=search,
             selected_department_id=department_id,
             selected_status=status,
             selected_employee_id_state=employee_id_state,
-            selected_relationship_status=relationship_status,
             ad_verified=page_data["ad_verified"],
-            candidate_missing_count=page_data["candidate_missing_count"],
             creation_eligible_count=page_data["creation_eligible_count"],
-            mapping_quality=page_data["mapping_quality"],
-            binding_cleanup_preview=binding_cleanup_preview,
-            binding_cleanup_workflow=binding_cleanup_workflow,
             employee_id_attribute=repositories.settings_repo.get_value(
-                "source_employee_id_attribute", "", org_id=current_org.org_id
-            ) or "",
+                "source_employee_id_attribute",
+                "",
+                org_id=current_org.org_id,
+            )
+            or "",
         )
 
     @app.post("/source-directory/reconcile-stale-bindings")
@@ -625,7 +877,11 @@ def register_source_directory_routes(
         user = require_capability(request, "mappings.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/source-directory")
+        csrf_error = reject_invalid_csrf(
+            request,
+            csrf_token,
+            CANONICAL_ROUTE_PATHS["binding-reconciliation"],
+        )
         if csrf_error:
             return csrf_error
 
@@ -640,7 +896,7 @@ def register_source_directory_routes(
             "employee_id_state": employee_id_state,
             "relationship_status": relationship_status or "all",
         }
-        redirect_url = "/source-directory?" + urlencode(
+        redirect_url = CANONICAL_ROUTE_PATHS["binding-reconciliation"] + "?" + urlencode(
             {
                 **filters,
                 "verify_ad": "true",
@@ -798,7 +1054,11 @@ def register_source_directory_routes(
         user = require_capability(request, "mappings.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/source-directory")
+        csrf_error = reject_invalid_csrf(
+            request,
+            csrf_token,
+            CANONICAL_ROUTE_PATHS["binding-reconciliation"],
+        )
         if csrf_error:
             return csrf_error
 
@@ -806,7 +1066,7 @@ def register_source_directory_routes(
         current_org = get_current_org(request)
         preview = dict(request.session.get(BINDING_CLEANUP_PREVIEW_SESSION_KEY) or {})
         filters = dict(preview.get("filters") or {})
-        redirect_url = "/source-directory"
+        redirect_url = CANONICAL_ROUTE_PATHS["binding-reconciliation"]
         if filters:
             redirect_url += "?" + urlencode(
                 {
@@ -1053,7 +1313,11 @@ def register_source_directory_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/source-directory")
+        csrf_error = reject_invalid_csrf(
+            request,
+            csrf_token,
+            CANONICAL_ROUTE_PATHS["config"],
+        )
         if csrf_error:
             return csrf_error
         provider = None
@@ -1076,7 +1340,7 @@ def register_source_directory_routes(
         finally:
             if provider is not None:
                 provider.close()
-        return RedirectResponse(url="/source-directory", status_code=303)
+        return RedirectResponse(url=CANONICAL_ROUTE_PATHS["config"], status_code=303)
 
     @app.post("/source-directory/refresh")
     def refresh_source_directory(
@@ -1087,7 +1351,11 @@ def register_source_directory_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/source-directory")
+        csrf_error = reject_invalid_csrf(
+            request,
+            csrf_token,
+            CANONICAL_ROUTE_PATHS["source-directory"],
+        )
         if csrf_error:
             return csrf_error
         repositories = get_web_repositories(request)
@@ -1116,7 +1384,10 @@ def register_source_directory_routes(
             payload={"provider_id": config.source_provider},
         )
         flash(request, "success", "Source directory refresh started. The previous successful snapshot remains available until completion.")
-        return RedirectResponse(url="/source-directory", status_code=303)
+        return RedirectResponse(
+            url=CANONICAL_ROUTE_PATHS["source-directory"],
+            status_code=303,
+        )
 
     @app.post("/source-directory/scope")
     def save_source_directory_scope(
@@ -1137,7 +1408,11 @@ def register_source_directory_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/source-directory")
+        csrf_error = reject_invalid_csrf(
+            request,
+            csrf_token,
+            CANONICAL_ROUTE_PATHS["sync-scope"],
+        )
         if csrf_error:
             return csrf_error
         repositories = get_web_repositories(request)
@@ -1195,7 +1470,10 @@ def register_source_directory_routes(
             )
         except ValueError as exc:
             flash(request, "error", str(exc))
-            return RedirectResponse(url="/source-directory", status_code=303)
+            return RedirectResponse(
+                url=CANONICAL_ROUTE_PATHS["sync-scope"],
+                status_code=303,
+            )
         repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
@@ -1213,7 +1491,10 @@ def register_source_directory_routes(
             },
         )
         flash(request, "success", "Sync scope saved. Run a new Dry Run before Apply.")
-        return RedirectResponse(url="/source-directory", status_code=303)
+        return RedirectResponse(
+            url=CANONICAL_ROUTE_PATHS["sync-scope"],
+            status_code=303,
+        )
 
     @app.post("/source-directory/create-selection")
     def prepare_source_directory_account_creations(
@@ -1224,7 +1505,11 @@ def register_source_directory_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/source-directory")
+        csrf_error = reject_invalid_csrf(
+            request,
+            csrf_token,
+            CANONICAL_ROUTE_PATHS["sync-scope"],
+        )
         if csrf_error:
             return csrf_error
 
@@ -1241,14 +1526,20 @@ def register_source_directory_routes(
                 "error",
                 "Select at least one verified missing candidate account.",
             )
-            return RedirectResponse(url="/source-directory", status_code=303)
+            return RedirectResponse(
+                url=CANONICAL_ROUTE_PATHS["sync-scope"],
+                status_code=303,
+            )
         if len(normalized_source_user_ids) > 100:
             flash(
                 request,
                 "error",
                 "Prepare no more than 100 candidate accounts at a time.",
             )
-            return RedirectResponse(url="/source-directory", status_code=303)
+            return RedirectResponse(
+                url=CANONICAL_ROUTE_PATHS["sync-scope"],
+                status_code=303,
+            )
 
         page_data = build_relationship_page(
             request,
@@ -1293,7 +1584,7 @@ def register_source_directory_routes(
             )
             flash(request, "error", message)
             return RedirectResponse(
-                url="/source-directory?verify_ad=true",
+                url=CANONICAL_ROUTE_PATHS["sync-scope"] + "?verify_ad=true",
                 status_code=303,
             )
 
@@ -1318,7 +1609,7 @@ def register_source_directory_routes(
         except ValueError as exc:
             flash(request, "error", str(exc))
             return RedirectResponse(
-                url="/source-directory?verify_ad=true",
+                url=CANONICAL_ROUTE_PATHS["sync-scope"] + "?verify_ad=true",
                 status_code=303,
             )
 

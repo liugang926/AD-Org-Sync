@@ -8,7 +8,9 @@ from sync_app.storage.local_db import (
     DatabaseManager,
     IntegrationWebhookSubscriptionRepository,
     PlannedOperationRepository,
+    OrganizationConfigRepository,
     SettingsRepository,
+    SyncConnectorRepository,
     SyncConflictRepository,
     SyncJobRepository,
     SyncPlanReviewRepository,
@@ -16,6 +18,7 @@ from sync_app.storage.local_db import (
 )
 from sync_app.web.services.config import WebConfigService
 from sync_app.web.services.conflicts import WebConflictService
+from sync_app.web.services.data_sources import WebDataSourceService
 from sync_app.web.services.integrations import WebIntegrationService
 from sync_app.web.services.jobs import WebJobService
 
@@ -25,6 +28,7 @@ class WebServiceState:
     jobs: WebJobService
     conflicts: WebConflictService
     config: WebConfigService
+    data_sources: WebDataSourceService
     integrations: WebIntegrationService
 
 
@@ -32,6 +36,8 @@ def build_web_service_state(
     *,
     db_manager: DatabaseManager,
     settings_repo: SettingsRepository,
+    org_config_repo: OrganizationConfigRepository,
+    connector_repo: SyncConnectorRepository,
     config_release_snapshot_repo: ConfigReleaseSnapshotRepository,
     subscription_repo: IntegrationWebhookSubscriptionRepository,
     job_repo: SyncJobRepository,
@@ -57,6 +63,11 @@ def build_web_service_state(
             db_manager=db_manager,
             settings_repo=settings_repo,
             config_release_snapshot_repo=config_release_snapshot_repo,
+            audit_repo=audit_repo,
+        ),
+        data_sources=WebDataSourceService(
+            org_config_repo=org_config_repo,
+            connector_repo=connector_repo,
             audit_repo=audit_repo,
         ),
         integrations=WebIntegrationService(

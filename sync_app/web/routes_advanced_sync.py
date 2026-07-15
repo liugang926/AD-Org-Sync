@@ -631,11 +631,17 @@ def register_advanced_sync_routes(
         request: Request,
         connector_id: str,
         csrf_token: str = Form(""),
+        return_url: str = Form(""),
     ):
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/advanced-sync")
+        redirect_url = (
+            CANONICAL_ROUTE_PATHS["config"]
+            if return_url == CANONICAL_ROUTE_PATHS["config"]
+            else "/advanced-sync"
+        )
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
         if csrf_error:
             return csrf_error
         current_org = get_current_org(request)
@@ -643,7 +649,7 @@ def register_advanced_sync_routes(
         record = repositories.connector_repo.get_connector_record(connector_id, org_id=current_org.org_id)
         if not record:
             flash(request, "error", "Connector not found")
-            return RedirectResponse(url="/advanced-sync", status_code=303)
+            return RedirectResponse(url=redirect_url, status_code=303)
         repositories.connector_repo.set_enabled(connector_id, not record.is_enabled, org_id=current_org.org_id)
         flash_t(
             request,
@@ -651,7 +657,7 @@ def register_advanced_sync_routes(
             "Connector {connector_id} enabled" if not record.is_enabled else "Connector {connector_id} disabled",
             connector_id=connector_id,
         )
-        return RedirectResponse(url="/advanced-sync", status_code=303)
+        return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post("/advanced-sync/connectors/{connector_id}/delete")
     def advanced_sync_connector_delete(
@@ -664,11 +670,17 @@ def register_advanced_sync_routes(
         snapshot_version: str = Form(""),
         impact_count: str = Form(""),
         preview_id: str = Form(""),
+        return_url: str = Form(""),
     ):
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/advanced-sync")
+        redirect_url = (
+            CANONICAL_ROUTE_PATHS["config"]
+            if return_url == CANONICAL_ROUTE_PATHS["config"]
+            else "/advanced-sync"
+        )
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
         if csrf_error:
             return csrf_error
         repositories = get_web_repositories(request)
@@ -679,7 +691,7 @@ def register_advanced_sync_routes(
         )
         if not record:
             flash(request, "error", "Connector not found")
-            return RedirectResponse(url="/advanced-sync", status_code=303)
+            return RedirectResponse(url=redirect_url, status_code=303)
         context = HighRiskOperationContext.create(
             operation_code="connector.delete",
             organization_id=current_org.org_id,
@@ -719,7 +731,7 @@ def register_advanced_sync_routes(
                 ),
             )
             flash_t(request, "error", gate.reason_code)
-            return RedirectResponse(url="/advanced-sync", status_code=303)
+            return RedirectResponse(url=redirect_url, status_code=303)
         repositories.connector_repo.delete_connector(connector_id, org_id=current_org.org_id)
         repositories.audit_repo.add_log(
             org_id=current_org.org_id,
@@ -732,7 +744,7 @@ def register_advanced_sync_routes(
             payload=high_risk_audit_payload(context),
         )
         flash_t(request, "success", "Connector {connector_id} deleted", connector_id=connector_id)
-        return RedirectResponse(url="/advanced-sync", status_code=303)
+        return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post("/advanced-sync/mappings")
     def advanced_sync_mapping_submit(

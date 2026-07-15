@@ -196,6 +196,49 @@ class SourceDirectoryRepository(BaseRepository):
             (org_id, provider_id, connector_id or "default"),
         )
 
+    def list_snapshots(
+        self,
+        *,
+        org_id: str,
+        provider_id: str = "",
+        status: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        clauses = ["org_id = ?"]
+        params: list[Any] = [self._resolve_org_id(org_id, default="default")]
+        normalized_provider = str(provider_id or "").strip().lower()
+        normalized_status = str(status or "").strip().lower()
+        if normalized_provider:
+            clauses.append("provider_id = ?")
+            params.append(normalized_provider)
+        if normalized_status:
+            clauses.append("status = ?")
+            params.append(normalized_status)
+        where = " AND ".join(clauses)
+        total = self._fetchcount(
+            f"SELECT COUNT(1) FROM source_directory_snapshots WHERE {where}",
+            params,
+        )
+        normalized_limit = min(max(int(limit or 50), 1), 200)
+        normalized_offset = max(int(offset or 0), 0)
+        rows = self._fetchall(
+            f"""
+            SELECT *
+            FROM source_directory_snapshots
+            WHERE {where}
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+            """,
+            [*params, normalized_limit, normalized_offset],
+        )
+        return {
+            "items": [dict(row) for row in rows],
+            "total": total,
+            "limit": normalized_limit,
+            "offset": normalized_offset,
+        }
+
     def list_departments(self, snapshot_id: int, *, org_id: str) -> list[dict[str, Any]]:
         rows = self._fetchall(
             """

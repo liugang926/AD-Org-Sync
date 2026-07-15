@@ -4,7 +4,7 @@
 {% set load_advanced_sync_page_script = (not is_lightweight_shell) and page == 'advanced-sync' %}
 {% set load_config_page_script = (not is_lightweight_shell) and page == 'config' %}
 {% set load_mappings_page_script = (not is_lightweight_shell) and page == 'mappings' %}
-{% set load_source_directory_page_script = (not is_lightweight_shell) and page == 'source-directory' %}
+{% set load_source_directory_page_script = (not is_lightweight_shell) and page in ['source-directory', 'sync-scope'] %}
 <!DOCTYPE html>
 <html lang="{{ ui_language if ui_language == 'zh-CN' else 'en' }}">
 <head>

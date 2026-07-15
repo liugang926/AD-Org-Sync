@@ -40,11 +40,11 @@ verification time, and actor in the audit log.
 
 ## Configure and verify a provider
 
-1. Open **Config** and select WeCom, DingTalk, or Feishu.
+1. Open **Data Sources > Connectors** and select WeCom, DingTalk, or Feishu.
 2. Enter the application credentials. Secrets are stored through the existing encrypted secret store and are never returned by source-directory APIs.
-3. Open **Source Directory**.
-4. Select **Test Connection**. A successful test must read both organization structure and at least one user page; token acquisition alone is not considered success.
-5. Select **Refresh Directory**. Refresh runs in the background. A failed refresh records a redacted error and retains the previous successful snapshot.
+3. Select **Test Saved Connections**. A successful source test must read both organization structure and at least one user page; token acquisition alone is considered insufficient.
+4. Open **Data Sources > Source Directory** and select **Refresh Directory**. Refresh runs in the background. A failed refresh records a redacted error and retains the previous successful snapshot.
+5. Use **Snapshot History** for version comparison and **Data Quality** for repair work. Use **Sync Scope** only after the source snapshot is ready.
 
 Credentials:
 
@@ -175,21 +175,23 @@ Use **Identity Overrides** (`/mappings`) to bind a real source user to an existi
 
 ## Review the complete relationship
 
-1. Open **Source Directory** and use the **Identity relationship** filter for
+1. Open **Identity Governance > Binding Reconciliation** and use the **Identity relationship** filter for
    bound, unbound, candidate-only, manual, automatic, disabled, AD-state,
    planned, Apply, or conflict views.
-2. Read the grouped columns from left to right: source/mapping, before sync,
-   planned after Dry Run, applied result, then difference/risk.
-3. Use **Verify current-page AD status** when live evidence is necessary. Only
+2. Expand **Identity timeline** for the same five ordered states: Candidate,
+   Current Binding, Latest Dry Run, Latest Apply, and Current AD State.
+3. Use **Verify Current Page** when live evidence is necessary. Only
    server-computed candidates and bindings on the current page are queried.
-4. If a saved target is confirmed missing, use **Verify AD and clean stale
-   bindings**. The write action re-verifies the page, removes only exact stale
-   bindings, and then returns to a freshly verified candidate view. Select the
-   now-unbound candidate for creation and prepare a new Dry Run.
-5. Follow the safe row links to the binding editor, Dry Run, Apply, or conflict
+4. If a saved target may be stale, use **Scan Binding Differences**. The
+   scan-preview-confirm-execute-audit flow re-verifies the page, removes only
+   exact stale bindings, and fails closed when AD is unavailable or unknown.
+5. Open **Sync Policies > Sync Scope** to select a reviewed candidate for
+   account-creation preparation. Preparation saves an exact Dry Run scope and
+   does not write to AD.
+6. Follow the safe row links to the binding editor, Dry Run, Apply, or conflict
    record. On mobile, the grouped table scrolls horizontally and remains
    keyboard focusable.
-6. Open the corresponding job. **Identity Resolution Results** presents the
+7. Open the corresponding job. **Identity Resolution Results** presents the
    structured per-user decision without requiring the raw JSON details panel.
 
 AD verification uses one batch request per connector and deduplicates account
@@ -204,6 +206,11 @@ not returned. The verification time identifies live or historical evidence.
 Authenticated organization-scoped endpoints include:
 
 - `GET /source-directory`
+- `GET /data-sources/source-directory`
+- `GET /data-sources/snapshots`
+- `GET /data-sources/data-quality`
+- `GET /identity-governance/binding-reconciliation`
+- `GET /sync-policies/scope`
 - `POST /source-directory/reconcile-stale-bindings`
 - `POST /source-directory/test`
 - `POST /source-directory/refresh`
@@ -244,7 +251,7 @@ binding and never write to AD.
 - **Duplicate or ambiguous binding:** use the complete organization/provider/connector/source-user boundary. Disable or remove the incorrect reviewed rule; the service will not silently choose one.
 - **Connector conflict:** correct department-root routing or move the binding to the connector selected by the existing runtime router, then run Dry Run again.
 - **Dry Run is stale:** refresh/save the source scope and rerun Dry Run. Do not approve or Apply an older plan.
-- **Check the latest Apply:** use the Apply link in Source Directory, the latest Apply status in Identity Overrides, or the job’s Identity Resolution Results table. Only `succeeded` is an applied actual state.
+- **Check the latest Apply:** use the Apply link in Binding Reconciliation, the latest Apply status in Identity Overrides, or the job's Identity Resolution Results table. Only `succeeded` is an applied actual state.
 - **AD verification is unavailable:** keep using the source/binding evidence, fix target connectivity or certificate/authentication configuration, and retry current-page verification. “Unavailable” is not the same as “missing.”
 
 Automated tests use fake providers and mock HTTP/LDAP clients. Production connectivity must still be verified with real tenant and AD credentials in the deployment environment.

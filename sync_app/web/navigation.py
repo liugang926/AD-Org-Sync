@@ -9,11 +9,14 @@ CANONICAL_ROUTE_PATHS = {
     "dashboard": "/overview/control-tower",
     "config": "/data-sources/connectors",
     "source-directory": "/data-sources/source-directory",
+    "snapshots": "/data-sources/snapshots",
     "data-quality": "/data-sources/data-quality",
+    "binding-reconciliation": "/identity-governance/binding-reconciliation",
     "conflicts": "/identity-governance/conflicts",
     "mappings": "/identity-governance/manual-overrides",
     "exceptions": "/identity-governance/exception-rules",
     "advanced-sync": "/sync-policies",
+    "sync-scope": "/sync-policies/scope",
     "jobs": "/execution-center/run-review",
     "lifecycle": "/operations-center/lifecycle-queue",
     "automation-center": "/operations-center/automation",
@@ -79,6 +82,14 @@ NAVIGATION_GROUPS = (
                 legacy_paths=("/source-directory",),
             ),
             NavigationItem(
+                page="snapshots",
+                label="Snapshot History",
+                icon="history",
+                capability="config.read",
+                legacy_paths=(),
+                advanced_only=True,
+            ),
+            NavigationItem(
                 page="data-quality",
                 label="Data Quality",
                 icon="circle-check-big",
@@ -97,6 +108,14 @@ NAVIGATION_GROUPS = (
                 icon="shield-alert",
                 capability="jobs.read",
                 legacy_paths=("/conflicts",),
+            ),
+            NavigationItem(
+                page="binding-reconciliation",
+                label="Binding Reconciliation",
+                icon="scan-search",
+                capability="mappings.read",
+                legacy_paths=(),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="mappings",
@@ -119,6 +138,14 @@ NAVIGATION_GROUPS = (
     NavigationGroup(
         label="Sync Policies",
         items=(
+            NavigationItem(
+                page="sync-scope",
+                label="Sync Scope",
+                icon="list-filter",
+                capability="config.read",
+                legacy_paths=(),
+                advanced_only=True,
+            ),
             NavigationItem(
                 page="advanced-sync",
                 label="Policy Center",

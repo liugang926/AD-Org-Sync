@@ -81,6 +81,34 @@ class SourceDirectorySnapshotTests(unittest.TestCase):
         self.assertEqual(latest_success["id"], first["id"])
         self.assertEqual(latest_attempt["status"], "failed")
 
+    def test_snapshot_history_is_paginated_filtered_and_organization_scoped(self):
+        first = self.service.refresh(
+            org_id="default", provider_id="wecom", provider=_Provider()
+        )
+        second = self.repo.start_refresh(
+            org_id="default", provider_id="wecom", created_by="tester"
+        )
+        self.repo.fail_refresh(second, "simulated failure")
+        other = self.repo.start_refresh(
+            org_id="other", provider_id="wecom", created_by="tester"
+        )
+        self.repo.fail_refresh(other, "other organization failure")
+
+        page = self.repo.list_snapshots(org_id="default", limit=1)
+        failed = self.repo.list_snapshots(
+            org_id="default", provider_id="wecom", status="failed"
+        )
+
+        self.assertEqual(page["total"], 2)
+        self.assertEqual(len(page["items"]), 1)
+        self.assertEqual(page["items"][0]["id"], second)
+        self.assertEqual(failed["total"], 1)
+        self.assertEqual(failed["items"][0]["id"], second)
+        self.assertEqual(
+            self.repo.get_snapshot(first["id"], org_id="other"),
+            None,
+        )
+
     def test_scope_fingerprint_and_custom_field_mapping(self):
         snapshot = self.service.refresh(org_id="default", provider_id="wecom", provider=_Provider())
         selection = self.repo.save_scope_selection(

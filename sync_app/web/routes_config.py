@@ -118,7 +118,6 @@ def register_config_routes(
     render: Callable[..., Any],
     require_capability: Callable[[Request, str], Any],
 ) -> None:
-    @app.get(CANONICAL_ROUTE_PATHS["config"], response_class=HTMLResponse)
     @app.get("/config", response_class=HTMLResponse)
     def config_page(request: Request):
         user = require_capability(request, "config.read")
@@ -130,6 +129,138 @@ def register_config_routes(
             "config.html",
             **build_config_page_context(request),
         )
+
+    @app.get(CANONICAL_ROUTE_PATHS["config"], response_class=HTMLResponse)
+    def connector_center_page(request: Request):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        runtime_state = get_web_runtime_state(request)
+        context = build_config_page_context(request)
+        context.update(
+            get_web_services(request).data_sources.build_connector_inventory(
+                org_id=current_org.org_id,
+                config_path=current_org.config_path or runtime_state.config_path,
+            )
+        )
+        context.update(
+            {
+                "page": "config",
+                "title": "Connectors",
+                "preflight_summary": dict(
+                    request.session.get("_preflight_snapshot") or {}
+                ),
+            }
+        )
+        return render(
+            request,
+            "connectors.html",
+            **context,
+        )
+
+    @app.post("/data-sources/connectors/base")
+    def connector_center_base_save(
+        request: Request,
+        csrf_token: str = Form(""),
+        source_provider: str = Form("wecom"),
+        corpid: str = Form(""),
+        agentid: str = Form(""),
+        corpsecret: str = Form(""),
+        ldap_server: str = Form(""),
+        ldap_domain: str = Form(""),
+        ldap_username: str = Form(""),
+        ldap_password: str = Form(""),
+        ldap_use_ssl: str = Form("true"),
+        ldap_port: int = Form(636),
+        ldap_validate_cert: str = Form("true"),
+        ldap_ca_cert_path: str = Form(""),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        redirect_url = CANONICAL_ROUTE_PATHS["config"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        runtime_state = get_web_runtime_state(request)
+        try:
+            get_web_services(request).data_sources.save_base_connections(
+                org_id=current_org.org_id,
+                config_path=current_org.config_path or runtime_state.config_path,
+                actor_username=user.username,
+                source_provider=source_provider,
+                corpid=corpid,
+                agentid=agentid,
+                corpsecret=corpsecret,
+                ldap_server=ldap_server,
+                ldap_domain=ldap_domain,
+                ldap_username=ldap_username,
+                ldap_password=ldap_password,
+                ldap_use_ssl=ldap_use_ssl,
+                ldap_port=ldap_port,
+                ldap_validate_cert=ldap_validate_cert,
+                ldap_ca_cert_path=ldap_ca_cert_path,
+            )
+        except (TypeError, ValueError) as exc:
+            flash_t(request, "error", "Failed to save connector: {error}", error=str(exc))
+            return RedirectResponse(url=redirect_url, status_code=303)
+        flash_t(request, "success", "Connector connection settings saved")
+        return RedirectResponse(url=redirect_url, status_code=303)
+
+    @app.post("/data-sources/connectors/targets")
+    def connector_center_target_save(
+        request: Request,
+        csrf_token: str = Form(""),
+        connector_id: str = Form(""),
+        name: str = Form(""),
+        config_path: str = Form(""),
+        ldap_server: str = Form(""),
+        ldap_domain: str = Form(""),
+        ldap_username: str = Form(""),
+        ldap_password: str = Form(""),
+        ldap_use_ssl: str = Form("true"),
+        ldap_port: int = Form(636),
+        ldap_validate_cert: str = Form("true"),
+        ldap_ca_cert_path: str = Form(""),
+        is_enabled: str = Form("true"),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        redirect_url = CANONICAL_ROUTE_PATHS["config"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        try:
+            get_web_services(request).data_sources.save_target_connection(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                connector_id=connector_id,
+                name=name,
+                config_path=config_path,
+                ldap_server=ldap_server,
+                ldap_domain=ldap_domain,
+                ldap_username=ldap_username,
+                ldap_password=ldap_password,
+                ldap_use_ssl=ldap_use_ssl,
+                ldap_port=ldap_port,
+                ldap_validate_cert=ldap_validate_cert,
+                ldap_ca_cert_path=ldap_ca_cert_path,
+                is_enabled=is_enabled,
+            )
+        except (TypeError, ValueError) as exc:
+            flash_t(request, "error", "Failed to save connector: {error}", error=str(exc))
+            return RedirectResponse(url=redirect_url, status_code=303)
+        flash_t(
+            request,
+            "success",
+            "Connector {connector_id} saved",
+            connector_id=str(connector_id or "").strip(),
+        )
+        return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.get("/config/releases", response_class=HTMLResponse)
     def config_release_center_page(request: Request):
