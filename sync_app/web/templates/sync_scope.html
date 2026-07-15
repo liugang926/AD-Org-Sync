@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Sync Scope"), t("Define which source identities may enter the next Dry Run and how their AD account names are generated."), eyebrow=t("Sync Policies"), badge_text=(t("Snapshot #{id}", id=snapshot.id) if snapshot else t("No snapshot")), badge_level=("success" if snapshot and not snapshot_expired else "warning")) %}
+    {% if snapshot and can("config.write") %}{{ ui.button(t("Save Sync Scope"), type="submit", variant="primary", icon="save", attrs='form="sync-scope-form"') }}{% endif %}
+  {% endcall %}
+
+  {% if not snapshot %}
+  <div class="callout callout--warning" role="status"><strong>{{ t("A successful source snapshot is required.") }}</strong><span>{{ t("Refresh Source Directory before defining a synchronization scope.") }}</span><a href="/data-sources/source-directory">{{ t("Open Source Directory") }}</a></div>
+  {% elif snapshot_expired %}
+  <div class="callout callout--warning" role="status"><strong>{{ t("The source snapshot is stale.") }}</strong><span>{{ t("Refresh Source Directory before saving scope or starting a Dry Run.") }}</span></div>
+  {% else %}
+  <div class="callout callout--info" role="status"><strong>{{ t("Scope changes do not write to AD.") }}</strong><span>{{ t("After saving, run a new Dry Run so the plan is bound to this snapshot and scope fingerprint.") }}</span></div>
+  {% endif %}
+
+  {% call ui.panel(t("Find Source Identities"), description=t("Filter the fixed snapshot, then select an explicit set or all filtered results. The core list has eight business columns.")) %}
+    <form method="get" action="/sync-policies/scope" class="filter-bar">
+      <label>{{ t("Search") }}<input type="search" name="search" value="{{ search }}" placeholder="{{ t('Name, source user ID, employee ID') }}"></label>
+      <label>{{ t("Department") }}<select name="department_id"><option value="">{{ t("All departments") }}</option>{% for department in departments %}<option value="{{ department.source_department_id }}" {% if selected_department_id == department.source_department_id %}selected{% endif %}>{{ department.path_names|join(" / ") }}</option>{% endfor %}</select></label>
+      <label>{{ t("Status") }}<select name="status"><option value="">{{ t("All statuses") }}</option><option value="active" {% if selected_status == "active" %}selected{% endif %}>{{ t("Active") }}</option><option value="inactive" {% if selected_status == "inactive" %}selected{% endif %}>{{ t("Inactive") }}</option></select></label>
+      <label>{{ t("Employee ID") }}<select name="employee_id_state"><option value="">{{ t("Any") }}</option><option value="present" {% if selected_employee_id_state == "present" %}selected{% endif %}>{{ t("Present") }}</option><option value="missing" {% if selected_employee_id_state == "missing" %}selected{% endif %}>{{ t("Missing") }}</option></select></label>
+      {{ ui.button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
+      {% if snapshot and not ad_verified %}{{ ui.button(t("Verify Current Page"), href="?page_number=" ~ page_number ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state ~ "&verify_ad=true", variant="ghost", icon="shield-check") }}{% endif %}
+    </form>
+  {% endcall %}
+
+  <form method="post" action="/source-directory/scope" id="sync-scope-form" class="stack-md">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="selection_mode" value="explicit" data-selection-mode>
+    <input type="hidden" name="selection_search" value="{{ search }}">
+    <input type="hidden" name="selection_department_id" value="{{ selected_department_id }}">
+    <input type="hidden" name="selection_status" value="{{ selected_status }}">
+    <input type="hidden" name="selection_employee_id_state" value="{{ selected_employee_id_state }}">
+
+    {% call ui.panel(t("Scope and Account Naming"), description=t("This policy is organization-scoped. Partial synchronization never treats unselected identities as offboarding candidates.")) %}
+      <div class="form-grid">
+        <label>{{ t("Sync Scope") }}<select name="scope_type">{% for value, label in [("full", "All active users"), ("department", "Selected departments and descendants"), ("selected_users", "Checked users only"), ("source_user", "Single user replay")] %}<option value="{{ value }}" {% if scope and scope.scope_type == value %}selected{% endif %}>{{ t(label) }}</option>{% endfor %}</select></label>
+        <label>{{ t("Departments in Scope") }}<select name="selected_department_ids" multiple size="4">{% for department in departments %}<option value="{{ department.source_department_id }}" {% if scope and department.source_department_id in scope.selected_department_ids %}selected{% endif %}>{{ department.path_names|join(" / ") }}</option>{% endfor %}</select></label>
+        <label>{{ t("AD Account Source") }}<select name="source_field">{% set selected_field = scope.source_field if scope else "source_user_id" %}<optgroup label="{{ t('Recommended account sources') }}">{% for value, label in [("source_user_id","Platform User ID"),("employee_id","Employee ID"),("email_localpart","Email local part"),("pinyin_initials_employee_id","Pinyin initials + employee ID"),("pinyin_full_employee_id","Full pinyin + employee ID"),("family_name_pinyin_given_initials","Family pinyin + given initials"),("family_name_pinyin_given_name_pinyin","Full romanized name"),("custom_template","Custom template")] %}<option value="{{ value }}" {% if selected_field == value %}selected{% endif %}>{{ t(label) }} ({{ value }})</option>{% endfor %}</optgroup>{% if fields %}<optgroup label="{{ t('Fields detected in current snapshot') }}">{% for field in fields %}{% if field.field_name not in ["source_user_id","employee_id","email","display_name","position","account_status"] %}<option value="{{ field.field_name }}" {% if selected_field == field.field_name %}selected{% endif %}>{{ t(field.field_label) }} ({{ field.field_name }}) · {{ t("Coverage") }} {{ field.coverage_count }}/{{ snapshot.user_count }}</option>{% endif %}{% endfor %}</optgroup>{% endif %}</select></label>
+        <label>{{ t("Custom Username Template") }}<input type="text" name="username_template" value="{{ scope.username_template if scope else '' }}" placeholder="{employee_id}"></label>
+        {% if provider_id == "wecom" %}<label>{{ t("WeCom Employee ID Extended Attribute") }}<input type="text" name="employee_id_attribute" value="{{ employee_id_attribute }}" placeholder="{{ t('For example: Employee ID or 工号') }}"><span class="form-help">{{ t("Leave empty to auto-detect common employee ID attribute names.") }}</span></label>{% endif %}
+      </div>
+      <div class="callout callout--warning"><strong>{{ t("Partial sync safety") }}</strong><span>{{ t("Partial synchronization will not process offboarding for unselected or out-of-scope users.") }}</span></div>
+    {% endcall %}
+
+    {% call ui.panel(t("Identity Selection"), description=t("Select identities for a checked-user scope. Live AD verification is optional for scope, but mandatory before account-creation preparation.")) %}
+      <div class="actions">
+        {{ ui.button(t("Select Current Page"), type="button", variant="secondary", icon="check-square", attrs="data-select-current-page", disabled=(not snapshot)) }}
+        {{ ui.button(t("Select All Filtered Results"), type="button", variant="secondary", icon="list-checks", attrs="data-select-all-filtered", disabled=(not snapshot)) }}
+        {% if ad_verified %}{{ ui.button(t("Select verified missing candidates"), type="button", variant="secondary", icon="user-plus", attrs="data-select-create-candidates", disabled=(creation_eligible_count == 0)) }}{% endif %}
+        {{ ui.button(t("Clear Selection"), type="button", variant="ghost", icon="x", attrs="data-clear-source-selection", disabled=(not snapshot)) }}
+        <span class="form-help" data-source-selection-status data-all-filtered-text="{{ t('All filtered results will be selected on the server.') }}" data-one-selected-template="{{ t('{count} user selected on this page.', count='{count}') }}" data-many-selected-template="{{ t('{count} users selected on this page.', count='{count}') }}" aria-live="polite"></span>
+      </div>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Synchronization scope identity selection') }}">
+        <table>
+          <thead><tr><th><input type="checkbox" data-select-page-checkbox aria-label="{{ t('Select Current Page') }}"></th><th>{{ t("Employee") }}</th><th>{{ t("Department") }}</th><th>{{ t("Candidate") }}</th><th>{{ t("Current Binding") }}</th><th>{{ t("Current AD State") }}</th><th>{{ t("Creation Readiness") }}</th><th>{{ t("Next Step") }}</th></tr></thead>
+          <tbody>
+            {% for item in relationships %}
+            <tr>
+              <td><input type="checkbox" name="selected_source_user_ids" value="{{ item.source_user_id }}" data-source-user-checkbox aria-label="{{ t('Select {name}', name=item.source_display_name or item.source_user_id) }}"></td>
+              <td><strong>{{ item.source_display_name or "-" }}</strong><div class="muted cell-mono">{{ item.source_user_id }}</div><div class="muted">{{ item.employee_id or "-" }}</div></td>
+              <td>{{ item.source_user.department_names|join(" / ") if item.source_user.department_names else "-" }}</td>
+              <td><span class="cell-mono">{{ item.candidate_mapping.ad_username or "-" }}</span><details class="detail-toggle compact-evidence"><summary>{{ t("Naming evidence") }}</summary><div>{{ t("Field") }}: {{ item.mapping_input.field_label or item.mapping_input.field_name }}</div><div>{{ t("Value") }}: {{ item.mapping_input.value or "-" }}</div><div>{{ t("Method") }}: {{ t(item.mapping_input.method) }}</div></details></td>
+              <td><span class="cell-mono">{{ item.before_state.bound_ad_username or "-" }}</span><div class="muted">{{ t(item.before_state.binding_source) if item.before_state.binding_source else t("No binding") }}</div></td>
+              <td>{{ ui.badge(t(item.candidate_ad_state.status or "not_checked"), "success" if item.candidate_ad_state.status in ["exists", "enabled"] else ("warning" if item.candidate_ad_state.status in ["missing", "unavailable"] else "info")) }}</td>
+              <td>{% if item.creation_eligibility.eligible %}{{ ui.badge(t("Eligible"), "success") }}{% else %}{{ ui.badge(t(item.creation_eligibility.status or "Not eligible"), "warning" if ad_verified else "info") }}{% endif %}<details class="detail-toggle compact-evidence"><summary>{{ t("Eligibility evidence") }}</summary>{{ t(item.creation_eligibility.reason or "Verification required") }}</details></td>
+              <td>{% if item.creation_eligibility.eligible %}{% set attrs %}data-select-create-candidate="{{ item.source_user_id }}" data-selected-text="{{ t('Selected for creation') }}"{% endset %}{{ ui.button(t("Select for creation"), type="button", variant="secondary", size="sm", attrs=attrs) }}{% else %}<a href="/identity-governance/binding-reconciliation?search={{ item.source_user_id|urlencode }}">{{ t("Review identity") }}</a>{% endif %}</td>
+            </tr>
+            {% else %}<tr><td colspan="8" class="table-empty">{{ t("No source identities match the current filters.") }}</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="pagination-bar"><span>{{ t("{count} matching users", count=total_users) }}</span><div>{% if page_number > 1 %}{{ ui.button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state, variant="secondary") }}{% endif %}<span>{{ page_number }} / {{ total_pages }}</span>{% if page_number < total_pages %}{{ ui.button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state, variant="secondary") }}{% endif %}</div></div>
+    {% endcall %}
+
+    <details class="card detail-toggle">
+      <summary><strong>{{ t("Advanced: prepare account creation scope") }}</strong></summary>
+      <p>{{ t("Preparation re-verifies every selected candidate and saves an exact Dry Run scope. It does not write to AD.") }}</p>
+      {% if ad_verified %}{{ ui.button(t("Prepare selected account creations"), type="submit", variant="secondary", icon="user-plus", attrs='formaction="/source-directory/create-selection" formmethod="post" data-prepare-account-creations', disabled=True) }}{% else %}<span class="form-help">{{ t("Verify the current page before preparing account creation scope.") }}</span>{% endif %}
+    </details>
+  </form>
+
+  {% call ui.helper_block(t("Next step"), t("After saving the scope, create a new Dry Run. Review the plan before Apply; this page never changes AD accounts."), "info") %}
+    <div class="actions">{{ ui.button(t("Open Dry Run"), href="/execution-center/run-review", variant="secondary", icon="play-circle") }}{{ ui.button(t("Review Bindings"), href="/identity-governance/binding-reconciliation", variant="ghost", icon="scan-search") }}</div>
+  {% endcall %}
+</div>
+{% endblock %}

@@ -56,15 +56,17 @@ def register_data_quality_routes(
             ),
         )
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['data-quality']}/run")
     @app.post("/data-quality/run")
     def data_quality_center_run(
         request: Request,
         csrf_token: str = Form(""),
     ):
-        user = require_capability(request, "config.read")
+        user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/data-quality")
+        redirect_url = CANONICAL_ROUTE_PATHS["data-quality"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
         if csrf_error:
             return csrf_error
 
@@ -80,10 +82,10 @@ def register_data_quality_routes(
             )
         except ValueError as exc:
             flash(request, "error", str(exc))
-            return RedirectResponse(url="/data-quality", status_code=303)
+            return RedirectResponse(url=redirect_url, status_code=303)
         except Exception as exc:
             flash(request, "error", f"Data quality snapshot failed: {exc}")
-            return RedirectResponse(url="/data-quality", status_code=303)
+            return RedirectResponse(url=redirect_url, status_code=303)
 
         snapshot_record = result.get("snapshot")
         if snapshot_record is not None:
@@ -103,13 +105,14 @@ def register_data_quality_routes(
                 f"Captured data quality snapshot {snapshot_record.id}",
             )
             return RedirectResponse(
-                url=f"/data-quality?snapshot_id={snapshot_record.id}",
+                url=f"{redirect_url}?snapshot_id={snapshot_record.id}",
                 status_code=303,
             )
 
         flash(request, "warning", "Data quality snapshot completed but no record was stored.")
-        return RedirectResponse(url="/data-quality", status_code=303)
+        return RedirectResponse(url=redirect_url, status_code=303)
 
+    @app.get(f"{CANONICAL_ROUTE_PATHS['data-quality']}/export")
     @app.get("/data-quality/export")
     def data_quality_export(request: Request):
         user = require_capability(request, "config.read")
@@ -129,7 +132,10 @@ def register_data_quality_routes(
             )
         if snapshot is None:
             flash(request, "warning", "Run a data quality snapshot before exporting repair items.")
-            return RedirectResponse(url="/data-quality", status_code=303)
+            return RedirectResponse(
+                url=CANONICAL_ROUTE_PATHS["data-quality"],
+                status_code=303,
+            )
         return stream_csv(
             header=[
                 "issue_key",

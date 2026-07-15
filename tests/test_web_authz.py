@@ -289,13 +289,13 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         body = self._text(response)
         self.assertIn("Advanced Sync", body)
         self.assertIn('href="/automation-center"', body)
-        self.assertIn('href="/data-quality"', body)
+        self.assertIn('href="/data-sources/data-quality"', body)
         self.assertIn('href="/integrations"', body)
         self.assertIn('href="/lifecycle"', body)
         self.assertIn("All advanced capabilities are opt-in.", body)
         self.assertIn("Pending Lifecycle Queue", body)
         self.assertIn("Pending Replay Requests", body)
-        self.assertIn("Source Data Quality Snapshot", body)
+        self.assertNotIn("Source Data Quality Snapshot", body)
         self.assertIn("Username Strategy Previewer", body)
         self.assertIn("Identity Route Explainer", body)
         self.assertIn("First Sync Identity Claim", body)
@@ -912,11 +912,13 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             is_enabled=True,
         )
 
-        page = self._route("/data-quality", "GET")(self._request("/data-quality"))
+        page = self._route("/data-sources/data-quality", "GET")(
+            self._request("/data-sources/data-quality")
+        )
         self.assertEqual(page.status_code, 200)
         page_text = self._text(page)
         self.assertIn("Data Quality Center", page_text)
-        self.assertIn("Run Snapshot", page_text)
+        self.assertIn("Run Quality Scan", page_text)
         self.assertIn("No snapshots yet", page_text)
         match = re.search(r'name="csrf_token" value="([^"]+)"', page_text)
         self.assertIsNotNone(match)
@@ -1006,12 +1008,15 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         with patch(
             "sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()
         ):
-            run_response = self._route("/data-quality/run", "POST")(
-                self._request("/data-quality/run", "POST"),
+            run_response = self._route("/data-sources/data-quality/run", "POST")(
+                self._request("/data-sources/data-quality/run", "POST"),
                 csrf_token=match.group(1),
             )
         self.assertEqual(run_response.status_code, 303)
-        self.assertIn("/data-quality?snapshot_id=", run_response.headers["location"])
+        self.assertIn(
+            "/data-sources/data-quality?snapshot_id=",
+            run_response.headers["location"],
+        )
 
         snapshots = self.app.state.data_quality_snapshot_repo.list_snapshot_records(
             org_id="default", limit=5
@@ -1019,8 +1024,11 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(len(snapshots), 1)
         snapshot_id = snapshots[0].id
 
-        center_response = self._route("/data-quality", "GET")(
-            self._request("/data-quality", query={"snapshot_id": str(snapshot_id)})
+        center_response = self._route("/data-sources/data-quality", "GET")(
+            self._request(
+                "/data-sources/data-quality",
+                query={"snapshot_id": str(snapshot_id)},
+            )
         )
         self.assertEqual(center_response.status_code, 200)
         center_text = self._text(center_response)
@@ -1029,9 +1037,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("Current Issue Summary", center_text)
         self.assertIn("Predicted managed username collisions", center_text)
 
-        export_response = self._route("/data-quality/export", "GET")(
+        export_response = self._route("/data-sources/data-quality/export", "GET")(
             self._request(
-                "/data-quality/export", query={"snapshot_id": str(snapshot_id)}
+                "/data-sources/data-quality/export",
+                query={"snapshot_id": str(snapshot_id)},
             )
         )
         self.assertEqual(export_response.status_code, 200)

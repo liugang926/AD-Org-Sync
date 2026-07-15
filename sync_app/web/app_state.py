@@ -222,6 +222,8 @@ def initialize_web_app_state(
     services = build_web_service_state(
         db_manager=db_manager,
         settings_repo=repositories.settings_repo,
+        org_config_repo=repositories.org_config_repo,
+        connector_repo=repositories.connector_repo,
         config_release_snapshot_repo=repositories.config_release_snapshot_repo,
         subscription_repo=repositories.integration_webhook_subscription_repo,
         job_repo=repositories.job_repo,

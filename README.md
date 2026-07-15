@@ -39,13 +39,13 @@ The codebase has already been refactored away from a simple `WeCom -> AD` utilit
 - Web console, CLI, import/export bundle, and bilingual UI
 - Production-ready DingTalk SSPR bounded context with passwordless employee verification, persistent one-time sessions, exact AD binding authorization, mobile Web UI, and security audit events
 
-The **Source Directory** relationship table is the primary place to trace a
-DingTalk, WeCom, or Feishu user through the referenced source field, normalized
-candidate username, persisted binding, optional current-page AD verification,
-latest Dry Run plan, and latest successful Apply result. **Identity Overrides**
-shows the same provider/connector boundary and source snapshot context. A Dry
-Run records only a proposed binding; it does not modify the active identity
-binding table. See the [Source Directory and AD Account Mapping Guide](docs/guides/source-directory-ad-account-mapping.md)
+The **Source Directory** is an eight-column daily view of employees in the
+latest successful source snapshot. **Binding Reconciliation** traces a user
+through the normalized candidate, persisted binding, latest Dry Run, latest
+Apply, and current AD evidence as one identity timeline. **Sync Scope** owns
+selection and account naming, while **Data Quality** owns repair work. A Dry Run
+records only a proposed binding; it does not modify the active identity binding
+table. See the [Source Directory and AD Account Mapping Guide](docs/guides/source-directory-ad-account-mapping.md)
 for state semantics and troubleshooting.
 
 ## Architecture

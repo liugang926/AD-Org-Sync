@@ -69,7 +69,7 @@ class WebNavigationTests(WebAuthzBaseTestCase):
         self.assertNotIn(CANONICAL_ROUTE_PATHS["organizations"], operator_navigation)
         self.assertNotIn(CANONICAL_ROUTE_PATHS["users"], operator_navigation)
 
-    def test_canonical_and_legacy_get_routes_are_registered_together(self):
+    def test_legacy_get_routes_remain_registered_during_page_migration(self):
         legacy_paths = {
             "dashboard": "/dashboard",
             "config": "/config",
@@ -90,11 +90,34 @@ class WebNavigationTests(WebAuthzBaseTestCase):
             "account": "/account",
         }
 
-        for page, canonical_path in CANONICAL_ROUTE_PATHS.items():
+        for page, legacy_path in legacy_paths.items():
+            canonical_path = CANONICAL_ROUTE_PATHS[page]
             with self.subTest(page=page, path=canonical_path):
                 canonical_endpoint = self._route(canonical_path, "GET")
-                legacy_endpoint = self._route(legacy_paths[page], "GET")
-                self.assertIs(canonical_endpoint, legacy_endpoint)
+                legacy_endpoint = self._route(legacy_path, "GET")
+                if page == "config":
+                    self.assertIsNot(canonical_endpoint, legacy_endpoint)
+                else:
+                    self.assertIs(canonical_endpoint, legacy_endpoint)
+
+        for page in ("snapshots", "binding-reconciliation", "sync-scope"):
+            with self.subTest(page=page):
+                self.assertTrue(callable(self._route(CANONICAL_ROUTE_PATHS[page], "GET")))
+
+    def test_connector_center_is_dedicated_while_legacy_config_remains_available(self):
+        self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
+
+        connector_page = self._route(CANONICAL_ROUTE_PATHS["config"], "GET")(
+            self._request(CANONICAL_ROUTE_PATHS["config"])
+        )
+        legacy_page = self._route("/config", "GET")(self._request("/config"))
+
+        connector_body = self._text(connector_page)
+        self.assertIn("Save Connection Settings", connector_body)
+        self.assertIn("Test Saved Connections", connector_body)
+        self.assertNotIn("Web Deployment", connector_body)
+        self.assertIn("Web Deployment", self._text(legacy_page))
 
     def test_canonical_routes_keep_existing_permission_checks(self):
         self._login("operator1")

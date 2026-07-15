@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+{% import "components/forms.html" as forms %}
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Connectors"), t("Configure the upstream people directory and target AD connections for the current organization. Synchronization scope, naming, routing, and lifecycle rules live in Sync Policies."), eyebrow=t("Data Sources"), badge_text=t("Organization Scope"), badge_level="info") %}
+    <form method="post" action="/preflight/run" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="return_url" value="/data-sources/connectors">
+      {{ ui.button(t("Test Saved Connections"), type="submit", variant="secondary", icon="plug-zap") }}
+    </form>
+  {% endcall %}
+
+  <div class="stat-grid">
+    <article class="stat-card"><span>{{ t("Organization") }}</span><strong>{{ current_org.name }}</strong></article>
+    <article class="stat-card"><span>{{ t("Source Provider") }}</span><strong data-config-provider-current>{{ t(source_provider_name) }}</strong></article>
+    <article class="stat-card"><span>{{ t("Source Connection") }}</span><strong>{{ t("Ready") if source_ready else t("Incomplete") }}</strong></article>
+    <article class="stat-card"><span>{{ t("Base Target AD") }}</span><strong>{{ t("Ready") if base_target_ready else t("Incomplete") }}</strong></article>
+    <article class="stat-card"><span>{{ t("Additional AD Connectors") }}</span><strong>{{ target_connectors|length }}</strong></article>
+    <article class="stat-card"><span>{{ t("Enabled Connectors") }}</span><strong>{{ enabled_target_connector_count }}</strong></article>
+  </div>
+
+  {% if preflight_summary %}
+  <section class="callout {{ 'callout--danger' if preflight_summary.overall_status == 'error' else ('callout--warning' if preflight_summary.overall_status == 'warning' else 'callout--success') }}" role="status">
+    <strong>{{ t("Saved connection test") }}: {{ t(preflight_summary.overall_status|upper) }}</strong>
+    <span>{{ t("Review any failed source or LDAP check below, update the saved connection, then test again.") }}</span>
+  </section>
+  {% endif %}
+
+  <form method="post" action="/data-sources/connectors/base" class="page-stack" data-connector-base-form>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="grid cols-2">
+      {% call ui.panel(t("Source Directory Connector"), t("Upstream"), "info", t("Choose the Provider and save only the credentials used to read departments and employees.")) %}
+        <div class="form-grid">
+          {{ forms.select("source_provider", t("Source Provider"), source_provider_options, selected_value=editable.source_provider, help_text=t(source_provider_schema.implementation_status or source_provider_schema.description or ""), class_name="field-span-full") }}
+          {% for field in source_connection_fields %}
+          {% set field_attrs = 'data-source-provider-field="' ~ field.name ~ '"' %}
+          {% if field.secret and field.configured %}
+          {% set field_attrs = field_attrs ~ ' data-provider-secret-configured="true" data-provider-secret-configured-provider="' ~ editable.source_provider ~ '"' %}
+          {% endif %}
+          {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=(field.required and not field.configured), class_name=field.class_name, autocomplete=field.autocomplete, attrs=field_attrs) }}
+          {% endfor %}
+        </div>
+      {% endcall %}
+
+      {% call ui.panel(t("Base Target AD Connector"), t("Downstream"), "info", t("Configure the default LDAP connection. OU routing and account policies are intentionally outside this page.")) %}
+        <div class="form-grid">
+          {{ forms.input("ldap_server", t("LDAP Server"), editable.ldap_server, placeholder="ldap.example.com") }}
+          {{ forms.input("ldap_domain", t("LDAP Domain"), editable.ldap_domain, placeholder="example.com") }}
+          {{ forms.input("ldap_username", t("LDAP Username"), editable.ldap_username, autocomplete="username") }}
+          {{ forms.input("ldap_password", t("LDAP Password"), type="password", placeholder=("********" if editable.ldap_password_configured else t("Enter LDAP password")), help_text=(t("Leave blank to keep current") if editable.ldap_password_configured else ""), autocomplete="new-password") }}
+          {{ forms.input("ldap_port", t("LDAP Port"), editable.ldap_port, type="number") }}
+          {{ forms.select("ldap_use_ssl", t("Use SSL"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.ldap_use_ssl|lower) }}
+          {{ forms.select("ldap_validate_cert", t("Certificate Validation"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.ldap_validate_cert|lower) }}
+          {{ forms.input("ldap_ca_cert_path", t("CA Certificate Path"), editable.ldap_ca_cert_path, help_text=t("Optional. Leave blank to use system trust store."), class_name="field-span-full") }}
+        </div>
+      {% endcall %}
+    </div>
+    <div class="form-actions">
+      {{ ui.button(t("Save Connection Settings"), type="submit", variant="primary", icon="save") }}
+      <span class="form-help">{{ t("Next: test the saved connections, then refresh Source Directory.") }}</span>
+    </div>
+  </form>
+
+  {% call ui.panel(t("Additional Target AD Connectors"), description=t("Use additional connectors only when one organization routes users to more than one AD domain or connection. Naming and routing rules remain in Sync Policies.")) %}
+    <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Additional target AD connectors') }}">
+      <table>
+        <thead><tr><th>{{ t("Connector") }}</th><th>{{ t("Connection") }}</th><th>{{ t("Transport") }}</th><th>{{ t("Status") }}</th><th>{{ t("Updated") }}</th><th>{{ t("Actions") }}</th></tr></thead>
+        <tbody>
+          {% for connector in target_connectors %}
+          <tr>
+            <td><strong>{{ connector.name or connector.connector_id }}</strong><div class="muted cell-mono">{{ connector.connector_id }}</div></td>
+            <td><div>{{ connector.ldap_server or t("Inherit base target") }}</div><div class="muted">{{ connector.ldap_domain or "-" }}</div></td>
+            <td>{{ "LDAPS" if connector.ldap_use_ssl is not false else "LDAP" }} · {{ connector.ldap_port or (636 if connector.ldap_use_ssl is not false else 389) }}</td>
+            <td>{{ ui.badge(t("Enabled") if connector.is_enabled else t("Disabled"), "success" if connector.is_enabled else "warning") }}</td>
+            <td>{{ ui.local_time(connector.updated_at) }}</td>
+            <td>
+              <div class="actions">
+                <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/toggle">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="return_url" value="/data-sources/connectors">
+                  {{ ui.button(t("Disable") if connector.is_enabled else t("Enable"), type="submit", variant="secondary", size="sm") }}
+                </form>
+                <form method="post" action="/advanced-sync/connectors/{{ connector.connector_id }}/delete" data-confirm="{{ t('Deleting a connector is irreversible and can remove its routing scope.') }}" data-confirm-title="{{ t('Confirm Connector Deletion') }}" data-confirm-require="{{ connector.connector_id }}" data-confirm-input-help="{{ t('Type {value} to confirm.') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name }}" data-confirm-detail-2-label="{{ t('Environment') }}" data-confirm-detail-2-value="{{ t(environment_label) }}" data-confirm-detail-3-label="{{ t('Snapshot Version') }}" data-confirm-detail-3-value="{{ t('Not applicable') }}" data-confirm-detail-4-label="{{ t('Impact Count') }}" data-confirm-detail-4-value="1">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="return_url" value="/data-sources/connectors">
+                  <input type="hidden" name="operation_code" value="connector.delete">
+                  <input type="hidden" name="organization_id" value="{{ current_org.org_id }}">
+                  <input type="hidden" name="environment_label" value="{{ environment_label }}">
+                  <input type="hidden" name="snapshot_version" value="Not applicable">
+                  <input type="hidden" name="impact_count" value="1">
+                  <input type="hidden" name="preview_id" value="{{ connector.connector_id }}">
+                  {{ ui.button(t("Delete Connector"), type="submit", variant="danger", size="sm") }}
+                </form>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td colspan="6">
+              {% call ui.detail_toggle(t("Edit {name} connection", name=connector.name or connector.connector_id), t("Connection-only edits preserve this connector's existing scope, naming, OU, group, and lifecycle policies."), open=False) %}
+              <form method="post" action="/data-sources/connectors/targets" class="form-grid">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="connector_id" value="{{ connector.connector_id }}">
+                {{ forms.input("name", t("Name"), connector.name, id="target_" ~ connector.connector_id ~ "_name") }}
+                {{ forms.input("config_path", t("Legacy Import Path"), connector.config_path, id="target_" ~ connector.connector_id ~ "_config_path") }}
+                {{ forms.input("ldap_server", t("LDAP Server"), connector.ldap_server, id="target_" ~ connector.connector_id ~ "_ldap_server") }}
+                {{ forms.input("ldap_domain", t("LDAP Domain"), connector.ldap_domain, id="target_" ~ connector.connector_id ~ "_ldap_domain") }}
+                {{ forms.input("ldap_username", t("LDAP Username"), connector.ldap_username, id="target_" ~ connector.connector_id ~ "_ldap_username") }}
+                {{ forms.input("ldap_password", t("LDAP Password"), type="password", placeholder=("********" if connector.ldap_password else t("Leave blank to inherit or keep current")), autocomplete="new-password", id="target_" ~ connector.connector_id ~ "_ldap_password") }}
+                {{ forms.input("ldap_port", t("LDAP Port"), connector.ldap_port or 636, type="number", id="target_" ~ connector.connector_id ~ "_ldap_port") }}
+                {{ forms.select("ldap_use_ssl", t("Use SSL"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=(connector.ldap_use_ssl if connector.ldap_use_ssl is not none else true)|string|lower, id="target_" ~ connector.connector_id ~ "_ldap_use_ssl") }}
+                {{ forms.select("ldap_validate_cert", t("Certificate Validation"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=(connector.ldap_validate_cert if connector.ldap_validate_cert is not none else true)|string|lower, id="target_" ~ connector.connector_id ~ "_ldap_validate_cert") }}
+                {{ forms.input("ldap_ca_cert_path", t("CA Certificate Path"), connector.ldap_ca_cert_path, class_name="field-span-full", id="target_" ~ connector.connector_id ~ "_ldap_ca_cert_path") }}
+                <input type="hidden" name="is_enabled" value="{{ 'true' if connector.is_enabled else 'false' }}">
+                <div class="form-actions field-span-full">{{ ui.button(t("Save Target Connection"), type="submit", variant="secondary", icon="save") }}</div>
+              </form>
+              {% endcall %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="table-empty">{{ t("No additional AD connectors are configured. The base target AD connection remains active.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% call ui.detail_toggle(t("Add Target AD Connector"), t("Create only the connection identity here. Configure its scope, naming, and routing in Sync Policies after saving."), open=(target_connectors|length == 0)) %}
+    <form method="post" action="/data-sources/connectors/targets" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {{ forms.input("connector_id", t("Connector ID"), placeholder="asia", required=True, id="new_target_connector_id") }}
+      {{ forms.input("name", t("Name"), placeholder="Asia Domain", id="new_target_name") }}
+      {{ forms.input("ldap_server", t("LDAP Server"), placeholder="dc01.asia.example.local", id="new_target_ldap_server") }}
+      {{ forms.input("ldap_domain", t("LDAP Domain"), placeholder="asia.example.local", id="new_target_ldap_domain") }}
+      {{ forms.input("ldap_username", t("LDAP Username"), autocomplete="username", id="new_target_ldap_username") }}
+      {{ forms.input("ldap_password", t("LDAP Password"), type="password", autocomplete="new-password", id="new_target_ldap_password") }}
+      {{ forms.input("ldap_port", t("LDAP Port"), 636, type="number", id="new_target_ldap_port") }}
+      {{ forms.select("ldap_use_ssl", t("Use SSL"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value="true", id="new_target_ldap_use_ssl") }}
+      {{ forms.select("ldap_validate_cert", t("Certificate Validation"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value="true", id="new_target_ldap_validate_cert") }}
+      {{ forms.input("ldap_ca_cert_path", t("CA Certificate Path"), class_name="field-span-full", id="new_target_ldap_ca_cert_path") }}
+      <input type="hidden" name="config_path" value="">
+      <input type="hidden" name="is_enabled" value="true">
+      <div class="form-actions field-span-full">{{ ui.button(t("Add Target Connector"), type="submit", variant="secondary", icon="plus") }}</div>
+    </form>
+    {% endcall %}
+  {% endcall %}
+
+  {% call ui.helper_block(t("Next step"), t("After the saved connections pass validation, refresh Source Directory. Configure scope, naming, routing, groups, lifecycle, and safety rules in Sync Policies."), "info") %}
+    <div class="actions">
+      {{ ui.button(t("Open Source Directory"), href="/data-sources/source-directory", variant="secondary", icon="users-round") }}
+      {{ ui.button(t("Open Sync Policies"), href="/sync-policies", variant="ghost", icon="waypoints") }}
+    </div>
+  {% endcall %}
+</div>
+<script id="source-provider-ui-catalog" type="application/json">{{ source_provider_ui_catalog | tojson }}</script>
+{% endblock %}

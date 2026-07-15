@@ -755,12 +755,54 @@ class WebBrowserRegressionTests(unittest.TestCase):
 
         self._login()
         self.page.goto(f"{self.base_url}/source-directory", wait_until="networkidle")
-        self.assertTrue(self.page.get_by_role("heading", name="DingTalk Users").is_visible())
-        self.assertTrue(self.page.get_by_role("button", name="Test Connection").is_visible())
+        self.assertTrue(self.page.get_by_role("heading", name="Source Directory").is_visible())
         self.assertTrue(self.page.get_by_role("button", name="Refresh Directory").is_visible())
-        self.assertTrue(self.page.get_by_text("Partial sync safety", exact=True).is_visible())
-        self.assertTrue(self.page.get_by_role("button", name="Select Current Page").is_visible())
-        self.assertTrue(self.page.get_by_role("button", name="Select All Filtered Results").is_visible())
+        self.assertEqual(self.page.get_by_role("button", name="Test Connection").count(), 0)
+        self.assertEqual(self.page.locator('select[name="scope_type"]').count(), 0)
+        source_table = self.page.locator(".source-directory-business-table")
+        self.assertTrue(source_table.is_visible())
+        self.assertEqual(source_table.locator("thead th").count(), 8)
+        source_text = source_table.inner_text()
+        for expected in ("Alice Zhang", "browser-alice", "TJ001", "Headquarters"):
+            self.assertIn(expected.lower(), source_text.lower())
+        for excluded in ("alice.manual", "Latest Dry Run", "Latest Apply"):
+            self.assertNotIn(excluded.lower(), source_text.lower())
+        self.assertNotIn("corpsecret", self.page.content().lower())
+        self.assertNotIn("distinguishedname", self.page.content().lower())
+        self._capture("source-directory-business-list-desktop-en.png")
+
+        self.page.goto(
+            f"{self.base_url}/identity-governance/binding-reconciliation?lang=en",
+            wait_until="networkidle",
+        )
+        relationship_table = self.page.locator(".identity-governance-table")
+        self.assertTrue(relationship_table.is_visible())
+        self.assertEqual(relationship_table.locator("thead th").count(), 8)
+        self.assertEqual(self.page.locator("[data-identity-timeline]").count(), 3)
+        self.assertEqual(self.page.locator("[data-identity-timeline-step]").count(), 15)
+        page_text = relationship_table.inner_text()
+        for expected in (
+            "Alice Zhang",
+            "TJ001",
+            "alice.manual",
+            "browser-identity-dry",
+            "browser-identity-apply",
+            "failed",
+            "carol.disabled",
+        ):
+            self.assertIn(expected.lower(), page_text.lower())
+        self._capture("identity-relationship-evidence-desktop-en.png")
+
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_MissingAccountPreviewProvider(),
+        ):
+            self.page.goto(
+                f"{self.base_url}/sync-policies/scope?lang=en&verify_ad=true",
+                wait_until="networkidle",
+            )
+        self.assertTrue(self.page.get_by_role("heading", name="Sync Scope").is_visible())
+        self.assertEqual(self.page.locator("thead th").count(), 8)
         self.assertEqual(self.page.locator('select[name="scope_type"]').count(), 1)
         self.assertEqual(self.page.locator('select[name="source_field"]').count(), 1)
         self.page.select_option('select[name="source_field"]', "source_user_id")
@@ -769,68 +811,9 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "source_user_id",
         )
         self.page.select_option('select[name="source_field"]', "employee_id")
-        self.assertEqual(
-            self.page.locator('select[name="source_field"]').input_value(),
-            "employee_id",
-        )
-        self.assertEqual(self.page.locator("thead tr").count(), 2)
-        relationship_table = self.page.locator(".identity-relationship-table")
-        self.assertTrue(relationship_table.is_visible())
-        self.assertEqual(relationship_table.get_attribute("tabindex"), "0")
-        self.assertGreater(
-            relationship_table.evaluate("element => element.scrollWidth"),
-            relationship_table.evaluate("element => element.clientWidth"),
-        )
-        page_text = relationship_table.inner_text()
-        for expected in (
-            "Alice Zhang",
-            "browser-alice",
-            "TJ001",
-            "alice.manual",
-            "Manual binding overrides the field-generated candidate",
-            "Temporarily unavailable",
-            "browser-identity-dry",
-            "browser-identity-apply",
-            "Apply failed",
-            "carol.disabled",
-            "Binding disabled",
-            "Post-Apply AD state",
-        ):
-            self.assertIn(expected.lower(), page_text.lower())
-        self.assertNotIn("corpsecret", self.page.content().lower())
-        self.assertNotIn("distinguishedname", self.page.content().lower())
-        self._capture("identity-relationship-desktop-en.png")
-        relationship_table.evaluate(
-            "element => { element.scrollLeft = element.scrollWidth; }"
-        )
-        self.assertGreater(
-            relationship_table.evaluate("element => element.scrollLeft"),
-            0,
-        )
-        self._capture("identity-relationship-evidence-desktop-en.png")
-
-        with patch(
-            "sync_app.web.app.build_target_provider",
-            return_value=_MissingAccountPreviewProvider(),
-        ):
-            self.page.goto(
-                f"{self.base_url}/source-directory?lang=en&verify_ad=true",
-                wait_until="networkidle",
-            )
-        self.assertIn(
-            "candidate ad account not found",
-            self.page.locator("body").inner_text().lower(),
-        )
-        self.assertTrue(
-            self.page.get_by_text(
-                "1 candidates eligible for creation", exact=True
-            ).is_visible()
-        )
         alice_row = self.page.locator("tbody tr").filter(has_text="browser-alice")
         self.assertTrue(
-            alice_row.get_by_text(
-                "Review saved binding before creation", exact=True
-            ).is_visible()
+            alice_row.get_by_text("Review identity", exact=True).is_visible()
         )
         bob_row = self.page.locator("tbody tr").filter(has_text="browser-bob")
         bob_row.get_by_role("button", name="Select for creation").click()
@@ -841,6 +824,9 @@ class WebBrowserRegressionTests(unittest.TestCase):
             self.page.locator('select[name="scope_type"]').input_value(),
             "selected_users",
         )
+        self.page.locator("details").filter(
+            has_text="Advanced: prepare account creation scope"
+        ).locator("summary").click()
         self.assertTrue(
             self.page.get_by_role(
                 "button", name="Prepare selected account creations"
@@ -848,14 +834,20 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self._capture("identity-relationship-create-selection-desktop-en.png")
 
-        cleanup_button = self.page.get_by_role("button", name="Scan stale bindings")
+        self.page.goto(
+            f"{self.base_url}/identity-governance/binding-reconciliation?lang=en",
+            wait_until="networkidle",
+        )
+        cleanup_button = self.page.get_by_role("button", name="Scan Binding Differences")
         self.assertTrue(cleanup_button.is_visible())
         with patch(
             "sync_app.web.app.build_target_provider",
             return_value=_MissingAccountPreviewProvider(),
         ):
             cleanup_button.click()
-            self.page.wait_for_url("**/source-directory?**cleanup_preview=true")
+            self.page.wait_for_url(
+                "**/identity-governance/binding-reconciliation?**cleanup_preview=true"
+            )
 
         self.assertTrue(
             self.page.get_by_role("heading", name="Binding Cleanup Preview").is_visible()
@@ -866,11 +858,9 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertIn("environment", preview_text)
         self.assertIn("snapshot version", preview_text)
         self.assertIn("impact count", preview_text)
-        self.assertTrue(
-            self.page.locator("tbody tr")
-            .filter(has_text="browser-alice")
-            .get_by_text("Review saved binding before creation", exact=True)
-            .is_visible()
+        self.assertIn(
+            "alice.manual",
+            self.page.locator("tbody tr").filter(has_text="browser-alice").inner_text(),
         )
 
         self.page.get_by_role(
@@ -887,19 +877,17 @@ class WebBrowserRegressionTests(unittest.TestCase):
             return_value=_MissingAccountPreviewProvider(),
         ):
             cleanup_dialog.locator("[data-confirm-approve]").click()
-            self.page.wait_for_url("**/source-directory?**cleanup_preview=true")
+            self.page.wait_for_url(
+                "**/identity-governance/binding-reconciliation?**cleanup_preview=true"
+            )
         self.assertIn(
             "Removed 2 verified stale binding(s)",
             self.page.locator("body").inner_text(),
         )
-        cleaned_alice_row = self.page.locator("tbody tr").filter(
-            has_text="browser-alice"
-        )
-        self.assertTrue(
-            cleaned_alice_row.get_by_role(
-                "button", name="Select for creation"
-            ).is_visible()
-        )
+        cleaned_alice_row = self.page.locator("tbody tr").filter(has_text="browser-alice")
+        current_binding_cell = cleaned_alice_row.locator("td").nth(2).inner_text()
+        self.assertNotIn("alice.manual", current_binding_cell)
+        self.assertIn("No binding", current_binding_cell)
         self._capture("identity-relationship-stale-binding-cleanup-desktop-en.png")
 
         bindings.upsert_binding(
@@ -928,15 +916,21 @@ class WebBrowserRegressionTests(unittest.TestCase):
 
         self.page.set_viewport_size({"width": 390, "height": 844})
         self.page.goto(
-            f"{self.base_url}/source-directory?lang=zh-CN",
+            f"{self.base_url}/identity-governance/binding-reconciliation?lang=zh-CN",
             wait_until="networkidle",
         )
         self._assert_page_has_no_horizontal_overflow()
         self.assertEqual(
             relationship_table.get_attribute("aria-label"),
-            "身份关联及同步前后预览",
+            "绑定对账身份证据",
         )
-        self.assertIn("暂时无法验证", self.page.locator("body").inner_text())
+        self.assertTrue(self.page.get_by_role("heading", name="绑定对账").is_visible())
+        self.assertEqual(relationship_table.locator("thead th").count(), 8)
+        self.page.goto(
+            f"{self.base_url}/sync-policies/scope?lang=zh-CN",
+            wait_until="networkidle",
+        )
+        self._assert_page_has_no_horizontal_overflow()
         self.assertEqual(
             self.page.locator("[data-source-selection-status]").inner_text(),
             "当前页已选择 0 个用户。",
@@ -957,7 +951,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             wait_until="networkidle",
         )
         self.assertIn("No cached users match", self.page.locator("body").inner_text())
-        self._capture("identity-relationship-empty-state.png")
+        self._capture("source-directory-empty-state.png")
 
         polling_snapshot_id = source_repo.start_refresh(
             org_id="default", provider_id="dingtalk", created_by="browser-poll"
@@ -1013,12 +1007,16 @@ class WebBrowserRegressionTests(unittest.TestCase):
             state="detached", timeout=8000
         )
         self.assertIn("Refresh Result", self.page.locator("body").inner_text())
+        self.page.goto(
+            f"{self.base_url}/sync-policies/scope?lang=en",
+            wait_until="networkidle",
+        )
         self.page.select_option('select[name="source_field"]', "employee_id")
         self.assertEqual(
             self.page.locator('select[name="source_field"]').input_value(),
             "employee_id",
         )
-        self._capture("source-directory-refresh-complete-mapping-en.png")
+        self._capture("sync-scope-refresh-complete-mapping-en.png")
 
     def _assert_page_has_no_horizontal_overflow(self) -> None:
         dimensions = self.page.evaluate(
@@ -1988,10 +1986,22 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "jobs": ("/jobs?lang=zh-CN", ".execution-flow"),
             "audit": ("/audit?lang=zh-CN", ".table-shell"),
             "organizations": ("/organizations?lang=zh-CN", ".table-shell"),
-            "connectors": ("/advanced-sync?lang=zh-CN", ".page-header"),
+            "connectors": ("/data-sources/connectors?lang=zh-CN", ".page-header"),
             "source-directory": (
-                "/source-directory?lang=zh-CN",
-                ".identity-relationship-table",
+                "/data-sources/source-directory?lang=zh-CN",
+                ".source-directory-business-table",
+            ),
+            "snapshot-history": (
+                "/data-sources/snapshots?lang=zh-CN",
+                ".table-scroll",
+            ),
+            "binding-reconciliation": (
+                "/identity-governance/binding-reconciliation?lang=zh-CN",
+                ".identity-governance-table",
+            ),
+            "sync-scope": (
+                "/sync-policies/scope?lang=zh-CN",
+                'select[name="scope_type"]',
             ),
             "mappings": ("/mappings?lang=zh-CN", ".table-shell"),
             "identity-job": (
@@ -2126,8 +2136,14 @@ class WebBrowserRegressionTests(unittest.TestCase):
     def test_z_phase3_operating_pages_render_shells(self):
         self._login()
 
-        self.page.goto(f"{self.base_url}/data-quality", wait_until="networkidle")
+        self.page.goto(
+            f"{self.base_url}/data-sources/data-quality", wait_until="networkidle"
+        )
         self.assertTrue(self.page.locator(".quality-ops-hero").is_visible())
+        self.assertEqual(
+            self.page.locator('form[action="/data-sources/data-quality/run"]').count(),
+            1,
+        )
         self.assertIn(
             "quality operations", self.page.locator("body").inner_text().lower()
         )

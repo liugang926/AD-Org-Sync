@@ -140,11 +140,14 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertIn("Source Directory", body)
         self.assertIn("Refresh Directory", body)
         self.assertNotIn("secret-001", body)
-        self.assertIn("Partial synchronization will not process offboarding", body)
+        self.assertIn("This daily list contains eight business columns", body)
+        self.assertEqual(body.count("<th>"), 8)
+        self.assertNotIn("Test Connection", body)
+        self.assertNotIn("Save Scope and Mapping", body)
+        self.assertNotIn("Before synchronization", body)
 
-    def test_empty_directory_explains_refresh_prerequisite_and_keeps_employee_id_visible(self):
+    def test_empty_directory_explains_refresh_prerequisite_and_keeps_daily_columns_visible(self):
         self._login("superadmin")
-        self.session["ui_language"] = "zh-CN"
 
         response = self._route("/source-directory", "GET")(
             self._request("/source-directory")
@@ -152,10 +155,10 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
 
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
-        self.assertIn("当前还没有成功的来源目录快照", body)
-        self.assertIn("工号 / 员工 ID (employee_id)", body)
-        self.assertIn("工号始终可选", body)
-        self.assertIn("disabled aria-disabled=\"true\"", body)
+        self.assertIn("No successful source directory snapshot is available yet", body)
+        self.assertIn("Employee ID", body)
+        self.assertIn("Open Connectors", body)
+        self.assertEqual(body.count("<th>"), 8)
         self.assertNotIn("verify_ad=true", body)
 
     def test_refreshing_directory_renders_automatic_status_poll(self):
@@ -243,8 +246,8 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
             fingerprint="sha256:v2:dynamic-field-label",
         )
 
-        response = self._route("/source-directory", "GET")(
-            self._request("/source-directory")
+        response = self._route("/sync-policies/scope", "GET")(
+            self._request("/sync-policies/scope")
         )
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
@@ -354,15 +357,18 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
             source_display_name="Alice Ding",
         )
 
-        page = self._route("/source-directory", "GET")(
-            self._request("/source-directory")
+        page = self._route("/identity-governance/binding-reconciliation", "GET")(
+            self._request("/identity-governance/binding-reconciliation")
         )
         body = self._text(page)
-        self.assertIn("Source and mapping method", body)
-        self.assertIn("Before synchronization", body)
-        self.assertIn("Planned after Dry Run", body)
-        self.assertIn("Applied result", body)
-        self.assertIn("Post-Apply AD state", body)
+        self.assertIn("Identity Evidence", body)
+        self.assertIn("Candidate", body)
+        self.assertIn("Current Binding", body)
+        self.assertIn("Latest Dry Run", body)
+        self.assertIn("Latest Apply", body)
+        self.assertEqual(body.count("<th>"), 8)
+        self.assertEqual(body.count("data-identity-timeline>"), 2)
+        self.assertEqual(body.count("data-identity-timeline-step"), 10)
         self.assertIn("TJ001", body)
         self.assertIn("alice.manual", body)
         self.assertIn("Manual binding overrides the field-generated candidate", body)
@@ -406,8 +412,8 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
             "sync_app.web.app.build_target_provider",
             return_value=_CreationPreviewTargetProvider(),
         ):
-            page = self._route("/source-directory", "GET")(
-                self._request("/source-directory"),
+            page = self._route("/sync-policies/scope", "GET")(
+                self._request("/sync-policies/scope"),
                 verify_ad=True,
             )
             response = self._route("/api/source-directory/relationships", "GET")(
@@ -416,10 +422,10 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
             )
 
         body = self._text(page)
-        self.assertIn("Candidate AD account not found", body)
+        self.assertIn("missing", body)
         self.assertIn("Select for creation", body)
-        self.assertIn("Review saved binding before creation", body)
-        self.assertIn("Saved binding", body)
+        self.assertIn("Review identity", body)
+        self.assertIn("Current Binding", body)
         payload = json.loads(response.body)
         self.assertEqual(payload["candidate_missing_count"], 2)
         self.assertEqual(payload["creation_eligible_count"], 1)
@@ -436,10 +442,10 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self._login("superadmin")
         self._seed_creation_candidates()
 
-        page = self._route("/source-directory", "GET")(
-            self._request("/source-directory")
+        page = self._route("/identity-governance/binding-reconciliation", "GET")(
+            self._request("/identity-governance/binding-reconciliation")
         )
-        self.assertIn("Scan stale bindings", self._text(page))
+        self.assertIn("Scan Binding Differences", self._text(page))
 
         with patch(
             "sync_app.web.app.build_target_provider",
@@ -463,8 +469,10 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
             self.assertEqual(preview["context"]["organization_id"], "default")
             self.assertEqual(preview["context"]["environment_label"], "Local environment")
 
-            preview_page = self._route("/source-directory", "GET")(
-                self._request("/source-directory")
+            preview_page = self._route(
+                "/identity-governance/binding-reconciliation", "GET"
+            )(
+                self._request("/identity-governance/binding-reconciliation")
             )
             preview_body = self._text(preview_page)
             self.assertIn("Binding Cleanup Preview", preview_body)
@@ -649,7 +657,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(
             response.headers["location"],
-            "/source-directory?verify_ad=true",
+            "/sync-policies/scope?verify_ad=true",
         )
         selection = self.app.state.source_directory_repo.get_scope_selection(
             org_id="default", provider_id="wecom"

@@ -1,277 +1,110 @@
 {% extends "base.html" %}
-{% from "components/ui.html" import button %}
 {% import "components/ui.html" as ui %}
-{% import "components/high_risk.html" as high_risk with context %}
 {% block content %}
-<section class="page-heading">
-  <div>
-    <div class="eyebrow">{{ t("Source Directory") }}</div>
-    <h1>{{ provider_name }} {{ t("Users") }}</h1>
-    <p>{{ t("Review the cached organization directory, choose the AD account source, and save an explicit synchronization scope.") }}</p>
-  </div>
-  <div class="page-actions">
-    <form method="post" action="/source-directory/test">
+<div class="page-stack">
+  {% call ui.page_header(t("Source Directory"), t("Browse employees and departments from the latest successful source snapshot. Connection settings, identity decisions, and synchronization policy are handled on their own pages."), eyebrow=t("Data Sources"), badge_text=(t("Refreshing") if latest_refresh and latest_refresh.status == "refreshing" else (t("No snapshot") if not snapshot else (t("Stale") if snapshot_expired else t("Current")))), badge_level=("warning" if snapshot_expired or not snapshot else "success")) %}
+    {% if can("config.write") %}
+    <form method="post" action="/source-directory/refresh" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ button(t("Test Connection"), type="submit", variant="secondary", icon="plug-zap") }}
-    </form>
-    <form method="post" action="/source-directory/refresh">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ button(t("Refresh Directory"), type="submit", variant="primary", icon="refresh-cw", disabled=(latest_refresh and latest_refresh.status == 'refreshing')) }}
-    </form>
-  </div>
-</section>
-
-{% if latest_refresh and latest_refresh.status == 'failed' %}
-<div class="callout callout--danger" role="alert">
-  <strong>{{ t("The latest refresh failed.") }}</strong>
-  <span>{{ latest_refresh.error_summary }}</span>
-  {% if snapshot %}<span>{{ t("The previous successful snapshot is still being used.") }}</span>{% endif %}
-</div>
-{% elif latest_refresh and latest_refresh.status == 'refreshing' %}
-<div
-  class="callout callout--info"
-  role="status"
-  aria-live="polite"
-  data-source-refresh-poll
-  data-status-url="/api/source-directory/status"
-  data-refreshing-text="{{ t('Directory refresh is in progress. This page will update automatically.') }}"
-  data-long-running-text="{{ t('Directory refresh is taking longer than expected, but it is still running. You can leave this page and return later.') }}"
-  data-succeeded-text="{{ t('Directory refresh completed. Reloading the latest users and mapping fields.') }}"
-  data-failed-text="{{ t('Directory refresh failed. Reloading the failure details.') }}"
->
-  <strong>{{ t("Directory refresh is in progress.") }}</strong>
-  <span data-source-refresh-message>{{ t("Directory refresh is in progress. This page will update automatically.") }}</span>
-</div>
-{% elif not snapshot %}
-<div class="callout callout--warning" role="status">
-  <strong>{{ t("No successful source directory snapshot is available yet.") }}</strong>
-  <span>{{ t("Test the connection, then refresh the directory. Users and discovered mapping fields appear after the refresh succeeds.") }}</span>
-</div>
-{% endif %}
-{% if snapshot_expired %}
-<div class="callout callout--warning" role="status">{{ t("This source snapshot is stale. Refresh it before starting a new Dry Run.") }}</div>
-{% endif %}
-
-<div class="stat-grid">
-  <article class="stat-card"><span>{{ t("Provider") }}</span><strong>{{ provider_name }}</strong></article>
-  <article class="stat-card"><span>{{ t("Users") }}</span><strong>{{ snapshot.user_count if snapshot else 0 }}</strong></article>
-  <article class="stat-card"><span>{{ t("Missing Employee ID") }}</span><strong>{{ snapshot.missing_employee_id_count if snapshot else 0 }}</strong></article>
-  <article class="stat-card"><span>{{ t("Duplicate Employee ID") }}</span><strong>{{ snapshot.duplicate_employee_id_count if snapshot else 0 }}</strong></article>
-  <article class="stat-card"><span>{{ t("Mapping Coverage") }}</span><strong>{{ mapping_quality.mapping_coverage_percent if mapping_quality else 0 }}%</strong></article>
-  <article class="stat-card"><span>{{ t("Username Collisions") }}</span><strong>{{ mapping_quality.normalized_username_collision_count if mapping_quality else 0 }}</strong></article>
-</div>
-
-<section class="card">
-  <div class="card-header">
-    <div>
-      <h2>{{ t("Preview and Filter") }}</h2>
-      <p>{{ t("All user lists are server-paginated. Mobile values are masked in the snapshot.") }}</p>
-    </div>
-    {% if snapshot %}<span class="badge">{{ t("Updated") }} {{ snapshot.completed_at }}</span>{% endif %}
-  </div>
-  <form method="get" action="/source-directory" class="filter-bar">
-    <label>{{ t("Search") }}<input type="search" name="search" value="{{ search }}" placeholder="{{ t('Name, user ID, employee ID, email') }}"></label>
-    <label>{{ t("Department") }}
-      <select name="department_id">
-        <option value="">{{ t("All departments") }}</option>
-        {% for department in departments %}<option value="{{ department.source_department_id }}" {% if selected_department_id == department.source_department_id %}selected{% endif %}>{{ department.path_names|join(' / ') }}</option>{% endfor %}
-      </select>
-    </label>
-    <label>{{ t("Status") }}
-      <select name="status"><option value="">{{ t("All statuses") }}</option><option value="active" {% if selected_status == 'active' %}selected{% endif %}>{{ t("Active") }}</option><option value="inactive" {% if selected_status == 'inactive' %}selected{% endif %}>{{ t("Inactive") }}</option></select>
-    </label>
-    <label>{{ t("Employee ID") }}
-      <select name="employee_id_state"><option value="">{{ t("Any") }}</option><option value="present" {% if selected_employee_id_state == 'present' %}selected{% endif %}>{{ t("Present") }}</option><option value="missing" {% if selected_employee_id_state == 'missing' %}selected{% endif %}>{{ t("Missing") }}</option></select>
-    </label>
-    <label>{{ t("Identity relationship") }}
-      <select name="relationship_status">
-        {% for value, label in [('all','All relationships'),('bound','Bound'),('unbound','Unbound'),('candidate_only','Candidate only'),('manual','Manual binding'),('automatic','Automatic binding'),('disabled','Binding disabled'),('ad_exists','AD exists'),('ad_missing','AD missing'),('ad_unknown','AD status unknown'),('planned_change','Has planned change'),('not_applied','Not applied'),('apply_success','Apply succeeded'),('apply_failed','Apply failed'),('conflict','Conflicts')] %}
-        <option value="{{ value }}" {% if selected_relationship_status == value %}selected{% endif %}>{{ t(label) }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    {{ button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
-  </form>
-
-  <div class="callout callout--info" role="note">
-    <strong>{{ t("Candidate, Before, Planned, and Applied are different evidence states.") }}</strong>
-    <span>{{ t("Candidate is calculated from the saved field rule. Before is the persisted binding and verified AD state. Planned is the latest Dry Run expectation. Applied requires a successful Apply operation and a matching persisted binding.") }}</span>
-  </div>
-  <div class="form-actions">
-    {% if ad_verified %}
-    <span class="badge badge--success" role="status">{{ t("Current-page AD accounts verified") }}</span>
-    <span class="badge badge--warning">{{ t("{count} candidate AD accounts not found", count=candidate_missing_count) }}</span>
-    <span class="badge badge--success">{{ t("{count} candidates eligible for creation", count=creation_eligible_count) }}</span>
-    {% elif not snapshot %}
-    {{ button(t("Verify current-page AD status"), type="button", variant="secondary", icon="shield-check", disabled=True) }}
-    <span class="form-help">{{ t("AD verification becomes available after a successful source directory refresh.") }}</span>
-    {% else %}
-    {{ button(t("Verify current-page AD status"), href="?page_number=" ~ page_number ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state ~ "&relationship_status=" ~ selected_relationship_status ~ "&verify_ad=true", variant="secondary", icon="shield-check") }}
-    {% endif %}
-    {% if snapshot and can("mappings.write") %}
-    <form method="post" action="/source-directory/reconcile-stale-bindings" class="inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="page_number" value="{{ page_number }}">
-      <input type="hidden" name="search" value="{{ search }}">
-      <input type="hidden" name="department_id" value="{{ selected_department_id }}">
-      <input type="hidden" name="status" value="{{ selected_status }}">
-      <input type="hidden" name="employee_id_state" value="{{ selected_employee_id_state }}">
-      <input type="hidden" name="relationship_status" value="{{ selected_relationship_status }}">
-      {{ button(t("Scan stale bindings"), type="submit", variant="secondary", icon="scan-search") }}
+      {{ ui.button(t("Refresh Directory"), type="submit", variant="primary", icon="refresh-cw", disabled=(latest_refresh and latest_refresh.status == "refreshing")) }}
     </form>
     {% endif %}
-  </div>
+  {% endcall %}
 
-  {% if binding_cleanup_preview %}
-  {% set cleanup_context = binding_cleanup_preview.context %}
-  {% set cleanup_confirm_details = [
-    (t("Organization"), cleanup_context.organization_name ~ " (" ~ cleanup_context.organization_id ~ ")"),
-    (t("Environment"), t(cleanup_context.environment_label)),
-    (t("Snapshot Version"), t(cleanup_context.snapshot_version)),
-    (t("Impact Count"), cleanup_context.impact_count)
-  ] %}
-  <section class="card stack-md" data-high-risk-cleanup-preview>
-    <div class="panel__intro">
-      <div class="panel__header">
-        <h2 class="panel__title">{{ t("Binding Cleanup Preview") }}</h2>
-        {{ ui.badge(t(binding_cleanup_preview.status|capitalize), "success" if binding_cleanup_preview.status == "completed" else ("error" if binding_cleanup_preview.status == "blocked" else "warning")) }}
-      </div>
-      <p class="panel__description">{{ t("Review the fixed scan context before confirming any binding deletion. A second live AD verification runs immediately before execution.") }}</p>
-    </div>
-    {{ high_risk.workflow(binding_cleanup_workflow, ui, "Binding cleanup workflow") }}
-    {{ high_risk.context_details(cleanup_context) }}
-    {% if binding_cleanup_preview.reason_code %}
-    <div class="panel-note {{ 'error' if binding_cleanup_preview.status == 'blocked' else 'warning' }}" role="status">
-      <strong>{{ t("Blocked") }}</strong>
-      <span>{{ t(binding_cleanup_preview.reason_code) }}</span>
-    </div>
-    {% endif %}
-    {% if binding_cleanup_preview.status == "preview" %}
-    <div class="panel-note info">
-      {{ t("{count} binding(s) could not be verified and will remain unchanged.", count=binding_cleanup_preview.unverified_binding_count or 0) }}
-    </div>
-    <form method="post" action="/source-directory/reconcile-stale-bindings/confirm" class="actions">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ high_risk.confirmation_fields(cleanup_context) }}
-      {{ button(t("Confirm and remove {count} binding(s)", count=cleanup_context.impact_count), type="submit", variant="danger", icon="trash-2", disabled=(not binding_cleanup_preview.gate.allowed or cleanup_context.impact_count <= 0), confirm_text=t("Only bindings in this reviewed preview will be considered. Live AD must again confirm each exact target account is missing."), confirm_title=t("Confirm Binding Cleanup"), confirm_details=cleanup_confirm_details) }}
-      {% if not binding_cleanup_preview.gate.allowed %}
-      <span class="form-help">{{ t(binding_cleanup_preview.gate.reason_code) }}</span>
-      {% elif cleanup_context.impact_count <= 0 %}
-      <span class="form-help">{{ t("No verified stale bindings require cleanup.") }}</span>
-      {% endif %}
-    </form>
-    {% elif binding_cleanup_preview.status == "completed" %}
-    <div class="panel-note success" role="status">
-      {{ t("Cleanup completed: {removed_count} removed, {unchanged_count} unchanged.", removed_count=binding_cleanup_preview.removed_count or 0, unchanged_count=(binding_cleanup_preview.changed_count or 0) + (binding_cleanup_preview.unverified_binding_count or 0)) }}
-    </div>
-    {% endif %}
-  </section>
+  {% if latest_refresh and latest_refresh.status == 'failed' %}
+  <div class="callout callout--danger" role="alert">
+    <strong>{{ t("The latest refresh failed.") }}</strong>
+    <span>{{ latest_refresh.error_summary }}</span>
+    {% if snapshot %}<span>{{ t("The previous successful snapshot is still being used.") }}</span>{% endif %}
+    <a href="/data-sources/connectors">{{ t("Check saved connectors") }}</a>
+  </div>
+  {% elif latest_refresh and latest_refresh.status == 'refreshing' %}
+  <div class="callout callout--info" role="status" aria-live="polite" data-source-refresh-poll data-status-url="/api/source-directory/status" data-refreshing-text="{{ t('Directory refresh is in progress. This page will update automatically.') }}" data-long-running-text="{{ t('Directory refresh is taking longer than expected, but it is still running. You can leave this page and return later.') }}" data-succeeded-text="{{ t('Directory refresh completed. Reloading the latest users and mapping fields.') }}" data-failed-text="{{ t('Directory refresh failed. Reloading the failure details.') }}">
+    <strong>{{ t("Directory refresh is in progress.") }}</strong>
+    <span data-source-refresh-message>{{ t("Directory refresh is in progress. This page will update automatically.") }}</span>
+  </div>
+  {% elif not snapshot %}
+  <div class="callout callout--warning" role="status">
+    <strong>{{ t("No successful source directory snapshot is available yet.") }}</strong>
+    <span>{{ t("Save and test the connector, then refresh the directory. No cached employee data is available until refresh succeeds.") }}</span>
+    <a href="/data-sources/connectors">{{ t("Open Connectors") }}</a>
+  </div>
+  {% elif snapshot_expired %}
+  <div class="callout callout--warning" role="status">
+    <strong>{{ t("This source snapshot is stale.") }}</strong>
+    <span>{{ t("Refresh it before starting a new Dry Run.") }}</span>
+  </div>
+  {% else %}
+  <div class="callout callout--success" role="status">
+    <strong>{{ t("Latest source snapshot is ready.") }}</strong>
+    <span>{{ t("Use filters to find employees. Open Data Quality for repair work or Binding Reconciliation for identity evidence.") }}</span>
+  </div>
   {% endif %}
 
-  <form method="post" action="/source-directory/scope">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="selection_mode" value="explicit" data-selection-mode>
-    <input type="hidden" name="selection_search" value="{{ search }}">
-    <input type="hidden" name="selection_department_id" value="{{ selected_department_id }}">
-    <input type="hidden" name="selection_status" value="{{ selected_status }}">
-    <input type="hidden" name="selection_employee_id_state" value="{{ selected_employee_id_state }}">
-    <div class="form-actions">
-      {{ button(t("Select Current Page"), type="button", variant="secondary", icon="check-square", attrs='data-select-current-page', disabled=(not snapshot)) }}
-      {{ button(t("Select All Filtered Results"), type="button", variant="secondary", icon="list-checks", attrs='data-select-all-filtered', disabled=(not snapshot)) }}
-      {% if ad_verified %}{{ button(t("Select verified missing candidates"), type="button", variant="secondary", icon="user-plus", attrs='data-select-create-candidates', disabled=(creation_eligible_count == 0)) }}{% endif %}
-      {{ button(t("Clear Selection"), type="button", variant="ghost", icon="x", attrs='data-clear-source-selection', disabled=(not snapshot)) }}
-      <span
-        class="form-help"
-        data-source-selection-status
-        data-all-filtered-text="{{ t('All filtered results will be selected on the server.') }}"
-        data-one-selected-template="{{ t('{count} user selected on this page.', count='{count}') }}"
-        data-many-selected-template="{{ t('{count} users selected on this page.', count='{count}') }}"
-        aria-live="polite"
-      ></span>
-    </div>
-    <div class="table-scroll identity-relationship-table" tabindex="0" role="region" aria-label="{{ t('Identity relationship and synchronization preview') }}">
+  <div class="stat-grid">
+    <article class="stat-card"><span>{{ t("Provider") }}</span><strong>{{ t(provider_name) }}</strong></article>
+    <article class="stat-card"><span>{{ t("Snapshot Version") }}</span><strong>{{ "#" ~ snapshot.id if snapshot else "-" }}</strong></article>
+    <article class="stat-card"><span>{{ t("Users") }}</span><strong>{{ snapshot.user_count if snapshot else 0 }}</strong></article>
+    <article class="stat-card"><span>{{ t("Departments") }}</span><strong>{{ snapshot.department_count if snapshot else 0 }}</strong></article>
+    <article class="stat-card"><span>{{ t("Fields") }}</span><strong>{{ field_count }}</strong></article>
+    <article class="stat-card"><span>{{ t("Updated") }}</span><strong>{% if snapshot %}{{ ui.local_time(snapshot.completed_at) }}{% else %}-{% endif %}</strong></article>
+  </div>
+
+  {% call ui.panel(t("Employees"), description=t("This daily list contains eight business columns. Technical source evidence stays collapsed inside each employee row.")) %}
+    <form method="get" action="/data-sources/source-directory" class="filter-bar">
+      <label>{{ t("Search") }}<input type="search" name="search" value="{{ search }}" placeholder="{{ t('Name, user ID, employee ID, email') }}"></label>
+      <label>{{ t("Department") }}
+        <select name="department_id">
+          <option value="">{{ t("All departments") }}</option>
+          {% for department in departments %}<option value="{{ department.source_department_id }}" {% if selected_department_id == department.source_department_id %}selected{% endif %}>{{ department.path_names|join(' / ') }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>{{ t("Status") }}
+        <select name="status"><option value="">{{ t("All statuses") }}</option><option value="active" {% if selected_status == 'active' %}selected{% endif %}>{{ t("Active") }}</option><option value="inactive" {% if selected_status == 'inactive' %}selected{% endif %}>{{ t("Inactive") }}</option></select>
+      </label>
+      <label>{{ t("Employee ID") }}
+        <select name="employee_id_state"><option value="">{{ t("Any") }}</option><option value="present" {% if selected_employee_id_state == 'present' %}selected{% endif %}>{{ t("Present") }}</option><option value="missing" {% if selected_employee_id_state == 'missing' %}selected{% endif %}>{{ t("Missing") }}</option></select>
+      </label>
+      {{ ui.button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
+    </form>
+
+    <div class="table-scroll source-directory-business-table" tabindex="0" role="region" aria-label="{{ t('Source directory employees') }}">
       <table>
-        <thead>
-          <tr>
-            <th rowspan="2"><input type="checkbox" data-select-page-checkbox aria-label="{{ t('Select Current Page') }}"></th>
-            <th colspan="7" scope="colgroup">{{ t("Source and mapping method") }}</th>
-            <th colspan="5" scope="colgroup">{{ t("Before synchronization") }}</th>
-            <th colspan="5" scope="colgroup">{{ t("Planned after Dry Run") }}</th>
-            <th colspan="6" scope="colgroup">{{ t("Applied result") }}</th>
-            <th colspan="3" scope="colgroup">{{ t("Difference and risk") }}</th>
-          </tr>
-          <tr>
-            <th>{{ t("Name") }}</th><th>{{ t("Platform User ID") }}</th><th>{{ t("Employee ID") }}</th><th>{{ t("Provider") }}</th><th>{{ t("Connector") }}</th><th>{{ t("Referenced field and method") }}</th><th>{{ t("Candidate AD username") }}</th>
-            <th>{{ t("Saved binding") }}</th><th>{{ t("Binding source") }}</th><th>{{ t("Enabled") }}</th><th>{{ t("AD state") }}</th><th>{{ t("Verified at") }}</th>
-            <th>{{ t("Expected AD username") }}</th><th>{{ t("Operation") }}</th><th>{{ t("Resolution source") }}</th><th>{{ t("Dry Run job") }}</th><th>{{ t("Freshness") }}</th>
-            <th>{{ t("Actual AD username") }}</th><th>{{ t("Operation") }}</th><th>{{ t("Result") }}</th><th>{{ t("Apply job") }}</th><th>{{ t("Completed at") }}</th><th>{{ t("Post-Apply AD state") }}</th>
-            <th>{{ t("Difference") }}</th><th>{{ t("Risks") }}</th><th>{{ t("Actions") }}</th>
-          </tr>
-        </thead>
+        <thead><tr><th>{{ t("Employee") }}</th><th>{{ t("Department") }}</th><th>{{ t("Employee ID") }}</th><th>{{ t("Email") }}</th><th>{{ t("Source Status") }}</th><th>{{ t("Provider") }}</th><th>{{ t("Data Readiness") }}</th><th>{{ t("Next Step") }}</th></tr></thead>
         <tbody>
-        {% for item in users %}
+          {% for item in users %}
           <tr>
-            <td><input type="checkbox" name="selected_source_user_ids" value="{{ item.source_user_id }}" data-source-user-checkbox aria-label="{{ t('Select {name}', name=item.source_display_name or item.source_user_id) }}"></td>
-            <td><strong>{{ item.source_display_name or '-' }}</strong><div class="muted">{{ item.source_user.account_status or '-' }}</div></td>
-            <td class="cell-mono">{{ item.source_user_id }}</td>
-            <td class="cell-mono">{{ item.employee_id or '-' }}</td>
-            <td>{{ item.source_provider }}</td>
-            <td class="cell-mono">{{ item.connector_id }}</td>
             <td>
-              <div><strong>{{ item.mapping_input.field_label or item.mapping_input.field_name }}</strong> <span class="cell-mono">({{ item.mapping_input.field_name }})</span></div>
-              <div class="muted">{{ t("Value") }}: <span class="cell-mono">{{ item.mapping_input.value or '-' }}</span></div>
-              <div class="muted">{{ t("Method") }}: {{ item.mapping_input.method }}</div>
-              <div class="muted">{{ t("Template") }}: <span class="cell-mono">{{ item.mapping_input.template or '-' }}</span></div>
+              <strong>{{ item.display_name or "-" }}</strong>
+              <div class="muted cell-mono">{{ item.source_user_id }}</div>
+              <details class="detail-toggle compact-evidence">
+                <summary>{{ t("Source evidence") }}</summary>
+                <dl class="detail-grid">
+                  <div class="detail-item"><dt class="label">{{ t("Position") }}</dt><dd class="value">{{ item.position or "-" }}</dd></div>
+                  <div class="detail-item"><dt class="label">{{ t("Mobile") }}</dt><dd class="value">{{ item.mobile_masked or "-" }}</dd></div>
+                  <div class="detail-item"><dt class="label">{{ t("Primary Department ID") }}</dt><dd class="value cell-mono">{{ item.primary_department_id or "-" }}</dd></div>
+                </dl>
+              </details>
             </td>
+            <td>{{ item.department_names|join(' / ') or "-" }}</td>
+            <td class="cell-mono">{{ item.employee_id or "-" }}</td>
+            <td>{{ item.email or "-" }}</td>
+            <td>{{ ui.badge(t("Active") if item.is_active else t("Inactive"), "success" if item.is_active else "warning") }}</td>
+            <td>{{ t(provider_name) }}</td>
             <td>
-              <div class="cell-mono cell-strong">{{ item.candidate_mapping.ad_username or '-' }}</div>
-              <div class="muted">{{ t(item.candidate_mapping.source) if item.candidate_mapping.source else '-' }}</div>
-              {% if item.candidate_mapping.illegal_characters_removed %}<span class="badge badge--warning">{{ t("Characters removed") }}</span>{% endif %}
-              {% if item.candidate_mapping.truncated %}<span class="badge badge--warning">{{ t("Truncated") }}</span>{% endif %}
-              {% set candidate_status = item.candidate_ad_state.status or 'not_checked' %}
-              {% if candidate_status == 'missing' %}
-              <span class="badge badge--warning">{{ t("Candidate AD account not found") }}</span>
-              {% elif candidate_status == 'not_checked' %}
-              <span class="badge badge--muted">{{ t("Candidate AD account not verified") }}</span>
-              {% elif candidate_status == 'unavailable' %}
-              <span class="badge badge--warning">{{ t("Candidate AD account could not be verified") }}</span>
-              {% elif candidate_status == 'protected' %}
-              <span class="badge badge--warning">{{ t("Candidate AD account is protected") }}</span>
+              {% if item.readiness_issues %}
+                {% for issue in item.readiness_issues %}{{ ui.badge(t(issue), "warning") }}{% endfor %}
               {% else %}
-              <span class="badge badge--success">{{ t("Candidate AD account exists ({status})", status=t(candidate_status)) }}</span>
+                {{ ui.badge(t("Ready"), "success") }}
               {% endif %}
             </td>
-            <td class="cell-mono">{{ item.before_state.bound_ad_username or '-' }}</td>
-            <td>{{ t(item.before_state.binding_source) if item.before_state.binding_source else t("No binding") }}</td>
-            <td>{{ t("Enabled") if item.before_state.binding_enabled else (t("Disabled") if item.before_state.bound_ad_username else '-') }}</td>
-            <td><span class="badge {% if item.before_state.ad_account_state.status in ['missing','unavailable'] %}badge--warning{% elif item.before_state.ad_account_state.status in ['exists','enabled'] %}badge--success{% else %}badge--muted{% endif %}">{{ t(item.before_state.ad_account_state.status or 'not_checked') }}</span></td>
-            <td>{{ item.before_state.verified_at or '-' }}</td>
-            <td class="cell-mono">{{ item.planned_after_state.ad_username or '-' }}</td>
-            <td>{{ t(item.planned_after_state.operation) if item.planned_after_state.operation else '-' }}</td>
-            <td>{{ t(item.planned_after_state.binding_source) if item.planned_after_state.binding_source else '-' }}</td>
-            <td>{% if item.planned_after_state.job_id %}<a href="/jobs/{{ item.planned_after_state.job_id }}" class="cell-mono">{{ item.planned_after_state.job_id }}</a>{% else %}{{ t("Not run") }}{% endif %}</td>
-            <td>{% if item.planned_after_state.is_stale %}<span class="badge badge--warning">{{ t("Stale") }}</span>{% elif item.planned_after_state.job_id %}<span class="badge badge--success">{{ t("Current") }}</span>{% else %}-{% endif %}</td>
-            <td class="cell-mono">{{ item.applied_after_state.ad_username or '-' }}</td>
-            <td>{{ t(item.applied_after_state.operation) if item.applied_after_state.operation else '-' }}</td>
-            <td>{{ t(item.applied_after_state.result) }}</td>
-            <td>{% if item.applied_after_state.job_id %}<a href="/jobs/{{ item.applied_after_state.job_id }}" class="cell-mono">{{ item.applied_after_state.job_id }}</a>{% else %}-{% endif %}</td>
-            <td>{{ item.applied_after_state.applied_at or '-' }}</td>
-            <td><span class="badge {% if item.applied_after_state.post_apply_ad_account_state.status in ['missing','unavailable'] %}badge--warning{% elif item.applied_after_state.post_apply_ad_account_state.status in ['exists','enabled'] %}badge--success{% else %}badge--muted{% endif %}">{{ t(item.applied_after_state.post_apply_ad_account_state.status or 'not_checked') }}</span></td>
-            <td><span class="badge {% if 'conflict' in item.difference.status or 'failed' in item.difference.status %}badge--warning{% elif item.difference.changed %}badge--info{% else %}badge--muted{% endif %}">{{ t(item.difference.status) }}</span><div class="muted">{{ t(item.resolution_reason) }}</div></td>
-            <td>{% if item.risks %}{% for risk in item.risks %}<span class="badge badge--warning">{{ t(risk) }}</span>{% endfor %}{% else %}<span class="badge badge--success">{{ t("No identified risk") }}</span>{% endif %}</td>
             <td>
-              {% if item.creation_eligibility.eligible %}
-              {% set create_candidate_attrs %}data-select-create-candidate="{{ item.source_user_id }}" data-selected-text="{{ t('Selected for creation') }}"{% endset %}
-              {{ button(t("Select for creation"), type="button", variant="secondary", size="sm", attrs=create_candidate_attrs) }}<br>
-              {% elif ad_verified and item.creation_eligibility.status == 'binding_review_required' %}
-              <a href="/mappings?q={{ item.source_user_id|urlencode }}">{{ t("Review saved binding before creation") }}</a><br>
-              {% elif ad_verified and item.candidate_ad_state.status == 'missing' %}
-              <span class="badge badge--warning">{{ t(item.creation_eligibility.reason) }}</span><br>
-              {% endif %}
-              <a href="/mappings?q={{ item.source_user_id|urlencode }}">{{ t("Open binding") }}</a>{% if item.planned_after_state.job_id %}<br><a href="/jobs/{{ item.planned_after_state.job_id }}">{{ t("View Dry Run") }}</a>{% endif %}{% if item.applied_after_state.job_id %}<br><a href="/jobs/{{ item.applied_after_state.job_id }}">{{ t("View Apply") }}</a>{% endif %}<br><a href="/conflicts?q={{ item.source_user_id|urlencode }}">{{ t("View conflicts") }}</a>
+              {% if item.readiness_issues %}<a href="/data-sources/data-quality">{{ t("Review data quality") }}</a>{% else %}<a href="/identity-governance/binding-reconciliation?search={{ item.source_user_id|urlencode }}">{{ t("Review identity") }}</a>{% endif %}
             </td>
           </tr>
-        {% else %}<tr><td colspan="27" class="empty-state">{{ t("No cached users match the current filters.") if snapshot else t("No successful source snapshot is available. Refresh the directory to load users.") }}</td></tr>{% endfor %}
+          {% else %}
+          <tr><td colspan="8" class="table-empty">{{ t("No cached users match the current filters.") if snapshot else t("No successful source snapshot is available. Refresh the directory to load users.") }}</td></tr>
+          {% endfor %}
         </tbody>
       </table>
     </div>
@@ -279,50 +112,20 @@
     <div class="pagination-bar">
       <span>{{ t("{count} matching users", count=total_users) }}</span>
       <div>
-        {% if page_number > 1 %}{{ button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state ~ "&relationship_status=" ~ selected_relationship_status, variant="secondary") }}{% endif %}
+        {% if page_number > 1 %}{{ ui.button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state, variant="secondary") }}{% endif %}
         <span>{{ page_number }} / {{ total_pages }}</span>
-        {% if page_number < total_pages %}{{ button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state ~ "&relationship_status=" ~ selected_relationship_status, variant="secondary") }}{% endif %}
+        {% if page_number < total_pages %}{{ ui.button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state, variant="secondary") }}{% endif %}
       </div>
     </div>
+  {% endcall %}
 
-    <div class="form-grid">
-      <label>{{ t("Sync Scope") }}
-        <select name="scope_type">
-          {% for value, label in [('full', 'All active users'), ('department', 'Selected departments and descendants'), ('selected_users', 'Checked users only'), ('source_user', 'Single user replay')] %}<option value="{{ value }}" {% if scope and scope.scope_type == value %}selected{% endif %}>{{ t(label) }}</option>{% endfor %}
-        </select>
-      </label>
-      <label>{{ t("Departments in Scope") }}
-        <select name="selected_department_ids" multiple size="4">
-          {% for department in departments %}<option value="{{ department.source_department_id }}" {% if scope and department.source_department_id in scope.selected_department_ids %}selected{% endif %}>{{ department.path_names|join(' / ') }}</option>{% endfor %}
-        </select>
-      </label>
-      <label>{{ t("AD Account Source") }}
-        <select name="source_field">
-          {% set selected_field = scope.source_field if scope else 'source_user_id' %}
-          <optgroup label="{{ t('Recommended account sources') }}">
-            {% for value, label in [('source_user_id','Platform User ID'),('employee_id','Employee ID'),('email_localpart','Email local part'),('pinyin_initials_employee_id','Pinyin initials + employee ID'),('pinyin_full_employee_id','Full pinyin + employee ID'),('family_name_pinyin_given_initials','Family pinyin + given initials'),('family_name_pinyin_given_name_pinyin','Full romanized name'),('custom_template','Custom template')] %}<option value="{{ value }}" {% if selected_field == value %}selected{% endif %}>{{ t(label) }} ({{ value }})</option>{% endfor %}
-          </optgroup>
-          {% if fields %}<optgroup label="{{ t('Fields detected in current snapshot') }}">
-            {% for field in fields %}{% if field.field_name not in ['source_user_id','employee_id','email','display_name','position','account_status'] %}<option value="{{ field.field_name }}" {% if selected_field == field.field_name %}selected{% endif %}>{{ t(field.field_label) }} ({{ field.field_name }}) · {{ t("Coverage") }} {{ field.coverage_count }}/{{ snapshot.user_count }}</option>{% endif %}{% endfor %}
-          </optgroup>{% endif %}
-        </select>
-        <span class="form-help">{{ t("Options show the business name and the actual source field name. Employee ID is always available; custom fields appear after a successful refresh.") }}</span>
-      </label>
-      <label>{{ t("Custom Username Template") }}<input type="text" name="username_template" value="{{ scope.username_template if scope else '' }}" placeholder="{employee_id}"></label>
-      {% if provider_id == 'wecom' %}<label>{{ t("WeCom Employee ID Extended Attribute") }}<input type="text" name="employee_id_attribute" value="{{ employee_id_attribute }}" placeholder="{{ t('For example: Employee ID or 工号') }}"><span class="form-help">{{ t("Leave empty to auto-detect common employee ID attribute names.") }}</span></label>{% endif %}
+  {% call ui.helper_block(t("Next step"), t("Data Quality owns repair work; Binding Reconciliation owns candidate, binding, Dry Run, Apply, and live AD evidence; Sync Scope owns inclusion rules."), "info") %}
+    <div class="actions">
+      {{ ui.button(t("Open Snapshot History"), href="/data-sources/snapshots", variant="secondary", icon="history") }}
+      {{ ui.button(t("Open Data Quality"), href="/data-sources/data-quality", variant="ghost", icon="circle-check-big") }}
+      {{ ui.button(t("Open Binding Reconciliation"), href="/identity-governance/binding-reconciliation", variant="ghost", icon="scan-search") }}
+      {{ ui.button(t("Open Sync Scope"), href="/sync-policies/scope", variant="ghost", icon="list-filter") }}
     </div>
-    <div class="callout callout--warning">
-      <strong>{{ t("Partial sync safety") }}</strong>
-      <span>{{ t("Partial synchronization will not process offboarding for unselected or out-of-scope users.") }}</span>
-    </div>
-    <div class="form-actions">
-      {{ button(t("Save Scope and Mapping"), type="submit", variant="primary", icon="save", disabled=(not snapshot)) }}
-      {% if ad_verified %}
-      {{ button(t("Prepare selected account creations"), type="submit", variant="secondary", icon="user-plus", attrs='formaction="/source-directory/create-selection" formmethod="post" data-prepare-account-creations', disabled=True) }}
-      <span class="form-help">{{ t("Preparation re-verifies every candidate and saves an exact Dry Run scope. It does not write to AD.") }}</span>
-      {% endif %}
-      {% if not snapshot %}<span class="form-help">{{ t("Scope and mapping can be saved after a successful source directory refresh.") }}</span>{% endif %}
-    </div>
-  </form>
-</section>
+  {% endcall %}
+</div>
 {% endblock %}
