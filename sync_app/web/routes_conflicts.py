@@ -6,6 +6,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from sync_app.web.app_state import get_web_services
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
 def register_conflict_routes(
@@ -29,6 +30,7 @@ def register_conflict_routes(
     resolve_remembered_filters: Callable[..., dict[str, Any]],
     to_text: Callable[[Any], str],
 ) -> None:
+    @app.get(CANONICAL_ROUTE_PATHS["conflicts"], response_class=HTMLResponse)
     @app.get("/conflicts", response_class=HTMLResponse)
     def conflicts_page(request: Request):
         user = require_capability(request, "jobs.read")

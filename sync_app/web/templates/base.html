@@ -38,48 +38,16 @@
         <div data-sidebar-recent-links></div>
       </div>
 
-      <details class="sidebar-nav-group" {% if page in ['dashboard', 'jobs', 'automation-center', 'audit'] %}open{% endif %}>
-        <summary><span class="sidebar-nav-group__label">{{ t("Run Monitoring") }}</span><i data-lucide="chevron-down" class="icon icon-xs sidebar-nav-group__chevron"></i></summary>
+      {% for group in navigation_groups %}
+      <details class="sidebar-nav-group" {% if page in group.items|map(attribute='page')|list %}open{% endif %}>
+        <summary><span class="sidebar-nav-group__label">{{ t(group.label) }}</span><i data-lucide="chevron-down" class="icon icon-xs sidebar-nav-group__chevron"></i></summary>
         <div class="sidebar-nav-group__links">
-          {% if current_user.role == 'auditor' and can("audit.read") %}<a href="/audit" class="{% if page == 'audit' %}active{% endif %}"><i data-lucide="scroll-text" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Audit") }}</span></a>{% endif %}
-          {% if can("dashboard.read") %}<a href="/dashboard" class="{% if page == 'dashboard' %}active{% endif %}"><i data-lucide="layout-grid" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Dashboard") }}</span></a>{% endif %}
-          {% if can("jobs.read") %}<a href="/jobs" class="{% if page == 'jobs' %}active{% endif %}"><i data-lucide="refresh-cw" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Jobs") }}</span></a>{% endif %}
-          {% if show_advanced_navigation and can("config.read") %}<a href="/automation-center" class="{% if page == 'automation-center' %}active{% endif %}"><i data-lucide="bell-ring" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Automation Center") }}</span></a>{% endif %}
-          {% if current_user.role != 'auditor' and show_advanced_navigation and can("audit.read") %}<a href="/audit" class="{% if page == 'audit' %}active{% endif %}"><i data-lucide="scroll-text" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Audit") }}</span></a>{% endif %}
+          {% for item in group.items %}
+          <a href="{{ item.href }}" data-route-aliases="{{ item.legacy_paths|join(' ') }}" class="{% if page == item.page %}active{% endif %}"{% if page == item.page %} aria-current="page"{% endif %}><i data-lucide="{{ item.icon }}" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t(item.label) }}</span></a>
+          {% endfor %}
         </div>
       </details>
-
-      <details class="sidebar-nav-group" {% if page in ['conflicts', 'mappings', 'data-quality', 'lifecycle', 'exceptions'] %}open{% endif %}>
-        <summary><span class="sidebar-nav-group__label">{{ t("Identity Governance") }}</span><i data-lucide="chevron-down" class="icon icon-xs sidebar-nav-group__chevron"></i></summary>
-        <div class="sidebar-nav-group__links">
-          {% if can("conflicts.read") %}<a href="/conflicts" class="{% if page == 'conflicts' %}active{% endif %}"><i data-lucide="shield-alert" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Conflicts") }}</span></a>{% endif %}
-          {% if show_advanced_navigation and can("mappings.read") %}<a href="/mappings" class="{% if page == 'mappings' %}active{% endif %}"><i data-lucide="layers" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Identity Overrides") }}</span></a>{% endif %}
-          {% if show_advanced_navigation and can("config.read") %}<a href="/data-quality" class="{% if page == 'data-quality' %}active{% endif %}"><i data-lucide="circle-check-big" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Data Quality Center") }}</span></a>{% endif %}
-          {% if show_advanced_navigation and can("config.read") %}<a href="/lifecycle" class="{% if page == 'lifecycle' %}active{% endif %}"><i data-lucide="clock-3" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Lifecycle Workbench") }}</span></a>{% endif %}
-          {% if show_advanced_navigation and can("exceptions.read") %}<a href="/exceptions" class="{% if page == 'exceptions' %}active{% endif %}"><i data-lucide="ban" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Exceptions") }}</span></a>{% endif %}
-        </div>
-      </details>
-
-      <details class="sidebar-nav-group" {% if page in ['config', 'source-directory', 'advanced-sync'] %}open{% endif %}>
-        <summary><span class="sidebar-nav-group__label">{{ t("Rule Configuration") }}</span><i data-lucide="chevron-down" class="icon icon-xs sidebar-nav-group__chevron"></i></summary>
-        <div class="sidebar-nav-group__links">
-          {% if can("config.read") %}<a href="/config" class="{% if page == 'config' %}active{% endif %}"><i data-lucide="settings-2" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Config") }}</span></a>{% endif %}
-          {% if can("config.read") %}<a href="/source-directory" class="{% if page == 'source-directory' %}active{% endif %}"><i data-lucide="users-round" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Source Directory") }}</span></a>{% endif %}
-          {% if show_advanced_navigation and can("config.read") %}<a href="/advanced-sync" class="{% if page == 'advanced-sync' %}active{% endif %}"><i data-lucide="waypoints" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Advanced Sync") }}</span></a>{% endif %}
-        </div>
-      </details>
-
-      {% if show_advanced_navigation %}
-      <details class="sidebar-nav-group" {% if page in ['account', 'integrations', 'organizations', 'database'] %}open{% endif %}>
-        <summary><span class="sidebar-nav-group__label">{{ t("Platform Management") }}</span><i data-lucide="chevron-down" class="icon icon-xs sidebar-nav-group__chevron"></i></summary>
-        <div class="sidebar-nav-group__links">
-          {% if can("config.read") %}<a href="/integrations" class="{% if page == 'integrations' %}active{% endif %}"><i data-lucide="plug" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Integration Center") }}</span></a>{% endif %}
-          {% if can("organizations.manage") %}<a href="/organizations" class="{% if page == 'organizations' %}active{% endif %}"><i data-lucide="building-2" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Organizations") }}</span></a>{% endif %}
-          {% if can("database.read") %}<a href="/database" class="{% if page == 'database' %}active{% endif %}"><i data-lucide="database" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Database") }}</span></a>{% endif %}
-          {% if can("account.manage") %}<a href="/account" class="{% if page == 'account' %}active{% endif %}"><i data-lucide="user-cog" class="icon icon-sm sidebar-nav__icon"></i><span>{{ t("Account") }}</span></a>{% endif %}
-        </div>
-      </details>
-      {% endif %}
+      {% endfor %}
     </nav>
     <div class="sidebar-mobile-preferences">
       <div class="sidebar-mobile-context">

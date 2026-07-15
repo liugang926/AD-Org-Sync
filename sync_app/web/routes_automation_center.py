@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sync_app.services.notification_automation_center import build_notification_automation_center_context
 from sync_app.services.typed_settings import NotificationAutomationPolicySettings
 from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
 def register_automation_center_routes(
@@ -20,6 +21,7 @@ def register_automation_center_routes(
     require_capability: Callable[[Request, str], Any],
     to_bool: Callable[[Optional[str], bool], bool],
 ) -> None:
+    @app.get(CANONICAL_ROUTE_PATHS["automation-center"], response_class=HTMLResponse)
     @app.get("/automation-center", response_class=HTMLResponse)
     def automation_center_page(request: Request):
         user = require_capability(request, "config.read")

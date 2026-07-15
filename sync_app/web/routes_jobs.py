@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from sync_app.services.identity_relationships import IdentityRelationshipPreviewService
 from sync_app.web.app_state import get_web_repositories, get_web_runtime_state, get_web_services
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
 def register_job_routes(
@@ -26,6 +27,7 @@ def register_job_routes(
     require_capability: Callable[[Request, str], Any],
     translate_text: Callable[..., str],
 ) -> None:
+    @app.get(CANONICAL_ROUTE_PATHS["jobs"], response_class=HTMLResponse)
     @app.get("/jobs", response_class=HTMLResponse)
     def jobs_page(request: Request):
         user = require_capability(request, "jobs.read")
@@ -247,6 +249,7 @@ def register_job_routes(
             }
         )
 
+    @app.get(CANONICAL_ROUTE_PATHS["database"], response_class=HTMLResponse)
     @app.get("/database", response_class=HTMLResponse)
     def database_page(request: Request):
         user = require_capability(request, "database.read")

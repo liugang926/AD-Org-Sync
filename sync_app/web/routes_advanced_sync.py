@@ -13,6 +13,7 @@ from sync_app.core.sync_policies import (
 )
 from sync_app.services.typed_settings import AdvancedSyncPolicySettings
 from sync_app.web.app_state import get_web_repositories
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
 ADVANCED_SYNC_CLIENT_I18N_KEYS = (
@@ -204,6 +205,7 @@ def register_advanced_sync_routes(
     to_bool: Callable[[Optional[str], bool], bool],
     translate_text: Callable[..., str],
 ) -> None:
+    @app.get(CANONICAL_ROUTE_PATHS["advanced-sync"], response_class=HTMLResponse)
     @app.get("/advanced-sync", response_class=HTMLResponse)
     def advanced_sync_page(request: Request):
         user = require_capability(request, "config.read")

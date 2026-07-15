@@ -6,6 +6,8 @@ from typing import Any, Callable
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
+
 
 def register_dashboard_routes(
     app: FastAPI,
@@ -37,6 +39,7 @@ def register_dashboard_routes(
             return url
         return "/config" if page == "advanced-sync" else "/dashboard"
 
+    @app.get(CANONICAL_ROUTE_PATHS["dashboard"], response_class=HTMLResponse)
     @app.get("/dashboard", response_class=HTMLResponse)
     def dashboard(request: Request):
         user = require_capability(request, "dashboard.read")

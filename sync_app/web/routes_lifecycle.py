@@ -12,6 +12,7 @@ from sync_app.services.lifecycle_workbench import (
     build_lifecycle_workbench_data,
 )
 from sync_app.web.app_state import get_web_repositories
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
 def _normalize_id_list(values: list[int] | None) -> list[int]:
@@ -66,6 +67,7 @@ def register_lifecycle_routes(
     render: Callable[..., Any],
     require_capability: Callable[[Request, str], Any],
 ) -> None:
+    @app.get(CANONICAL_ROUTE_PATHS["lifecycle"], response_class=HTMLResponse)
     @app.get("/lifecycle", response_class=HTMLResponse)
     def lifecycle_workbench_page(request: Request):
         user = require_capability(request, "config.read")

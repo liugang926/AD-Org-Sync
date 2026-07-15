@@ -7,6 +7,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from sync_app.web.app_state import get_web_runtime_state, get_web_services
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 CONFIG_SUBMISSION_FIELD_NAMES = (
     "source_provider",
@@ -113,6 +114,7 @@ def register_config_routes(
     render: Callable[..., Any],
     require_capability: Callable[[Request, str], Any],
 ) -> None:
+    @app.get(CANONICAL_ROUTE_PATHS["config"], response_class=HTMLResponse)
     @app.get("/config", response_class=HTMLResponse)
     def config_page(request: Request):
         user = require_capability(request, "config.read")

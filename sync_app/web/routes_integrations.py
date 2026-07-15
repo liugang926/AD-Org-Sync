@@ -6,6 +6,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from sync_app.web.app_state import get_web_runtime_state, get_web_services
+from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
 def register_integration_routes(
@@ -48,6 +49,7 @@ def register_integration_routes(
             )
         return str(auth_result["org_id"])
 
+    @app.get(CANONICAL_ROUTE_PATHS["integrations"], response_class=HTMLResponse)
     @app.get("/integrations", response_class=HTMLResponse)
     def integration_center_page(request: Request):
         user = require_capability(request, "config.read")

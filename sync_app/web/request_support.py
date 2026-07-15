@@ -19,6 +19,7 @@ from sync_app.web.i18n import (
     normalize_ui_language,
     translate,
 )
+from sync_app.web.navigation import build_navigation_groups
 from sync_app.web.security import ensure_csrf_token, validate_admin_password_strength, validate_csrf_token
 
 
@@ -317,6 +318,13 @@ class RequestSupport:
             ui_mode == "advanced" or current_page in self.advanced_nav_pages,
         )
         context.setdefault("is_advanced_page", current_page in self.advanced_nav_pages)
+        context.setdefault(
+            "navigation_groups",
+            build_navigation_groups(
+                current_role,
+                show_advanced_navigation=bool(context["show_advanced_navigation"]),
+            ),
+        )
         context.setdefault("t", lambda text, **params: self.translate_text(ui_language, str(text or ""), **params))
         context.setdefault("current_capabilities", role_capabilities(current_role))
         context.setdefault("can", lambda capability: has_capability(current_role, capability))
