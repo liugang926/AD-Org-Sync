@@ -22,6 +22,10 @@ class _CreationPreviewTargetProvider:
         return None
 
 
+class _UnavailableCreationPreviewTargetProvider(_CreationPreviewTargetProvider):
+    last_batch_lookup_failed = True
+
+
 class WebSourceDirectoryTests(WebAuthzBaseTestCase):
     def _seed_creation_candidates(self):
         snapshot_id = self.app.state.source_directory_repo.start_refresh(
@@ -146,6 +150,16 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
             self._request("/source-directory/create-selection", "POST"),
             csrf_token="",
             selected_source_user_ids=["alice"],
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/dashboard")
+        response = self._route(
+            "/source-directory/reconcile-stale-bindings", "POST"
+        )(
+            self._request(
+                "/source-directory/reconcile-stale-bindings", "POST"
+            ),
+            csrf_token="",
         )
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/dashboard")
@@ -370,6 +384,99 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertEqual(
             relationships["alice"]["creation_eligibility"]["status"],
             "binding_review_required",
+        )
+
+    def test_live_verification_cleans_only_confirmed_missing_saved_binding(self):
+        self._login("superadmin")
+        self._seed_creation_candidates()
+
+        page = self._route("/source-directory", "GET")(
+            self._request("/source-directory")
+        )
+        self.assertIn("Verify AD and clean stale bindings", self._text(page))
+
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_CreationPreviewTargetProvider(),
+        ):
+            response = self._route(
+                "/source-directory/reconcile-stale-bindings", "POST"
+            )(
+                self._request(
+                    "/source-directory/reconcile-stale-bindings", "POST"
+                ),
+                csrf_token=self.session["_csrf_token"],
+                page_number=1,
+                search="",
+                department_id="",
+                status="",
+                employee_id_state="",
+                relationship_status="all",
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("verify_ad=true", response.headers["location"])
+        self.assertIsNone(
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
+        )
+        self.assertEqual(
+            self.session["_flash"]["message"],
+            {
+                "key": "Removed {removed_count} verified stale binding(s). Recheck the candidates before selecting account creation.",
+                "params": {"removed_count": 1},
+            },
+        )
+        cleanup_logs = [
+            item
+            for item in self.app.state.audit_repo.list_recent_logs(20)
+            if item.action_type == "mapping.binding_stale_cleanup"
+        ]
+        self.assertEqual(len(cleanup_logs), 1)
+        self.assertEqual(cleanup_logs[0].target_id, "alice")
+
+    def test_unavailable_ad_verification_never_cleans_saved_binding(self):
+        self._login("superadmin")
+        self._seed_creation_candidates()
+
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_UnavailableCreationPreviewTargetProvider(),
+        ):
+            response = self._route(
+                "/source-directory/reconcile-stale-bindings", "POST"
+            )(
+                self._request(
+                    "/source-directory/reconcile-stale-bindings", "POST"
+                ),
+                csrf_token=self.session["_csrf_token"],
+                page_number=1,
+                search="",
+                department_id="",
+                status="",
+                employee_id_state="",
+                relationship_status="all",
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIsNotNone(
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
+        )
+        self.assertEqual(
+            self.session["_flash"]["message"],
+            {
+                "key": "Could not verify {unverified_count} saved binding(s). Nothing was removed.",
+                "params": {"unverified_count": 1},
+            },
         )
 
     def test_prepare_creation_reverifies_and_saves_exact_dry_run_scope(self):

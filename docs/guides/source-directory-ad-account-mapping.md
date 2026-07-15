@@ -28,6 +28,16 @@ The successful AD operation proves the post-Apply account exists; enabled and
 locked flags remain unknown unless a bounded AD verification actually reads
 them. Use **Verify current-page AD status** for that batch check.
 
+An enabled or disabled saved binding is historical database evidence, not proof
+that the target account still exists. Administrators with mapping-write access
+can use **Verify AD and clean stale bindings** to reconcile the current page.
+The action performs a fresh bounded AD lookup and automatically removes a saved
+binding only when the exact bound username returns `missing` with
+`exists=false`. It fails closed for unavailable or unknown lookups, protected
+accounts, ambiguous provider/connector identities, and concurrent target
+changes. Every removal records the old target, binding source, candidate,
+verification time, and actor in the audit log.
+
 ## Configure and verify a provider
 
 1. Open **Config** and select WeCom, DingTalk, or Feishu.
@@ -172,10 +182,14 @@ Use **Identity Overrides** (`/mappings`) to bind a real source user to an existi
    planned after Dry Run, applied result, then difference/risk.
 3. Use **Verify current-page AD status** when live evidence is necessary. Only
    server-computed candidates and bindings on the current page are queried.
-4. Follow the safe row links to the binding editor, Dry Run, Apply, or conflict
+4. If a saved target is confirmed missing, use **Verify AD and clean stale
+   bindings**. The write action re-verifies the page, removes only exact stale
+   bindings, and then returns to a freshly verified candidate view. Select the
+   now-unbound candidate for creation and prepare a new Dry Run.
+5. Follow the safe row links to the binding editor, Dry Run, Apply, or conflict
    record. On mobile, the grouped table scrolls horizontally and remains
    keyboard focusable.
-5. Open the corresponding job. **Identity Resolution Results** presents the
+6. Open the corresponding job. **Identity Resolution Results** presents the
    structured per-user decision without requiring the raw JSON details panel.
 
 AD verification uses one batch request per connector and deduplicates account
@@ -190,6 +204,7 @@ not returned. The verification time identifies live or historical evidence.
 Authenticated organization-scoped endpoints include:
 
 - `GET /source-directory`
+- `POST /source-directory/reconcile-stale-bindings`
 - `POST /source-directory/test`
 - `POST /source-directory/refresh`
 - `GET /api/source-directory/status`
@@ -208,7 +223,12 @@ client-supplied organization/provider/connector or arbitrary AD enumeration is
 not accepted. Pagination and relationship filters are applied on the server,
 and the browser never receives the complete source or AD directory.
 
-Writes require the existing `config.write` capability and CSRF validation, and they create audit records without credential payloads. Reads require `config.read` (job evidence uses `jobs.read`) and apply the selected organization on every repository query. GET previews do not create, update, disable, or delete a binding and never write to AD.
+Configuration writes require `config.write`; stale-binding reconciliation and
+mapping writes require `mappings.write`. Every write uses CSRF validation and
+creates audit records without credential payloads. Reads require `config.read`
+(job evidence uses `jobs.read`) and apply the selected organization on every
+repository query. GET previews do not create, update, disable, or delete a
+binding and never write to AD.
 
 ## Troubleshooting
 
@@ -220,7 +240,7 @@ Writes require the existing `config.write` capability and CSRF validation, and t
 - **Duplicate account preview:** correct the source data, select a safer field/collision policy, or create a reviewed manual binding. Never bypass the conflict queue by overwriting an AD account.
 - **DingTalk user has only a candidate:** this is normal before the first Dry Run/Apply. Confirm the referenced field and candidate, run Dry Run, review the proposed binding, then run the approved Apply.
 - **Source user has no binding:** filter **Unbound** or **Candidate only**, check for an empty/duplicate referenced field or conflict, and run a new Dry Run after correction.
-- **Bound AD account is missing:** verify the current page, confirm the correct connector, then repair or review the binding; do not assume a same-named account is the bound account.
+- **Bound AD account is missing:** confirm the connector, then use **Verify AD and clean stale bindings**. Only a fresh explicit `missing` result removes the exact database binding; `unavailable`, protected, ambiguous, or changed bindings remain untouched. After cleanup, select the field candidate, prepare a new Dry Run, review it, and only then Apply.
 - **Duplicate or ambiguous binding:** use the complete organization/provider/connector/source-user boundary. Disable or remove the incorrect reviewed rule; the service will not silently choose one.
 - **Connector conflict:** correct department-root routing or move the binding to the connector selected by the existing runtime router, then run Dry Run again.
 - **Dry Run is stale:** refresh/save the source scope and rerun Dry Run. Do not approve or Apply an older plan.

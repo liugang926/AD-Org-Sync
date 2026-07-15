@@ -578,6 +578,7 @@ def create_app(
             "build_identity_preview_target_provider"
         ),
         flash=request_support.flash,
+        flash_t=request_support.flash_t,
         get_current_org=request_support.get_current_org,
         reject_invalid_csrf=request_support.reject_invalid_csrf,
         render=request_support.render,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable
+from urllib.parse import urlencode
 
 from fastapi import BackgroundTasks, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -52,6 +53,7 @@ def register_source_directory_routes(
     app: FastAPI,
     *,
     flash: Callable[..., None],
+    flash_t: Callable[..., None],
     get_current_org: Callable[[Request], Any],
     reject_invalid_csrf: Callable[[Request, str, str], Any],
     render: Callable[..., Any],
@@ -499,6 +501,146 @@ def register_source_directory_routes(
                 "source_employee_id_attribute", "", org_id=current_org.org_id
             ) or "",
         )
+
+    @app.post("/source-directory/reconcile-stale-bindings")
+    def reconcile_source_directory_stale_bindings(
+        request: Request,
+        csrf_token: str = Form(""),
+        page_number: int = Form(1),
+        search: str = Form(""),
+        department_id: str = Form(""),
+        status: str = Form(""),
+        employee_id_state: str = Form(""),
+        relationship_status: str = Form("all"),
+    ):
+        user = require_capability(request, "mappings.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        csrf_error = reject_invalid_csrf(request, csrf_token, "/source-directory")
+        if csrf_error:
+            return csrf_error
+
+        normalized_page_number = max(int(page_number or 1), 1)
+        redirect_url = "/source-directory?" + urlencode(
+            {
+                "page_number": normalized_page_number,
+                "search": search,
+                "department_id": department_id,
+                "status": status,
+                "employee_id_state": employee_id_state,
+                "relationship_status": relationship_status or "all",
+                "verify_ad": "true",
+            }
+        )
+        page_data = build_relationship_page(
+            request,
+            page_number=normalized_page_number,
+            page_size=50,
+            search=search,
+            department_id=department_id,
+            status=status,
+            employee_id_state=employee_id_state,
+            relationship_status=relationship_status,
+            verify_ad=True,
+        )
+        if not page_data["snapshot"] or not page_data["ad_verified"]:
+            flash_t(
+                request,
+                "error",
+                "Live AD verification is unavailable. No saved bindings were removed.",
+            )
+            return RedirectResponse(url=redirect_url, status_code=303)
+
+        targets = [
+            target
+            for item in page_data["relationships"]
+            if (
+                target
+                := IdentityRelationshipPreviewService.verified_stale_binding_cleanup_target(
+                    item
+                )
+            )
+        ]
+        unverified_binding_count = sum(
+            1
+            for item in page_data["relationships"]
+            if item.before_state.get("bound_ad_username")
+            and str(
+                item.before_state.get("ad_account_state", {}).get("status") or ""
+            )
+            in {"", "not_checked", "unavailable"}
+        )
+        repositories = get_web_repositories(request)
+        current_org = get_current_org(request)
+        removed_count = 0
+        changed_count = 0
+        for target in targets:
+            removed = repositories.user_binding_repo.delete_binding_if_target_matches(
+                target["source_user_id"],
+                target["ad_username"],
+                org_id=current_org.org_id,
+                source_provider=target["source_provider"],
+                connector_id=target["connector_id"],
+            )
+            if not removed:
+                changed_count += 1
+                continue
+            removed_count += 1
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="mapping.binding_stale_cleanup",
+                target_type="user_identity_binding",
+                target_id=target["source_user_id"],
+                result="success",
+                message="Removed saved binding after live AD verification confirmed the target was missing",
+                payload={
+                    "source_provider": target["source_provider"],
+                    "connector_id": target["connector_id"],
+                    "source_user_id": target["source_user_id"],
+                    "source_display_name": target["source_display_name"],
+                    "removed_ad_username": target["ad_username"],
+                    "binding_source": target["binding_source"],
+                    "candidate_ad_username": target["candidate_ad_username"],
+                    "verified_at": target["verified_at"],
+                },
+            )
+
+        if removed_count and unverified_binding_count:
+            flash_t(
+                request,
+                "success",
+                "Removed {removed_count} verified stale binding(s). {unverified_count} binding(s) could not be verified and were left unchanged.",
+                removed_count=removed_count,
+                unverified_count=unverified_binding_count,
+            )
+        elif removed_count:
+            flash_t(
+                request,
+                "success",
+                "Removed {removed_count} verified stale binding(s). Recheck the candidates before selecting account creation.",
+                removed_count=removed_count,
+            )
+        elif changed_count:
+            flash_t(
+                request,
+                "error",
+                "The verified binding changed before cleanup, so nothing was removed. Review the current binding and try again.",
+            )
+        elif unverified_binding_count:
+            flash_t(
+                request,
+                "error",
+                "Could not verify {unverified_count} saved binding(s). Nothing was removed.",
+                unverified_count=unverified_binding_count,
+            )
+        else:
+            flash_t(
+                request,
+                "success",
+                "No verified stale saved bindings were found. Nothing was removed.",
+            )
+        return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post("/source-directory/test")
     def test_source_directory_connection(request: Request, csrf_token: str = Form("")):
