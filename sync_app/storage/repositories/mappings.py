@@ -853,6 +853,58 @@ class UserIdentityBindingRepository(BaseRepository):
                     ),
                 )
 
+    def delete_binding_if_target_matches(
+        self,
+        source_user_id: str,
+        ad_username: str,
+        *,
+        org_id: str,
+        source_provider: str,
+        connector_id: str,
+    ) -> bool:
+        """Delete one exact binding only when its persisted target is unchanged.
+
+        Callers must verify the target directory state before invoking this
+        compare-and-delete operation. The complete identity boundary prevents
+        one provider or connector from removing another one's binding, while
+        the target comparison closes the race with a concurrent binding edit.
+        """
+
+        normalized_source_user_id = str(source_user_id or "").strip()
+        normalized_ad_username = str(ad_username or "").strip()
+        normalized_org_id = self._resolve_org_id(org_id) or "default"
+        normalized_provider = str(source_provider or "").strip().lower()
+        normalized_connector_id = str(connector_id or "").strip()
+        if not all(
+            (
+                normalized_source_user_id,
+                normalized_ad_username,
+                normalized_provider,
+                normalized_connector_id,
+            )
+        ):
+            return False
+
+        with self.db.transaction() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM user_identity_bindings
+                WHERE org_id = ?
+                  AND source_provider = ?
+                  AND connector_id = ?
+                  AND source_user_id = ?
+                  AND LOWER(ad_username) = LOWER(?)
+                """,
+                (
+                    normalized_org_id,
+                    normalized_provider,
+                    normalized_connector_id,
+                    normalized_source_user_id,
+                    normalized_ad_username,
+                ),
+            )
+        return cursor.rowcount == 1
+
     def delete_bindings_for_org(self, org_id: str) -> None:
         with self.db.transaction() as conn:
             conn.execute("DELETE FROM user_identity_bindings WHERE org_id = ?", (self._resolve_org_id(org_id, default="default"),))

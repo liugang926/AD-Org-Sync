@@ -953,6 +953,55 @@ class IdentityRelationshipPreviewService:
         )
 
     @staticmethod
+    def verified_stale_binding_cleanup_target(
+        item: IdentityRelationshipPreview,
+    ) -> dict[str, str] | None:
+        """Return an exact deletion target for a freshly verified stale binding.
+
+        A persisted binding is eligible only when this relationship contains
+        one unambiguous provider/connector identity and the live target lookup
+        explicitly reports the bound username as missing. Unknown, unavailable,
+        protected, or historically cached states fail closed.
+        """
+
+        before = dict(item.before_state or {})
+        bound_username = str(before.get("bound_ad_username") or "").strip()
+        state = dict(before.get("ad_account_state") or {})
+        checked_username = str(before.get("checked_ad_username") or "").strip()
+        verified_at = str(before.get("verified_at") or "").strip()
+        if (
+            not bound_username
+            or item.connector_id == "__conflict__"
+            or item.effective_resolution_source == "conflict"
+            or any(
+                risk in {"multiple_bindings", "connector_migration_required"}
+                for risk in item.risks
+            )
+        ):
+            return None
+        if checked_username.lower() != bound_username.lower() or not verified_at:
+            return None
+        if (
+            str(state.get("status") or "") != "missing"
+            or state.get("exists") is not False
+            or bool(state.get("protected"))
+        ):
+            return None
+        return {
+            "org_id": item.org_id,
+            "source_provider": item.source_provider,
+            "connector_id": item.connector_id,
+            "source_user_id": item.source_user_id,
+            "source_display_name": item.source_display_name,
+            "ad_username": bound_username,
+            "binding_source": str(before.get("binding_source") or ""),
+            "candidate_ad_username": str(
+                item.candidate_mapping.get("ad_username") or ""
+            ).strip(),
+            "verified_at": verified_at,
+        }
+
+    @staticmethod
     def matches_filter(item: IdentityRelationshipPreview, status: str) -> bool:
         normalized = str(status or "all").strip().lower()
         before = item.before_state

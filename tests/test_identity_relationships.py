@@ -225,6 +225,50 @@ class IdentityRelationshipTests(unittest.TestCase):
         self.assertEqual(apply_rows, [])
         self.assertEqual(fetchall.call_count, 3)
 
+        self.assertFalse(
+            self.bindings.delete_binding_if_target_matches(
+                "shared",
+                "changed-before-delete",
+                org_id="default",
+                source_provider="dingtalk",
+                connector_id="default",
+            )
+        )
+        self.assertTrue(
+            self.bindings.delete_binding_if_target_matches(
+                "shared",
+                "DING-DEFAULT",
+                org_id="default",
+                source_provider="dingtalk",
+                connector_id="default",
+            )
+        )
+        remaining_shared = self.bindings.list_binding_records_for_source_identities(
+            ["shared"],
+            org_id="default",
+            source_provider="dingtalk",
+        )
+        self.assertEqual(
+            {item.connector_id for item in remaining_shared},
+            {"asia"},
+        )
+        self.assertIsNotNone(
+            self.bindings.get_binding_record_by_source_user_id(
+                "shared",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
+        )
+        self.assertIsNotNone(
+            self.bindings.get_binding_record_by_source_user_id(
+                "shared",
+                org_id="other",
+                source_provider="dingtalk",
+                connector_id="default",
+            )
+        )
+
     def test_manual_binding_overrides_candidate_and_ad_lookup_is_deduplicated(self):
         snapshot, selection = self._snapshot()
         self.bindings.upsert_binding(
@@ -402,6 +446,36 @@ class IdentityRelationshipTests(unittest.TestCase):
         self.assertEqual(
             mismatched_binding.creation_eligibility["status"],
             "binding_review_required",
+        )
+        cleanup_target = self.service.verified_stale_binding_cleanup_target(
+            mismatched_binding
+        )
+        self.assertIsNotNone(cleanup_target)
+        self.assertEqual(cleanup_target["source_user_id"], "ding-001")
+        self.assertEqual(cleanup_target["ad_username"], "legacy.alice")
+        self.assertEqual(cleanup_target["candidate_ad_username"], "TJ001")
+
+        unavailable = missing | {
+            "status": "unavailable",
+            "exists": None,
+        }
+        unavailable_binding = self.service.build_relationships(
+            [next(item for item in users if item["source_user_id"] == "ding-001")],
+            org_id="default",
+            source_provider="dingtalk",
+            snapshot=snapshot,
+            scope=selection,
+            connector_specs_by_id=specs,
+            connector_ids_by_source_user={"ding-001": "default"},
+            ad_states={
+                ("default", "tj001"): missing,
+                ("default", "legacy.alice"): unavailable,
+            },
+        )[0]
+        self.assertIsNone(
+            self.service.verified_stale_binding_cleanup_target(
+                unavailable_binding
+            )
         )
 
     def test_connector_boundaries_never_reuse_another_connector_binding(self):

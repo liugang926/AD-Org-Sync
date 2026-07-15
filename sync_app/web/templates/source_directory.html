@@ -106,6 +106,18 @@
     {% else %}
     {{ button(t("Verify current-page AD status"), href="?page_number=" ~ page_number ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state ~ "&relationship_status=" ~ selected_relationship_status ~ "&verify_ad=true", variant="secondary", icon="shield-check") }}
     {% endif %}
+    {% if snapshot and can("mappings.write") %}
+    <form method="post" action="/source-directory/reconcile-stale-bindings" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="page_number" value="{{ page_number }}">
+      <input type="hidden" name="search" value="{{ search }}">
+      <input type="hidden" name="department_id" value="{{ selected_department_id }}">
+      <input type="hidden" name="status" value="{{ selected_status }}">
+      <input type="hidden" name="employee_id_state" value="{{ selected_employee_id_state }}">
+      <input type="hidden" name="relationship_status" value="{{ selected_relationship_status }}">
+      {{ button(t("Verify AD and clean stale bindings"), type="submit", variant="danger", icon="trash-2", confirm_text=t("Live AD verification will remove current-page saved bindings only when their exact target account is confirmed missing. Continue?")) }}
+    </form>
+    {% endif %}
   </div>
 
   <form method="post" action="/source-directory/scope">

@@ -848,6 +848,55 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self._capture("identity-relationship-create-selection-desktop-en.png")
 
+        cleanup_button = self.page.get_by_role(
+            "button", name="Verify AD and clean stale bindings"
+        )
+        self.assertTrue(cleanup_button.is_visible())
+        cleanup_button.click()
+        cleanup_dialog = self.page.locator("[data-confirm-dialog]")
+        self.assertTrue(cleanup_dialog.is_visible())
+        self.assertIn(
+            "only when their exact target account is confirmed missing",
+            cleanup_dialog.inner_text(),
+        )
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_MissingAccountPreviewProvider(),
+        ):
+            cleanup_dialog.locator("[data-confirm-approve]").click()
+            self.page.wait_for_url("**/source-directory?**verify_ad=true")
+        self.assertIn(
+            "Removed 2 verified stale binding(s)",
+            self.page.locator("body").inner_text(),
+        )
+        cleaned_alice_row = self.page.locator("tbody tr").filter(
+            has_text="browser-alice"
+        )
+        self.assertTrue(
+            cleaned_alice_row.get_by_role(
+                "button", name="Select for creation"
+            ).is_visible()
+        )
+        self._capture("identity-relationship-stale-binding-cleanup-desktop-en.png")
+
+        bindings.upsert_binding(
+            "browser-alice",
+            "alice.manual",
+            org_id="default",
+            source_provider="dingtalk",
+            connector_id="default",
+            source="manual",
+        )
+        bindings.upsert_binding(
+            "browser-carol",
+            "carol.disabled",
+            org_id="default",
+            source_provider="dingtalk",
+            connector_id="default",
+            source="managed_generated",
+            is_enabled=False,
+        )
+
         self.page.select_option('select[name="relationship_status"]', "manual")
         self.page.get_by_role("button", name="Apply Filters").click()
         self.page.wait_for_load_state("networkidle")
