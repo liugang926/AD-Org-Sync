@@ -8,8 +8,18 @@ from typing import Any, Optional
 
 from sync_app.core.common import generate_job_id
 from sync_app.core.models import SyncJobRecord
+from sync_app.services.high_risk_operations import (
+    HighRiskOperationPolicy,
+    build_apply_operation_context,
+    high_risk_audit_payload,
+)
 from sync_app.services.notification_automation_center import evaluate_scheduled_apply_readiness
-from sync_app.storage.local_db import DatabaseManager, SyncJobRepository
+from sync_app.storage.local_db import (
+    DatabaseManager,
+    OrganizationRepository,
+    SyncJobRepository,
+    WebAuditLogRepository,
+)
 from sync_app.storage.repositories.conflicts import SyncConflictRepository, SyncPlanReviewRepository
 from sync_app.storage.repositories.system import SettingsRepository
 
@@ -145,6 +155,42 @@ def enqueue_sync_job(
             job=existing_job,
             message=f"Synchronization job {existing_job.job_id} is already queued or running",
         )
+
+    if normalized_execution_mode == "apply":
+        settings_repo = SettingsRepository(_db_manager)
+        organization = OrganizationRepository(_db_manager).get_organization_record(
+            normalized_org_id
+        )
+        context = build_apply_operation_context(
+            settings_repo=settings_repo,
+            job_repo=job_repo,
+            organization_id=normalized_org_id,
+            organization_name=getattr(organization, "name", normalized_org_id),
+        )
+        gate = HighRiskOperationPolicy.evaluate(context)
+        if not gate.allowed:
+            WebAuditLogRepository(_db_manager).add_log(
+                org_id=normalized_org_id,
+                actor_username=str(requested_by or normalized_trigger_type),
+                action_type="high_risk.apply.blocked",
+                target_type="sync_apply",
+                target_id=context.preview_id or normalized_org_id,
+                result="blocked",
+                message="Apply was blocked because the runtime environment is unlabeled",
+                payload=high_risk_audit_payload(
+                    context,
+                    trigger_type=normalized_trigger_type,
+                    reason_code=gate.reason_code,
+                ),
+            )
+            return SyncDispatchResult(
+                accepted=False,
+                job=None,
+                message=(
+                    "Apply blocked: this runtime environment is unlabeled. "
+                    "Set AD_ORG_SYNC_ENVIRONMENT_LABEL and retry after reviewing the same preview."
+                ),
+            )
 
     if _should_guard_scheduled_apply(
         execution_mode=normalized_execution_mode,

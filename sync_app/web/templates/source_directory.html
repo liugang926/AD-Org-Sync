@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% from "components/ui.html" import button %}
+{% import "components/ui.html" as ui %}
+{% import "components/high_risk.html" as high_risk with context %}
 {% block content %}
 <section class="page-heading">
   <div>
@@ -115,10 +117,56 @@
       <input type="hidden" name="status" value="{{ selected_status }}">
       <input type="hidden" name="employee_id_state" value="{{ selected_employee_id_state }}">
       <input type="hidden" name="relationship_status" value="{{ selected_relationship_status }}">
-      {{ button(t("Verify AD and clean stale bindings"), type="submit", variant="danger", icon="trash-2", confirm_text=t("Live AD verification will remove current-page saved bindings only when their exact target account is confirmed missing. Continue?")) }}
+      {{ button(t("Scan stale bindings"), type="submit", variant="secondary", icon="scan-search") }}
     </form>
     {% endif %}
   </div>
+
+  {% if binding_cleanup_preview %}
+  {% set cleanup_context = binding_cleanup_preview.context %}
+  {% set cleanup_confirm_details = [
+    (t("Organization"), cleanup_context.organization_name ~ " (" ~ cleanup_context.organization_id ~ ")"),
+    (t("Environment"), t(cleanup_context.environment_label)),
+    (t("Snapshot Version"), t(cleanup_context.snapshot_version)),
+    (t("Impact Count"), cleanup_context.impact_count)
+  ] %}
+  <section class="card stack-md" data-high-risk-cleanup-preview>
+    <div class="panel__intro">
+      <div class="panel__header">
+        <h2 class="panel__title">{{ t("Binding Cleanup Preview") }}</h2>
+        {{ ui.badge(t(binding_cleanup_preview.status|capitalize), "success" if binding_cleanup_preview.status == "completed" else ("error" if binding_cleanup_preview.status == "blocked" else "warning")) }}
+      </div>
+      <p class="panel__description">{{ t("Review the fixed scan context before confirming any binding deletion. A second live AD verification runs immediately before execution.") }}</p>
+    </div>
+    {{ high_risk.workflow(binding_cleanup_workflow, ui, "Binding cleanup workflow") }}
+    {{ high_risk.context_details(cleanup_context) }}
+    {% if binding_cleanup_preview.reason_code %}
+    <div class="panel-note {{ 'error' if binding_cleanup_preview.status == 'blocked' else 'warning' }}" role="status">
+      <strong>{{ t("Blocked") }}</strong>
+      <span>{{ t(binding_cleanup_preview.reason_code) }}</span>
+    </div>
+    {% endif %}
+    {% if binding_cleanup_preview.status == "preview" %}
+    <div class="panel-note info">
+      {{ t("{count} binding(s) could not be verified and will remain unchanged.", count=binding_cleanup_preview.unverified_binding_count or 0) }}
+    </div>
+    <form method="post" action="/source-directory/reconcile-stale-bindings/confirm" class="actions">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {{ high_risk.confirmation_fields(cleanup_context) }}
+      {{ button(t("Confirm and remove {count} binding(s)", count=cleanup_context.impact_count), type="submit", variant="danger", icon="trash-2", disabled=(not binding_cleanup_preview.gate.allowed or cleanup_context.impact_count <= 0), confirm_text=t("Only bindings in this reviewed preview will be considered. Live AD must again confirm each exact target account is missing."), confirm_title=t("Confirm Binding Cleanup"), confirm_details=cleanup_confirm_details) }}
+      {% if not binding_cleanup_preview.gate.allowed %}
+      <span class="form-help">{{ t(binding_cleanup_preview.gate.reason_code) }}</span>
+      {% elif cleanup_context.impact_count <= 0 %}
+      <span class="form-help">{{ t("No verified stale bindings require cleanup.") }}</span>
+      {% endif %}
+    </form>
+    {% elif binding_cleanup_preview.status == "completed" %}
+    <div class="panel-note success" role="status">
+      {{ t("Cleanup completed: {removed_count} removed, {unchanged_count} unchanged.", removed_count=binding_cleanup_preview.removed_count or 0, unchanged_count=(binding_cleanup_preview.changed_count or 0) + (binding_cleanup_preview.unverified_binding_count or 0)) }}
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
 
   <form method="post" action="/source-directory/scope">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

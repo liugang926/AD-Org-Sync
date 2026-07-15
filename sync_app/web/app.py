@@ -37,6 +37,7 @@ from sync_app.modules.sspr import (
 )
 from sync_app.services.config_bundle import export_organization_bundle, import_organization_bundle
 from sync_app.services.config_validation import test_ldap_connection, test_source_connection, validate_config
+from sync_app.services.high_risk_operations import resolve_environment_label
 from sync_app.web.authz import normalize_role
 from sync_app.web.dashboard_state import (
     build_getting_started_data as build_getting_started_view_state,
@@ -241,15 +242,15 @@ def create_app(
     repositories = web_app_state.repositories
     runtime_state = web_app_state.runtime
     runtime_bind_host = str(runtime_state.web_runtime_settings.get("bind_host") or "").strip().lower()
-    environment_label = (
-        "Local environment"
-        if runtime_bind_host in {"127.0.0.1", "localhost", "::1"}
-        else "Unlabeled environment"
+    environment_label = resolve_environment_label(
+        bind_host=runtime_bind_host,
+        settings_repo=repositories.settings_repo,
     )
     oidc_settings = OIDCSettings.from_environment(default_environment_label=environment_label)
     oidc_service = OIDCService(oidc_settings)
 
     app = FastAPI(title="AD Org Sync Web", version=APP_VERSION)
+    app.state.environment_label = oidc_settings.environment_label or environment_label
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     web_app_state.bind_to_app(app)
@@ -286,7 +287,7 @@ def create_app(
         default_brand_display_name=DEFAULT_BRAND_DISPLAY_NAME,
         default_brand_mark_text=DEFAULT_BRAND_MARK_TEXT,
         default_brand_attribution=DEFAULT_BRAND_ATTRIBUTION,
-        environment_label=oidc_settings.environment_label or environment_label,
+        environment_label=app.state.environment_label,
         supported_ui_modes=SUPPORTED_UI_MODES,
         placement_strategies=PLACEMENT_STRATEGIES,
         advanced_nav_pages=ADVANCED_NAV_PAGES,

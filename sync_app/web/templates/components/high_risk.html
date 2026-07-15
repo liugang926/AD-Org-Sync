@@ -1,0 +1,50 @@
+{% macro workflow(steps, ui, label="High-risk operation workflow") -%}
+<ol class="execution-flow high-risk-workflow" aria-label="{{ t(label) }}" data-high-risk-workflow>
+  {% for step in steps %}
+  <li class="execution-flow__step" data-state="{{ step.state }}" data-high-risk-step="{{ step.code }}">
+    <span class="execution-flow__index">{{ loop.index }}</span>
+    <div>
+      <strong>{{ t(step.label) }}</strong>
+      <small>{{ t("high_risk.step." ~ step.state) }}</small>
+    </div>
+    {{ ui.badge(t("high_risk.step." ~ step.state), "success" if step.state == "complete" else ("error" if step.state == "blocked" else ("info" if step.state == "current" else "warning"))) }}
+  </li>
+  {% endfor %}
+</ol>
+{%- endmacro %}
+
+{% macro context_details(context) -%}
+<div class="detail-grid high-risk-context" data-high-risk-context>
+  <div class="detail-item">
+    <div class="label">{{ t("Organization") }}</div>
+    <div class="value" data-high-risk-organization>{{ context.organization_name }} <span class="muted">({{ context.organization_id }})</span></div>
+  </div>
+  <div class="detail-item">
+    <div class="label">{{ t("Environment") }}</div>
+    <div class="value" data-high-risk-environment>{{ t(context.environment_label) }}</div>
+  </div>
+  <div class="detail-item">
+    <div class="label">{{ t("Snapshot Version") }}</div>
+    <div class="value cell-mono" data-high-risk-snapshot>{{ t(context.snapshot_version) }}</div>
+  </div>
+  <div class="detail-item">
+    <div class="label">{{ t("Impact Count") }}</div>
+    <div class="value" data-high-risk-impact>{{ context.impact_count }}</div>
+  </div>
+  {% if context.preview_id %}
+  <div class="detail-item">
+    <div class="label">{{ t("Preview ID") }}</div>
+    <div class="value cell-mono" data-high-risk-preview>{{ context.preview_id }}</div>
+  </div>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{% macro confirmation_fields(context) -%}
+<input type="hidden" name="operation_code" value="{{ context.operation_code }}">
+<input type="hidden" name="organization_id" value="{{ context.organization_id }}">
+<input type="hidden" name="environment_label" value="{{ context.environment_label }}">
+<input type="hidden" name="snapshot_version" value="{{ context.snapshot_version }}">
+<input type="hidden" name="impact_count" value="{{ context.impact_count }}">
+<input type="hidden" name="preview_id" value="{{ context.preview_id }}">
+{%- endmacro %}

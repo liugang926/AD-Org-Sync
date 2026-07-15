@@ -11,6 +11,11 @@ from sync_app.core.sync_policies import (
     normalize_username_collision_policy,
     normalize_username_strategy,
 )
+from sync_app.services.high_risk_operations import (
+    HighRiskOperationContext,
+    HighRiskOperationPolicy,
+    high_risk_audit_payload,
+)
 from sync_app.services.typed_settings import AdvancedSyncPolicySettings
 from sync_app.web.app_state import get_web_repositories
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
@@ -653,6 +658,12 @@ def register_advanced_sync_routes(
         request: Request,
         connector_id: str,
         csrf_token: str = Form(""),
+        operation_code: str = Form(""),
+        organization_id: str = Form(""),
+        environment_label: str = Form(""),
+        snapshot_version: str = Form(""),
+        impact_count: str = Form(""),
+        preview_id: str = Form(""),
     ):
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
@@ -662,7 +673,64 @@ def register_advanced_sync_routes(
             return csrf_error
         repositories = get_web_repositories(request)
         current_org = get_current_org(request)
+        record = repositories.connector_repo.get_connector_record(
+            connector_id,
+            org_id=current_org.org_id,
+        )
+        if not record:
+            flash(request, "error", "Connector not found")
+            return RedirectResponse(url="/advanced-sync", status_code=303)
+        context = HighRiskOperationContext.create(
+            operation_code="connector.delete",
+            organization_id=current_org.org_id,
+            organization_name=current_org.name,
+            environment_label=getattr(
+                request.app.state,
+                "environment_label",
+                "Unlabeled environment",
+            ),
+            snapshot_version="Not applicable",
+            impact_count=1,
+            preview_id=connector_id,
+        )
+        gate = HighRiskOperationPolicy.validate_confirmation(
+            context,
+            {
+                "operation_code": operation_code,
+                "organization_id": organization_id,
+                "environment_label": environment_label,
+                "snapshot_version": snapshot_version,
+                "impact_count": impact_count,
+                "preview_id": preview_id,
+            },
+        )
+        if not gate.allowed:
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="high_risk.connector_delete.blocked",
+                target_type="sync_connector",
+                target_id=connector_id,
+                result="blocked",
+                message="Connector deletion was blocked by high-risk validation",
+                payload=high_risk_audit_payload(
+                    context,
+                    reason_code=gate.reason_code,
+                ),
+            )
+            flash_t(request, "error", gate.reason_code)
+            return RedirectResponse(url="/advanced-sync", status_code=303)
         repositories.connector_repo.delete_connector(connector_id, org_id=current_org.org_id)
+        repositories.audit_repo.add_log(
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            action_type="high_risk.connector_delete.execute",
+            target_type="sync_connector",
+            target_id=connector_id,
+            result="success",
+            message="Deleted connector after high-risk environment validation",
+            payload=high_risk_audit_payload(context),
+        )
         flash_t(request, "success", "Connector {connector_id} deleted", connector_id=connector_id)
         return RedirectResponse(url="/advanced-sync", status_code=303)
 

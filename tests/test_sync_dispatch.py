@@ -1,4 +1,5 @@
 import unittest
+import os
 import time
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
@@ -12,10 +13,68 @@ from sync_app.services.sync_dispatch import (
     enqueue_sync_job,
     run_sync_request,
 )
-from sync_app.storage.local_db import DatabaseManager, SyncJobRepository
+from sync_app.storage.local_db import (
+    DatabaseManager,
+    SettingsRepository,
+    SyncJobRepository,
+    WebAuditLogRepository,
+)
 
 
 class SyncDispatchTests(unittest.TestCase):
+    def test_unlabeled_runtime_blocks_apply_but_not_dry_run_and_audits_context(self):
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "dispatch-unlabeled.db"
+            db_manager = DatabaseManager(db_path=str(db_path))
+            db_manager.initialize()
+            SettingsRepository(db_manager).set_value(
+                "web_bind_host",
+                "0.0.0.0",
+                "string",
+            )
+
+            with patch.dict(
+                os.environ,
+                {"AD_ORG_SYNC_ENVIRONMENT_LABEL": ""},
+            ):
+                apply_result = enqueue_sync_job(
+                    db_path=str(db_path),
+                    execution_mode="apply",
+                    trigger_type="web",
+                    org_id="default",
+                    config_path="config.ini",
+                    requested_by="alice",
+                )
+                dry_run_result = enqueue_sync_job(
+                    db_path=str(db_path),
+                    execution_mode="dry_run",
+                    trigger_type="web",
+                    org_id="default",
+                    config_path="config.ini",
+                    requested_by="alice",
+                )
+
+            self.assertFalse(apply_result.accepted)
+            self.assertIsNone(apply_result.job)
+            self.assertIn("unlabeled", apply_result.message)
+            self.assertTrue(dry_run_result.accepted)
+            logs = WebAuditLogRepository(db_manager).list_recent_logs(10)
+            blocked = next(
+                item
+                for item in logs
+                if item.action_type == "high_risk.apply.blocked"
+            )
+            self.assertEqual(blocked.result, "blocked")
+            self.assertEqual(
+                blocked.payload["reason_code"],
+                "high_risk.blocker.environment_unlabeled",
+            )
+            self.assertEqual(blocked.payload["organization_id"], "default")
+            self.assertEqual(
+                blocked.payload["environment_label"],
+                "Unlabeled environment",
+            )
+
     def test_enqueue_sync_job_prevents_duplicate_active_job_for_same_org(self):
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "dispatch.db"

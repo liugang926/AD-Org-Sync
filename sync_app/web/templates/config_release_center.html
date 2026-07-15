@@ -179,9 +179,15 @@
                 {% endif %}
                 {{ ui.button(t("Download"), href=("/config/releases/" ~ row.snapshot.id ~ "/download"), variant="ghost", icon="download") }}
                 {% if can("config.write") %}
-                <form method="post" action="{{ '/config/releases/' ~ row.snapshot.id ~ '/rollback' }}" class="inline">
+                <form method="post" action="{{ '/config/releases/' ~ row.snapshot.id ~ '/rollback' }}" class="inline" data-confirm="{{ t('Roll back the current organization configuration to this snapshot?') }}" data-confirm-title="{{ t('Confirm Configuration Rollback') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name }}" data-confirm-detail-2-label="{{ t('Environment') }}" data-confirm-detail-2-value="{{ t(environment_label) }}" data-confirm-detail-3-label="{{ t('Snapshot Version') }}" data-confirm-detail-3-value="#{{ row.snapshot.id }}" data-confirm-detail-4-label="{{ t('Impact Count') }}" data-confirm-detail-4-value="1">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                  {{ ui.button(t("Rollback"), type="submit", variant="secondary", icon="rotate-ccw", confirm_text=t("Roll back the current organization configuration to this snapshot?")) }}
+                  <input type="hidden" name="operation_code" value="config.rollback">
+                  <input type="hidden" name="organization_id" value="{{ current_org.org_id }}">
+                  <input type="hidden" name="environment_label" value="{{ environment_label }}">
+                  <input type="hidden" name="snapshot_version" value="#{{ row.snapshot.id }}">
+                  <input type="hidden" name="impact_count" value="1">
+                  <input type="hidden" name="preview_id" value="{{ row.snapshot.id }}">
+                  {{ ui.button(t("Rollback"), type="submit", variant="secondary", icon="rotate-ccw") }}
                 </form>
                 {% endif %}
               </div>

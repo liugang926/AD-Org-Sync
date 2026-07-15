@@ -35,6 +35,7 @@ services:
       AD_ORG_SYNC_ADMIN_USERNAME: ${AD_ORG_SYNC_ADMIN_USERNAME:-admin}
       AD_ORG_SYNC_PUBLIC_BASE_URL: ${AD_ORG_SYNC_PUBLIC_BASE_URL:?Set AD_ORG_SYNC_PUBLIC_BASE_URL to the external HTTPS URL}
       AD_ORG_SYNC_SECURE_COOKIES: ${AD_ORG_SYNC_SECURE_COOKIES:-always}
+      AD_ORG_SYNC_ENVIRONMENT_LABEL: ${AD_ORG_SYNC_ENVIRONMENT_LABEL:-}
     volumes:
       - ad_org_sync_data:/data
       - ad_org_sync_logs:/app/logs

@@ -6,7 +6,11 @@ from unittest.mock import patch
 from sync_app.core.models import AccountConfig, AppConfig, DepartmentNode, LDAPConfig, SourceDirectoryUser, WeComConfig
 from sync_app.services import runtime
 from sync_app.services.source_directory import SourceDirectoryService
-from sync_app.storage.local_db import DatabaseManager
+from sync_app.storage.local_db import (
+    DatabaseManager,
+    SettingsRepository,
+    WebAuditLogRepository,
+)
 from sync_app.storage.repositories import SourceDirectoryRepository, SyncPlanReviewRepository
 from tests.helpers.runtime_fakes import FakeADSyncApply, FakeWeComAPI
 
@@ -33,6 +37,68 @@ class _RecordingAD(FakeADSyncApply):
 
 
 class ScopedSnapshotRuntimeTests(unittest.TestCase):
+    def test_direct_apply_rechecks_environment_before_constructing_ad_client(self):
+        config = AppConfig(
+            wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),
+            ldap=LDAPConfig(
+                server="ldap.example.com",
+                domain="example.com",
+                username="svc",
+                password="password",
+                use_ssl=True,
+                port=636,
+            ),
+            domain="example.com",
+            account=AccountConfig(default_password="VeryStrong123!456"),
+            config_path="ignored.ini",
+        )
+        db_path = os.path.join("test_artifacts", "runtime_unlabeled_gate.db")
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+        manager = DatabaseManager(db_path=db_path)
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        SettingsRepository(manager).set_value("web_bind_host", "0.0.0.0", "string")
+
+        with (
+            patch.dict(os.environ, {"AD_ORG_SYNC_ENVIRONMENT_LABEL": ""}),
+            patch.object(runtime, "load_sync_config", return_value=config),
+            patch.object(runtime, "ADSyncLDAPS") as ad_client,
+            patch.object(
+                runtime.sync_logging,
+                "setup_logging",
+                return_value=logging.getLogger("unlabeled-runtime"),
+            ),
+            patch.object(runtime.sync_logging, "log_filename", "unlabeled-runtime.log"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "environment is unlabeled"):
+                runtime.run_sync_job(
+                    execution_mode="apply",
+                    trigger_type="unit_test",
+                    db_path=db_path,
+                    config_path="ignored.ini",
+                    requested_by="admin",
+                )
+
+        ad_client.assert_not_called()
+        blocked_log = next(
+            item
+            for item in WebAuditLogRepository(manager).list_recent_logs(10)
+            if item.action_type == "high_risk.apply.blocked"
+        )
+        self.assertEqual(blocked_log.result, "blocked")
+        self.assertEqual(
+            blocked_log.payload["reason_code"],
+            "high_risk.blocker.environment_unlabeled",
+        )
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+
     def test_selected_users_requires_matching_dry_run_and_never_disables_unselected_users(self):
         config = AppConfig(
             wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),

@@ -263,6 +263,10 @@ class WebJobService:
                     or 0
                 ),
                 "high_risk_operation_count": int(impact_summary.get("high_risk_operation_count") or 0),
+                "source_snapshot_id": int(impact_summary.get("source_snapshot_id") or 0),
+                "source_snapshot_fingerprint": str(
+                    impact_summary.get("source_snapshot_fingerprint") or ""
+                ),
                 "added_operation_count": added_operation_count,
                 "modified_operation_count": modified_operation_count,
                 "disabled_operation_count": disabled_operation_count,

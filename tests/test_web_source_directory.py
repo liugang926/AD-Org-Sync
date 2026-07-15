@@ -27,6 +27,42 @@ class _UnavailableCreationPreviewTargetProvider(_CreationPreviewTargetProvider):
 
 
 class WebSourceDirectoryTests(WebAuthzBaseTestCase):
+    def _scan_stale_bindings(self):
+        return self._route("/source-directory/reconcile-stale-bindings", "POST")(
+            self._request("/source-directory/reconcile-stale-bindings", "POST"),
+            csrf_token=self.session["_csrf_token"],
+            page_number=1,
+            search="",
+            department_id="",
+            status="",
+            employee_id_state="",
+            relationship_status="all",
+        )
+
+    def _confirm_stale_binding_cleanup(self, *, csrf_token=None, **overrides):
+        preview = self.session.get("_binding_cleanup_preview") or {}
+        context = dict(preview.get("context") or {})
+        submission = {
+            "csrf_token": csrf_token
+            if csrf_token is not None
+            else self.session["_csrf_token"],
+            "operation_code": context.get("operation_code", ""),
+            "organization_id": context.get("organization_id", ""),
+            "environment_label": context.get("environment_label", ""),
+            "snapshot_version": context.get("snapshot_version", ""),
+            "impact_count": str(context.get("impact_count", "")),
+            "preview_id": context.get("preview_id", ""),
+        }
+        submission.update(overrides)
+        return self._route(
+            "/source-directory/reconcile-stale-bindings/confirm", "POST"
+        )(
+            self._request(
+                "/source-directory/reconcile-stale-bindings/confirm", "POST"
+            ),
+            **submission,
+        )
+
     def _seed_creation_candidates(self):
         snapshot_id = self.app.state.source_directory_repo.start_refresh(
             org_id="default", provider_id="wecom", created_by="superadmin"
@@ -143,6 +179,16 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self._login("operator1")
         response = self._route("/source-directory", "GET")(
             self._request("/source-directory")
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/dashboard")
+        response = self._route(
+            "/source-directory/reconcile-stale-bindings/confirm", "POST"
+        )(
+            self._request(
+                "/source-directory/reconcile-stale-bindings/confirm", "POST"
+            ),
+            csrf_token="",
         )
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/dashboard")
@@ -393,26 +439,39 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         page = self._route("/source-directory", "GET")(
             self._request("/source-directory")
         )
-        self.assertIn("Verify AD and clean stale bindings", self._text(page))
+        self.assertIn("Scan stale bindings", self._text(page))
 
         with patch(
             "sync_app.web.app.build_target_provider",
             return_value=_CreationPreviewTargetProvider(),
         ):
-            response = self._route(
-                "/source-directory/reconcile-stale-bindings", "POST"
-            )(
-                self._request(
-                    "/source-directory/reconcile-stale-bindings", "POST"
-                ),
-                csrf_token=self.session["_csrf_token"],
-                page_number=1,
-                search="",
-                department_id="",
-                status="",
-                employee_id_state="",
-                relationship_status="all",
+            scan_response = self._scan_stale_bindings()
+
+            self.assertEqual(scan_response.status_code, 303)
+            self.assertIn("verify_ad=true", scan_response.headers["location"])
+            self.assertIsNotNone(
+                self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                    "alice",
+                    org_id="default",
+                    source_provider="wecom",
+                    connector_id="default",
+                )
             )
+            preview = self.session["_binding_cleanup_preview"]
+            self.assertEqual(preview["status"], "preview")
+            self.assertEqual(preview["context"]["impact_count"], 1)
+            self.assertEqual(preview["context"]["organization_id"], "default")
+            self.assertEqual(preview["context"]["environment_label"], "Local environment")
+
+            preview_page = self._route("/source-directory", "GET")(
+                self._request("/source-directory")
+            )
+            preview_body = self._text(preview_page)
+            self.assertIn("Binding Cleanup Preview", preview_body)
+            self.assertIn("Snapshot Version", preview_body)
+            self.assertIn("Impact Count", preview_body)
+
+            response = self._confirm_stale_binding_cleanup()
 
         self.assertEqual(response.status_code, 303)
         self.assertIn("verify_ad=true", response.headers["location"])
@@ -438,6 +497,17 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         ]
         self.assertEqual(len(cleanup_logs), 1)
         self.assertEqual(cleanup_logs[0].target_id, "alice")
+        execute_logs = [
+            item
+            for item in self.app.state.audit_repo.list_recent_logs(20)
+            if item.action_type == "high_risk.binding_cleanup.execute"
+        ]
+        self.assertEqual(len(execute_logs), 1)
+        self.assertEqual(execute_logs[0].result, "success")
+        self.assertEqual(execute_logs[0].payload["organization_id"], "default")
+        self.assertEqual(execute_logs[0].payload["environment_label"], "Local environment")
+        self.assertEqual(execute_logs[0].payload["impact_count"], 1)
+        self.assertTrue(execute_logs[0].payload["snapshot_version"].startswith("#"))
 
     def test_unavailable_ad_verification_never_cleans_saved_binding(self):
         self._login("superadmin")
@@ -447,20 +517,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
             "sync_app.web.app.build_target_provider",
             return_value=_UnavailableCreationPreviewTargetProvider(),
         ):
-            response = self._route(
-                "/source-directory/reconcile-stale-bindings", "POST"
-            )(
-                self._request(
-                    "/source-directory/reconcile-stale-bindings", "POST"
-                ),
-                csrf_token=self.session["_csrf_token"],
-                page_number=1,
-                search="",
-                department_id="",
-                status="",
-                employee_id_state="",
-                relationship_status="all",
-            )
+            response = self._scan_stale_bindings()
 
         self.assertEqual(response.status_code, 303)
         self.assertIsNotNone(
@@ -474,9 +531,77 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertEqual(
             self.session["_flash"]["message"],
             {
-                "key": "Could not verify {unverified_count} saved binding(s). Nothing was removed.",
-                "params": {"unverified_count": 1},
+                "key": "Live AD verification is unavailable. No saved bindings were removed.",
+                "params": {},
             },
+        )
+
+    def test_cleanup_confirmation_fails_closed_for_csrf_org_change_and_unlabeled_environment(self):
+        self._login("superadmin")
+        self._seed_creation_candidates()
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_CreationPreviewTargetProvider(),
+        ):
+            self._scan_stale_bindings()
+            csrf_response = self._confirm_stale_binding_cleanup(csrf_token="invalid")
+
+        self.assertEqual(csrf_response.status_code, 303)
+        self.assertIsNotNone(
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
+        )
+
+        self.app.state.organization_repo.upsert_organization(
+            org_id="asia",
+            name="Asia Region",
+            config_path=str(self.config_path),
+            description="",
+            is_enabled=True,
+        )
+        self.session["selected_org_id"] = "asia"
+        org_response = self._confirm_stale_binding_cleanup()
+        self.assertEqual(org_response.status_code, 303)
+        self.assertIsNotNone(
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
+        )
+
+        self.session["selected_org_id"] = "default"
+        self.app.state.environment_label = "Unlabeled environment"
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_CreationPreviewTargetProvider(),
+        ):
+            self._scan_stale_bindings()
+            unlabeled_response = self._confirm_stale_binding_cleanup()
+        self.assertEqual(unlabeled_response.status_code, 303)
+        self.assertIsNotNone(
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
+        )
+        blocked_logs = [
+            item
+            for item in self.app.state.audit_repo.list_recent_logs(30)
+            if item.action_type == "high_risk.binding_cleanup.execute"
+            and item.result == "blocked"
+        ]
+        self.assertTrue(blocked_logs)
+        self.assertEqual(
+            blocked_logs[0].payload["reason_code"],
+            "high_risk.blocker.environment_unlabeled",
         )
 
     def test_prepare_creation_reverifies_and_saves_exact_dry_run_scope(self):
