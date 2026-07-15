@@ -1,9 +1,95 @@
 import json
+from unittest.mock import patch
 
+from sync_app.core.models import DirectoryUserRecord
 from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
 
+class _CreationPreviewTargetProvider:
+    def __init__(self, existing_usernames=()):
+        self.existing_usernames = {
+            str(username).strip().lower() for username in existing_usernames
+        }
+
+    def get_users_batch(self, usernames):
+        return {
+            username: DirectoryUserRecord(username=username, dn="redacted")
+            for username in usernames
+            if str(username).strip().lower() in self.existing_usernames
+        }
+
+    def close(self):
+        return None
+
+
 class WebSourceDirectoryTests(WebAuthzBaseTestCase):
+    def _seed_creation_candidates(self):
+        snapshot_id = self.app.state.source_directory_repo.start_refresh(
+            org_id="default", provider_id="wecom", created_by="superadmin"
+        )
+        self.app.state.source_directory_repo.replace_snapshot(
+            snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "1",
+                    "name": "HQ",
+                    "parent_department_id": "0",
+                    "path_ids": ["1"],
+                    "path_names": ["HQ"],
+                }
+            ],
+            users=[
+                {
+                    "source_user_id": "alice",
+                    "display_name": "Alice Ding",
+                    "employee_id": "TJ001",
+                    "department_ids": ["1"],
+                    "department_names": ["HQ"],
+                    "is_active": True,
+                    "raw_payload": {"userid": "alice", "employee_id": "TJ001"},
+                    "search_text": "Alice Ding TJ001",
+                },
+                {
+                    "source_user_id": "bob",
+                    "display_name": "Bob Ding",
+                    "employee_id": "TJ002",
+                    "department_ids": ["1"],
+                    "department_names": ["HQ"],
+                    "is_active": True,
+                    "raw_payload": {"userid": "bob", "employee_id": "TJ002"},
+                    "search_text": "Bob Ding TJ002",
+                },
+            ],
+            fields=[
+                {
+                    "name": "employee_id",
+                    "label": "Employee ID",
+                    "coverage": 2,
+                    "samples": ["TJ001", "TJ002"],
+                }
+            ],
+            fingerprint="creation-selection-v1",
+        )
+        self.app.state.source_directory_repo.save_scope_selection(
+            org_id="default",
+            provider_id="wecom",
+            scope_type="full",
+            username_strategy="employee_id",
+            source_field="employee_id",
+            snapshot_id=snapshot_id,
+            requested_by="superadmin",
+        )
+        self.app.state.user_binding_repo.upsert_binding(
+            "alice",
+            "legacy.alice",
+            org_id="default",
+            source_provider="wecom",
+            connector_id="default",
+            source="manual",
+            source_display_name="Alice Ding",
+        )
+        return snapshot_id
+
     def test_super_admin_can_open_source_directory_without_exposing_secrets(self):
         self._login("superadmin")
         response = self._route("/source-directory", "GET")(
@@ -53,6 +139,13 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self._login("operator1")
         response = self._route("/source-directory", "GET")(
             self._request("/source-directory")
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/dashboard")
+        response = self._route("/source-directory/create-selection", "POST")(
+            self._request("/source-directory/create-selection", "POST"),
+            csrf_token="",
+            selected_source_user_ids=["alice"],
         )
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/dashboard")
@@ -244,6 +337,96 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(response.status_code, 403)
         self.assertNotIn("session", response.body.decode("utf-8").lower())
+
+    def test_verified_missing_candidate_can_be_selected_but_binding_mismatch_is_blocked(self):
+        self._login("superadmin")
+        self._seed_creation_candidates()
+
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_CreationPreviewTargetProvider(),
+        ):
+            page = self._route("/source-directory", "GET")(
+                self._request("/source-directory"),
+                verify_ad=True,
+            )
+            response = self._route("/api/source-directory/relationships", "GET")(
+                self._request("/api/source-directory/relationships"),
+                verify_ad=True,
+            )
+
+        body = self._text(page)
+        self.assertIn("Candidate AD account not found", body)
+        self.assertIn("Select for creation", body)
+        self.assertIn("Review saved binding before creation", body)
+        self.assertIn("Saved binding", body)
+        payload = json.loads(response.body)
+        self.assertEqual(payload["candidate_missing_count"], 2)
+        self.assertEqual(payload["creation_eligible_count"], 1)
+        relationships = {
+            item["source_user_id"]: item for item in payload["items"]
+        }
+        self.assertTrue(relationships["bob"]["creation_eligibility"]["eligible"])
+        self.assertEqual(
+            relationships["alice"]["creation_eligibility"]["status"],
+            "binding_review_required",
+        )
+
+    def test_prepare_creation_reverifies_and_saves_exact_dry_run_scope(self):
+        self._login("superadmin")
+        self._seed_creation_candidates()
+
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_CreationPreviewTargetProvider(),
+        ):
+            response = self._route(
+                "/source-directory/create-selection", "POST"
+            )(
+                self._request("/source-directory/create-selection", "POST"),
+                csrf_token=self.session["_csrf_token"],
+                selected_source_user_ids=["bob"],
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/jobs")
+        selection = self.app.state.source_directory_repo.get_scope_selection(
+            org_id="default", provider_id="wecom"
+        )
+        self.assertEqual(selection["scope_type"], "selected_users")
+        self.assertEqual(selection["selected_source_user_ids"], ["bob"])
+        self.assertEqual(selection["source_field"], "employee_id")
+        self.assertIn("no AD changes", self.session["_flash"]["message"])
+
+    def test_prepare_creation_rejects_candidate_that_now_exists(self):
+        self._login("superadmin")
+        self._seed_creation_candidates()
+
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_CreationPreviewTargetProvider(["TJ002"]),
+        ):
+            response = self._route(
+                "/source-directory/create-selection", "POST"
+            )(
+                self._request("/source-directory/create-selection", "POST"),
+                csrf_token=self.session["_csrf_token"],
+                selected_source_user_ids=["bob"],
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(
+            response.headers["location"],
+            "/source-directory?verify_ad=true",
+        )
+        selection = self.app.state.source_directory_repo.get_scope_selection(
+            org_id="default", provider_id="wecom"
+        )
+        self.assertEqual(selection["scope_type"], "full")
+        self.assertEqual(
+            self.session["_flash"]["message"],
+            "The candidate AD account already exists.",
+        )
 
 
 if __name__ == "__main__":

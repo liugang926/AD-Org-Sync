@@ -40,6 +40,8 @@ class IdentityRelationshipPreview:
     resolution_reason: str
     rule_hits: list[str]
     difference: dict[str, Any]
+    candidate_ad_state: dict[str, Any] = field(default_factory=dict)
+    creation_eligibility: dict[str, Any] = field(default_factory=dict)
     risks: list[str] = field(default_factory=list)
     evidence: dict[str, Any] = field(default_factory=dict)
     updated_at: str = ""
@@ -700,6 +702,20 @@ class IdentityRelationshipPreviewService:
                 rule_hits = [candidate_source] if candidate_source else []
 
             candidate_username = str(preview["username"] or "")
+            candidate_ad_state = (
+                dict(states.get((connector_id, candidate_username.lower())) or {})
+                if candidate_username and ad_states is not None
+                else {}
+            )
+            if not candidate_ad_state:
+                candidate_ad_state = {
+                    "status": "not_checked",
+                    "exists": None,
+                    "enabled": None,
+                    "locked": None,
+                    "protected": False,
+                    "verified_at": "",
+                }
             if connector_conflict:
                 difference_status = "connector_conflict"
             elif binding_conflict:
@@ -772,6 +788,7 @@ class IdentityRelationshipPreviewService:
                         "status": difference_status,
                         "changed": difference_status not in {"no_change", "not_dry_run", "not_applied"},
                     },
+                    candidate_ad_state=candidate_ad_state,
                     risks=sorted(set(risks)),
                     evidence={
                         "preview_fingerprint": current_fingerprint,
@@ -835,7 +852,105 @@ class IdentityRelationshipPreviewService:
                     "status": "multiple_candidate_conflict",
                     "changed": True,
                 }
+        for item in relationships:
+            item.creation_eligibility = self._build_creation_eligibility(item)
         return relationships
+
+    @staticmethod
+    def _build_creation_eligibility(
+        item: IdentityRelationshipPreview,
+    ) -> dict[str, Any]:
+        candidate = str(item.candidate_mapping.get("ad_username") or "").strip()
+        state = dict(item.candidate_ad_state or {})
+        status = str(state.get("status") or "not_checked")
+        before = item.before_state
+        bound_username = str(before.get("bound_ad_username") or "").strip()
+        target = candidate
+
+        def result(code: str, reason: str, *, eligible: bool = False) -> dict[str, Any]:
+            return {
+                "eligible": eligible,
+                "status": code,
+                "reason": reason,
+                "target_ad_username": target,
+            }
+
+        if not candidate:
+            return result(
+                "mapping_required",
+                "Save a valid candidate mapping before selecting account creation.",
+            )
+        if status == "not_checked":
+            return result(
+                "verification_required",
+                "Verify the candidate AD account before selecting account creation.",
+            )
+        if status == "unavailable":
+            return result(
+                "verification_unavailable",
+                "The candidate AD account could not be verified.",
+            )
+        if status == "protected" or bool(state.get("protected")):
+            return result(
+                "protected_account",
+                "The candidate AD account is protected and cannot be selected for creation.",
+            )
+        if state.get("exists") is True:
+            return result(
+                "candidate_exists",
+                "The candidate AD account already exists.",
+            )
+        if status != "missing" or state.get("exists") is not False:
+            return result(
+                "verification_required",
+                "Verify the candidate AD account before selecting account creation.",
+            )
+        if "normalized_username_collision" in item.risks:
+            return result(
+                "candidate_collision",
+                "Resolve the candidate username collision before selecting account creation.",
+            )
+        if (
+            item.effective_resolution_source == "conflict"
+            or any("conflict" in risk for risk in item.risks)
+        ):
+            return result(
+                "identity_conflict",
+                "Resolve the identity or connector conflict before selecting account creation.",
+            )
+        checked_username = str(before.get("checked_ad_username") or "").strip()
+        if (
+            item.effective_resolution_source == "existing_ad_match"
+            or (
+                checked_username
+                and checked_username.lower() != candidate.lower()
+                and before.get("ad_account_state", {}).get("exists") is True
+            )
+        ):
+            return result(
+                "existing_identity_match",
+                "Review the existing AD identity match before creating another account.",
+            )
+        if bound_username and not bool(before.get("binding_enabled")):
+            return result(
+                "binding_disabled",
+                "Enable or remove the disabled saved binding before selecting account creation.",
+            )
+        if bound_username and bound_username.lower() != candidate.lower():
+            return result(
+                "binding_review_required",
+                "Review or update the saved binding before creating the candidate account.",
+            )
+        if str(item.source_user.get("account_status") or "").strip().lower() == "inactive":
+            return result(
+                "source_inactive",
+                "The source user is inactive and cannot be selected for account creation.",
+            )
+        return result(
+            "eligible",
+            "The candidate AD account was verified as missing and can be prepared for Dry Run.",
+            eligible=True,
+        )
 
     @staticmethod
     def matches_filter(item: IdentityRelationshipPreview, status: str) -> bool:
