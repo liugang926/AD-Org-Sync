@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+{% import "components/sync_policy.html" as policy with context %}
+
+{% block content %}
+{% call ui.page_header(t("Group Rules"), t("Define managed group type, mail domain, OU placement, and source tag or chat inclusion rules."), eyebrow=t("Sync Policies"), badge_text=t("Organization Scope"), badge_level="info") %}
+  {{ ui.button(t("Release History"), href="/sync-policies/releases", variant="secondary", icon="history") }}
+{% endcall %}
+{{ policy.tabs('group-rules') }}
+{{ policy.status(has_unpublished_changes, latest_snapshot_title, '', t('Review protected group scope, publish, then run a new Dry Run')) }}
+
+{% call ui.panel(t("Group Policy"), scope_label=(selected_connector.name if selected_connector else t('Organization Defaults')), scope_level="info", description=t("Organization defaults apply unless a selected connector provides an explicit group policy.")) %}
+  <form method="post" action="/sync-policies/group-rules" class="page-stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if selected_connector %}<input type="hidden" name="connector_id" value="{{ selected_connector.connector_id }}">{% endif %}
+    <div class="form-grid">
+      <label class="check-card"><input type="checkbox" name="custom_group_sync_enabled" value="1" {% if policy_settings.custom_group_sync_enabled %}checked{% endif %}><span><strong>{{ t("Enable Custom Group Sync") }}</strong><small>{{ t("Plan managed tag and external-chat groups during Dry Run.") }}</small></span></label>
+      <label>{{ t("Default Group Type") }}<select name="managed_group_type">{% for value, label in group_type_options %}<option value="{{ value }}" {% if policy_settings.managed_group_type == value %}selected{% endif %}>{{ t(label) }}</option>{% endfor %}</select></label>
+      <label>{{ t("Default Group Mail Domain") }}<input type="text" name="managed_group_mail_domain" value="{{ policy_settings.managed_group_mail_domain }}" placeholder="groups.example.com"></label>
+      <label>{{ t("Default Custom Group OU") }}<input type="text" name="custom_group_ou_path" value="{{ policy_settings.custom_group_ou_path }}" placeholder="Managed Groups"></label>
+    </div>
+    {% if selected_connector %}
+    <details class="detail-toggle" open><summary><strong>{{ t("Connector override") }} · {{ selected_connector.name }}</strong></summary>
+      <div class="form-grid">
+        <label>{{ t("Connector Group Type") }}<select name="connector_group_type">{% for value, label in group_type_options %}<option value="{{ value }}" {% if selected_connector.group_type == value %}selected{% endif %}>{{ t(label) }}</option>{% endfor %}</select></label>
+        <label>{{ t("Connector Group Mail Domain") }}<input type="text" name="connector_group_mail_domain" value="{{ selected_connector.group_mail_domain }}"></label>
+        <label>{{ t("Connector Custom Group OU") }}<input type="text" name="connector_custom_group_ou_path" value="{{ selected_connector.custom_group_ou_path }}"></label>
+        <label>{{ t("Managed Tag IDs") }}<input type="text" name="managed_tag_ids" value="{{ selected_connector.managed_tag_ids | join(', ') }}" placeholder="1001, 1002"></label>
+        <label>{{ t("Managed External Chat IDs") }}<input type="text" name="managed_external_chat_ids" value="{{ selected_connector.managed_external_chat_ids | join(', ') }}" placeholder="chat_01, chat_02"></label>
+      </div>
+    </details>
+    {% endif %}
+    {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Group Rules"), type="submit", icon="save") }}</div>{% endif %}
+  </form>
+{% endcall %}
+
+{% call ui.panel(t("Connector Group Policies"), description=t("Select a connector to edit its override without changing connection credentials, scope, or naming.")) %}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Connector group policies') }}"><table data-policy-table><thead><tr><th>{{ t("Connector") }}</th><th>{{ t("Status") }}</th><th>{{ t("Group Type") }}</th><th>{{ t("Mail Domain") }}</th><th>{{ t("Group OU") }}</th><th>{{ t("Managed Sources") }}</th><th>{{ t("Action") }}</th></tr></thead><tbody>
+    {% for connector in connectors %}<tr><td><strong>{{ connector.name }}</strong><div class="muted">{{ connector.connector_id }}</div></td><td>{{ t("Enabled") if connector.is_enabled else t("Disabled") }}</td><td>{{ t(connector.group_type) }}</td><td>{{ connector.group_mail_domain or '-' }}</td><td>{{ connector.custom_group_ou_path or '-' }}</td><td>{{ (connector.managed_tag_ids|length) + (connector.managed_external_chat_ids|length) }}</td><td>{{ ui.button(t("Edit"), href=("/sync-policies/group-rules?connector_id=" ~ connector.connector_id), variant="ghost", size="sm") }}</td></tr>
+    {% else %}<tr><td colspan="7" class="empty-state">{{ t("No target connectors are configured") }}</td></tr>{% endfor %}
+  </tbody></table></div>
+  <details class="detail-toggle"><summary><strong>{{ t("Advanced: current managed group evidence") }}</strong></summary><p class="muted">{{ t("Current runtime bindings are evidence only; operational cleanup belongs in the execution and operations centers.") }}</p><ul>{% for binding in custom_group_bindings[:10] %}<li>{{ binding.source_type }} · {{ binding.source_key }} → {{ binding.group_sam }}</li>{% else %}<li>{{ t("No managed group evidence is available") }}</li>{% endfor %}</ul></details>
+{% endcall %}
+
+{% call ui.helper_block(t("Next step"), t("Publish the reviewed group policy and inspect planned group creation, membership, and cleanup in Dry Run."), "info") %}
+  {{ ui.button(t("Open Release History"), href="/sync-policies/releases", variant="ghost", icon="history") }}
+{% endcall %}
+{% endblock %}

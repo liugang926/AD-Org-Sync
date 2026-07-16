@@ -1,11 +1,13 @@
 {% extends "base.html" %}
 {% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
+{% set release_base_path = release_base_path|default('/config/releases') %}
+{% set release_back_path = release_back_path|default('/config') %}
 
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Config Release Center"), t("Publish the current organization configuration as a release snapshot, compare it with earlier snapshots, and roll back when needed."), eyebrow=t("Setup"), badge_text=(t("Unpublished") if has_unpublished_changes else t("Published")), badge_level=("warning" if has_unpublished_changes else "success")) %}
-    {{ ui.button(t("Back To Config"), href="/config", variant="ghost", icon="arrow-left") }}
+    {{ ui.button(t("Back"), href=release_back_path, variant="ghost", icon="arrow-left") }}
     {% if can("organizations.manage") %}
     {{ ui.button(t("Open Organizations"), href="/organizations", variant="secondary", icon="building-2") }}
     {% endif %}
@@ -67,14 +69,14 @@
     </div>
 
     {% if can("config.write") %}
-    <form method="post" action="/config/releases/publish" class="page-stack">
+    <form method="post" action="{{ release_base_path }}/publish" class="page-stack">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         {{ forms.input("snapshot_name", t("Snapshot Name"), "", placeholder=t("Optional release label such as April production baseline"), help_text=t("Leave blank to use an automatic release number."), class_name="field-span-full") }}
       </div>
       <div class="actions">
         {{ ui.button(t("Publish Current Snapshot"), type="submit", variant="secondary", icon="save") }}
-        {{ ui.button(t("Back To Config"), href="/config", variant="ghost", icon="arrow-left") }}
+        {{ ui.button(t("Back"), href=release_back_path, variant="ghost", icon="arrow-left") }}
       </div>
     </form>
     {% endif %}
@@ -175,11 +177,11 @@
             <td>
               <div class="actions">
                 {% if row.previous_snapshot_id %}
-                {{ ui.button(t("Compare"), href=("/config/releases?current_snapshot_id=" ~ row.snapshot.id ~ "&baseline_snapshot_id=" ~ row.previous_snapshot_id), variant="ghost", icon="git-compare") }}
+                {{ ui.button(t("Compare"), href=(release_base_path ~ "?current_snapshot_id=" ~ row.snapshot.id ~ "&baseline_snapshot_id=" ~ row.previous_snapshot_id), variant="ghost", icon="git-compare") }}
                 {% endif %}
-                {{ ui.button(t("Download"), href=("/config/releases/" ~ row.snapshot.id ~ "/download"), variant="ghost", icon="download") }}
+                {{ ui.button(t("Download"), href=(release_base_path ~ "/" ~ row.snapshot.id ~ "/download"), variant="ghost", icon="download") }}
                 {% if can("config.write") %}
-                <form method="post" action="{{ '/config/releases/' ~ row.snapshot.id ~ '/rollback' }}" class="inline" data-confirm="{{ t('Roll back the current organization configuration to this snapshot?') }}" data-confirm-title="{{ t('Confirm Configuration Rollback') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name }}" data-confirm-detail-2-label="{{ t('Environment') }}" data-confirm-detail-2-value="{{ t(environment_label) }}" data-confirm-detail-3-label="{{ t('Snapshot Version') }}" data-confirm-detail-3-value="#{{ row.snapshot.id }}" data-confirm-detail-4-label="{{ t('Impact Count') }}" data-confirm-detail-4-value="1">
+                <form method="post" action="{{ release_base_path ~ '/' ~ row.snapshot.id ~ '/rollback' }}" class="inline" data-confirm="{{ t('Roll back the current organization configuration to this snapshot?') }}" data-confirm-title="{{ t('Confirm Configuration Rollback') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name }}" data-confirm-detail-2-label="{{ t('Environment') }}" data-confirm-detail-2-value="{{ t(environment_label) }}" data-confirm-detail-3-label="{{ t('Snapshot Version') }}" data-confirm-detail-3-value="#{{ row.snapshot.id }}" data-confirm-detail-4-label="{{ t('Impact Count') }}" data-confirm-detail-4-value="1">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="operation_code" value="config.rollback">
                   <input type="hidden" name="organization_id" value="{{ current_org.org_id }}">

@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sync_app.services.config_release import (
+    build_config_release_center_data,
     publish_current_config_release_snapshot,
     rollback_config_release_snapshot,
 )
@@ -11,6 +12,7 @@ from sync_app.storage.local_db import (
     DatabaseManager,
     OrganizationConfigRepository,
     OrganizationRepository,
+    SourceDirectoryRepository,
     SettingsRepository,
 )
 
@@ -163,6 +165,92 @@ class ConfigReleaseTests(unittest.TestCase):
         self.assertEqual(rollback_result["rollback_snapshot"].trigger_action, "rollback")
         self.assertIn("rollback_safety", trigger_actions)
         self.assertIn("rollback", trigger_actions)
+
+    def test_source_scope_is_published_diffed_and_restored(self):
+        with TemporaryDirectory() as temp_dir:
+            db_manager, _config_path = self._build_db(temp_dir)
+            source_repo = SourceDirectoryRepository(db_manager)
+            snapshot_id = source_repo.start_refresh(
+                org_id="default",
+                provider_id="wecom",
+                created_by="tester",
+            )
+            source_repo.replace_snapshot(
+                snapshot_id,
+                departments=[
+                    {
+                        "source_department_id": "1",
+                        "name": "HQ",
+                        "parent_department_id": "0",
+                        "path_ids": ["1"],
+                        "path_names": ["HQ"],
+                    }
+                ],
+                users=[
+                    {
+                        "source_user_id": "alice",
+                        "display_name": "Alice",
+                        "employee_id": "E001",
+                        "department_ids": ["1"],
+                        "department_names": ["HQ"],
+                        "is_active": True,
+                        "search_text": "Alice E001",
+                    }
+                ],
+                fields=[],
+                fingerprint="config-release-scope-v1",
+            )
+            source_repo.save_scope_selection(
+                org_id="default",
+                provider_id="wecom",
+                scope_type="full",
+                username_strategy="employee_id",
+                source_field="employee_id",
+                snapshot_id=snapshot_id,
+                requested_by="tester",
+            )
+            baseline = publish_current_config_release_snapshot(
+                db_manager,
+                "default",
+                created_by="tester",
+                snapshot_name="Full Scope",
+            )
+
+            source_repo.save_scope_selection(
+                org_id="default",
+                provider_id="wecom",
+                scope_type="selected_users",
+                selected_source_user_ids=["alice"],
+                username_strategy="employee_id",
+                source_field="employee_id",
+                snapshot_id=snapshot_id,
+                requested_by="tester",
+            )
+            release_center = build_config_release_center_data(
+                db_manager,
+                "default",
+            )
+            rollback_config_release_snapshot(
+                db_manager,
+                baseline["snapshot"].id,
+                org_id="default",
+                created_by="tester",
+            )
+            restored = source_repo.get_scope_selection(
+                org_id="default",
+                provider_id="wecom",
+            )
+
+        self.assertTrue(release_center["has_unpublished_changes"])
+        self.assertTrue(
+            any(
+                group["title"] == "Source Sync Scopes"
+                for group in release_center["comparison_diff"]["groups"]
+            )
+        )
+        self.assertEqual(restored["scope_type"], "full")
+        self.assertEqual(restored["selected_source_user_ids"], [])
+        self.assertEqual(restored["source_field"], "employee_id")
 
 
 if __name__ == "__main__":

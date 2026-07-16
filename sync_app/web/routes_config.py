@@ -262,21 +262,37 @@ def register_config_routes(
         )
         return RedirectResponse(url=redirect_url, status_code=303)
 
+    @app.get(CANONICAL_ROUTE_PATHS["sync-policy-releases"], response_class=HTMLResponse)
     @app.get("/config/releases", response_class=HTMLResponse)
     def config_release_center_page(request: Request):
         user = require_capability(request, "config.read")
         if isinstance(user, RedirectResponse):
             return user
+        release_base_path = (
+            CANONICAL_ROUTE_PATHS["sync-policy-releases"]
+            if request.url.path.startswith(CANONICAL_ROUTE_PATHS["sync-policy-releases"])
+            else "/config/releases"
+        )
+        release_context = get_web_services(request).config.build_release_center_context(
+            current_org=get_current_org(request),
+            current_snapshot_id=_parse_optional_int(request.query_params.get("current_snapshot_id")),
+            baseline_snapshot_id=_parse_optional_int(request.query_params.get("baseline_snapshot_id")),
+        )
+        if release_base_path == CANONICAL_ROUTE_PATHS["sync-policy-releases"]:
+            release_context["page"] = "sync-account-naming"
         return render(
             request,
             "config_release_center.html",
-            **get_web_services(request).config.build_release_center_context(
-                current_org=get_current_org(request),
-                current_snapshot_id=_parse_optional_int(request.query_params.get("current_snapshot_id")),
-                baseline_snapshot_id=_parse_optional_int(request.query_params.get("baseline_snapshot_id")),
+            release_base_path=release_base_path,
+            release_back_path=(
+                CANONICAL_ROUTE_PATHS["sync-scope"]
+                if release_base_path == CANONICAL_ROUTE_PATHS["sync-policy-releases"]
+                else "/config"
             ),
+            **release_context,
         )
 
+    @app.post(CANONICAL_ROUTE_PATHS["sync-policy-releases"] + "/publish")
     @app.post("/config/releases/publish")
     def config_release_publish(
         request: Request,
@@ -286,7 +302,12 @@ def register_config_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/config/releases")
+        release_base_path = (
+            CANONICAL_ROUTE_PATHS["sync-policy-releases"]
+            if request.url.path.startswith(CANONICAL_ROUTE_PATHS["sync-policy-releases"])
+            else "/config/releases"
+        )
+        csrf_error = reject_invalid_csrf(request, csrf_token, release_base_path)
         if csrf_error:
             return csrf_error
         current_org = get_current_org(request)
@@ -302,15 +323,16 @@ def register_config_routes(
                 "warning",
                 "Current configuration already matches the latest published snapshot.",
             )
-            return RedirectResponse(url="/config/releases", status_code=303)
+            return RedirectResponse(url=release_base_path, status_code=303)
         flash_t(
             request,
             "success",
             "Published configuration snapshot {snapshot_id}",
             snapshot_id=str(getattr(snapshot, "id", "") or ""),
         )
-        return RedirectResponse(url="/config/releases", status_code=303)
+        return RedirectResponse(url=release_base_path, status_code=303)
 
+    @app.post(CANONICAL_ROUTE_PATHS["sync-policy-releases"] + "/{snapshot_id}/rollback")
     @app.post("/config/releases/{snapshot_id}/rollback")
     def config_release_rollback(
         request: Request,
@@ -326,7 +348,12 @@ def register_config_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/config/releases")
+        release_base_path = (
+            CANONICAL_ROUTE_PATHS["sync-policy-releases"]
+            if request.url.path.startswith(CANONICAL_ROUTE_PATHS["sync-policy-releases"])
+            else "/config/releases"
+        )
+        csrf_error = reject_invalid_csrf(request, csrf_token, release_base_path)
         if csrf_error:
             return csrf_error
         current_org = get_current_org(request)
@@ -365,7 +392,7 @@ def register_config_routes(
                 reason_code=gate.reason_code,
             )
             flash_t(request, "error", gate.reason_code)
-            return RedirectResponse(url="/config/releases", status_code=303)
+            return RedirectResponse(url=release_base_path, status_code=303)
         try:
             config_service.rollback_release_snapshot(
                 org_id=current_org.org_id,
@@ -374,7 +401,7 @@ def register_config_routes(
             )
         except ValueError as exc:
             flash(request, "error", str(exc))
-            return RedirectResponse(url="/config/releases", status_code=303)
+            return RedirectResponse(url=release_base_path, status_code=303)
         config_service.record_high_risk_rollback_audit(
             org_id=current_org.org_id,
             actor_username=user.username,
@@ -388,8 +415,9 @@ def register_config_routes(
             "Rolled back to configuration snapshot {snapshot_id}",
             snapshot_id=str(snapshot_id),
         )
-        return RedirectResponse(url="/config/releases", status_code=303)
+        return RedirectResponse(url=release_base_path, status_code=303)
 
+    @app.get(CANONICAL_ROUTE_PATHS["sync-policy-releases"] + "/{snapshot_id}/download")
     @app.get("/config/releases/{snapshot_id}/download")
     def config_release_download(request: Request, snapshot_id: int):
         user = require_capability(request, "config.read")
@@ -402,7 +430,12 @@ def register_config_routes(
         )
         if download is None:
             flash(request, "error", "Configuration snapshot not found")
-            return RedirectResponse(url="/config/releases", status_code=303)
+            release_base_path = (
+                CANONICAL_ROUTE_PATHS["sync-policy-releases"]
+                if request.url.path.startswith(CANONICAL_ROUTE_PATHS["sync-policy-releases"])
+                else "/config/releases"
+            )
+            return RedirectResponse(url=release_base_path, status_code=303)
         return Response(
             content=download["content"],
             media_type=download["media_type"],

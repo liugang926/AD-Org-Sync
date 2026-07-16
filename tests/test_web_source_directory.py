@@ -246,8 +246,8 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
             fingerprint="sha256:v2:dynamic-field-label",
         )
 
-        response = self._route("/sync-policies/scope", "GET")(
-            self._request("/sync-policies/scope")
+        response = self._route("/sync-policies/account-naming", "GET")(
+            self._request("/sync-policies/account-naming")
         )
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
@@ -412,8 +412,8 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
             "sync_app.web.app.build_target_provider",
             return_value=_CreationPreviewTargetProvider(),
         ):
-            page = self._route("/sync-policies/scope", "GET")(
-                self._request("/sync-policies/scope"),
+            page = self._route("/identity-governance/identity-matching", "GET")(
+                self._request("/identity-governance/identity-matching"),
                 verify_ad=True,
             )
             response = self._route("/api/source-directory/relationships", "GET")(
@@ -424,8 +424,13 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         body = self._text(page)
         self.assertIn("missing", body)
         self.assertIn("Select for creation", body)
-        self.assertIn("Review identity", body)
+        self.assertIn("Review Manual Override", body)
         self.assertIn("Current Binding", body)
+        scope = self._route("/sync-policies/scope", "GET")(
+            self._request("/sync-policies/scope")
+        )
+        self.assertNotIn("Select for creation", self._text(scope))
+        self.assertNotIn("Current Binding", self._text(scope))
         payload = json.loads(response.body)
         self.assertEqual(payload["candidate_missing_count"], 2)
         self.assertEqual(payload["creation_eligible_count"], 1)
@@ -657,7 +662,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(
             response.headers["location"],
-            "/sync-policies/scope?verify_ad=true",
+            "/identity-governance/identity-matching?verify_ad=true",
         )
         selection = self.app.state.source_directory_repo.get_scope_selection(
             org_id="default", provider_id="wecom"

@@ -4920,7 +4920,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         advanced_text = self._text(advanced_dashboard)
         for page in (
-            "advanced-sync",
+            "sync-scope",
             "automation-center",
             "data-quality",
             "integrations",

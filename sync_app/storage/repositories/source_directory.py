@@ -421,6 +421,36 @@ class SourceDirectoryRepository(BaseRepository):
             "selected_source_user_ids": _json_list(row["selected_source_user_ids_json"]),
         }
 
+    def list_scope_selections(self, *, org_id: str) -> list[dict[str, Any]]:
+        rows = self._fetchall(
+            """
+            SELECT * FROM sync_scope_selections
+            WHERE org_id = ?
+            ORDER BY provider_id, connector_id
+            """,
+            (str(org_id or "").strip(),),
+        )
+        return [
+            dict(row)
+            | {
+                "selected_department_ids": _json_list(
+                    row["selected_department_ids_json"]
+                ),
+                "selected_source_user_ids": _json_list(
+                    row["selected_source_user_ids_json"]
+                ),
+            }
+            for row in rows
+        ]
+
+    def delete_scope_selections_for_org(self, org_id: str) -> int:
+        with self.db.transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM sync_scope_selections WHERE org_id = ?",
+                (str(org_id or "").strip(),),
+            )
+            return int(cursor.rowcount or 0)
+
     def bind_job_scope(
         self,
         *,

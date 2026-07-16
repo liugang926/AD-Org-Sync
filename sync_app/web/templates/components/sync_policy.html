@@ -1,0 +1,33 @@
+{% macro tabs(active) %}
+<nav class="policy-tabs" aria-label="{{ t('Sync policy sections') }}">
+  {% for key, label, href in [
+    ('scope', 'Sync Scope', '/sync-policies/scope'),
+    ('account-naming', 'Account Naming', '/sync-policies/account-naming'),
+    ('attribute-mappings', 'Attribute Mappings', '/sync-policies/attribute-mappings'),
+    ('department-ou-routing', 'Department & OU Routing', '/sync-policies/department-ou-routing'),
+    ('group-rules', 'Group Rules', '/sync-policies/group-rules'),
+    ('lifecycle', 'Lifecycle Policy', '/sync-policies/lifecycle'),
+    ('security', 'Security Policy', '/sync-policies/security')
+  ] %}
+  <a href="{{ href }}" class="policy-tabs__link{% if active == key %} is-active{% endif %}"{% if active == key %} aria-current="page"{% endif %}>{{ t(label) }}</a>
+  {% endfor %}
+</nav>
+{% endmacro %}
+
+{% macro status(has_unpublished_changes, latest_snapshot_title='', blocker='', next_step='') %}
+<section class="policy-status-grid" aria-label="{{ t('Policy status and next step') }}">
+  <div class="policy-status-grid__item">
+    <span class="label">{{ t('Current status') }}</span>
+    <strong>{{ t('Unpublished changes') if has_unpublished_changes else t('Published configuration is current') }}</strong>
+    <span class="muted">{{ latest_snapshot_title or t('No published snapshot') }}</span>
+  </div>
+  <div class="policy-status-grid__item">
+    <span class="label">{{ t('Blocking reason') }}</span>
+    <strong>{{ blocker or t('No blocking issue detected') }}</strong>
+  </div>
+  <div class="policy-status-grid__item">
+    <span class="label">{{ t('Next step') }}</span>
+    <strong>{{ next_step or t('Review, publish, then run a new Dry Run') }}</strong>
+  </div>
+</section>
+{% endmacro %}

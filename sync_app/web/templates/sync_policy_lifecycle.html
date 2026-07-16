@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+{% import "components/sync_policy.html" as policy with context %}
+
+{% block content %}
+{% call ui.page_header(t("Lifecycle Policy"), t("Define joiner, contractor expiry, offboarding grace, rehire restoration, and replay behavior. Operational items belong in Lifecycle Queue."), eyebrow=t("Sync Policies"), badge_text=t("Organization Scope"), badge_level="info") %}
+  <div class="toolbar">{{ ui.button(t("Lifecycle Queue"), href="/operations-center/lifecycle-queue", variant="secondary", icon="clock-3") }}{{ ui.button(t("Release History"), href="/sync-policies/releases", variant="ghost", icon="history") }}</div>
+{% endcall %}
+{{ policy.tabs('lifecycle') }}
+{{ policy.status(has_unpublished_changes, latest_snapshot_title, '', t('Publish the lifecycle policy, then inspect lifecycle operations in Dry Run')) }}
+
+{% call ui.panel(t("Lifecycle Policy"), scope_label=(selected_connector.name if selected_connector else t('Organization Defaults')), scope_level="info", description=t("Policy settings create planned work only; this page never disables, restores, or creates an AD account directly.")) %}
+  <form method="post" action="/sync-policies/lifecycle" class="page-stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if selected_connector %}<input type="hidden" name="connector_id" value="{{ selected_connector.connector_id }}">{% endif %}
+    <div class="form-grid">
+      <label class="check-card"><input type="checkbox" name="future_onboarding_enabled" value="1" {% if policy_settings.future_onboarding_enabled %}checked{% endif %}><span><strong>{{ t("Future Onboarding") }}</strong><small>{{ t("Queue future starters until their effective date.") }}</small></span></label>
+      <label>{{ t("Start Date Field") }}<input type="text" name="future_onboarding_start_field" value="{{ policy_settings.future_onboarding_start_field }}" placeholder="hire_date"></label>
+      <label class="check-card"><input type="checkbox" name="contractor_lifecycle_enabled" value="1" {% if policy_settings.contractor_lifecycle_enabled %}checked{% endif %}><span><strong>{{ t("Contractor Lifecycle") }}</strong><small>{{ t("Plan contractor expiry from source fields.") }}</small></span></label>
+      <label>{{ t("Employment Type Field") }}<input type="text" name="lifecycle_employment_type_field" value="{{ policy_settings.lifecycle_employment_type_field }}"></label>
+      <label>{{ t("Contract End Field") }}<input type="text" name="contractor_end_field" value="{{ policy_settings.contractor_end_field }}"></label>
+      <label>{{ t("Sponsor Field") }}<input type="text" name="lifecycle_sponsor_field" value="{{ policy_settings.lifecycle_sponsor_field }}"></label>
+      <label>{{ t("Contractor Type Values") }}<input type="text" name="contractor_type_values" value="{{ policy_settings.contractor_type_values }}"></label>
+      <label class="check-card"><input type="checkbox" name="offboarding_lifecycle_enabled" value="1" {% if policy_settings.offboarding_lifecycle_enabled %}checked{% endif %}><span><strong>{{ t("Offboarding Lifecycle") }}</strong><small>{{ t("Create reviewed offboarding work from missing or inactive identities.") }}</small></span></label>
+      <label>{{ t("Offboarding Grace Days") }}<input type="number" min="0" name="offboarding_grace_days" value="{{ policy_settings.offboarding_grace_days }}"></label>
+      <label class="checkbox-row"><input type="checkbox" name="offboarding_notify_managers" value="1" {% if policy_settings.offboarding_notify_managers %}checked{% endif %}><span>{{ t("Notify Managers") }}</span></label>
+      <label class="checkbox-row"><input type="checkbox" name="rehire_restore_enabled" value="1" {% if policy_settings.rehire_restore_enabled %}checked{% endif %}><span>{{ t("Restore Rehires") }}</span></label>
+      <label class="checkbox-row"><input type="checkbox" name="automatic_replay_enabled" value="1" {% if policy_settings.automatic_replay_enabled %}checked{% endif %}><span>{{ t("Automatic Replay") }}</span></label>
+    </div>
+    {% if selected_connector %}<label>{{ t("Disabled Users OU") }}<input type="text" name="disabled_users_ou" value="{{ selected_connector.disabled_users_ou }}" placeholder="Disabled Users"></label>{% endif %}
+    {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Lifecycle Policy"), type="submit", icon="save") }}</div>{% endif %}
+  </form>
+{% endcall %}
+
+{% call ui.panel(t("Connector Lifecycle Placement"), description=t("Select a connector to edit only its disabled-user OU; credentials, scope, and naming are preserved.")) %}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Connector lifecycle placement') }}"><table data-policy-table><thead><tr><th>{{ t("Connector") }}</th><th>{{ t("Status") }}</th><th>{{ t("Disabled Users OU") }}</th><th>{{ t("Updated") }}</th><th>{{ t("Action") }}</th></tr></thead><tbody>{% for connector in connectors %}<tr><td><strong>{{ connector.name }}</strong><div class="muted">{{ connector.connector_id }}</div></td><td>{{ t("Enabled") if connector.is_enabled else t("Disabled") }}</td><td>{{ connector.disabled_users_ou or '-' }}</td><td><time datetime="{{ connector.updated_at }}" data-local-time="{{ connector.updated_at }}">{{ connector.updated_at or '-' }}</time></td><td>{{ ui.button(t("Edit"), href=("/sync-policies/lifecycle?connector_id=" ~ connector.connector_id), variant="ghost", size="sm") }}</td></tr>{% else %}<tr><td colspan="5" class="empty-state">{{ t("No target connectors are configured") }}</td></tr>{% endfor %}</tbody></table></div>
+{% endcall %}
+
+{% call ui.helper_block(t("Next step"), t("Publish the policy, run Dry Run, and send resulting lifecycle items to Lifecycle Queue for operational handling."), "info") %}
+  {{ ui.button(t("Open Lifecycle Queue"), href="/operations-center/lifecycle-queue", variant="ghost", icon="clock-3") }}
+{% endcall %}
+{% endblock %}

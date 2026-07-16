@@ -46,6 +46,8 @@
       {% if not ad_verified %}{{ ui.button(t("Verify Current Page"), href="?page_number=" ~ page_number ~ "&search=" ~ (search|urlencode) ~ "&relationship_status=" ~ selected_relationship_status ~ "&verify_ad=true", variant="ghost", icon="shield-check") }}{% endif %}
     </form>
 
+    <form method="post" action="/source-directory/create-selection" data-creation-selection-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="table-scroll identity-governance-table" tabindex="0" role="region" aria-label="{{ t('Identity matching candidates') }}">
       <table data-identity-matching-table>
         <thead><tr><th>{{ t("Identity") }}</th><th>{{ t("Candidate") }}</th><th>{{ t("Confidence") }}</th><th>{{ t("Current Binding") }}</th><th>{{ t("Latest Dry Run") }}</th><th>{{ t("Latest Apply") }}</th><th>{{ t("Current AD State") }}</th><th>{{ t("Next Step") }}</th></tr></thead>
@@ -59,13 +61,18 @@
             <td><div>{{ t(item.planned_after_state.operation) if item.planned_after_state.operation else t("Not run") }}</div><div class="muted">{{ ui.local_time(item.planned_after_state.planned_at) if item.planned_after_state.planned_at else "-" }}</div></td>
             <td><div>{{ t(item.applied_after_state.result) }}</div><div class="muted">{{ ui.local_time(item.applied_after_state.applied_at) if item.applied_after_state.applied_at else "-" }}</div></td>
             <td>{{ ui.badge(t(item.before_state.ad_account_state.status or "not_checked"), "success" if item.before_state.ad_account_state.status in ["exists", "enabled"] else "warning") }}<div class="muted">{{ ui.local_time(item.before_state.verified_at) if item.before_state.verified_at else "-" }}</div></td>
-            <td>{{ ui.button(t(assessment.next_action), variant="ghost", size="sm", attrs="data-identity-drawer-open=identity-drawer-" ~ loop.index) }}</td>
+            <td>
+              {% if can("config.write") and item.creation_eligibility.eligible %}<label class="checkbox-line"><input type="checkbox" name="selected_source_user_ids" value="{{ item.source_user_id }}">{{ t("Select for creation") }}</label>{% endif %}
+              {{ ui.button(t(assessment.next_action), variant="ghost", size="sm", attrs="data-identity-drawer-open=identity-drawer-" ~ loop.index) }}
+            </td>
           </tr>
           {% else %}<tr><td colspan="8" class="table-empty">{{ t("No identity candidates match the current filters.") }}</td></tr>{% endfor %}
         </tbody>
       </table>
     </div>
     <div class="pagination-bar"><span>{{ t("{count} matching users", count=total_users) }}</span><div>{% if page_number > 1 %}{{ ui.button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&search=" ~ (search|urlencode) ~ "&relationship_status=" ~ selected_relationship_status, variant="secondary") }}{% endif %}<span>{{ page_number }} / {{ total_pages }}</span>{% if page_number < total_pages %}{{ ui.button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&search=" ~ (search|urlencode) ~ "&relationship_status=" ~ selected_relationship_status, variant="secondary") }}{% endif %}</div></div>
+    {% if can("config.write") and creation_eligible_count %}<div class="form-actions">{{ ui.button(t("Prepare selected accounts for Dry Run"), type="submit", variant="secondary", icon="list-checks") }}</div>{% endif %}
+    </form>
   {% endcall %}
   {% endif %}
 

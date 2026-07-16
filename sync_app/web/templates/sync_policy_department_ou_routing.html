@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+{% import "components/sync_policy.html" as policy with context %}
+
+{% block content %}
+{% call ui.page_header(t("Department & OU Routing"), t("Route source departments into managed AD OU paths while keeping connector credentials and identity overrides separate."), eyebrow=t("Sync Policies"), badge_text=t("Organization Scope"), badge_level="info") %}
+  {{ ui.button(t("Release History"), href="/sync-policies/releases", variant="secondary", icon="history") }}
+{% endcall %}
+{{ policy.tabs('department-ou-routing') }}
+{{ policy.status(has_unpublished_changes, latest_snapshot_title, (t('No target connectors are configured') if not connectors else ''), t('Review routing coverage, publish, then run a new Dry Run')) }}
+
+{% call ui.panel(t("Department Routing Rule"), description=t("Map one exact department or its full subtree to a connector OU path.")) %}
+  <form method="post" action="/sync-policies/department-ou-routing" class="page-stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-grid">
+      <label>{{ t("Connector") }}<select name="connector_id" required><option value="">{{ t("Select Connector") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}">{{ connector.name }}</option>{% endfor %}</select></label>
+      <label>{{ t("Source Department ID") }}<input type="text" name="source_department_id" required placeholder="20018"></label>
+      <label>{{ t("Source Department Name") }}<input type="text" name="source_department_name" placeholder="Greater China"></label>
+      <label>{{ t("Target OU Path") }}<input type="text" name="target_ou_path" required placeholder="Managed Users/China"></label>
+      <label>{{ t("Apply Mode") }}<select name="apply_mode">{% for value, label in department_ou_apply_mode_options %}<option value="{{ value }}">{{ t(label) }}</option>{% endfor %}</select></label>
+    </div>
+    <label>{{ t("Notes") }}<textarea name="notes" placeholder="{{ t('Record the routing owner and business reason.') }}"></textarea></label>
+    <label class="checkbox-row"><input type="checkbox" name="is_enabled" value="1" checked><span>{{ t("Rule Enabled") }}</span></label>
+    {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Routing Rule"), type="submit", icon="save") }}</div>{% endif %}
+  </form>
+{% endcall %}
+
+{% call ui.panel(t("Department Routing Rules"), description=t("Routing applies during planning; this page never moves an AD object directly.")) %}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Department routing rules') }}"><table data-policy-table><thead><tr><th>{{ t("Connector") }}</th><th>{{ t("Source Department") }}</th><th>{{ t("Target OU") }}</th><th>{{ t("Apply Mode") }}</th><th>{{ t("Status") }}</th><th>{{ t("Updated") }}</th><th>{{ t("Action") }}</th></tr></thead><tbody>
+    {% for record in department_ou_mappings %}<tr><td>{{ record.connector_id or t("Global") }}</td><td><strong>{{ record.source_department_name or record.source_department_id }}</strong><div class="muted">{{ record.source_department_id }}</div></td><td class="wrap-anywhere">{{ record.target_ou_path }}</td><td>{{ t(record.apply_mode) }}</td><td>{{ t("Enabled") if record.is_enabled else t("Disabled") }}</td><td><time datetime="{{ record.updated_at }}" data-local-time="{{ record.updated_at }}">{{ record.updated_at or '-' }}</time></td><td>{% if can("config.write") %}<form method="post" action="/sync-policies/department-ou-routing/{{ record.id }}/delete" class="inline" data-confirm="{{ t('Deleting this routing rule returns the department to default OU placement.') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ ui.button(t("Delete"), type="submit", variant="danger", size="sm") }}</form>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="7" class="empty-state">{{ t("No department routing rules are configured") }}</td></tr>{% endfor %}
+  </tbody></table></div>
+{% endcall %}
+
+{% call ui.helper_block(t("Next step"), t("Publish the configuration snapshot, then verify planned OU placement in Dry Run before Apply."), "info") %}
+  {{ ui.button(t("Open Release History"), href="/sync-policies/releases", variant="ghost", icon="history") }}
+{% endcall %}
+{% endblock %}
