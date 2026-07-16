@@ -23,6 +23,7 @@ from sync_app.storage.repositories.system import (
     SettingsRepository,
     SyncReplayRequestRepository,
 )
+from tests.helpers.execution_plans import create_eligible_execution_plan
 
 
 class ExternalIntegrationServiceTests(unittest.TestCase):
@@ -379,28 +380,11 @@ class ExternalIntegrationServiceTests(unittest.TestCase):
         subscription_repo = IntegrationWebhookSubscriptionRepository(db_manager)
 
         settings_repo.set_value("automatic_replay_enabled", "true", "bool", org_id="default")
-        job_repo.create_job(
-            "job-ext-approve",
-            trigger_type="manual",
-            execution_mode="dry_run",
-            status="COMPLETED",
-            org_id="default",
-        )
-        job_repo.update_job(
-            "job-ext-approve",
-            summary={
-                "planned_operation_count": 4,
-                "conflict_count": 0,
-                "high_risk_operation_count": 1,
-                "review_required": True,
-                "plan_fingerprint": "plan-approve-001",
-            },
-            ended=True,
-        )
-        review_repo.upsert_review_request(
+        create_eligible_execution_plan(
+            db_manager,
             job_id="job-ext-approve",
-            plan_fingerprint="plan-approve-001",
-            config_snapshot_hash="cfg-approve-001",
+            org_id="default",
+            planned_operation_count=4,
             high_risk_operation_count=1,
         )
         subscription_repo.upsert_subscription(

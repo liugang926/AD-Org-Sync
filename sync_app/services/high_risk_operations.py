@@ -257,20 +257,38 @@ def build_apply_operation_context(
     organization_id: str,
     organization_name: str,
     environment_label: str | None = None,
+    preview_job_id: str = "",
 ) -> HighRiskOperationContext:
-    recent_jobs = job_repo.list_recent_job_records(
-        limit=50,
-        org_id=organization_id,
-    )
-    latest_dry_run = next(
-        (
-            job
-            for job in recent_jobs
-            if _clean_text(getattr(job, "execution_mode", "")).lower() == "dry_run"
-            and _clean_text(getattr(job, "status", "")).upper() == "COMPLETED"
-        ),
-        None,
-    )
+    requested_preview_id = _clean_text(preview_job_id)
+    latest_dry_run = None
+    if requested_preview_id:
+        candidate = job_repo.get_job_record(requested_preview_id)
+        if (
+            candidate is not None
+            and _clean_text(getattr(candidate, "org_id", "")).lower()
+            == _clean_text(organization_id).lower()
+            and _clean_text(getattr(candidate, "execution_mode", "")).lower()
+            == "dry_run"
+            and _clean_text(getattr(candidate, "status", "")).upper()
+            == "COMPLETED"
+        ):
+            latest_dry_run = candidate
+    else:
+        recent_jobs = job_repo.list_recent_job_records(
+            limit=50,
+            org_id=organization_id,
+        )
+        latest_dry_run = next(
+            (
+                job
+                for job in recent_jobs
+                if _clean_text(getattr(job, "execution_mode", "")).lower()
+                == "dry_run"
+                and _clean_text(getattr(job, "status", "")).upper()
+                == "COMPLETED"
+            ),
+            None,
+        )
     summary = dict(getattr(latest_dry_run, "summary", {}) or {}) if latest_dry_run else {}
     source_snapshot_id = int(summary.get("source_snapshot_id") or 0)
     return HighRiskOperationContext.create(

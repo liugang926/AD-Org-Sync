@@ -76,6 +76,28 @@ class SyncJobRepository(BaseRepository):
             return None
         return SyncJobRecord.from_row(row)
 
+    def get_apply_job_for_plan_source(
+        self,
+        plan_source_job_id: str,
+        *,
+        org_id: str,
+    ) -> Optional[SyncJobRecord]:
+        row = self._fetchone(
+            """
+            SELECT * FROM sync_jobs
+            WHERE org_id = ?
+              AND execution_mode = 'apply'
+              AND plan_source_job_id = ?
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (
+                str(org_id or "").strip() or "default",
+                str(plan_source_job_id or "").strip(),
+            ),
+        )
+        return SyncJobRecord.from_row(row) if row else None
+
     def list_recent_jobs(self, limit: int = 20, *, org_id: Optional[str] = None):
         normalized_org_id = str(org_id or "").strip()
         if normalized_org_id:
@@ -146,6 +168,79 @@ class SyncJobRepository(BaseRepository):
                     str(started_at or utcnow_iso()),
                 ),
             )
+
+    def create_apply_job_once(
+        self,
+        *,
+        job_id: str,
+        org_id: str,
+        trigger_type: str,
+        status: str,
+        requested_by: str,
+        requested_config_path: str,
+        plan_source_job_id: str,
+        started_at: Optional[str] = None,
+    ) -> tuple[SyncJobRecord, bool, bool]:
+        """Atomically bind one Apply job to one reviewed Dry Run plan."""
+
+        normalized_org_id = str(org_id or "").strip() or "default"
+        normalized_plan_source_job_id = str(plan_source_job_id or "").strip()
+        if not normalized_plan_source_job_id:
+            raise ValueError("plan_source_job_id is required for Apply")
+        active_placeholders, active_params = self._normalize_status_values(
+            self.ACTIVE_STATUSES
+        )
+        with self.db.transaction() as conn:
+            active_row = conn.execute(
+                f"""
+                SELECT * FROM sync_jobs
+                WHERE org_id = ? AND status IN ({active_placeholders})
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (normalized_org_id, *active_params),
+            ).fetchone()
+            if active_row:
+                return SyncJobRecord.from_row(active_row), False, False
+            existing_row = conn.execute(
+                """
+                SELECT * FROM sync_jobs
+                WHERE org_id = ?
+                  AND execution_mode = 'apply'
+                  AND plan_source_job_id = ?
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (normalized_org_id, normalized_plan_source_job_id),
+            ).fetchone()
+            if existing_row:
+                return SyncJobRecord.from_row(existing_row), False, True
+            conn.execute(
+                """
+                INSERT INTO sync_jobs (
+                  job_id, org_id, trigger_type, execution_mode, status,
+                  requested_by, requested_config_path, plan_source_job_id,
+                  started_at
+                ) VALUES (?, ?, ?, 'apply', ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(job_id or "").strip(),
+                    normalized_org_id,
+                    str(trigger_type or "").strip(),
+                    str(status or "").strip().upper(),
+                    str(requested_by or "").strip(),
+                    str(requested_config_path or "").strip(),
+                    normalized_plan_source_job_id,
+                    str(started_at or utcnow_iso()),
+                ),
+            )
+            created_row = conn.execute(
+                "SELECT * FROM sync_jobs WHERE job_id = ? LIMIT 1",
+                (str(job_id or "").strip(),),
+            ).fetchone()
+            if created_row is None:
+                raise RuntimeError("Apply job could not be reloaded")
+            return SyncJobRecord.from_row(created_row), True, False
 
     def update_job(
         self,

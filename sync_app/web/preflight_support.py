@@ -185,7 +185,7 @@ class DashboardSupport:
                     if dry_run_completed
                     else "No successful dry run has been recorded yet."
                 ),
-                "action_url": "/jobs",
+                "action_url": "/execution-center/dry-run",
             }
         )
         checks.append(
@@ -212,7 +212,7 @@ class DashboardSupport:
                     if apply_completed
                     else "No successful apply run has been recorded yet."
                 ),
-                "action_url": "/jobs",
+                "action_url": "/execution-center/apply",
             }
         )
 
@@ -311,13 +311,13 @@ class DashboardSupport:
             next_action_url = "/config"
             next_action_label = "Fix Connectivity"
         elif not dry_run_completed:
-            next_action_url = "/jobs"
+            next_action_url = "/execution-center/dry-run"
             next_action_label = "Run First Dry Run"
         elif open_conflicts_total > 0:
             next_action_url = "/conflicts"
             next_action_label = "Review Conflict Queue"
         elif not apply_completed:
-            next_action_url = "/jobs"
+            next_action_url = "/execution-center/apply"
             next_action_label = "Run First Apply"
         else:
             next_action_url = "/dashboard"
@@ -376,13 +376,16 @@ class DashboardSupport:
                     "title": "Background runner error",
                     "detail": "Last background execution error: {error}",
                     "detail_params": {"error": sync_runner_error},
-                    "action_url": "/jobs",
-                    "action_label": "Open Job Center",
+                    "action_url": "/execution-center/jobs",
+                    "action_label": "Open Job History",
                 }
             )
 
         for reason in list(job_center_summary.get("blocked_reasons") or [])[:4]:
-            next_url = str(job_center_summary.get("next_action_url") or "/jobs")
+            next_url = str(
+                job_center_summary.get("next_action_url")
+                or "/execution-center/dry-run"
+            )
             blockers.append(
                 {
                     "level": str(job_center_summary.get("overall_status") or "warning"),
@@ -435,7 +438,7 @@ class DashboardSupport:
                     "title": "Active synchronization job",
                     "detail": str(getattr(active_job, "job_id", "") or "-"),
                     "meta": str(getattr(active_job, "status", "") or ""),
-                    "href": f"/jobs/{getattr(active_job, 'job_id', '')}",
+                    "href": f"/execution-center/jobs/{getattr(active_job, 'job_id', '')}",
                 }
             )
 
@@ -463,7 +466,7 @@ class DashboardSupport:
                     "title": "Dry run completed" if mode == "dry_run" else "Apply run completed",
                     "detail": str(getattr(job, "job_id", "") or "-"),
                     "meta": status,
-                    "href": f"/jobs/{getattr(job, 'job_id', '')}",
+                    "href": f"/execution-center/jobs/{getattr(job, 'job_id', '')}",
                 }
             )
             if len(timeline) >= 6:

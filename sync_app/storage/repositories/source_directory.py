@@ -480,5 +480,30 @@ class SourceDirectoryRepository(BaseRepository):
                 ),
             )
 
+    def get_job_scope(
+        self,
+        job_id: str,
+        *,
+        org_id: str,
+    ) -> Optional[dict[str, Any]]:
+        row = self._fetchone(
+            """
+            SELECT * FROM sync_job_source_scopes
+            WHERE job_id = ? AND org_id = ?
+            LIMIT 1
+            """,
+            (str(job_id or "").strip(), str(org_id or "").strip()),
+        )
+        if not row:
+            return None
+        return dict(row) | {
+            "selected_department_ids": _json_list(
+                row["selected_department_ids_json"]
+            ),
+            "selected_source_user_ids": _json_list(
+                row["selected_source_user_ids_json"]
+            ),
+        }
+
 
 __all__ = ["SourceDirectoryRepository", "VALID_SCOPE_TYPES"]

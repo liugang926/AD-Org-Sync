@@ -12,6 +12,7 @@ from sync_app.services.config_store import save_editable_config
 from sync_app.web.app import resolve_web_runtime_settings
 from sync_app.web.i18n import TRANSLATIONS
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
+from tests.helpers.execution_plans import create_eligible_execution_plan
 from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
 
@@ -1168,24 +1169,13 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self._login("superadmin")
         self.session["ui_mode"] = "advanced"
 
-        self.app.state.job_repo.create_job(
-            "job-integration-001",
-            trigger_type="manual",
-            execution_mode="dry_run",
-            status="COMPLETED",
+        create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="job-integration-001",
             org_id="default",
-            started_at="2026-04-21T00:00:00+00:00",
-        )
-        self.app.state.job_repo.update_job(
-            "job-integration-001",
-            summary={
-                "planned_operation_count": 4,
-                "conflict_count": 1,
-                "high_risk_operation_count": 1,
-                "review_required": True,
-                "plan_fingerprint": "plan-integration-001",
-            },
-            ended=True,
+            environment_label=self.app.state.environment_label,
+            planned_operation_count=4,
+            high_risk_operation_count=1,
         )
         self.app.state.conflict_repo.add_conflict(
             job_id="job-integration-001",
@@ -1194,13 +1184,6 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             target_key="identity_binding",
             message="needs identity decision",
         )
-        self.app.state.review_repo.upsert_review_request(
-            job_id="job-integration-001",
-            plan_fingerprint="plan-integration-001",
-            config_snapshot_hash="cfg-integration-001",
-            high_risk_operation_count=1,
-        )
-
         response = self._route("/integrations", "GET")(self._request("/integrations"))
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
@@ -2067,9 +2050,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
         self.assertIn("Next Step: Run The First Dry Run", body)
-        self.assertIn("Run First Dry Run", body)
-        self.assertIn('action="/jobs/run"', body)
-        self.assertIn('name="mode" value="dry_run"', body)
+        self.assertIn("Open Dry Run", body)
+        self.assertIn('href="/execution-center/dry-run"', body)
+        self.assertNotIn('action="/jobs/run"', body)
 
     def test_super_admin_can_resolve_conflict_with_manual_binding(self):
         self._login("superadmin")
@@ -4781,6 +4764,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             actor_username="superadmin",
             org_id="asia",
             config_path=asia_config_path,
+            plan_source_job_id="",
         )
 
     def test_dashboard_renders_global_organization_switcher_when_multiple_orgs_exist(
@@ -4873,7 +4857,8 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             "Identity Governance",
             "Execution Center",
             "Control Tower",
-            "Run Review",
+            "Plan Review",
+            "Job History",
             "Configuration Validation",
             "AD Org Sync",
         ):

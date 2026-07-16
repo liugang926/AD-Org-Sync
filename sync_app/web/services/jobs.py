@@ -5,12 +5,18 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from sync_app.application import ApproveSyncPlanUseCase, TenantContext
+from sync_app.services.execution_center import (
+    ExecutionCenterService,
+    ExecutionPlanEvaluation,
+)
 from sync_app.services.job_diff import build_job_comparison_summary
 from sync_app.storage.local_db import (
     PlannedOperationRepository,
     SyncConflictRepository,
     SyncJobRepository,
     SyncPlanReviewRepository,
+    SourceDirectoryRepository,
+    SettingsRepository,
 )
 
 
@@ -21,6 +27,16 @@ class WebJobService:
     review_repo: SyncPlanReviewRepository
     planned_operation_repo: PlannedOperationRepository
     conflict_repo: SyncConflictRepository
+    source_directory_repo: SourceDirectoryRepository
+    settings_repo: SettingsRepository
+
+    def _execution_center(self) -> ExecutionCenterService:
+        return ExecutionCenterService(
+            job_repo=self.job_repo,
+            review_repo=self.review_repo,
+            source_directory_repo=self.source_directory_repo,
+            settings_repo=self.settings_repo,
+        )
 
     @staticmethod
     def _normalize_job_status(value: str | None) -> str:
@@ -79,11 +95,79 @@ class WebJobService:
     def get_active_job(self, *, org_id: str) -> Any | None:
         return self.job_repo.get_active_job_record(org_id=org_id)
 
+    def get_apply_job_for_plan(
+        self,
+        *,
+        org_id: str,
+        plan_job_id: str,
+    ) -> Any | None:
+        normalized_plan_job_id = str(plan_job_id or "").strip()
+        if not normalized_plan_job_id:
+            return None
+        return self.job_repo.get_apply_job_for_plan_source(
+            normalized_plan_job_id,
+            org_id=org_id,
+        )
+
     def get_job_record(self, job_id: str) -> Any | None:
         return self.job_repo.get_job_record(job_id)
 
     def get_review_record(self, job_id: str) -> Any | None:
         return self.review_repo.get_review_record_by_job_id(job_id)
+
+    def list_jobs_by_mode(
+        self,
+        *,
+        org_id: str,
+        execution_mode: str,
+        limit: int = 30,
+    ) -> list[Any]:
+        normalized_mode = str(execution_mode or "").strip().lower()
+        return [
+            job
+            for job in self.list_recent_jobs(
+                org_id=org_id,
+                limit=max(limit * 3, limit),
+            )
+            if str(getattr(job, "execution_mode", "") or "").strip().lower()
+            == normalized_mode
+        ][:limit]
+
+    def evaluate_plan(
+        self,
+        *,
+        org_id: str,
+        organization_name: str,
+        environment_label: str,
+        plan_job_id: str = "",
+        require_approval: bool = True,
+        current_config_fingerprint: str | None = "",
+    ) -> ExecutionPlanEvaluation:
+        return self._execution_center().evaluate_plan(
+            org_id=org_id,
+            organization_name=organization_name,
+            environment_label=environment_label,
+            plan_job_id=plan_job_id,
+            require_approval=require_approval,
+            current_config_fingerprint=current_config_fingerprint,
+        )
+
+    def list_review_items(
+        self,
+        *,
+        org_id: str,
+        organization_name: str,
+        environment_label: str,
+        current_config_fingerprint: str | None = "",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        return self._execution_center().list_review_items(
+            org_id=org_id,
+            organization_name=organization_name,
+            environment_label=environment_label,
+            current_config_fingerprint=current_config_fingerprint,
+            limit=limit,
+        )
 
     def approve_review(
         self,
@@ -200,10 +284,10 @@ class WebJobService:
             next_action_url = "/config"
             next_action_label_code = "jobs.action.fix_configuration"
         elif latest_dry_run and not latest_successful_dry_run:
-            next_action_url = f"/jobs/{latest_dry_run.job_id}"
+            next_action_url = f"/execution-center/jobs/{latest_dry_run.job_id}"
             next_action_label_code = "jobs.action.inspect_dry_run_errors"
         elif not latest_successful_dry_run:
-            next_action_url = "/jobs"
+            next_action_url = "/execution-center/dry-run"
             next_action_label_code = "jobs.action.run_dry_run"
         elif open_conflict_count > 0:
             next_action_url = "/conflicts"
@@ -211,13 +295,16 @@ class WebJobService:
         elif review_required and (
             review_record is None or str(review_record.status or "").strip().lower() != "approved"
         ):
-            next_action_url = f"/jobs/{latest_successful_dry_run.job_id}"
+            next_action_url = (
+                "/execution-center/plan-review"
+                f"?plan_id={latest_successful_dry_run.job_id}"
+            )
             next_action_label_code = "jobs.action.approve_high_risk_plan"
         elif not latest_apply:
-            next_action_url = "/jobs"
+            next_action_url = "/execution-center/apply"
             next_action_label_code = "jobs.action.run_apply"
         else:
-            next_action_url = "/jobs"
+            next_action_url = "/execution-center/jobs"
             next_action_label_code = "jobs.action.review_latest_apply"
 
         impact_job = latest_successful_dry_run or latest_dry_run

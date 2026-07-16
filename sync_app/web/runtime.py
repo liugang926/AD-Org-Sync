@@ -144,6 +144,7 @@ class WebSyncRunner:
         actor_username: str,
         org_id: str,
         config_path: str,
+        plan_source_job_id: str = "",
     ) -> tuple[bool, str]:
         enqueue_result = enqueue_sync_job(
             db_path=self.db_path,
@@ -152,6 +153,7 @@ class WebSyncRunner:
             org_id=org_id,
             config_path=config_path,
             requested_by=actor_username,
+            plan_source_job_id=plan_source_job_id,
         )
         if not enqueue_result.accepted:
             return False, enqueue_result.message
@@ -171,6 +173,7 @@ class WebSyncRunner:
                     "job_id": enqueue_result.job.job_id,
                     "mode": mode,
                     "org_id": org_id,
+                    "plan_source_job_id": plan_source_job_id,
                 },
             )
         return True, enqueue_result.message

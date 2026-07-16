@@ -240,7 +240,6 @@
             <th class="table-center">{{ t("Planned") }}</th>
             <th class="table-center">{{ t("High Risk") }}</th>
             <th class="table-center">{{ t("Conflicts") }}</th>
-            <th class="table-center">{{ t("Executed") }}</th>
             <th class="table-center">{{ t("Errors") }}</th>
             <th>{{ t("Started At") }}</th>
           </tr>
@@ -263,7 +262,6 @@
               {% set c_count = (job.summary or {}).get("conflict_count", 0) %}
               {% if c_count > 0 %}<span class="badge badge-warning">{{ c_count }}</span>{% else %}-{% endif %}
             </td>
-            <td class="table-number">{{ job.executed_operation_count }}</td>
             <td class="table-number">
               {% if job.error_count > 0 %}<span class="badge badge-error">{{ job.error_count }}</span>{% else %}0{% endif %}
             </td>

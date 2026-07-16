@@ -15,6 +15,7 @@ from sync_app.storage.local_db import (
     SyncReplayRequestRepository,
     WebAuditLogRepository,
 )
+from tests.helpers.execution_plans import create_eligible_execution_plan
 
 
 class CliApprovePlanTests(unittest.TestCase):
@@ -24,18 +25,16 @@ class CliApprovePlanTests(unittest.TestCase):
         self.db_path = f"{self.temp_dir.name}/app.db"
         self.db_manager = DatabaseManager(db_path=self.db_path)
         self.db_manager.initialize(create_startup_snapshot=False)
-        SyncJobRepository(self.db_manager).create_job(
-            "job-cli-approve",
-            trigger_type="cli",
-            execution_mode="dry_run",
-            status="COMPLETED",
+        SettingsRepository(self.db_manager).set_value(
+            "automatic_replay_enabled",
+            "true",
+            "bool",
             org_id="tenant-a",
         )
-        SyncPlanReviewRepository(self.db_manager).upsert_review_request(
+        create_eligible_execution_plan(
+            self.db_manager,
             job_id="job-cli-approve",
-            plan_fingerprint="sha256:v2:cli-plan",
-            config_snapshot_hash="sha256:v2:cli-config",
-            high_risk_operation_count=1,
+            org_id="tenant-a",
         )
 
     def _args(self, *, org_id: str, ttl_minutes: int | None = 30) -> argparse.Namespace:
@@ -49,12 +48,6 @@ class CliApprovePlanTests(unittest.TestCase):
         )
 
     def test_cli_approval_uses_tenant_context_and_shared_workflow(self) -> None:
-        SettingsRepository(self.db_manager).set_value(
-            "automatic_replay_enabled",
-            "true",
-            "bool",
-            org_id="tenant-a",
-        )
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
             exit_code = _handle_approve_plan(self._args(org_id="tenant-a"))

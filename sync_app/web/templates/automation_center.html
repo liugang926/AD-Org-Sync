@@ -3,7 +3,7 @@
 
 {% block content %}
 {% call ui.page_header(t("Notification And Automation Center"), t("Centralize rollout reminders, webhook delivery, and the safety rules that decide whether scheduled apply is allowed to continue."), eyebrow=t("Operations"), badge_text=t("Organization Scope"), badge_level="info") %}
-  {{ ui.button(t("Open Jobs"), href="/jobs", variant="ghost", icon="refresh-cw") }}
+  {{ ui.button(t("Open Job History"), href="/execution-center/jobs", variant="ghost", icon="refresh-cw") }}
   {{ ui.button(t("Open Conflicts"), href="/conflicts", variant="ghost", icon="shield-alert") }}
   {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost", icon="waypoints") }}
 {% endcall %}
@@ -73,7 +73,7 @@
           <strong>{{ t(scheduled_apply_guard.summary) }}</strong>
           <div class="muted">{{ t("Latest successful dry run") }}:
             {% if scheduled_apply_guard.latest_successful_dry_run %}
-            <a href="/jobs/{{ scheduled_apply_guard.latest_successful_dry_run.job_id }}">{{ scheduled_apply_guard.latest_successful_dry_run.job_id }}</a>
+            <a href="/execution-center/jobs/{{ scheduled_apply_guard.latest_successful_dry_run.job_id }}">{{ scheduled_apply_guard.latest_successful_dry_run.job_id }}</a>
             {% else %}
             -
             {% endif %}
@@ -183,27 +183,8 @@
 {% endcall %}
 
 {% if pending_review_records %}
-{% call ui.panel(t("Pending Review Queue"), description=t("These dry runs still need an approval decision before high-risk apply is considered safe.")) %}
-  <table>
-    <thead>
-      <tr>
-        <th>{{ t("Job") }}</th>
-        <th>{{ t("Status") }}</th>
-        <th>{{ t("High-Risk Changes") }}</th>
-        <th>{{ t("Created At") }}</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for item in pending_review_records %}
-      <tr>
-        <td><a href="/jobs/{{ item.job_id }}">{{ item.job_id }}</a></td>
-        <td>{{ ui.badge(t(item.status), "warning") }}</td>
-        <td>{{ item.high_risk_operation_count }}</td>
-        <td>{{ ui.local_time(item.created_at) }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{% call ui.helper_block(t("Plan approvals are managed in Execution Center"), t("Automation keeps the scheduled-run gate and reminder count; Plan Review owns approval decisions and evidence."), "warning", badge_text=pending_review_count) %}
+  <a href="/execution-center/plan-review">{{ t("Open Plan Review") }}</a>
 {% endcall %}
 {% endif %}
 {% endblock %}

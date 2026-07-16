@@ -1,6 +1,7 @@
 import logging
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from sync_app.core.models import AccountConfig, AppConfig, DepartmentNode, LDAPConfig, SourceDirectoryUser, WeComConfig
@@ -9,6 +10,7 @@ from sync_app.services.source_directory import SourceDirectoryService
 from sync_app.storage.local_db import (
     DatabaseManager,
     SettingsRepository,
+    SyncJobRepository,
     WebAuditLogRepository,
 )
 from sync_app.storage.repositories import SourceDirectoryRepository, SyncPlanReviewRepository
@@ -156,6 +158,167 @@ class ScopedSnapshotRuntimeTests(unittest.TestCase):
                     os.remove(db_path + suffix)
                 except FileNotFoundError:
                     pass
+
+    def test_selected_apply_rechecks_config_before_constructing_ad_client(self):
+        config = AppConfig(
+            wecom=WeComConfig(
+                corpid="corp",
+                corpsecret="secret",
+                agentid="1001",
+            ),
+            ldap=LDAPConfig(
+                server="ldap.example.com",
+                domain="example.com",
+                username="svc",
+                password="password",
+                use_ssl=True,
+                port=636,
+            ),
+            domain="example.com",
+            account=AccountConfig(default_password="VeryStrong123!456"),
+            config_path="ignored.ini",
+        )
+        db_path = os.path.join(
+            "test_artifacts",
+            "runtime_config_fingerprint_gate.db",
+        )
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+        manager = DatabaseManager(db_path=db_path)
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        source_repo = SourceDirectoryRepository(manager)
+        SourceDirectoryService(source_repo).refresh(
+            org_id="default",
+            provider_id="wecom",
+            provider=_SnapshotProvider(),
+        )
+        source_repo.save_scope_selection(
+            org_id="default",
+            provider_id="wecom",
+            scope_type="full",
+            requested_by="admin",
+        )
+        dry_run_patches = (
+            patch.object(runtime, "load_sync_config", return_value=config),
+            patch.object(runtime, "validate_config", return_value=(True, [])),
+            patch.object(
+                runtime,
+                "test_source_connection",
+                return_value=(True, "ok"),
+            ),
+            patch.object(
+                runtime,
+                "test_ldap_connection",
+                return_value=(True, "ok"),
+            ),
+            patch.object(
+                runtime,
+                "run_config_security_self_check",
+                return_value=[],
+            ),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComAPI),
+            patch.object(runtime, "ADSyncLDAPS", _RecordingAD),
+            patch.object(
+                runtime.sync_logging,
+                "setup_logging",
+                return_value=logging.getLogger("config-gate-dry-run"),
+            ),
+            patch.object(
+                runtime.sync_logging,
+                "log_filename",
+                "config-gate-dry-run.log",
+            ),
+            patch.object(
+                runtime,
+                "_generate_skip_detail_report",
+                return_value="skip.csv",
+            ),
+        )
+        for item in dry_run_patches:
+            item.start()
+        try:
+            dry_run = runtime.run_sync_job(
+                execution_mode="dry_run",
+                trigger_type="unit_test",
+                db_path=db_path,
+                config_path="ignored.ini",
+                requested_by="admin",
+            )
+        finally:
+            for item in reversed(dry_run_patches):
+                item.stop()
+
+        review_repo = SyncPlanReviewRepository(manager)
+        self.assertTrue(
+            review_repo.approve_review(
+                dry_run["job_id"],
+                reviewer_username="admin",
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(hours=1)
+                ).isoformat(timespec="seconds"),
+            )
+        )
+        SettingsRepository(manager).set_value(
+            "group_display_separator",
+            "/",
+            "string",
+            org_id="default",
+        )
+        SyncJobRepository(manager).create_job(
+            "apply-config-changed",
+            trigger_type="unit_test",
+            execution_mode="apply",
+            status="QUEUED",
+            org_id="default",
+            plan_source_job_id=dry_run["job_id"],
+        )
+
+        with (
+            patch.object(runtime, "load_sync_config", return_value=config),
+            patch.object(runtime, "ADSyncLDAPS") as ad_client,
+            patch.object(
+                runtime.sync_logging,
+                "setup_logging",
+                return_value=logging.getLogger("config-gate-apply"),
+            ),
+            patch.object(
+                runtime.sync_logging,
+                "log_filename",
+                "config-gate-apply.log",
+            ),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "execution.blocker.config_changed",
+            ):
+                runtime.run_sync_job(
+                    execution_mode="apply",
+                    trigger_type="unit_test",
+                    db_path=db_path,
+                    config_path="ignored.ini",
+                    requested_by="admin",
+                    job_id="apply-config-changed",
+                    active_job_guard_id="apply-config-changed",
+                )
+
+        ad_client.assert_not_called()
+        blocked_log = next(
+            item
+            for item in WebAuditLogRepository(manager).list_recent_logs(10)
+            if item.action_type == "high_risk.apply.blocked"
+        )
+        self.assertEqual(
+            blocked_log.payload["reason_code"],
+            "execution.blocker.config_changed",
+        )
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
 
 
 if __name__ == "__main__":

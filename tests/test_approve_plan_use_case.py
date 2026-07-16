@@ -14,6 +14,7 @@ from sync_app.storage.local_db import (
     SyncReplayRequestRepository,
     WebAuditLogRepository,
 )
+from tests.helpers.execution_plans import create_eligible_execution_plan
 
 
 class _RecordingPublisher:
@@ -43,18 +44,10 @@ class ApproveSyncPlanUseCaseTests(unittest.TestCase):
         self.review_repo = SyncPlanReviewRepository(self.db_manager)
 
     def _create_review(self, *, job_id: str, org_id: str) -> None:
-        self.job_repo.create_job(
-            job_id,
-            trigger_type="manual",
-            execution_mode="dry_run",
-            status="COMPLETED",
-            org_id=org_id,
-        )
-        self.review_repo.upsert_review_request(
+        create_eligible_execution_plan(
+            self.db_manager,
             job_id=job_id,
-            plan_fingerprint=f"sha256:v2:{job_id}",
-            config_snapshot_hash=f"sha256:v2:config:{job_id}",
-            high_risk_operation_count=1,
+            org_id=org_id,
         )
 
     def test_tenant_context_requires_organization_and_actor(self) -> None:
@@ -64,13 +57,13 @@ class ApproveSyncPlanUseCaseTests(unittest.TestCase):
             TenantContext.create(org_id="default", actor_username="")
 
     def test_approval_is_tenant_scoped_idempotent_and_emits_once(self) -> None:
-        self._create_review(job_id="job-approve", org_id="tenant-a")
         SettingsRepository(self.db_manager).set_value(
             "automatic_replay_enabled",
             "true",
             "bool",
             org_id="tenant-a",
         )
+        self._create_review(job_id="job-approve", org_id="tenant-a")
         publisher = _RecordingPublisher()
         use_case = ApproveSyncPlanUseCase(self.db_manager, event_publisher=publisher)
         tenant = TenantContext.create(
@@ -129,13 +122,13 @@ class ApproveSyncPlanUseCaseTests(unittest.TestCase):
         self.assertEqual(publisher.events, [])
 
     def test_approval_replay_and_audit_roll_back_as_one_unit_of_work(self) -> None:
-        self._create_review(job_id="job-rollback", org_id="tenant-a")
         SettingsRepository(self.db_manager).set_value(
             "automatic_replay_enabled",
             "true",
             "bool",
             org_id="tenant-a",
         )
+        self._create_review(job_id="job-rollback", org_id="tenant-a")
         publisher = _RecordingPublisher()
         use_case = ApproveSyncPlanUseCase(self.db_manager, event_publisher=publisher)
 

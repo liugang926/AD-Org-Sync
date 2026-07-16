@@ -27,7 +27,10 @@ class WebNavigationTests(WebAuthzBaseTestCase):
                 "/data-sources/source-directory",
                 "/identity-governance/identity-matching",
                 "/identity-governance/conflicts",
-                "/execution-center/run-review",
+                "/execution-center/dry-run",
+                "/execution-center/plan-review",
+                "/execution-center/apply",
+                "/execution-center/jobs",
             ],
         )
         self.assertEqual(navigation.count('aria-current="page"'), 1)

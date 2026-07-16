@@ -4817,7 +4817,112 @@ button.small {
   }
 }
 
+.execution-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.execution-tabs a {
+  flex: 0 0 auto;
+  min-height: 42px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.execution-tabs a:hover,
+.execution-tabs a:focus-visible {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.execution-tabs a[aria-current="page"] {
+  color: var(--primary);
+  background: var(--primary-soft);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.execution-context {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.execution-context > div {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.execution-context span,
+.execution-context strong {
+  display: block;
+}
+
+.execution-context span {
+  margin-bottom: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.execution-context strong {
+  overflow-wrap: anywhere;
+}
+
+.execution-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--success);
+  border-radius: 12px;
+  background: var(--success-bg);
+}
+
+.execution-status--blocked {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.execution-status p {
+  margin: 4px 0 0;
+}
+
+.execution-status__next {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .execution-context {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 767px) {
+  .execution-tabs {
+    margin-inline: -4px;
+  }
+
+  .execution-context {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .execution-status {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .execution-flow {
     grid-template-columns: minmax(0, 1fr);
   }

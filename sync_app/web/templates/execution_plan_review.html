@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+{% import "components/execution_center.html" as execution with context %}
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Plan Review"), t("Review one Dry Run plan and record an auditable approval before Apply."), eyebrow=t("Execution Center"), badge_text=current_org.name, badge_level="info") %}
+    {% if can_approve and can("jobs.review") %}
+    <form method="post" action="/execution-center/plan-review/{{ selected_item.review.job_id }}/approve">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="review_notes" value="{{ t('Approved in Plan Review') }}">
+      {{ ui.button(t("Approve selected plan"), type="submit", icon="clipboard-check", confirm_text=t("Approve this exact Dry Run plan for the current organization, environment, snapshot, and scope?"), confirm_title=t("Confirm plan approval")) }}
+    </form>
+    {% else %}
+    {{ ui.button(t(next_action_code), href=next_action_url, icon="arrow-right") }}
+    {% endif %}
+  {% endcall %}
+
+  {{ execution.tabs("execution-plan-review") }}
+  {{ execution.scope_context(current_org, environment_label, selected_item.evaluation.context if selected_item else none) }}
+  {{ execution.status(blocker_code, next_action_code, "The selected plan evidence is valid and ready for approval.") }}
+
+  {% if selected_item %}{% set job = selected_item.job %}{% set review = selected_item.review %}{% set summary = job.summary or {} %}
+  {% call ui.panel(t("Selected Plan"), description=t("Approval applies only to this plan fingerprint and expires automatically.")) %}
+    <div class="detail-grid">
+      <div class="detail-item"><div class="label">{{ t("Dry Run ID") }}</div><div class="value">{{ ui.identifier(job.job_id, t("Copy Dry Run ID"), t("Dry Run ID copied"), "/execution-center/jobs/" ~ job.job_id) }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Review Status") }}</div><div class="value">{{ ui.badge(t(review.status|capitalize), "success" if review.status == "approved" else "warning") }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Planned Changes") }}</div><div class="value">{{ summary.planned_operation_count or job.planned_operation_count or 0 }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("High-Risk Changes") }}</div><div class="value">{{ review.high_risk_operation_count }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Plan Generated") }}</div><div class="value">{{ ui.local_time(selected_item.evaluation.plan_generated_at) }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Approval Expires") }}</div><div class="value">{{ ui.local_time(review.expires_at) }}</div></div>
+    </div>
+    <details class="detail-toggle"><summary>{{ t("Technical evidence") }}</summary><div class="evidence-code"><div>{{ t("Plan Fingerprint") }}: <code>{{ review.plan_fingerprint }}</code></div><div>{{ t("Config Fingerprint") }}: <code>{{ review.config_snapshot_hash }}</code></div></div></details>
+  {% endcall %}
+  {% endif %}
+
+  {% call ui.panel(t("Review Queue"), description=t("Select a plan to inspect. Approval remains a separate, explicit action.")) %}
+    {% if review_items %}<div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Review Queue') }}"><table>
+      <thead><tr><th>{{ t("Dry Run ID") }}</th><th>{{ t("Status") }}</th><th>{{ t("Snapshot Version") }}</th><th>{{ t("Impact Count") }}</th><th>{{ t("High-Risk Changes") }}</th><th>{{ t("Created") }}</th><th>{{ t("Details") }}</th></tr></thead>
+      <tbody>{% for item in review_items %}<tr{% if selected_item and item.review.job_id == selected_item.review.job_id %} aria-current="true"{% endif %}>
+        <td><code>{{ item.review.job_id }}</code></td><td>{{ ui.badge(t(item.review.status|capitalize), "success" if item.review.status == "approved" else "warning") }}</td><td>{{ item.evaluation.context.snapshot_version }}</td><td>{{ item.evaluation.context.impact_count }}</td><td>{{ item.review.high_risk_operation_count }}</td><td>{{ ui.local_time(item.review.created_at) }}</td><td><a href="?plan_id={{ item.review.job_id|urlencode }}">{{ t("Inspect") }}</a></td>
+      </tr>{% endfor %}</tbody>
+    </table></div>{% else %}{{ ui.empty_state(t("No plans awaiting review"), t("Run a Dry Run to generate the first review record."), "warning") }}{% endif %}
+  {% endcall %}
+</div>
+{% endblock %}

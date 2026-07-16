@@ -5,12 +5,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from sync_app.application.context import TenantContext
+from sync_app.services.execution_center import ExecutionCenterService
+from sync_app.services.high_risk_operations import resolve_environment_label
+from sync_app.services.runtime_bootstrap import resolve_runtime_config_fingerprint
 from sync_app.storage.local_db import (
     DatabaseManager,
+    OrganizationRepository,
     SettingsRepository,
     SyncJobRepository,
     SyncPlanReviewRepository,
     SyncReplayRequestRepository,
+    SourceDirectoryRepository,
     WebAuditLogRepository,
     normalize_org_id,
 )
@@ -58,6 +63,8 @@ class ApproveSyncPlanUseCase:
         self.job_repo = SyncJobRepository(db_manager)
         self.review_repo = SyncPlanReviewRepository(db_manager)
         self.settings_repo = SettingsRepository(db_manager)
+        self.organization_repo = OrganizationRepository(db_manager)
+        self.source_directory_repo = SourceDirectoryRepository(db_manager)
         self.replay_request_repo = SyncReplayRequestRepository(db_manager)
         self.audit_repo = WebAuditLogRepository(db_manager)
         self.event_publisher = event_publisher
@@ -84,15 +91,56 @@ class ApproveSyncPlanUseCase:
         review_record = self.review_repo.get_review_record_by_job_id(normalized_job_id)
         if review_record is None:
             raise ValueError("This job does not have a pending high-risk review")
+        already_approved = (
+            str(getattr(review_record, "status", "") or "").strip().lower()
+            == "approved"
+        )
+        resolved_ttl_minutes = (
+            None if already_approved else self._resolve_ttl_minutes(ttl_minutes)
+        )
+        organization = self.organization_repo.get_organization_record(tenant.org_id)
+        try:
+            current_config_fingerprint = resolve_runtime_config_fingerprint(
+                db_manager=self.db_manager,
+                org_id=tenant.org_id,
+                config_path=(
+                    str(getattr(organization, "config_path", "") or "")
+                    or "config.ini"
+                ),
+            )
+        except Exception as exc:
+            raise ValueError(
+                "Plan cannot be approved: execution.blocker.config_unavailable"
+            ) from exc
+        plan_evaluation = ExecutionCenterService(
+            job_repo=self.job_repo,
+            review_repo=self.review_repo,
+            source_directory_repo=self.source_directory_repo,
+            settings_repo=self.settings_repo,
+        ).evaluate_plan(
+            org_id=tenant.org_id,
+            organization_name=getattr(organization, "name", tenant.org_id),
+            environment_label=resolve_environment_label(
+                settings_repo=self.settings_repo,
+                org_id=tenant.org_id,
+            ),
+            plan_job_id=normalized_job_id,
+            require_approval=False,
+            current_config_fingerprint=current_config_fingerprint,
+        )
+        if not plan_evaluation.allowed:
+            raise ValueError(
+                "Plan cannot be approved: "
+                f"{plan_evaluation.reason_code or 'execution.blocker.plan_not_eligible'}"
+            )
 
-        already_approved = str(getattr(review_record, "status", "") or "").strip().lower() == "approved"
         replay_request_id: int | None = None
         if already_approved:
             proposed_expires_at = str(getattr(review_record, "expires_at", "") or "")
         else:
-            resolved_ttl_minutes = self._resolve_ttl_minutes(ttl_minutes)
             proposed_expires_at = (
-                datetime.now(timezone.utc) + timedelta(minutes=resolved_ttl_minutes)
+                datetime.now(timezone.utc)
+                + timedelta(minutes=int(resolved_ttl_minutes or 1))
             ).isoformat(timespec="seconds")
 
         with self.db_manager.transaction() as connection:

@@ -1,6 +1,6 @@
 # AD Org Sync 管理后台信息架构重构路线图
 
-> 状态：前四阶段已合并、CI 通过并部署；第五阶段（同步策略拆分）正在功能分支实施
+> 状态：前五阶段已合并、CI 通过并部署；第六阶段（执行中心拆分）实现与本地 CI 等价验证已完成，待 Draft PR CI
 > 约束：不操作真实 AD 账号，不修改真实生产绑定数据，不在 GET 请求中写入数据。
 
 ## 1. 当前信息架构清单
@@ -156,6 +156,8 @@
 
 ### PR 6：执行中心拆分
 
+实现与验收契约见 [`execution-center-migration-contract.md`](execution-center-migration-contract.md)。
+
 - 拆出 Dry Run、Plan Review、Apply、Job History，消除 Dashboard/Jobs/Automation 重复。
 - Apply 只接受同组织、同环境、同快照、未过期且已批准的计划。
 - 测试：状态机、计划指纹、过期计划、重复提交、浏览器完整流程。
@@ -182,7 +184,7 @@
 | `/mappings` | `/identity-governance/manual-overrides` | 过渡入口；绑定对账在 PR 4 拆分 |
 | `/exceptions` | `/identity-governance/exception-rules` | 一对一兼容 |
 | `/advanced-sync` | `/sync-policies` | 过渡入口；策略子页在 PR 5 拆分 |
-| `/jobs` | `/execution-center/run-review` | 过渡入口；四个执行页面在 PR 6 拆分 |
+| `/jobs`、`/execution-center/run-review` | `/execution-center/dry-run`、`/execution-center/plan-review`、`/execution-center/apply`、`/execution-center/jobs` | 旧混合页与 POST 保持兼容；正式导航和内部链接使用四个任务页 |
 | `/lifecycle` | `/operations-center/lifecycle-queue` | 一对一兼容 |
 | `/automation-center` | `/operations-center/automation` | 一对一兼容 |
 | `/integrations` | `/operations-center/notifications` | 过渡入口；API 与通知在 PR 7 收口 |

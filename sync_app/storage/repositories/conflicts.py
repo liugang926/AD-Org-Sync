@@ -400,9 +400,9 @@ class SyncPlanReviewRepository(BaseRepository):
         plan_fingerprint: str,
         config_snapshot_hash: str,
         now_iso: str,
+        plan_source_job_id: str = "",
     ) -> Optional[SyncPlanReviewRecord]:
-        row = self._fetchone(
-            """
+        sql = """
             SELECT r.*
             FROM sync_plan_reviews AS r
             INNER JOIN sync_jobs AS j ON j.job_id = r.job_id
@@ -411,16 +411,22 @@ class SyncPlanReviewRepository(BaseRepository):
               AND r.config_snapshot_hash = ?
               AND r.status = 'approved'
               AND (r.expires_at IS NULL OR r.expires_at >= ?)
+        """
+        params: list[Any] = [
+            str(org_id or "").strip().lower() or "default",
+            plan_fingerprint,
+            config_snapshot_hash,
+            now_iso,
+        ]
+        normalized_plan_source_job_id = str(plan_source_job_id or "").strip()
+        if normalized_plan_source_job_id:
+            sql += " AND r.job_id = ?"
+            params.append(normalized_plan_source_job_id)
+        sql += """
             ORDER BY r.reviewed_at DESC, r.id DESC
             LIMIT 1
-            """,
-            (
-                str(org_id or "").strip().lower() or "default",
-                plan_fingerprint,
-                config_snapshot_hash,
-                now_iso,
-            ),
-        )
+        """
+        row = self._fetchone(sql, tuple(params))
         if not row:
             return None
         return SyncPlanReviewRecord.from_row(row)

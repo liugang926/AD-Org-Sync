@@ -79,11 +79,28 @@ def handle_plan_review_gate(
     record_event: Callable[..., None],
     record_operation: Callable[..., None],
     force_review: bool = False,
+    selected_plan_job_id: str = "",
 ) -> tuple[Any | None, dict[str, Any] | None, bool]:
-    review_required_for_high_risk = settings_repo.get_bool('high_risk_apply_requires_review', True) or force_review
+    high_risk_review_enabled = settings_repo.get_bool(
+        'high_risk_apply_requires_review',
+        True,
+    )
+    selected_plan_job_id = str(selected_plan_job_id or '').strip()
+    review_required_for_high_risk = bool(
+        execution_mode == 'dry_run'
+        or selected_plan_job_id
+        or force_review
+        or (high_risk_operation_count and high_risk_review_enabled)
+        or (disable_breaker_triggered and disable_breaker_requires_approval)
+    )
     approved_review = None
 
-    if disable_breaker_triggered and disable_breaker_requires_approval:
+    if (
+        execution_mode == 'apply'
+        and disable_breaker_triggered
+        and disable_breaker_requires_approval
+        and not selected_plan_job_id
+    ):
         sync_stats['review_required'] = True
         breaker_summary = {
             'org_id': organization.org_id,
@@ -97,38 +114,30 @@ def handle_plan_review_gate(
             'plan_fingerprint': plan_fingerprint,
             'reason': 'disable_circuit_breaker',
         }
-        if execution_mode == 'dry_run':
-            review_repo.upsert_review_request(
-                job_id=job_id,
-                plan_fingerprint=plan_fingerprint,
-                config_snapshot_hash=config_hash,
-                high_risk_operation_count=high_risk_operation_count,
+        sync_stats['summary'] = breaker_summary
+        sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(sync_stats).to_dict()
+        mark_job('REVIEW_REQUIRED', ended=True, summary=breaker_summary)
+        record_operation(
+            stage_name='plan',
+            object_type='review',
+            operation_type='disable_circuit_breaker',
+            status='review_required',
+            message='apply blocked by disable circuit breaker policy',
+            source_id=job_id,
+            risk_level='high',
+            reason_code='disable_circuit_breaker',
+            details=breaker_summary,
+        )
+        if bot:
+            bot.send_message(
+                f"## {source_provider_name}-AD sync blocked by circuit breaker\n\n"
+                f"> Pending disables: {disable_action_count}\n"
+                f"> Threshold: {disable_breaker_threshold}\n"
+                f"> Managed user baseline: {managed_user_baseline}"
             )
-        else:
-            sync_stats['summary'] = breaker_summary
-            sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(sync_stats).to_dict()
-            mark_job('REVIEW_REQUIRED', ended=True, summary=breaker_summary)
-            record_operation(
-                stage_name='plan',
-                object_type='review',
-                operation_type='disable_circuit_breaker',
-                status='review_required',
-                message='apply blocked by disable circuit breaker policy',
-                source_id=job_id,
-                risk_level='high',
-                reason_code='disable_circuit_breaker',
-                details=breaker_summary,
-            )
-            if bot:
-                bot.send_message(
-                    f"## {source_provider_name}-AD sync blocked by circuit breaker\n\n"
-                    f"> Pending disables: {disable_action_count}\n"
-                    f"> Threshold: {disable_breaker_threshold}\n"
-                    f"> Managed user baseline: {managed_user_baseline}"
-                )
-            return None, sync_stats.to_dict(), review_required_for_high_risk
+        return None, sync_stats.to_dict(), review_required_for_high_risk
 
-    if (high_risk_operation_count or force_review) and review_required_for_high_risk:
+    if review_required_for_high_risk:
         sync_stats['review_required'] = True
         if execution_mode == 'dry_run':
             review_repo.upsert_review_request(
@@ -139,8 +148,8 @@ def handle_plan_review_gate(
             )
             record_event(
                 'WARNING',
-                'high_risk_review_pending',
-                f"dry-run generated a scoped plan with {high_risk_operation_count} high-risk operations and requires approval before apply",
+                'plan_review_pending',
+                f"dry-run generated a fingerprint-bound plan with {high_risk_operation_count} high-risk operations and requires approval before apply",
                 stage_name='plan',
                 payload={
                     'plan_fingerprint': plan_fingerprint,
@@ -150,12 +159,12 @@ def handle_plan_review_gate(
             record_operation(
                 stage_name='plan',
                 object_type='review',
-                operation_type='require_high_risk_review',
+                operation_type='require_plan_review',
                 status='pending',
                 message='dry-run created a fingerprint-bound review request',
                 source_id=job_id,
                 risk_level='high',
-                reason_code='high_risk_review_required',
+                reason_code='plan_review_required',
                 details={
                     'plan_fingerprint': plan_fingerprint,
                     'high_risk_operation_count': high_risk_operation_count,
@@ -167,6 +176,7 @@ def handle_plan_review_gate(
                 plan_fingerprint=plan_fingerprint,
                 config_snapshot_hash=config_hash,
                 now_iso=datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                plan_source_job_id=selected_plan_job_id,
             )
             if not approved_review:
                 summary = {
@@ -180,7 +190,7 @@ def handle_plan_review_gate(
                     'high_risk_operation_count': high_risk_operation_count,
                     'review_required': True,
                     'plan_fingerprint': plan_fingerprint,
-                    'review_hint': 'Approve the matching dry-run review before rerunning apply',
+                    'review_hint': 'Approve the selected matching dry-run plan before rerunning apply',
                 }
                 sync_stats['summary'] = summary
                 sync_stats['job_summary'] = SyncJobSummary.from_sync_stats(sync_stats).to_dict()
@@ -188,7 +198,7 @@ def handle_plan_review_gate(
                 record_event(
                     'WARNING',
                     'review_required',
-                    f"apply blocked: the scoped plan requires an approved matching dry-run review ({high_risk_operation_count} high-risk operations)",
+                    f"apply blocked: the selected plan requires an approved matching dry-run review ({high_risk_operation_count} high-risk operations)",
                     stage_name='plan',
                     payload={
                         'plan_fingerprint': plan_fingerprint,
@@ -198,12 +208,12 @@ def handle_plan_review_gate(
                 record_operation(
                     stage_name='plan',
                     object_type='review',
-                    operation_type='require_high_risk_review',
+                    operation_type='require_plan_review',
                     status='review_required',
-                    message='apply blocked until a matching dry-run plan is approved',
+                    message='apply blocked until the selected matching dry-run plan is approved',
                     source_id=job_id,
                     risk_level='high',
-                    reason_code='high_risk_review_required',
+                    reason_code='plan_review_required',
                     details=summary,
                 )
                 if bot:
@@ -257,6 +267,8 @@ def complete_dry_run(
         'high_risk_operation_count': high_risk_operation_count,
         'review_required': sync_stats['review_required'],
         'plan_fingerprint': plan_fingerprint,
+        'environment_label': str(sync_stats.get('environment_label') or ''),
+        'plan_generated_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
         'phase_durations_ms': dict(sync_stats.get('phase_durations_ms') or {}),
         'field_ownership_policy': dict(field_ownership_policy),
         'skipped_operation_count': sync_stats['skipped_operations']['total'],
@@ -303,6 +315,7 @@ def complete_plan_phase(ctx: SyncContext) -> dict[str, Any] | None:
         record_event=ctx.hooks.record_event,
         record_operation=ctx.hooks.record_operation,
         force_review=bool(ctx.environment.source_scope),
+        selected_plan_job_id=str(ctx.sync_stats.get('plan_source_job_id') or ''),
     )
     if early_response is not None:
         return early_response
