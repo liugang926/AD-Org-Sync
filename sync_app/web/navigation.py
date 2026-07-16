@@ -11,6 +11,7 @@ CANONICAL_ROUTE_PATHS = {
     "source-directory": "/data-sources/source-directory",
     "snapshots": "/data-sources/snapshots",
     "data-quality": "/data-sources/data-quality",
+    "identity-matching": "/identity-governance/identity-matching",
     "binding-reconciliation": "/identity-governance/binding-reconciliation",
     "conflicts": "/identity-governance/conflicts",
     "mappings": "/identity-governance/manual-overrides",
@@ -103,11 +104,11 @@ NAVIGATION_GROUPS = (
         label="Identity Governance",
         items=(
             NavigationItem(
-                page="conflicts",
-                label="Conflict Queue",
-                icon="shield-alert",
-                capability="jobs.read",
-                legacy_paths=("/conflicts",),
+                page="identity-matching",
+                label="Identity Matching",
+                icon="user-round-search",
+                capability="mappings.read",
+                legacy_paths=(),
             ),
             NavigationItem(
                 page="binding-reconciliation",
@@ -116,6 +117,13 @@ NAVIGATION_GROUPS = (
                 capability="mappings.read",
                 legacy_paths=(),
                 advanced_only=True,
+            ),
+            NavigationItem(
+                page="conflicts",
+                label="Conflict Queue",
+                icon="shield-alert",
+                capability="jobs.read",
+                legacy_paths=("/conflicts",),
             ),
             NavigationItem(
                 page="mappings",

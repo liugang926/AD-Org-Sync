@@ -53,6 +53,85 @@ class IdentityRelationshipPreview:
         return payload
 
 
+def assess_identity_match(item: IdentityRelationshipPreview) -> dict[str, str]:
+    """Summarize matching evidence without changing binding or AD state."""
+
+    candidate = str(item.candidate_mapping.get("ad_username") or "").strip()
+    binding = str(item.before_state.get("bound_ad_username") or "").strip()
+    difference = str(item.difference.get("status") or "")
+    blocking_risks = {
+        "connector_conflict",
+        "multiple_bindings",
+        "multiple_ad_candidates",
+        "normalized_username_collision",
+        "connector_migration_required",
+    }
+    if item.effective_resolution_source == "manual_binding":
+        return {
+            "status": "manual_override",
+            "confidence": "not_applicable",
+            "level": "info",
+            "reason": item.resolution_reason or "A reviewed manual binding takes precedence",
+            "next_action": "Review Manual Override",
+        }
+    if item.effective_resolution_source == "conflict" or blocking_risks.intersection(item.risks):
+        return {
+            "status": "conflict",
+            "confidence": "low",
+            "level": "error",
+            "reason": item.resolution_reason or "Conflicting evidence requires a human decision",
+            "next_action": "Open Conflict Queue",
+        }
+    if not candidate:
+        return {
+            "status": "blocked",
+            "confidence": "low",
+            "level": "error",
+            "reason": "No candidate username can be generated from the current source data",
+            "next_action": "Repair Source Data",
+        }
+    if binding and item.before_state.get("binding_enabled") is False:
+        return {
+            "status": "blocked",
+            "confidence": "low",
+            "level": "error",
+            "reason": "The current binding is disabled and cannot resolve this identity",
+            "next_action": "Review Binding",
+        }
+    if binding and candidate.casefold() == binding.casefold():
+        return {
+            "status": "confirmed",
+            "confidence": "high",
+            "level": "success",
+            "reason": "The generated candidate matches the current binding",
+            "next_action": "Review Evidence",
+        }
+    if binding or difference == "candidate_differs_from_binding":
+        return {
+            "status": "review",
+            "confidence": "low",
+            "level": "warning",
+            "reason": "The generated candidate differs from the current binding",
+            "next_action": "Review Identity",
+        }
+    method = str(item.mapping_input.get("method") or "")
+    if method in {"employee_id", "userid"}:
+        return {
+            "status": "ready",
+            "confidence": "high",
+            "level": "success",
+            "reason": "The candidate comes from a stable unique source identifier",
+            "next_action": "Review Evidence",
+        }
+    return {
+        "status": "review",
+        "confidence": "medium",
+        "level": "warning",
+        "reason": item.resolution_reason or "Review the generated candidate before execution",
+        "next_action": "Review Identity",
+    }
+
+
 def build_identity_preview_fingerprint(
     *,
     org_id: str,

@@ -30,6 +30,22 @@ def register_conflict_routes(
     resolve_remembered_filters: Callable[..., dict[str, Any]],
     to_text: Callable[[Any], str],
 ) -> None:
+    canonical_path = CANONICAL_ROUTE_PATHS["conflicts"]
+
+    def base_path_for(request: Request) -> str:
+        return canonical_path if request.url.path.startswith(canonical_path) else "/conflicts"
+
+    def return_url_for(
+        request: Request,
+        query: str,
+        status: str,
+        job_id: str,
+    ) -> str:
+        result = build_conflicts_return_url(query, status, job_id)
+        if base_path_for(request) == canonical_path and result.startswith("/conflicts"):
+            return canonical_path + result[len("/conflicts") :]
+        return result
+
     @app.get(CANONICAL_ROUTE_PATHS["conflicts"], response_class=HTMLResponse)
     @app.get("/conflicts", response_class=HTMLResponse)
     def conflicts_page(request: Request):
@@ -76,8 +92,10 @@ def register_conflict_routes(
             conflict_job_id=job_id,
             current_org=current_org,
             filters_are_remembered=True,
+            conflicts_base_path=base_path_for(request),
         )
 
+    @app.get(f"{canonical_path}/{{conflict_id}}/decision-guide", response_class=HTMLResponse)
     @app.get("/conflicts/{conflict_id}/decision-guide", response_class=HTMLResponse)
     def conflict_decision_guide_page(request: Request, conflict_id: int):
         user = require_capability(request, "jobs.read")
@@ -91,14 +109,15 @@ def register_conflict_routes(
         )
         if not conflict:
             flash(request, "error", "Conflict record not found")
-            return RedirectResponse(url="/conflicts", status_code=303)
+            return RedirectResponse(url=base_path_for(request), status_code=303)
 
         return_query = to_text(request.query_params.get("return_query"))
         return_status = to_text(request.query_params.get("return_status")) or "open"
         return_job_id = (
             to_text(request.query_params.get("return_job_id")) or conflict.job_id
         )
-        return_url = build_conflicts_return_url(
+        return_url = return_url_for(
+            request,
             return_query, return_status, return_job_id
         )
         decision_guide = build_conflict_decision_guide(
@@ -118,8 +137,10 @@ def register_conflict_routes(
             return_query=return_query,
             return_status=return_status,
             return_job_id=return_job_id,
+            conflicts_base_path=base_path_for(request),
         )
 
+    @app.post(f"{canonical_path}/{{conflict_id}}/resolve-binding")
     @app.post("/conflicts/{conflict_id}/resolve-binding")
     def resolve_conflict_binding(
         request: Request,
@@ -141,8 +162,9 @@ def register_conflict_routes(
         )
         if not conflict:
             flash(request, "error", "Conflict record not found")
-            return RedirectResponse(url="/conflicts", status_code=303)
-        fallback_url = build_conflicts_return_url(
+            return RedirectResponse(url=base_path_for(request), status_code=303)
+        fallback_url = return_url_for(
+            request,
             to_text(return_query),
             to_text(return_status),
             to_text(return_job_id) or conflict.job_id,
@@ -176,6 +198,7 @@ def register_conflict_routes(
         )
         return RedirectResponse(url=fallback_url, status_code=303)
 
+    @app.post(f"{canonical_path}/{{conflict_id}}/skip-user")
     @app.post("/conflicts/{conflict_id}/skip-user")
     def resolve_conflict_with_skip_user(
         request: Request,
@@ -197,8 +220,9 @@ def register_conflict_routes(
         )
         if not conflict:
             flash(request, "error", "Conflict record not found")
-            return RedirectResponse(url="/conflicts", status_code=303)
-        fallback_url = build_conflicts_return_url(
+            return RedirectResponse(url=base_path_for(request), status_code=303)
+        fallback_url = return_url_for(
+            request,
             to_text(return_query),
             to_text(return_status),
             to_text(return_job_id) or conflict.job_id,
@@ -232,6 +256,7 @@ def register_conflict_routes(
         )
         return RedirectResponse(url=fallback_url, status_code=303)
 
+    @app.post(f"{canonical_path}/{{conflict_id}}/apply-recommendation")
     @app.post("/conflicts/{conflict_id}/apply-recommendation")
     def apply_conflict_recommendation_route(
         request: Request,
@@ -253,8 +278,9 @@ def register_conflict_routes(
         )
         if not conflict:
             flash(request, "error", "Conflict record not found")
-            return RedirectResponse(url="/conflicts", status_code=303)
-        fallback_url = build_conflicts_return_url(
+            return RedirectResponse(url=base_path_for(request), status_code=303)
+        fallback_url = return_url_for(
+            request,
             to_text(return_query),
             to_text(return_status),
             to_text(return_job_id) or conflict.job_id,
@@ -286,6 +312,7 @@ def register_conflict_routes(
         )
         return RedirectResponse(url=fallback_url, status_code=303)
 
+    @app.post(f"{canonical_path}/{{conflict_id}}/dismiss")
     @app.post("/conflicts/{conflict_id}/dismiss")
     def dismiss_conflict(
         request: Request,
@@ -307,8 +334,9 @@ def register_conflict_routes(
         )
         if not conflict:
             flash(request, "error", "Conflict record not found")
-            return RedirectResponse(url="/conflicts", status_code=303)
-        fallback_url = build_conflicts_return_url(
+            return RedirectResponse(url=base_path_for(request), status_code=303)
+        fallback_url = return_url_for(
+            request,
             to_text(return_query),
             to_text(return_status),
             to_text(return_job_id) or conflict.job_id,
@@ -326,6 +354,7 @@ def register_conflict_routes(
         flash(request, "success", "Conflict dismissed")
         return RedirectResponse(url=fallback_url, status_code=303)
 
+    @app.post(f"{canonical_path}/{{conflict_id}}/reopen")
     @app.post("/conflicts/{conflict_id}/reopen")
     def reopen_conflict(
         request: Request,
@@ -346,8 +375,9 @@ def register_conflict_routes(
         )
         if not conflict:
             flash(request, "error", "Conflict record not found")
-            return RedirectResponse(url="/conflicts", status_code=303)
-        fallback_url = build_conflicts_return_url(
+            return RedirectResponse(url=base_path_for(request), status_code=303)
+        fallback_url = return_url_for(
+            request,
             to_text(return_query),
             to_text(return_status),
             to_text(return_job_id) or conflict.job_id,
@@ -367,6 +397,7 @@ def register_conflict_routes(
         flash(request, "success", "Conflict reopened")
         return RedirectResponse(url=fallback_url, status_code=303)
 
+    @app.post(f"{canonical_path}/bulk")
     @app.post("/conflicts/bulk")
     def bulk_conflict_action(
         request: Request,
@@ -382,7 +413,8 @@ def register_conflict_routes(
         if isinstance(user, RedirectResponse):
             return user
 
-        fallback_url = build_conflicts_return_url(
+        fallback_url = return_url_for(
+            request,
             to_text(return_query),
             to_text(return_status),
             to_text(return_job_id),

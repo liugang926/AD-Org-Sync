@@ -2232,6 +2232,118 @@ body.confirm-dialog-open {
   overflow: hidden;
 }
 
+.identity-drawer[hidden] {
+  display: none;
+}
+
+.identity-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(26rem, 42rem);
+}
+
+.button.identity-drawer__backdrop,
+.button.identity-drawer__backdrop:hover,
+button.button.identity-drawer__backdrop,
+button.button.identity-drawer__backdrop:hover {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--overlay-backdrop);
+  cursor: default;
+}
+
+.identity-drawer__panel {
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-xl);
+  display: flex;
+  flex-direction: column;
+}
+
+.identity-drawer__header,
+.identity-drawer__footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.identity-drawer__header h2,
+.identity-drawer__header p {
+  margin: 0;
+}
+
+.identity-drawer__header p {
+  margin-top: 0.35rem;
+  color: var(--text-muted);
+}
+
+.identity-drawer__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 1.5rem;
+  display: grid;
+  align-content: start;
+  gap: 1.25rem;
+}
+
+.identity-drawer__footer {
+  align-items: center;
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+  background: var(--surface-muted);
+}
+
+.identity-drawer__footer > span {
+  color: var(--text-muted);
+}
+
+body.identity-drawer-open {
+  overflow: hidden;
+}
+
+.wrap-anywhere {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .identity-drawer {
+    grid-template-columns: 1fr;
+  }
+
+  .identity-drawer__backdrop {
+    display: none;
+  }
+
+  .identity-drawer__panel {
+    width: 100%;
+    border-left: 0;
+  }
+
+  .identity-drawer__header,
+  .identity-drawer__body,
+  .identity-drawer__footer {
+    padding: 1rem;
+  }
+
+  .identity-drawer__footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .decision-wizard__hero,
 .conflict-command-center,
 .lifecycle-command-center,

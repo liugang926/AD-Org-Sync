@@ -172,6 +172,13 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertGreater(target.stat().st_size, 0)
         return target
 
+    def _capture_viewport(self, name: str) -> Path:
+        target = ARTIFACT_DIR / name
+        self.page.screenshot(path=str(target), full_page=False)
+        self.assertTrue(target.exists())
+        self.assertGreater(target.stat().st_size, 0)
+        return target
+
     def _login(self) -> None:
         self.page.goto(f"{self.base_url}/login", wait_until="networkidle")
         self.page.fill("#username", "admin")
@@ -792,6 +799,62 @@ class WebBrowserRegressionTests(unittest.TestCase):
         ):
             self.assertIn(expected.lower(), page_text.lower())
         self._capture("identity-relationship-evidence-desktop-en.png")
+
+        self.page.goto(
+            f"{self.base_url}/identity-governance/identity-matching?lang=en",
+            wait_until="networkidle",
+        )
+        matching_table = self.page.locator("[data-identity-matching-table]")
+        self.assertTrue(matching_table.is_visible())
+        self.assertEqual(matching_table.locator("thead th").count(), 8)
+        opener = self.page.locator("[data-identity-drawer-open]").first
+        opener.focus()
+        opener.click()
+        drawer = self.page.locator("[data-identity-drawer]:visible")
+        self.assertEqual(drawer.count(), 1)
+        self.assertEqual(
+            self._style(
+                "[data-identity-drawer]:visible .identity-drawer__backdrop",
+                "background-color",
+            ),
+            "rgba(15, 23, 42, 0.56)",
+        )
+        self.assertEqual(drawer.locator("[data-identity-timeline-step]").count(), 5)
+        self.assertTrue(
+            drawer.evaluate("element => element.contains(document.activeElement)")
+        )
+        self.page.keyboard.press("Shift+Tab")
+        self.assertTrue(
+            drawer.evaluate("element => element.contains(document.activeElement)")
+        )
+        self._capture_viewport("identity-matching-drawer-desktop-en.png")
+        self.page.keyboard.press("Escape")
+        self.assertEqual(self.page.locator("[data-identity-drawer]:visible").count(), 0)
+        self.assertTrue(opener.evaluate("element => document.activeElement === element"))
+
+        self.page.set_viewport_size({"width": 480, "height": 900})
+        self.page.goto(
+            f"{self.base_url}/identity-governance/identity-matching?lang=en",
+            wait_until="networkidle",
+        )
+        self.page.locator("[data-identity-drawer-open]").first.click()
+        narrow_panel = self.page.locator(
+            "[data-identity-drawer]:visible .identity-drawer__panel"
+        )
+        self.assertGreaterEqual(narrow_panel.bounding_box()["width"], 475)
+        self.assertTrue(
+            self.page.locator(
+                "[data-identity-drawer]:visible .identity-drawer__footer"
+            ).is_visible()
+        )
+        self.assertTrue(
+            self.page.evaluate(
+                "() => document.documentElement.scrollWidth <= window.innerWidth"
+            )
+        )
+        self._capture_viewport("identity-matching-drawer-narrow-en.png")
+        self.page.keyboard.press("Escape")
+        self.page.set_viewport_size({"width": 1440, "height": 1100})
 
         with patch(
             "sync_app.web.app.build_target_provider",
@@ -1998,6 +2061,22 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "binding-reconciliation": (
                 "/identity-governance/binding-reconciliation?lang=zh-CN",
                 ".identity-governance-table",
+            ),
+            "identity-matching": (
+                "/identity-governance/identity-matching?lang=zh-CN",
+                ".page-header",
+            ),
+            "conflict-queue": (
+                "/identity-governance/conflicts?lang=zh-CN",
+                ".conflict-command-center",
+            ),
+            "manual-overrides": (
+                "/identity-governance/manual-overrides?lang=zh-CN",
+                "[data-manual-bindings-table]",
+            ),
+            "exception-rules": (
+                "/identity-governance/exception-rules?lang=zh-CN",
+                ".table-shell",
             ),
             "sync-scope": (
                 "/sync-policies/scope?lang=zh-CN",

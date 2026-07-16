@@ -38,6 +38,11 @@ def register_mapping_routes(
         [Request], dict[str, dict[str, Any]]
     ] | None = None,
 ) -> None:
+    canonical_path = CANONICAL_ROUTE_PATHS["mappings"]
+
+    def return_url_for(request: Request) -> str:
+        return canonical_path if request.url.path.startswith(canonical_path) else "/mappings"
+
     @app.get(CANONICAL_ROUTE_PATHS["mappings"], response_class=HTMLResponse)
     @app.get("/mappings", response_class=HTMLResponse)
     def mappings_page(request: Request):
@@ -46,9 +51,10 @@ def register_mapping_routes(
             return user
 
         current_org = get_current_org(request)
+        is_canonical = request.url.path == canonical_path
         remembered_filters = resolve_remembered_filters(
             request,
-            page_name="mappings",
+            page_name="manual-overrides" if is_canonical else "mappings",
             defaults={
                 "q": "",
                 "status": "all",
@@ -65,6 +71,8 @@ def register_mapping_routes(
         binding_source_filter = str(
             remembered_filters.get("binding_source") or ""
         ).strip().lower()
+        if is_canonical:
+            binding_source_filter = "manual"
         apply_status_filter = str(
             remembered_filters.get("apply_status") or ""
         ).strip().lower()
@@ -96,10 +104,17 @@ def register_mapping_routes(
             page=override_page,
             page_size=20,
         )
+        governance_bindings = repositories.user_binding_repo.list_binding_records(
+            org_id=current_org.org_id
+        )
+        if is_canonical:
+            governance_bindings = [
+                item for item in governance_bindings if item.source == "manual"
+            ]
         rule_governance_summary = build_rule_governance_summary(
-            bindings=repositories.user_binding_repo.list_binding_records(org_id=current_org.org_id),
+            bindings=governance_bindings,
             overrides=repositories.department_override_repo.list_override_records(org_id=current_org.org_id),
-            exception_rules=repositories.exception_rule_repo.list_rule_records(org_id=current_org.org_id),
+            exception_rules=[] if is_canonical else repositories.exception_rule_repo.list_rule_records(org_id=current_org.org_id),
         )
         config = repositories.org_config_repo.get_app_config(
             current_org.org_id,
@@ -315,9 +330,10 @@ def register_mapping_routes(
             )
         return render(
             request,
-            "mappings.html",
+            "manual_overrides.html" if is_canonical else "mappings.html",
             page="mappings",
-            title="Identity Overrides",
+            title="Manual Overrides" if is_canonical else "Identity Overrides",
+            current_org=current_org,
             bindings=bindings,
             binding_rows=binding_rows,
             overrides=overrides,
@@ -336,6 +352,7 @@ def register_mapping_routes(
             rule_governance_summary=rule_governance_summary,
         )
 
+    @app.get(f"{canonical_path}/export")
     @app.get("/mappings/export")
     def mappings_export(request: Request):
         user = require_capability(request, "mappings.read")
@@ -344,6 +361,7 @@ def register_mapping_routes(
 
         query = (request.query_params.get("q") or "").strip()
         status = (request.query_params.get("status") or "all").strip().lower()
+        binding_source = "manual" if request.url.path.startswith(canonical_path) else ""
         current_org = get_current_org(request)
         repositories = get_web_repositories(request)
 
@@ -354,6 +372,7 @@ def register_mapping_routes(
                     offset=offset,
                     query=query,
                     status=status,
+                    binding_source=binding_source,
                     org_id=current_org.org_id,
                 )
             ):
@@ -416,9 +435,14 @@ def register_mapping_routes(
                 "last_hit_at",
             ],
             row_iterable=iter_rows(),
-            filename="mappings-export.csv",
+            filename=(
+                "manual-overrides-export.csv"
+                if binding_source == "manual"
+                else "mappings-export.csv"
+            ),
         )
 
+    @app.post(f"{canonical_path}/bind")
     @app.post("/mappings/bind")
     def mappings_bind_submit(
         request: Request,
@@ -434,7 +458,8 @@ def register_mapping_routes(
         user = require_capability(request, "mappings.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/mappings")
+        return_url = return_url_for(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
         if csrf_error:
             return csrf_error
 
@@ -442,18 +467,18 @@ def register_mapping_routes(
         ad_username = ad_username.strip()
         if not source_user_id or not ad_username:
             flash(request, "error", "Source user ID and AD username are required")
-            return RedirectResponse(url="/mappings", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         conflict_message = validate_binding_target(request, source_user_id, ad_username)
         if conflict_message:
             flash(request, "error", conflict_message)
-            return RedirectResponse(url="/mappings", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         try:
             normalized_next_review_at = normalize_optional_datetime_input(next_review_at)
         except ValueError as exc:
             flash(request, "error", str(exc))
-            return RedirectResponse(url="/mappings", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         current_org = get_current_org(request)
         reviewed_at = utcnow_iso()
@@ -496,8 +521,9 @@ def register_mapping_routes(
             },
         )
         flash(request, "success", "Identity binding saved")
-        return RedirectResponse(url="/mappings", status_code=303)
+        return RedirectResponse(url=return_url, status_code=303)
 
+    @app.post(f"{canonical_path}/import")
     @app.post("/mappings/import")
     def mappings_import_submit(
         request: Request,
@@ -507,17 +533,18 @@ def register_mapping_routes(
         user = require_capability(request, "mappings.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/mappings")
+        return_url = return_url_for(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
         if csrf_error:
             return csrf_error
 
         rows, parse_errors = parse_bulk_bindings(bulk_bindings)
         if parse_errors:
             flash(request, "error", "; ".join(parse_errors[:5]))
-            return RedirectResponse(url="/mappings", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
         if not rows:
             flash(request, "error", "Bulk import content is empty")
-            return RedirectResponse(url="/mappings", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         imported_count = 0
         conflicts: list[str] = []
@@ -577,8 +604,9 @@ def register_mapping_routes(
             )
         else:
             flash_t(request, "success", "Imported {imported_count} identity bindings", imported_count=imported_count)
-        return RedirectResponse(url="/mappings", status_code=303)
+        return RedirectResponse(url=return_url, status_code=303)
 
+    @app.post(f"{canonical_path}/bind/{{source_user_id}}/toggle")
     @app.post("/mappings/bind/{source_user_id}/toggle")
     def mappings_toggle_binding(
         request: Request,
@@ -591,7 +619,8 @@ def register_mapping_routes(
         user = require_capability(request, "mappings.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/mappings")
+        return_url = return_url_for(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
         if csrf_error:
             return csrf_error
 
@@ -605,7 +634,7 @@ def register_mapping_routes(
         )
         if not binding:
             flash_t(request, "error", "Binding not found: {source_user_id}", source_user_id=source_user_id)
-            return RedirectResponse(url="/mappings", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         new_state = to_bool(enabled, binding.is_enabled)
         repositories.user_binding_repo.set_enabled_for_source_user(
@@ -636,8 +665,9 @@ def register_mapping_routes(
             "Binding {source_user_id} enabled" if new_state else "Binding {source_user_id} disabled",
             source_user_id=source_user_id,
         )
-        return RedirectResponse(url="/mappings", status_code=303)
+        return RedirectResponse(url=return_url, status_code=303)
 
+    @app.post(f"{canonical_path}/department")
     @app.post("/mappings/override")
     def mappings_override_submit(
         request: Request,
@@ -653,7 +683,8 @@ def register_mapping_routes(
         user = require_capability(request, "mappings.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/mappings")
+        return_url = return_url_for(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
         if csrf_error:
             return csrf_error
 
@@ -661,17 +692,17 @@ def register_mapping_routes(
         primary_department_id = primary_department_id.strip()
         if not source_user_id or not primary_department_id:
             flash(request, "error", "Source user ID and primary department ID are required")
-            return RedirectResponse(url="/mappings", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         source_exists, source_error = source_user_exists_in_source_provider(request, source_user_id)
         if not source_exists:
             flash(request, "error", source_error or "Source user validation failed")
-            return RedirectResponse(url="/mappings", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         department_exists, department_error = department_exists_in_source_provider(request, primary_department_id)
         if not department_exists:
             flash(request, "error", department_error or "Primary department validation failed")
-            return RedirectResponse(url="/mappings", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         department_belongs_to_user, override_error = source_user_has_department(
             request,
@@ -680,13 +711,13 @@ def register_mapping_routes(
         )
         if not department_belongs_to_user:
             flash(request, "error", override_error or "Selected department does not belong to the source user")
-            return RedirectResponse(url="/mappings", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         try:
             normalized_next_review_at = normalize_optional_datetime_input(next_review_at)
         except ValueError as exc:
             flash(request, "error", str(exc))
-            return RedirectResponse(url="/mappings", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         current_org = get_current_org(request)
         reviewed_at = utcnow_iso()
@@ -721,8 +752,9 @@ def register_mapping_routes(
             },
         )
         flash(request, "success", "Primary department override saved")
-        return RedirectResponse(url="/mappings", status_code=303)
+        return RedirectResponse(url=return_url, status_code=303)
 
+    @app.post(f"{canonical_path}/department/{{source_user_id}}/delete")
     @app.post("/mappings/override/{source_user_id}/delete")
     def mappings_override_delete(
         request: Request,
@@ -732,7 +764,8 @@ def register_mapping_routes(
         user = require_capability(request, "mappings.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/mappings")
+        return_url = return_url_for(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
         if csrf_error:
             return csrf_error
 
@@ -757,4 +790,4 @@ def register_mapping_routes(
             "Deleted primary department override for {source_user_id}",
             source_user_id=source_user_id,
         )
-        return RedirectResponse(url="/mappings", status_code=303)
+        return RedirectResponse(url=return_url, status_code=303)

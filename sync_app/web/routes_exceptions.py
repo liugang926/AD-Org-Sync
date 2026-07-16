@@ -38,6 +38,11 @@ def register_exception_routes(
     stream_csv: Callable[..., Any],
     to_bool: Callable[[str | None, bool], bool],
 ) -> None:
+    canonical_path = CANONICAL_ROUTE_PATHS["exceptions"]
+
+    def return_url_for(request: Request) -> str:
+        return canonical_path if request.url.path.startswith(canonical_path) else "/exceptions"
+
     @app.get(CANONICAL_ROUTE_PATHS["exceptions"], response_class=HTMLResponse)
     @app.get("/exceptions", response_class=HTMLResponse)
     def exceptions_page(request: Request):
@@ -46,6 +51,7 @@ def register_exception_routes(
             return user
 
         current_org = get_current_org(request)
+        is_canonical = request.url.path == canonical_path
         remembered_filters = resolve_remembered_filters(
             request,
             page_name="exceptions",
@@ -70,8 +76,8 @@ def register_exception_routes(
             page_size=25,
         )
         rule_governance_summary = build_rule_governance_summary(
-            bindings=repositories.user_binding_repo.list_binding_records(org_id=current_org.org_id),
-            overrides=repositories.department_override_repo.list_override_records(org_id=current_org.org_id),
+            bindings=[] if is_canonical else repositories.user_binding_repo.list_binding_records(org_id=current_org.org_id),
+            overrides=[] if is_canonical else repositories.department_override_repo.list_override_records(org_id=current_org.org_id),
             exception_rules=repositories.exception_rule_repo.list_rule_records(org_id=current_org.org_id),
         )
         return render(
@@ -104,8 +110,10 @@ def register_exception_routes(
             department_name_map=load_department_name_map(request),
             filters_are_remembered=True,
             rule_governance_summary=rule_governance_summary,
+            exceptions_base_path=return_url_for(request),
         )
 
+    @app.post(canonical_path)
     @app.post("/exceptions")
     def exceptions_submit(
         request: Request,
@@ -122,7 +130,8 @@ def register_exception_routes(
         user = require_capability(request, "exceptions.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/exceptions")
+        return_url = return_url_for(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
         if csrf_error:
             return csrf_error
 
@@ -131,19 +140,19 @@ def register_exception_routes(
         normalized_match_value = match_value.strip()
         if not rule_definition or not normalized_match_value:
             flash(request, "error", "Invalid exception rule input")
-            return RedirectResponse(url="/exceptions", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         if rule_definition.get("match_type") == "department_id":
             department_exists, department_error = department_exists_in_source_provider(request, normalized_match_value)
             if not department_exists:
                 flash(request, "error", department_error or "Invalid department id")
-                return RedirectResponse(url="/exceptions", status_code=303)
+                return RedirectResponse(url=return_url, status_code=303)
         try:
             normalized_expires_at = normalize_optional_datetime_input(expires_at)
             normalized_next_review_at = normalize_optional_datetime_input(next_review_at)
         except ValueError as exc:
             flash(request, "error", str(exc))
-            return RedirectResponse(url="/exceptions", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         try:
             current_org = get_current_org(request)
@@ -168,7 +177,7 @@ def register_exception_routes(
             )
         except ValueError as exc:
             flash(request, "error", str(exc))
-            return RedirectResponse(url="/exceptions", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
         enqueue_replay_request(
             app=request.app,
             request_type="exception_rule_changed",
@@ -202,8 +211,9 @@ def register_exception_routes(
             },
         )
         flash(request, "success", "Exception rule saved")
-        return RedirectResponse(url="/exceptions", status_code=303)
+        return RedirectResponse(url=return_url, status_code=303)
 
+    @app.post(f"{canonical_path}/import")
     @app.post("/exceptions/import")
     def exceptions_import_submit(
         request: Request,
@@ -213,17 +223,18 @@ def register_exception_routes(
         user = require_capability(request, "exceptions.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/exceptions")
+        return_url = return_url_for(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
         if csrf_error:
             return csrf_error
 
         rows, parse_errors = parse_bulk_exception_rules(bulk_rules)
         if parse_errors:
             flash(request, "error", "; ".join(parse_errors[:5]))
-            return RedirectResponse(url="/exceptions", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
         if not rows:
             flash(request, "error", "Bulk exception rule content is empty")
-            return RedirectResponse(url="/exceptions", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         imported_count = 0
         import_errors: list[str] = []
@@ -299,8 +310,9 @@ def register_exception_routes(
             )
         else:
             flash_t(request, "success", "Imported {imported_count} exception rules", imported_count=imported_count)
-        return RedirectResponse(url="/exceptions", status_code=303)
+        return RedirectResponse(url=return_url, status_code=303)
 
+    @app.get(f"{canonical_path}/export")
     @app.get("/exceptions/export")
     def exceptions_export(request: Request):
         user = require_capability(request, "exceptions.read")
@@ -358,6 +370,7 @@ def register_exception_routes(
             filename="exception-rules-export.csv",
         )
 
+    @app.post(f"{canonical_path}/{{rule_id}}/toggle")
     @app.post("/exceptions/{rule_id}/toggle")
     def exceptions_toggle(
         request: Request,
@@ -368,7 +381,8 @@ def register_exception_routes(
         user = require_capability(request, "exceptions.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/exceptions")
+        return_url = return_url_for(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
         if csrf_error:
             return csrf_error
 
@@ -377,7 +391,7 @@ def register_exception_routes(
         rule_record = repositories.exception_rule_repo.get_rule_record(rule_id, org_id=current_org.org_id)
         if not rule_record:
             flash(request, "error", "Exception rule not found")
-            return RedirectResponse(url="/exceptions", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         new_state = to_bool(enabled, rule_record.is_enabled)
         repositories.exception_rule_repo.set_enabled(rule_id, new_state, org_id=current_org.org_id)
@@ -400,8 +414,9 @@ def register_exception_routes(
             "success",
             "Exception rule enabled" if new_state else "Exception rule disabled",
         )
-        return RedirectResponse(url="/exceptions", status_code=303)
+        return RedirectResponse(url=return_url, status_code=303)
 
+    @app.post(f"{canonical_path}/{{rule_id}}/delete")
     @app.post("/exceptions/{rule_id}/delete")
     def exceptions_delete(
         request: Request,
@@ -411,7 +426,8 @@ def register_exception_routes(
         user = require_capability(request, "exceptions.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/exceptions")
+        return_url = return_url_for(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
         if csrf_error:
             return csrf_error
 
@@ -420,7 +436,7 @@ def register_exception_routes(
         rule_record = repositories.exception_rule_repo.get_rule_record(rule_id, org_id=current_org.org_id)
         if not rule_record:
             flash(request, "error", "Exception rule not found")
-            return RedirectResponse(url="/exceptions", status_code=303)
+            return RedirectResponse(url=return_url, status_code=303)
 
         repositories.exception_rule_repo.delete_rule(rule_id, org_id=current_org.org_id)
         repositories.audit_repo.add_log(
@@ -438,4 +454,4 @@ def register_exception_routes(
             },
         )
         flash(request, "success", "Exception rule deleted")
-        return RedirectResponse(url="/exceptions", status_code=303)
+        return RedirectResponse(url=return_url, status_code=303)

@@ -11,7 +11,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from sync_app.providers.source import build_source_provider, get_source_provider_display_name
 from sync_app.core.models import DepartmentNode
-from sync_app.services.identity_relationships import IdentityRelationshipPreviewService
+from sync_app.services.identity_relationships import (
+    IdentityRelationshipPreviewService,
+    assess_identity_match,
+)
 from sync_app.services.high_risk_operations import (
     HighRiskOperationContext,
     HighRiskOperationPolicy,
@@ -748,6 +751,59 @@ def register_source_directory_routes(
             total_pages=max((int(history["total"]) + page_size - 1) // page_size, 1),
             selected_provider_id=provider_id,
             selected_snapshot_status=status,
+        )
+
+    @app.get(CANONICAL_ROUTE_PATHS["identity-matching"], response_class=HTMLResponse)
+    def identity_matching_page(
+        request: Request,
+        page_number: int = 1,
+        search: str = "",
+        relationship_status: str = "all",
+        verify_ad: bool = False,
+    ):
+        user = require_capability(request, "mappings.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        page_size = 50
+        page_number = max(int(page_number or 1), 1)
+        page_data = build_relationship_page(
+            request,
+            page_number=page_number,
+            page_size=page_size,
+            search=search,
+            department_id="",
+            status="",
+            employee_id_state="",
+            relationship_status=relationship_status,
+            verify_ad=verify_ad,
+        )
+        identity_matches = [
+            {"relationship": item, "assessment": assess_identity_match(item)}
+            for item in page_data["relationships"]
+        ]
+        assessment_counts: dict[str, int] = {}
+        for match in identity_matches:
+            status_key = str(match["assessment"]["status"])
+            assessment_counts[status_key] = assessment_counts.get(status_key, 0) + 1
+        return render(
+            request,
+            "identity_matching.html",
+            page="identity-matching",
+            title="Identity Matching",
+            current_org=current_org,
+            provider_id=page_data["provider_id"],
+            provider_name=get_source_provider_display_name(page_data["provider_id"]),
+            snapshot=_row_dict(page_data["snapshot"]),
+            snapshot_expired=_is_expired(page_data["snapshot"]),
+            identity_matches=identity_matches,
+            assessment_counts=assessment_counts,
+            total_users=page_data["total"],
+            page_number=page_number,
+            total_pages=max((int(page_data["total"]) + page_size - 1) // page_size, 1),
+            search=search,
+            selected_relationship_status=relationship_status,
+            ad_verified=page_data["ad_verified"],
         )
 
     @app.get(
