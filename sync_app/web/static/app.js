@@ -273,6 +273,103 @@
     });
   }
 
+  function initIdentityDrawers() {
+    const drawers = Array.from(document.querySelectorAll("[data-identity-drawer]"));
+    if (!drawers.length) {
+      return;
+    }
+    let activeDrawer = null;
+    let restoreFocusTo = null;
+
+    const focusableElements = (drawer) =>
+      Array.from(
+        drawer.querySelectorAll(
+          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), details > summary, [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter(
+        (element) =>
+          element instanceof HTMLElement &&
+          !element.hidden &&
+          element.getClientRects().length > 0 &&
+          element.getAttribute("aria-hidden") !== "true"
+      );
+
+    const closeDrawer = ({ restoreFocus = true } = {}) => {
+      if (!(activeDrawer instanceof HTMLElement)) {
+        return;
+      }
+      activeDrawer.hidden = true;
+      document.body?.classList.remove("identity-drawer-open");
+      activeDrawer = null;
+      if (restoreFocus && restoreFocusTo instanceof HTMLElement) {
+        restoreFocusTo.focus();
+      }
+      restoreFocusTo = null;
+    };
+
+    const openDrawer = (opener) => {
+      const drawerId = opener.getAttribute("data-identity-drawer-open") || "";
+      const drawer = drawerId ? document.getElementById(drawerId) : null;
+      if (!(drawer instanceof HTMLElement)) {
+        return;
+      }
+      if (activeDrawer instanceof HTMLElement && activeDrawer !== drawer) {
+        activeDrawer.hidden = true;
+      }
+      activeDrawer = drawer;
+      restoreFocusTo = opener;
+      drawer.hidden = false;
+      document.body?.classList.add("identity-drawer-open");
+      const preferred = drawer.querySelector(
+        ".identity-drawer__header [data-identity-drawer-close]"
+      );
+      const panel = drawer.querySelector(".identity-drawer__panel");
+      if (preferred instanceof HTMLElement) {
+        preferred.focus();
+      } else if (panel instanceof HTMLElement) {
+        panel.focus();
+      }
+    };
+
+    document.querySelectorAll("[data-identity-drawer-open]").forEach((opener) => {
+      opener.addEventListener("click", () => openDrawer(opener));
+    });
+    drawers.forEach((drawer) => {
+      drawer.querySelectorAll("[data-identity-drawer-close]").forEach((closer) => {
+        closer.addEventListener("click", () => closeDrawer());
+      });
+    });
+    document.addEventListener("keydown", (event) => {
+      if (!(activeDrawer instanceof HTMLElement) || activeDrawer.hidden) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeDrawer();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+      const focusable = focusableElements(activeDrawer);
+      const panel = activeDrawer.querySelector(".identity-drawer__panel");
+      if (!focusable.length) {
+        event.preventDefault();
+        panel?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+  }
+
   function initSelectionSummaries() {
     document.querySelectorAll("[data-selection-scope]").forEach((scope) => {
       const update = () => {
@@ -640,6 +737,7 @@
     initAutoSubmit();
     initCopyButtons();
     initConfirmationPrompts();
+    initIdentityDrawers();
     initSelectionSummaries();
     initFormLoading();
     initFlashMessages();

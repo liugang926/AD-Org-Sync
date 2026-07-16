@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
 {% import "components/high_risk.html" as high_risk with context %}
+{% import "components/identity_timeline.html" as identity_timeline with context %}
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Binding Reconciliation"), t("Compare generated candidates, current saved bindings, the latest Dry Run and Apply evidence, and live AD state without mixing these identities into Source Directory."), eyebrow=t("Identity Governance"), badge_text=(t("Live AD verified") if ad_verified else t("Cached evidence")), badge_level=("success" if ad_verified else "warning")) %}
@@ -97,23 +98,7 @@
               <strong>{{ item.source_display_name or "-" }}</strong><div class="muted cell-mono">{{ item.source_user_id }}</div><div class="muted">{{ item.employee_id or "-" }}</div>
               <details class="detail-toggle compact-evidence" data-identity-timeline>
                 <summary>{{ t("Identity timeline") }}</summary>
-                <div class="timeline-list">
-                  <div class="timeline-item" data-identity-timeline-step>
-                    <span class="timeline-item__dot"></span><span class="timeline-item__body"><strong>{{ t("Candidate") }}</strong><span class="cell-mono">{{ item.candidate_mapping.ad_username or "-" }}</span></span><span class="timeline-item__meta">{{ t(item.mapping_input.method) }}</span>
-                  </div>
-                  <div class="timeline-item {{ 'timeline-item--success' if item.before_state.bound_ad_username else 'timeline-item--warning' }}" data-identity-timeline-step>
-                    <span class="timeline-item__dot"></span><span class="timeline-item__body"><strong>{{ t("Current Binding") }}</strong><span class="cell-mono">{{ item.before_state.bound_ad_username or t("No binding") }}</span></span><span class="timeline-item__meta">{{ t(item.before_state.binding_source) if item.before_state.binding_source else "-" }}</span>
-                  </div>
-                  <div class="timeline-item {{ 'timeline-item--success' if item.planned_after_state.job_id and not item.planned_after_state.is_stale else 'timeline-item--warning' }}" data-identity-timeline-step>
-                    <span class="timeline-item__dot"></span><span class="timeline-item__body"><strong>{{ t("Latest Dry Run") }}</strong><span>{{ t(item.planned_after_state.operation) if item.planned_after_state.operation else t("Not run") }}</span></span><span class="timeline-item__meta cell-mono">{{ item.planned_after_state.job_id or "-" }}</span>
-                  </div>
-                  <div class="timeline-item {{ 'timeline-item--success' if item.applied_after_state.result == 'success' else ('timeline-item--error' if item.applied_after_state.result == 'failed' else 'timeline-item--warning') }}" data-identity-timeline-step>
-                    <span class="timeline-item__dot"></span><span class="timeline-item__body"><strong>{{ t("Latest Apply") }}</strong><span>{{ t(item.applied_after_state.result) }}</span></span><span class="timeline-item__meta">{{ ui.local_time(item.applied_after_state.applied_at) if item.applied_after_state.applied_at else "-" }}</span>
-                  </div>
-                  <div class="timeline-item {{ 'timeline-item--success' if item.before_state.ad_account_state.status in ['exists', 'enabled'] else 'timeline-item--warning' }}" data-identity-timeline-step>
-                    <span class="timeline-item__dot"></span><span class="timeline-item__body"><strong>{{ t("Current AD State") }}</strong><span>{{ t(item.before_state.ad_account_state.status or "not_checked") }}</span></span><span class="timeline-item__meta">{{ ui.local_time(item.before_state.verified_at) if item.before_state.verified_at else "-" }}</span>
-                  </div>
-                </div>
+                {{ identity_timeline.timeline(item) }}
               </details>
             </td>
             <td><div class="cell-mono cell-strong">{{ item.candidate_mapping.ad_username or "-" }}</div><details class="detail-toggle compact-evidence"><summary>{{ t("Candidate evidence") }}</summary><div>{{ t("Field") }}: {{ item.mapping_input.field_label or item.mapping_input.field_name }}</div><div>{{ t("Method") }}: {{ t(item.mapping_input.method) }}</div><div>{{ t("Value") }}: <span class="cell-mono">{{ item.mapping_input.value or "-" }}</span></div></details></td>

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+{% import "components/identity_timeline.html" as identity_timeline with context %}
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Identity Matching"), t("Review how source identities become AD candidates. This page explains evidence and confidence; it never writes a binding or changes AD."), eyebrow=t("Identity Governance"), badge_text=(t("Live AD verified") if ad_verified else t("Cached evidence")), badge_level=("success" if ad_verified else "warning")) %}
+    {% if identity_matches %}
+    {{ ui.button(t("Review Next Candidate"), icon="user-round-search", attrs="data-identity-drawer-open=identity-drawer-1") }}
+    {% elif not snapshot %}
+    {{ ui.button(t("Open Source Directory"), href="/data-sources/source-directory", variant="primary", icon="users-round") }}
+    {% endif %}
+  {% endcall %}
+
+  {% if not snapshot %}
+  <div class="callout callout--warning" role="status">
+    <strong>{{ t("Identity matching is blocked because no source snapshot is available.") }}</strong>
+    <span>{{ t("Refresh Source Directory to create a fixed evidence version, then return here.") }}</span>
+  </div>
+  {% elif snapshot_expired %}
+  <div class="callout callout--warning" role="status">
+    <strong>{{ t("The identity evidence snapshot is stale.") }}</strong>
+    <span>{{ t("Candidate review can continue, but refresh Source Directory before making a decision.") }}</span>
+  </div>
+  {% elif not ad_verified %}
+  <div class="callout callout--info" role="status">
+    <strong>{{ t("Candidate and binding evidence is ready; current AD state is cached or unknown.") }}</strong>
+    <span>{{ t("Use Verify Current Page when live AD evidence is required. Unknown AD state never removes a binding.") }}</span>
+  </div>
+  {% else %}
+  <div class="callout callout--success" role="status">
+    <strong>{{ t("Candidate, binding, and current-page AD evidence are ready for review.") }}</strong>
+    <span>{{ t("Open an identity to review its complete timeline before choosing the next action.") }}</span>
+  </div>
+  {% endif %}
+
+  {% if snapshot %}
+  {% call ui.panel(t("Identity Candidates"), scope_label=t("Snapshot {snapshot_id}", snapshot_id=snapshot.id), scope_level="info", description=t("The core list stays task-focused. Technical evidence is available in the accessible detail drawer.")) %}
+    <form method="get" action="/identity-governance/identity-matching" class="filter-bar">
+      <label class="field"><span>{{ t("Search") }}</span><input type="search" name="search" value="{{ search }}" placeholder="{{ t('Name, source ID, or employee ID') }}"></label>
+      <label class="field"><span>{{ t("Relationship") }}</span><select name="relationship_status">
+        {% for value, label in [("all", "All identities"), ("candidate_only", "Candidate only"), ("bound", "Bound"), ("manual", "Manual override"), ("conflict", "Conflict")] %}
+        <option value="{{ value }}" {% if selected_relationship_status == value %}selected{% endif %}>{{ t(label) }}</option>
+        {% endfor %}
+      </select></label>
+      {{ ui.button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
+      {% if not ad_verified %}{{ ui.button(t("Verify Current Page"), href="?page_number=" ~ page_number ~ "&search=" ~ (search|urlencode) ~ "&relationship_status=" ~ selected_relationship_status ~ "&verify_ad=true", variant="ghost", icon="shield-check") }}{% endif %}
+    </form>
+
+    <div class="table-scroll identity-governance-table" tabindex="0" role="region" aria-label="{{ t('Identity matching candidates') }}">
+      <table data-identity-matching-table>
+        <thead><tr><th>{{ t("Identity") }}</th><th>{{ t("Candidate") }}</th><th>{{ t("Confidence") }}</th><th>{{ t("Current Binding") }}</th><th>{{ t("Latest Dry Run") }}</th><th>{{ t("Latest Apply") }}</th><th>{{ t("Current AD State") }}</th><th>{{ t("Next Step") }}</th></tr></thead>
+        <tbody>
+          {% for match in identity_matches %}{% set item = match.relationship %}{% set assessment = match.assessment %}
+          <tr>
+            <td><strong>{{ item.source_display_name or "-" }}</strong><div class="muted cell-mono">{{ item.source_user_id }}</div><div class="muted">{{ item.employee_id or "-" }}</div></td>
+            <td><div class="cell-mono cell-strong">{{ item.candidate_mapping.ad_username or "-" }}</div><div class="muted">{{ t(item.mapping_input.method) }}</div></td>
+            <td>{{ ui.badge(t(assessment.confidence), assessment.level) }}<div class="muted">{{ t(assessment.status) }}</div></td>
+            <td><div class="cell-mono">{{ item.before_state.bound_ad_username or "-" }}</div><div class="muted">{{ t(item.before_state.binding_source) if item.before_state.binding_source else t("No binding") }}</div></td>
+            <td><div>{{ t(item.planned_after_state.operation) if item.planned_after_state.operation else t("Not run") }}</div><div class="muted">{{ ui.local_time(item.planned_after_state.planned_at) if item.planned_after_state.planned_at else "-" }}</div></td>
+            <td><div>{{ t(item.applied_after_state.result) }}</div><div class="muted">{{ ui.local_time(item.applied_after_state.applied_at) if item.applied_after_state.applied_at else "-" }}</div></td>
+            <td>{{ ui.badge(t(item.before_state.ad_account_state.status or "not_checked"), "success" if item.before_state.ad_account_state.status in ["exists", "enabled"] else "warning") }}<div class="muted">{{ ui.local_time(item.before_state.verified_at) if item.before_state.verified_at else "-" }}</div></td>
+            <td>{{ ui.button(t(assessment.next_action), variant="ghost", size="sm", attrs="data-identity-drawer-open=identity-drawer-" ~ loop.index) }}</td>
+          </tr>
+          {% else %}<tr><td colspan="8" class="table-empty">{{ t("No identity candidates match the current filters.") }}</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination-bar"><span>{{ t("{count} matching users", count=total_users) }}</span><div>{% if page_number > 1 %}{{ ui.button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&search=" ~ (search|urlencode) ~ "&relationship_status=" ~ selected_relationship_status, variant="secondary") }}{% endif %}<span>{{ page_number }} / {{ total_pages }}</span>{% if page_number < total_pages %}{{ ui.button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&search=" ~ (search|urlencode) ~ "&relationship_status=" ~ selected_relationship_status, variant="secondary") }}{% endif %}</div></div>
+  {% endcall %}
+  {% endif %}
+
+  {% call ui.helper_block(t("Next step"), t("Resolve conflicts in Conflict Queue, record exceptional decisions in Manual Overrides, then run a fresh Dry Run."), "info") %}
+    <div class="actions">{{ ui.button(t("Open Conflict Queue"), href="/identity-governance/conflicts", variant="secondary", icon="shield-alert") }}{{ ui.button(t("Open Manual Overrides"), href="/identity-governance/manual-overrides", variant="ghost", icon="layers") }}</div>
+  {% endcall %}
+</div>
+
+{% for match in identity_matches %}{% set item = match.relationship %}{% set assessment = match.assessment %}
+<div class="identity-drawer" id="identity-drawer-{{ loop.index }}" data-identity-drawer hidden>
+  {{ ui.button("", variant="secondary", class_name="identity-drawer__backdrop", attrs='data-identity-drawer-close aria-label="' ~ t("Close identity details") ~ '"') }}
+  <section class="identity-drawer__panel" role="dialog" aria-modal="true" aria-labelledby="identity-drawer-title-{{ loop.index }}" tabindex="-1">
+    <header class="identity-drawer__header">
+      <div><div class="page-header__eyebrow">{{ t("Identity Evidence") }}</div><h2 id="identity-drawer-title-{{ loop.index }}">{{ item.source_display_name or item.source_user_id }}</h2><p>{{ t(assessment.reason) }}</p></div>
+      {{ ui.button("", icon="x", variant="ghost", class_name="topbar-icon-button", attrs='data-identity-drawer-close aria-label="' ~ t("Close identity details") ~ '"') }}
+    </header>
+    <div class="identity-drawer__body">
+      <dl class="detail-list"><dt>{{ t("Source User ID") }}</dt><dd class="cell-mono">{{ item.source_user_id }}</dd><dt>{{ t("Provider") }}</dt><dd>{{ provider_name }}</dd><dt>{{ t("Connector") }}</dt><dd class="cell-mono">{{ item.connector_id }}</dd><dt>{{ t("Snapshot Version") }}</dt><dd>{{ snapshot.id if snapshot else "-" }}</dd><dt>{{ t("Confidence") }}</dt><dd>{{ ui.badge(t(assessment.confidence), assessment.level) }}</dd></dl>
+      <h3>{{ t("Identity timeline") }}</h3>
+      <div data-identity-timeline>{{ identity_timeline.timeline(item, compact=False) }}</div>
+      <details class="detail-toggle"><summary>{{ t("Technical evidence") }}</summary><div class="detail-toggle__body"><dl class="detail-list"><dt>{{ t("Mapping field") }}</dt><dd>{{ item.mapping_input.field_label or item.mapping_input.field_name or "-" }}</dd><dt>{{ t("Mapping value") }}</dt><dd class="cell-mono">{{ item.mapping_input.value or "-" }}</dd><dt>{{ t("Resolution") }}</dt><dd>{{ t(item.resolution_reason) }}</dd><dt>{{ t("Evidence fingerprint") }}</dt><dd class="cell-mono wrap-anywhere">{{ item.evidence.preview_fingerprint or "-" }}</dd></dl></div></details>
+    </div>
+    <footer class="identity-drawer__footer"><span>{{ t("Next step") }}: {{ t(assessment.next_action) }}</span><div class="actions">{% if assessment.status == "conflict" %}{{ ui.button(t("Open Conflict Queue"), href="/identity-governance/conflicts?q=" ~ (item.source_user_id|urlencode), variant="secondary") }}{% else %}{{ ui.button(t("Open Manual Overrides"), href="/identity-governance/manual-overrides?q=" ~ (item.source_user_id|urlencode), variant="secondary") }}{% endif %}{{ ui.button(t("Close"), variant="ghost", attrs="data-identity-drawer-close") }}</div></footer>
+  </section>
+</div>
+{% endfor %}
+{% endblock %}

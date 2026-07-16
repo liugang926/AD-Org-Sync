@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% import "components/forms.html" as forms %}
+{% import "components/ui.html" as ui %}
+{% block content %}
+{% set governance = rule_governance_summary %}
+<div class="page-stack" data-mappings-page data-source-user-search-url="/api/metadata/source-users" data-target-user-search-url="/api/metadata/ad-users" data-source-user-departments-url="/api/metadata/source-user-departments" data-mapping-loading-label="{{ t('Loading options...') }}" data-mapping-no-results-label="{{ t('No matching records found') }}" data-mapping-search-source-placeholder="{{ t('Search source user name or ID') }}" data-mapping-search-target-placeholder="{{ t('Search AD username, display name, or mail') }}" data-mapping-department-placeholder="{{ t('Select a primary department from this user') }}" data-mapping-department-empty-label="{{ t('Select a source user first') }}" data-mapping-type-to-search-label="{{ t('Type at least 2 characters to search') }}">
+  {% call ui.page_header(t("Manual Overrides"), t("Record reviewed exceptions to automatic identity matching or department placement. Changes are scoped to the current organization and audited."), eyebrow=t("Identity Governance"), badge_text=t("Organization Scope"), badge_level="warning") %}
+    {% if can("mappings.write") %}{{ ui.button(t("New Manual Override"), href="#manual-override-create", variant="primary", icon="plus") }}{% endif %}
+  {% endcall %}
+
+  <div class="callout callout--info" role="status">
+    <strong>{{ t("Automatic matching remains the default.") }}</strong>
+    <span>{{ t("Manual bindings take precedence. After saving or disabling an override, run a fresh Dry Run before Apply.") }}</span>
+  </div>
+
+  {% call ui.panel(t("Manual Override Health"), description=t("This summary contains manual identity bindings and department overrides only; exception rules have their own page.")) %}
+    <div class="compact-stats">
+      {{ ui.compact_stat(t("Manual Bindings"), governance.binding_count) }}
+      {{ ui.compact_stat(t("Department Overrides"), governance.override_count) }}
+      {{ ui.compact_stat(t("Missing Reasons"), governance.missing_notes_count) }}
+      {{ ui.compact_stat(t("Pending Review"), governance.stale_rule_count) }}
+    </div>
+    {% if governance.issues %}<div class="panel-note warning" role="status"><strong>{{ t("Needs Attention") }}</strong><span>{{ t("Document an owner and reason, and review overdue records before the next Apply.") }}</span></div>{% else %}<div class="panel-note success" role="status"><strong>{{ t("Healthy") }}</strong><span>{{ t("Current manual overrides have no governance warning.") }}</span></div>{% endif %}
+  {% endcall %}
+
+  {% if can("mappings.write") %}
+  <section id="manual-override-create" class="grid cols-2" tabindex="-1">
+    {% call ui.panel(t("Manual Identity Binding"), description=t("Choose a source identity and the reviewed AD account that should take precedence over the generated candidate.")) %}
+      <form method="post" action="/identity-governance/manual-overrides/bind">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-grid">
+          {{ forms.select("source_user_id", t("Source User"), [("", t("Search and choose a source user"))], required=True, class_name="field-span-full", id="binding_source_user_id", attrs='data-mapping-source-user-select data-placeholder="' ~ t("Search and choose a source user") ~ '"') }}
+          {{ forms.select("ad_username", t("AD User"), [("", t("Search and choose an AD user"))], required=True, class_name="field-span-full", id="binding_ad_username", attrs='data-mapping-target-user-select data-placeholder="' ~ t("Search and choose an AD user") ~ '"') }}
+          {{ forms.input("rule_owner", t("Rule Owner"), placeholder=t("alice@corp.example"), id="binding_rule_owner") }}
+          {{ forms.input("next_review_at", t("Next Review"), type="datetime-local", id="binding_next_review_at") }}
+          {{ forms.input("effective_reason", t("Effective Reason"), class_name="field-span-full", id="binding_effective_reason", required=True) }}
+          {{ forms.input("notes", t("Notes"), class_name="field-span-full", id="binding_notes") }}
+        </div>
+        <div class="actions">{{ ui.button(t("Save Binding"), type="submit", variant="secondary") }}</div>
+      </form>
+    {% endcall %}
+    {% call ui.panel(t("Department Placement Override"), description=t("Choose one of the selected source user's own departments as the primary placement decision.")) %}
+      <form method="post" action="/identity-governance/manual-overrides/department">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-grid">
+          {{ forms.select("source_user_id", t("Source User"), [("", t("Search and choose a source user"))], required=True, class_name="field-span-full", id="override_source_user_id", attrs='data-mapping-source-user-select data-mapping-department-target="override_primary_department_id" data-placeholder="' ~ t("Search and choose a source user") ~ '"') }}
+          {{ forms.select("primary_department_id", t("Primary Department"), [("", t("Select a source user first"))], required=True, class_name="field-span-full", id="override_primary_department_id", attrs='data-mapping-source-department-select data-source-user-select="override_source_user_id" disabled') }}
+          {{ forms.input("rule_owner", t("Rule Owner"), placeholder=t("ops@corp.example"), id="override_rule_owner") }}
+          {{ forms.input("next_review_at", t("Next Review"), type="datetime-local", id="override_next_review_at") }}
+          {{ forms.input("effective_reason", t("Effective Reason"), class_name="field-span-full", id="override_effective_reason", required=True) }}
+          {{ forms.input("notes", t("Notes"), class_name="field-span-full", id="override_notes") }}
+        </div>
+        <div class="actions">{{ ui.button(t("Save Override"), type="submit", variant="secondary") }}</div>
+      </form>
+    {% endcall %}
+  </section>
+
+  {% call ui.detail_toggle(t("Advanced: bulk import manual bindings"), t("Use reviewed CSV rows only. Every imported binding is audited.")) %}
+    <form method="post" action="/identity-governance/manual-overrides/import">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {{ forms.textarea("bulk_bindings", t("Bulk Content"), placeholder="alice,alice.ad,iam@corp.example,Trusted account,2026-12-01T09:00,Reviewed") }}
+      <div class="actions">{{ ui.button(t("Import Bindings"), type="submit", variant="secondary") }}</div>
+    </form>
+  {% endcall %}
+  {% endif %}
+
+  {% call ui.panel(t("Manual Identity Bindings"), description=t("Only explicit manual bindings appear here. Generated and automatic evidence belongs in Identity Matching.")) %}
+    <form method="get" action="/identity-governance/manual-overrides" class="filter-bar">
+      {{ forms.input("q", t("Keyword"), mapping_query or "", placeholder=t("Search source user, AD user, owner, or reason")) }}
+      {{ forms.select("status", t("Status"), [("all", t("All")), ("enabled", t("Enabled Only")), ("disabled", t("Disabled Only"))], selected_value=(mapping_status or "all")) }}
+      {{ ui.button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
+      {{ ui.button(t("Export"), href="/identity-governance/manual-overrides/export?q=" ~ (mapping_query|urlencode), variant="ghost", icon="download") }}
+    </form>
+    {% call ui.table_shell() %}<table data-manual-bindings-table><thead><tr><th>{{ t("Identity") }}</th><th>{{ t("Current Binding") }}</th><th>{{ t("Candidate") }}</th><th>{{ t("Governance") }}</th><th>{{ t("State") }}</th><th>{{ t("Latest Apply") }}</th><th>{{ t("Updated At") }}</th><th>{{ t("Actions") }}</th></tr></thead><tbody>
+      {% for row in binding_rows %}{% set item = row.record %}<tr>
+        <td><strong>{{ row.source_display_name or item.source_display_name or "-" }}</strong><div class="muted cell-mono">{{ item.source_user_id }}</div></td>
+        <td><span class="cell-mono cell-strong">{{ item.ad_username }}</span><div class="muted">{{ t(item.source) }}</div></td>
+        <td><span class="cell-mono">{{ row.candidate_mapping.ad_username or "-" }}</span></td>
+        <td><div>{{ item.rule_owner or "-" }}</div><div class="muted">{{ item.effective_reason or item.notes or "-" }}</div><div class="muted">{{ t("Next Review") }}: {{ ui.local_time(item.next_review_at) if item.next_review_at else "-" }}</div></td>
+        <td>{{ ui.badge(t("Enabled") if item.is_enabled else t("Disabled"), "success" if item.is_enabled else "warning") }}<div class="muted">{{ t(row.health) }}</div></td>
+        <td>{% if row.last_apply_job_id %}<a href="/jobs/{{ row.last_apply_job_id }}">{{ t(row.last_apply_status) }}</a>{% else %}{{ t(row.last_apply_status) }}{% endif %}<div class="muted">{{ ui.local_time(row.last_verified_at) if row.last_verified_at else "-" }}</div></td>
+        <td>{{ ui.local_time(item.updated_at) }}</td>
+        <td>{% if can("mappings.write") %}<form class="inline" method="post" action="/identity-governance/manual-overrides/bind/{{ item.source_user_id }}/toggle"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="enabled" value="{{ 'false' if item.is_enabled else 'true' }}"><input type="hidden" name="source_provider" value="{{ item.source_provider }}"><input type="hidden" name="connector_id" value="{{ item.connector_id }}">{{ ui.button(t("Disable") if item.is_enabled else t("Enable"), type="submit", variant=("danger" if item.is_enabled else "secondary"), size="small") }}</form>{% else %}<span class="muted">{{ t("Read only") }}</span>{% endif %}</td>
+      </tr>{% else %}<tr><td colspan="8" class="table-empty">{{ t("No manual bindings match the current filters.") }}</td></tr>{% endfor %}
+    </tbody></table>{% endcall %}
+    {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=binding_page_data.total_items, page=binding_page_data.page, pages=binding_page_data.total_pages)) %}{% if binding_page_data.has_previous %}{{ ui.button(t("Previous"), href="?q=" ~ (mapping_query|urlencode) ~ "&status=" ~ mapping_status ~ "&binding_page=" ~ binding_page_data.previous_page ~ "&override_page=" ~ override_page_data.page, variant="secondary") }}{% endif %}{% if binding_page_data.has_next %}{{ ui.button(t("Next"), href="?q=" ~ (mapping_query|urlencode) ~ "&status=" ~ mapping_status ~ "&binding_page=" ~ binding_page_data.next_page ~ "&override_page=" ~ override_page_data.page, variant="secondary") }}{% endif %}{% endcall %}
+  {% endcall %}
+
+  {% call ui.panel(t("Department Placement Overrides"), description=t("Per-user placement exceptions are separate from identity matching decisions.")) %}
+    {% call ui.table_shell() %}<table data-department-overrides-table><thead><tr><th>{{ t("Source User ID") }}</th><th>{{ t("Primary Department") }}</th><th>{{ t("Governance") }}</th><th>{{ t("State") }}</th><th>{{ t("Updated At") }}</th><th>{{ t("Actions") }}</th></tr></thead><tbody>
+      {% for item in overrides %}<tr><td class="cell-mono">{{ item.source_user_id }}</td><td><strong>{{ department_name_map.get(item.primary_department_id, "-") }}</strong><div class="muted cell-mono">{{ item.primary_department_id }}</div></td><td><div>{{ item.rule_owner or "-" }}</div><div class="muted">{{ item.effective_reason or item.notes or "-" }}</div><div class="muted">{{ t("Next Review") }}: {{ ui.local_time(item.next_review_at) if item.next_review_at else "-" }}</div></td><td>{{ ui.badge(t("Active"), "info") }}</td><td>{{ ui.local_time(item.updated_at) }}</td><td>{% if can("mappings.write") %}<form class="inline" method="post" action="/identity-governance/manual-overrides/department/{{ item.source_user_id }}/delete" data-confirm="{{ t('Deleting this override returns the user to automatic department placement.') }}" data-confirm-title="{{ t('Confirm Department Override Deletion') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name }}" data-confirm-detail-2-label="{{ t('Source User ID') }}" data-confirm-detail-2-value="{{ item.source_user_id }}" data-confirm-detail-3-label="{{ t('Primary Department ID') }}" data-confirm-detail-3-value="{{ item.primary_department_id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ ui.button(t("Delete"), type="submit", variant="danger", size="small") }}</form>{% endif %}</td></tr>{% else %}<tr><td colspan="6" class="table-empty">{{ t("No department overrides match the current filters.") }}</td></tr>{% endfor %}
+    </tbody></table>{% endcall %}
+  {% endcall %}
+
+  {% call ui.helper_block(t("Next step"), t("After an override changes, review Identity Matching and run a fresh Dry Run. Apply remains gated in Execution Center."), "info") %}<div class="actions">{{ ui.button(t("Open Identity Matching"), href="/identity-governance/identity-matching", variant="secondary") }}{{ ui.button(t("Open Dry Run"), href="/execution-center/run-review", variant="ghost") }}</div>{% endcall %}
+</div>
+{% endblock %}

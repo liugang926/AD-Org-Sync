@@ -19,20 +19,16 @@
 } %}
 <div class="page-stack">
   {% call ui.page_header(t("Exception Rules"), t("Use this page for true exceptions only. If a rule would apply to many users, groups, or departments, it probably belongs in the main sync policy instead."), eyebrow=t("Exceptions"), badge_text=t("Organization Scope"), badge_level="warning") %}
-    <div class="surface-inline">
-      {{ ui.badge(t("Use Sparingly"), "warning") }}
-      <span class="muted">{{ t("Exception rules should stay rare and explainable.") }}</span>
-    </div>
+    {% if can("exceptions.write") %}{{ ui.button(t("New Exception Rule"), href="#exception-create", variant="primary", icon="plus") }}{% endif %}
   {% endcall %}
 
-  {% call ui.panel(t("Rule Governance Snapshot"), description=t("Manual bindings, department overrides, and exception rules should stay documented, time-bounded, and periodically reviewed.")) %}
+  {% call ui.panel(t("Exception Rule Health") if exceptions_base_path != "/exceptions" else t("Rule Governance Snapshot"), description=(t("This summary contains exception rules only. Manual identity and placement decisions belong in Manual Overrides.") if exceptions_base_path != "/exceptions" else t("Manual bindings, department overrides, and exception rules should stay documented, time-bounded, and periodically reviewed."))) %}
     <div class="surface-inline">
       {{ ui.badge(t("Needs Attention") if governance.overall_status != 'success' else t("Healthy"), ('warning' if governance.overall_status == 'warning' else ('error' if governance.overall_status == 'error' else 'success')) ) }}
-      <span class="muted">{{ t("This summary combines bindings, department overrides, and exception rules for the current organization.") }}</span>
+      <span class="muted">{{ t("Exception rules should stay rare, documented, time-bounded, and periodically reviewed.") if exceptions_base_path != "/exceptions" else t("This summary combines bindings, department overrides, and exception rules for the current organization.") }}</span>
     </div>
     <div class="compact-stats">
-      {{ ui.compact_stat(t("Bindings"), governance.binding_count) }}
-      {{ ui.compact_stat(t("Overrides"), governance.override_count) }}
+      {% if exceptions_base_path == "/exceptions" %}{{ ui.compact_stat(t("Bindings"), governance.binding_count) }}{{ ui.compact_stat(t("Overrides"), governance.override_count) }}{% endif %}
       {{ ui.compact_stat(t("Exceptions"), governance.exception_count) }}
       {{ ui.compact_stat(t("Expired"), governance.expired_exception_count, detail=t("Still enabled")) }}
       {{ ui.compact_stat(t("Expiring Soon"), governance.expiring_exception_count, detail=t("Within {days} days", days=governance.expiring_soon_window_days)) }}
@@ -68,23 +64,23 @@
     {% else %}
     {% call ui.empty_state(t("Manual rules look healthy."), t("Nothing in the current bindings, overrides, or exceptions is calling for immediate cleanup."), "success") %}
       {% if can("mappings.read") %}
-      {{ ui.button(t("Review Identity Overrides"), href="/mappings", variant="secondary") }}
+      {{ ui.button(t("Review Manual Overrides"), href="/identity-governance/manual-overrides", variant="secondary") }}
       {% endif %}
     {% endcall %}
     {% endif %}
     <div class="actions">
       {% if can("mappings.read") %}
-      {{ ui.button(t("Open Identity Overrides"), href="/mappings", variant="secondary") }}
+      {{ ui.button(t("Open Manual Overrides"), href="/identity-governance/manual-overrides", variant="secondary") }}
       {% endif %}
-      {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost") }}
-      {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
+      {{ ui.button(t("Open Job Center"), href="/execution-center/run-review", variant="ghost") }}
+      {{ ui.button(t("Open Conflict Queue"), href="/identity-governance/conflicts", variant="ghost") }}
     </div>
   {% endcall %}
 
   {% if can("exceptions.write") %}
   <div class="grid cols-2" id="exception-create">
     {% call ui.panel(t("User Exceptions"), description=t("Use these rules for named users that should not follow the default sync policy.")) %}
-      <form method="post" action="/exceptions">
+      <form method="post" action="{{ exceptions_base_path }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-grid">
           <div class="form-group">
@@ -104,13 +100,13 @@
           {{ forms.checkbox("is_once", t("One-time Rule"), id="user_exception_is_once") }}
         </div>
         <div class="actions">
-          {{ ui.button(t("Save Rule"), type="submit") }}
+          {{ ui.button(t("Save Rule"), type="submit", variant="secondary") }}
         </div>
       </form>
     {% endcall %}
 
     {% call ui.panel(t("Department Placement Exceptions"), description=t("Blocked departments will not be selected as OU placement targets, even if they appear in user memberships.")) %}
-      <form method="post" action="/exceptions">
+      <form method="post" action="{{ exceptions_base_path }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="rule_type" value="skip_department_placement">
         <div class="form-grid">
@@ -123,14 +119,14 @@
           {{ forms.checkbox("is_once", t("One-time Rule"), id="placement_exception_is_once") }}
         </div>
         <div class="actions">
-          {{ ui.button(t("Save Rule"), type="submit") }}
+          {{ ui.button(t("Save Rule"), type="submit", variant="secondary") }}
         </div>
       </form>
     {% endcall %}
   </div>
 
   {% call ui.panel(t("Group Cleanup Exceptions"), description=t("These groups will not have stale recursive parent-child relations removed automatically.")) %}
-    <form method="post" action="/exceptions">
+    <form method="post" action="{{ exceptions_base_path }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="rule_type" value="skip_group_relation_cleanup">
       <div class="form-grid">
@@ -143,13 +139,13 @@
         {{ forms.checkbox("is_once", t("One-time Rule"), id="group_cleanup_is_once") }}
       </div>
       <div class="actions">
-        {{ ui.button(t("Save Rule"), type="submit") }}
+        {{ ui.button(t("Save Rule"), type="submit", variant="secondary") }}
       </div>
     </form>
   {% endcall %}
 
   {% call ui.panel(t("Bulk Import"), description=t("Legacy CSV format: <code>rule_type,match_value,notes,is_enabled,expires_at,is_once</code>. Governance format: <code>rule_type,match_value,rule_owner,effective_reason,notes,is_enabled,expires_at,next_review_at,is_once</code>.")) %}
-    <form method="post" action="/exceptions/import">
+    <form method="post" action="{{ exceptions_base_path }}/import">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       {{ forms.textarea("bulk_rules", t("Bulk Rules"), placeholder="rule_type,match_value,rule_owner,effective_reason,notes,is_enabled,expires_at,next_review_at,is_once&#10;skip_user_disable,alice,iam@corp.example,Grace period before disable,Keep account enabled,true,2026-12-31T18:00,2026-06-01T09:00,true&#10;skip_group_relation_cleanup,WECOM_D1001,ad-team@corp.example,Manual parent stays for migration,,false,,,false") }}
       <div class="actions">
@@ -164,7 +160,7 @@
   {% endif %}
 
   {% call ui.panel(t("Search And Filter")) %}
-    <form method="get" action="/exceptions">
+    <form method="get" action="{{ exceptions_base_path }}">
       <div class="form-grid">
         {{ forms.input("q", t("Keyword"), exception_query or '', placeholder=t('rule, match value, owner, or reason')) }}
         <div>
@@ -182,13 +178,13 @@
       <p class="section-subtitle">{{ t("Filters are remembered for this browser session.") }}</p>
       {% endif %}
       <div class="actions">
-        {{ ui.button(t("Search"), type="submit") }}
-        {{ ui.button(t("Reset"), href="/exceptions?clear_filters=1", variant="secondary") }}
-        {{ ui.button(t("Export CSV"), href="/exceptions/export?q=" ~ (exception_query or '') ~ "&rule_type=" ~ (exception_rule_type or 'all') ~ "&status=" ~ (exception_status or 'all'), variant="secondary") }}
-        {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
-        {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost") }}
+        {{ ui.button(t("Search"), type="submit", variant="secondary") }}
+        {{ ui.button(t("Reset"), href=exceptions_base_path ~ "?clear_filters=1", variant="secondary") }}
+        {{ ui.button(t("Export CSV"), href=exceptions_base_path ~ "/export?q=" ~ (exception_query or '') ~ "&rule_type=" ~ (exception_rule_type or 'all') ~ "&status=" ~ (exception_status or 'all'), variant="secondary") }}
+        {{ ui.button(t("Open Conflict Queue"), href="/identity-governance/conflicts", variant="ghost") }}
+        {{ ui.button(t("Open Job Center"), href="/execution-center/run-review", variant="ghost") }}
         {% if show_advanced_navigation %}
-        {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost") }}
+        {{ ui.button(t("Open Sync Policies"), href="/sync-policies", variant="ghost") }}
         {% endif %}
       </div>
     </form>
@@ -199,11 +195,9 @@
       <table>
         <thead>
           <tr>
-            <th>{{ t("Rule") }}</th>
-            <th>{{ t("Match") }}</th>
+            <th>{{ t("Rule And Match") }}</th>
             <th>{{ t("Governance") }}</th>
-            <th>{{ t("Mode") }}</th>
-            <th>{{ t("Expires At") }}</th>
+            <th>{{ t("Mode And Expiry") }}</th>
             <th>{{ t("Last Matched") }}</th>
             <th>{{ t("Status") }}</th>
             <th>{{ t("Updated") }}</th>
@@ -217,8 +211,6 @@
             <td>
               <div class="cell-strong">{{ t(rule_definition.get("label", item.rule_type)) }}</div>
               <div class="muted">{{ t(rule_definition.get("description", "")) }}</div>
-            </td>
-            <td>
               <div>{{ item.match_value }}</div>
               <div class="muted">{{ t(exception_match_type_labels.get(item.match_type, item.match_type)) }}</div>
               {% if item.match_type == "department_id" and department_name_map.get(item.match_value) %}
@@ -228,27 +220,26 @@
             <td>
               <div><strong>{{ t("Owner") }}:</strong> {{ item.rule_owner or "-" }}</div>
               <div><strong>{{ t("Reason") }}:</strong> {{ item.effective_reason or item.notes or "-" }}</div>
-              <div class="muted">{{ t("Next Review") }}: {{ item.next_review_at or "-" }}</div>
+              <div class="muted">{{ t("Next Review") }}: {{ ui.local_time(item.next_review_at) if item.next_review_at else "-" }}</div>
               <div class="muted">{{ t("Last Reviewed") }}: {{ ui.local_time(item.last_reviewed_at or item.updated_at or item.created_at) }}</div>
-              <div class="muted">{{ t("Hits") }}: {{ item.hit_count or 0 }}{% if item.last_hit_at or item.last_matched_at %} · {{ t("Last Hit") }}: {{ item.last_hit_at or item.last_matched_at }}{% endif %}</div>
+              <div class="muted">{{ t("Hits") }}: {{ item.hit_count or 0 }}{% if item.last_hit_at or item.last_matched_at %} · {{ t("Last Hit") }}: {{ ui.local_time(item.last_hit_at or item.last_matched_at) }}{% endif %}</div>
               {% if item.notes and item.effective_reason and item.notes != item.effective_reason %}
               <div class="muted">{{ t("Notes") }}: {{ item.notes }}</div>
               {% endif %}
             </td>
-            <td>{{ t("One-time") if item.is_once else t("Persistent") }}</td>
-            <td>{{ item.expires_at or "-" }}</td>
-            <td>{{ item.last_matched_at or "-" }}</td>
+            <td>{{ t("One-time") if item.is_once else t("Persistent") }}<div class="muted">{{ t("Expires At") }}: {{ ui.local_time(item.expires_at) if item.expires_at else "-" }}</div></td>
+            <td>{{ ui.local_time(item.last_matched_at) if item.last_matched_at else "-" }}</td>
             <td>{{ t("Enabled") if item.is_enabled else t("Disabled") }}</td>
             <td>{{ ui.local_time(item.updated_at or item.created_at) }}</td>
             <td>
               {% if can("exceptions.write") %}
               <div class="actions flush-top">
-                <form class="inline" method="post" action="/exceptions/{{ item.id }}/toggle">
+                <form class="inline" method="post" action="{{ exceptions_base_path }}/{{ item.id }}/toggle">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="enabled" value="{{ 'false' if item.is_enabled else 'true' }}">
                   {{ ui.button(t("Disable") if item.is_enabled else t("Enable"), type="submit", variant=("danger" if item.is_enabled else "secondary"), size="small") }}
                 </form>
-                <form class="inline" method="post" action="/exceptions/{{ item.id }}/delete" data-confirm="{{ t('Deleting this exception removes its protection from the next sync run.') }}" data-confirm-title="{{ t('Confirm Exception Rule Deletion') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Match Type') }}" data-confirm-detail-2-value="{{ t(exception_match_type_labels.get(item.match_type, item.match_type)) }}" data-confirm-detail-3-label="{{ t('Match Value') }}" data-confirm-detail-3-value="{{ item.match_value }}" data-confirm-detail-4-label="{{ t('Requested Action') }}" data-confirm-detail-4-value="{{ t('Permanent deletion') }}">
+                <form class="inline" method="post" action="{{ exceptions_base_path }}/{{ item.id }}/delete" data-confirm="{{ t('Deleting this exception removes its protection from the next sync run.') }}" data-confirm-title="{{ t('Confirm Exception Rule Deletion') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Match Type') }}" data-confirm-detail-2-value="{{ t(exception_match_type_labels.get(item.match_type, item.match_type)) }}" data-confirm-detail-3-label="{{ t('Match Value') }}" data-confirm-detail-3-value="{{ item.match_value }}" data-confirm-detail-4-label="{{ t('Requested Action') }}" data-confirm-detail-4-value="{{ t('Permanent deletion') }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   {{ ui.button(t("Delete"), type="submit", variant="danger", size="small") }}
                 </form>
@@ -259,7 +250,7 @@
             </td>
           </tr>
           {% else %}
-          <tr><td class="table-empty" colspan="9">{{ t("No exception rules yet.") }}</td></tr>
+          <tr><td class="table-empty" colspan="7">{{ t("No exception rules yet.") }}</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -267,19 +258,20 @@
     {% if exception_page_data.total_items == 0 %}
     {% call ui.empty_state(t("No exception rules yet."), t("Keep the default policy until you discover a real edge case. This page is best used for explicit exceptions, not initial setup."), "info") %}
       {% if can("exceptions.write") %}
-      {{ ui.button(t("Use the forms above"), href="/exceptions#exception-create", variant="secondary") }}
+      {{ ui.button(t("Use the forms above"), href=exceptions_base_path ~ "#exception-create", variant="secondary") }}
       {% endif %}
-      {{ ui.button(t("Review Conflict Queue"), href="/conflicts", variant="ghost") }}
+      {{ ui.button(t("Review Conflict Queue"), href="/identity-governance/conflicts", variant="ghost") }}
     {% endcall %}
     {% endif %}
     {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=exception_page_data.total_items, page=exception_page_data.page, pages=exception_page_data.total_pages)) %}
       {% if exception_page_data.has_previous %}
-      {{ ui.button(t("Previous"), href="/exceptions?q=" ~ (exception_query or '') ~ "&rule_type=" ~ (exception_rule_type or 'all') ~ "&status=" ~ (exception_status or 'all') ~ "&page_number=" ~ exception_page_data.previous_page, variant="secondary") }}
+      {{ ui.button(t("Previous"), href=exceptions_base_path ~ "?q=" ~ (exception_query or '') ~ "&rule_type=" ~ (exception_rule_type or 'all') ~ "&status=" ~ (exception_status or 'all') ~ "&page_number=" ~ exception_page_data.previous_page, variant="secondary") }}
       {% endif %}
       {% if exception_page_data.has_next %}
-      {{ ui.button(t("Next"), href="/exceptions?q=" ~ (exception_query or '') ~ "&rule_type=" ~ (exception_rule_type or 'all') ~ "&status=" ~ (exception_status or 'all') ~ "&page_number=" ~ exception_page_data.next_page, variant="secondary") }}
+      {{ ui.button(t("Next"), href=exceptions_base_path ~ "?q=" ~ (exception_query or '') ~ "&rule_type=" ~ (exception_rule_type or 'all') ~ "&status=" ~ (exception_status or 'all') ~ "&page_number=" ~ exception_page_data.next_page, variant="secondary") }}
       {% endif %}
     {% endcall %}
   {% endcall %}
+  {% call ui.helper_block(t("Next step"), t("Review the rule owner and expiry, then run a fresh Dry Run. Exception rules never authorize Apply by themselves."), "info") %}<div class="actions">{{ ui.button(t("Open Identity Matching"), href="/identity-governance/identity-matching", variant="secondary") }}{{ ui.button(t("Open Dry Run"), href="/execution-center/run-review", variant="ghost") }}</div>{% endcall %}
 </div>
 {% endblock %}

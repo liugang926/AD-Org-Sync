@@ -44,7 +44,7 @@
         <div>{{ t("Job ID") }}: <a href="/jobs/{{ conflict.job_id }}">{{ conflict.job_id }}</a></div>
       </div>
       {% if can("mappings.write") and decision_guide.selected_target_username %}
-      <form method="post" action="/conflicts/{{ conflict.id }}/resolve-binding">
+      <form method="post" action="{{ conflicts_base_path }}/{{ conflict.id }}/resolve-binding">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="ad_username" value="{{ decision_guide.selected_target_username }}">
         <input type="hidden" name="return_query" value="{{ return_query or '' }}">
@@ -208,7 +208,7 @@
         <p>{{ t("conflicts.candidate.explanation.generic") }}</p>
         {% endif %}
         {% if not candidate.is_selected %}
-        {{ ui.button(t("Review This Account"), href="/conflicts/" ~ conflict.id ~ "/decision-guide?ad_username=" ~ (candidate.username|urlencode) ~ "&return_query=" ~ ((return_query or '')|urlencode) ~ "&return_status=" ~ ((return_status or 'open')|urlencode) ~ "&return_job_id=" ~ ((return_job_id or conflict.job_id)|urlencode), variant="ghost", size="small") }}
+        {{ ui.button(t("Review This Account"), href=conflicts_base_path ~ "/" ~ conflict.id ~ "/decision-guide?ad_username=" ~ (candidate.username|urlencode) ~ "&return_query=" ~ ((return_query or '')|urlencode) ~ "&return_status=" ~ ((return_status or 'open')|urlencode) ~ "&return_job_id=" ~ ((return_job_id or conflict.job_id)|urlencode), variant="ghost", size="small") }}
         {% endif %}
       </article>
       {% endfor %}

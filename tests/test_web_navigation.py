@@ -25,6 +25,7 @@ class WebNavigationTests(WebAuthzBaseTestCase):
             [
                 "/overview/control-tower",
                 "/data-sources/source-directory",
+                "/identity-governance/identity-matching",
                 "/identity-governance/conflicts",
                 "/execution-center/run-review",
             ],
