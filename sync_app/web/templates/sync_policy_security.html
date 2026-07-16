@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+{% import "components/sync_policy.html" as policy with context %}
+
+{% block content %}
+{% call ui.page_header(t("Security Policy"), t("Define connector-routing safety, destructive-change circuit breakers, approval requirements, identity claiming, and connector password posture."), eyebrow=t("Sync Policies"), badge_text=t("Organization Scope"), badge_level="warning") %}
+  {{ ui.button(t("Release History"), href="/sync-policies/releases", variant="secondary", icon="history") }}
+{% endcall %}
+{{ policy.tabs('security') }}
+{{ policy.status(has_unpublished_changes, latest_snapshot_title, (t('Approval is not required when the disable circuit breaker trips') if policy_settings.disable_circuit_breaker_enabled and not policy_settings.disable_circuit_breaker_requires_approval else ''), t('Resolve safety warnings, publish, then validate the gates in Dry Run')) }}
+
+{% call ui.panel(t("Safety Gates"), description=t("These settings shape planning and approval. They do not bypass the environment label, snapshot freshness, or Apply confirmation gates.")) %}
+  <form method="post" action="/sync-policies/security" class="page-stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if selected_connector %}<input type="hidden" name="connector_id" value="{{ selected_connector.connector_id }}">{% endif %}
+    <div class="form-grid">
+      <label class="check-card"><input type="checkbox" name="advanced_connector_routing_enabled" value="1" {% if policy_settings.advanced_connector_routing_enabled %}checked{% endif %}><span><strong>{{ t("Enable Multi-Connector Routing") }}</strong><small>{{ t("Require a single unambiguous connector result for every identity.") }}</small></span></label>
+      <label class="check-card"><input type="checkbox" name="disable_circuit_breaker_enabled" value="1" {% if policy_settings.disable_circuit_breaker_enabled %}checked{% endif %}><span><strong>{{ t("Enable Disable Circuit Breaker") }}</strong><small>{{ t("Block unusually large disable plans before Apply.") }}</small></span></label>
+      <label>{{ t("Maximum Disable Percent") }}<input type="number" min="0" step="0.1" name="disable_circuit_breaker_percent" value="{{ policy_settings.disable_circuit_breaker_percent }}"></label>
+      <label>{{ t("Minimum Disable Count") }}<input type="number" min="0" name="disable_circuit_breaker_min_count" value="{{ policy_settings.disable_circuit_breaker_min_count }}"></label>
+      <label class="check-card"><input type="checkbox" name="disable_circuit_breaker_requires_approval" value="1" {% if policy_settings.disable_circuit_breaker_requires_approval %}checked{% endif %}><span><strong>{{ t("Require Approval After Circuit Breaker") }}</strong><small>{{ t("A reviewed plan is required before high-volume disable work can proceed.") }}</small></span></label>
+      <label>{{ t("First Sync Identity Claim") }}<select name="first_sync_identity_claim_mode">{% for value, label in first_sync_identity_claim_mode_options %}<option value="{{ value }}" {% if policy_settings.first_sync_identity_claim_mode == value %}selected{% endif %}>{{ t(label) }}</option>{% endfor %}</select></label>
+    </div>
+    {% if selected_connector %}
+    <details class="detail-toggle" open><summary><strong>{{ t("Connector password posture") }} · {{ selected_connector.name }}</strong></summary><div class="form-grid">
+      <label>{{ t("Force Password Change") }}<select name="force_change_password"><option value="">{{ t("Keep Current") }}</option><option value="true" {% if selected_connector.force_change_password is sameas true %}selected{% endif %}>{{ t("Yes") }}</option><option value="false" {% if selected_connector.force_change_password is sameas false %}selected{% endif %}>{{ t("No") }}</option></select></label>
+      <label>{{ t("Password Complexity") }}<input type="text" name="password_complexity" value="{{ selected_connector.password_complexity }}" placeholder="strong"></label>
+    </div><p class="muted">{{ t("Password secret values remain in Connectors and are never displayed here.") }}</p></details>
+    {% endif %}
+    {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Security Policy"), type="submit", icon="shield-check") }}</div>{% endif %}
+  </form>
+{% endcall %}
+
+{% call ui.panel(t("Connector Security Posture"), description=t("Select a connector to edit only its non-secret password policy fields.")) %}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Connector security posture') }}"><table data-policy-table><thead><tr><th>{{ t("Connector") }}</th><th>{{ t("Status") }}</th><th>{{ t("TLS") }}</th><th>{{ t("Certificate Validation") }}</th><th>{{ t("Force Password Change") }}</th><th>{{ t("Password Complexity") }}</th><th>{{ t("Action") }}</th></tr></thead><tbody>{% for connector in connectors %}<tr><td><strong>{{ connector.name }}</strong><div class="muted">{{ connector.connector_id }}</div></td><td>{{ t("Enabled") if connector.is_enabled else t("Disabled") }}</td><td>{{ t("Enabled") if connector.ldap_use_ssl else t("Disabled") }}</td><td>{{ t("Enabled") if connector.ldap_validate_cert else t("Disabled") }}</td><td>{{ t("Yes") if connector.force_change_password else t("No") }}</td><td>{{ connector.password_complexity or '-' }}</td><td>{{ ui.button(t("Edit"), href=("/sync-policies/security?connector_id=" ~ connector.connector_id), variant="ghost", size="sm") }}</td></tr>{% else %}<tr><td colspan="7" class="empty-state">{{ t("No target connectors are configured") }}</td></tr>{% endfor %}</tbody></table></div>
+{% endcall %}
+
+{% call ui.helper_block(t("Next step"), t("Publish the reviewed security policy and confirm every warning, approval gate, environment label, snapshot version, and impact count in Dry Run."), "warning") %}
+  {{ ui.button(t("Open Release History"), href="/sync-policies/releases", variant="ghost", icon="history") }}
+{% endcall %}
+{% endblock %}

@@ -7,7 +7,11 @@ from typing import Any, Callable, Optional
 
 from sync_app.core.models import ConfigReleaseSnapshotRecord
 from sync_app.services.config_bundle import export_organization_bundle, import_organization_bundle
-from sync_app.storage.local_db import ConfigReleaseSnapshotRepository, DatabaseManager
+from sync_app.storage.local_db import (
+    ConfigReleaseSnapshotRepository,
+    DatabaseManager,
+    SourceDirectoryRepository,
+)
 from sync_app.storage.secret_store import CONNECTOR_SECRET_FIELDS, ORGANIZATION_SECRET_FIELDS
 
 SECRET_FIELDS_BY_SECTION = {
@@ -27,6 +31,7 @@ SECTION_TITLES = {
     "attribute_mappings": "Attribute Mappings",
     "department_ou_mappings": "Department Routing",
     "group_exclusion_rules": "Group Exclusion Rules",
+    "sync_scopes": "Source Sync Scopes",
 }
 FIELD_LABELS = {
     "source_provider": "Source Provider",
@@ -97,6 +102,13 @@ FIELD_LABELS = {
     "match_value": "Match Value",
     "display_name": "Display Name",
     "source": "Source",
+    "provider_id": "Provider ID",
+    "scope_type": "Scope Type",
+    "selected_department_ids": "Selected Departments",
+    "selected_source_user_ids": "Selected Source Identities",
+    "snapshot_id": "Source Snapshot Version",
+    "source_snapshot_fingerprint": "Source Snapshot Fingerprint",
+    "selection_fingerprint": "Scope Fingerprint",
 }
 FIELD_ORDER = {
     "organization": ("name", "description", "is_enabled", "config_path"),
@@ -183,6 +195,19 @@ FIELD_ORDER = {
         "is_enabled",
         "source",
     ),
+    "sync_scopes": (
+        "provider_id",
+        "connector_id",
+        "scope_type",
+        "selected_department_ids",
+        "selected_source_user_ids",
+        "username_strategy",
+        "username_template",
+        "source_field",
+        "snapshot_id",
+        "source_snapshot_fingerprint",
+        "selection_fingerprint",
+    ),
 }
 TRIGGER_LABELS = {
     "manual_release": "Manual Publish",
@@ -257,6 +282,15 @@ def _normalized_bundle_payload(bundle: dict[str, Any]) -> dict[str, Any]:
             ]
         ),
     )
+    normalized["sync_scopes"] = _normalize_collection(
+        list(normalized.get("sync_scopes") or []),
+        key_builder=lambda item: "|".join(
+            [
+                str(item.get("provider_id") or ""),
+                str(item.get("connector_id") or "default"),
+            ]
+        ),
+    )
     return normalized
 
 
@@ -282,6 +316,11 @@ def _format_value(
     if isinstance(value, bool):
         return "Enabled" if value else "Disabled"
     if isinstance(value, list):
+        if section_key == "sync_scopes" and field_name in {
+            "selected_department_ids",
+            "selected_source_user_ids",
+        }:
+            return f"{len(value)} selected"
         normalized_items = [str(item).strip() for item in value if str(item).strip()]
         return ", ".join(normalized_items) if normalized_items else "None"
     if isinstance(value, dict):
@@ -318,6 +357,13 @@ def _collection_item_key(section_key: str, item: dict[str, Any]) -> str:
                 str(item.get("match_value") or ""),
             ]
         )
+    if section_key == "sync_scopes":
+        return "|".join(
+            [
+                str(item.get("provider_id") or ""),
+                str(item.get("connector_id") or "default"),
+            ]
+        )
     return json.dumps(item, ensure_ascii=False, sort_keys=True)
 
 
@@ -349,6 +395,10 @@ def _collection_item_label(section_key: str, item: dict[str, Any]) -> str:
             f"{str(item.get('protection_level') or '').strip() or '-'}: "
             f"{str(item.get('match_value') or '').strip() or '-'}"
         )
+    if section_key == "sync_scopes":
+        provider_id = str(item.get("provider_id") or "-").strip()
+        connector_id = str(item.get("connector_id") or "default").strip()
+        return f"{provider_id} / {connector_id}"
     return _collection_item_key(section_key, item) or "Item"
 
 
@@ -531,6 +581,11 @@ def build_config_release_diff(
             list(normalized_current.get("group_exclusion_rules") or []),
             list(normalized_baseline.get("group_exclusion_rules") or []),
         ),
+        _build_collection_group(
+            "sync_scopes",
+            list(normalized_current.get("sync_scopes") or []),
+            list(normalized_baseline.get("sync_scopes") or []),
+        ),
     ]
     normalized_groups = [group for group in groups if group]
     added_count = sum(int(group["added_count"]) for group in normalized_groups)
@@ -571,6 +626,110 @@ def build_config_release_trigger_label(trigger_action: str) -> str:
     return TRIGGER_LABELS.get(str(trigger_action or "").strip(), _humanize_field_name(str(trigger_action or "")))
 
 
+def _build_current_release_bundle(
+    db_manager: DatabaseManager,
+    org_id: str,
+) -> dict[str, Any]:
+    bundle = export_organization_bundle(db_manager, org_id)
+    source_repo = SourceDirectoryRepository(db_manager)
+    bundle["sync_scopes"] = [
+        {
+            "provider_id": str(scope.get("provider_id") or "").strip(),
+            "connector_id": str(scope.get("connector_id") or "default").strip()
+            or "default",
+            "scope_type": str(scope.get("scope_type") or "full").strip(),
+            "selected_department_ids": list(
+                scope.get("selected_department_ids") or []
+            ),
+            "selected_source_user_ids": list(
+                scope.get("selected_source_user_ids") or []
+            ),
+            "username_strategy": str(
+                scope.get("username_strategy") or "userid"
+            ).strip(),
+            "username_template": str(scope.get("username_template") or ""),
+            "source_field": str(
+                scope.get("source_field") or "source_user_id"
+            ).strip(),
+            "snapshot_id": int(scope.get("snapshot_id") or 0),
+            "source_snapshot_fingerprint": str(
+                scope.get("source_snapshot_fingerprint") or ""
+            ),
+            "selection_fingerprint": str(
+                scope.get("selection_fingerprint") or ""
+            ),
+        }
+        for scope in source_repo.list_scope_selections(org_id=org_id)
+    ]
+    return bundle
+
+
+def _validate_release_sync_scopes(
+    db_manager: DatabaseManager,
+    org_id: str,
+    bundle: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    if "sync_scopes" not in bundle:
+        return None
+    source_repo = SourceDirectoryRepository(db_manager)
+    scopes = [dict(scope or {}) for scope in list(bundle.get("sync_scopes") or [])]
+    for scope in scopes:
+        snapshot_id = int(scope.get("snapshot_id") or 0)
+        snapshot = (
+            source_repo.get_snapshot(snapshot_id, org_id=org_id)
+            if snapshot_id
+            else None
+        )
+        if snapshot is None:
+            raise ValueError(
+                "Configuration release scope references a source snapshot that is no longer available."
+            )
+        expected_fingerprint = str(
+            scope.get("source_snapshot_fingerprint") or ""
+        ).strip()
+        if expected_fingerprint and str(snapshot["snapshot_fingerprint"] or "") != expected_fingerprint:
+            raise ValueError(
+                "Configuration release scope does not match the retained source snapshot."
+            )
+    return scopes
+
+
+def _restore_release_sync_scopes(
+    db_manager: DatabaseManager,
+    org_id: str,
+    scopes: list[dict[str, Any]] | None,
+    *,
+    requested_by: str,
+) -> None:
+    if scopes is None:
+        return
+    source_repo = SourceDirectoryRepository(db_manager)
+    source_repo.delete_scope_selections_for_org(org_id)
+    for scope in scopes:
+        source_repo.save_scope_selection(
+            org_id=org_id,
+            provider_id=str(scope.get("provider_id") or "").strip(),
+            connector_id=str(scope.get("connector_id") or "default").strip()
+            or "default",
+            scope_type=str(scope.get("scope_type") or "full").strip(),
+            selected_department_ids=list(
+                scope.get("selected_department_ids") or []
+            ),
+            selected_source_user_ids=list(
+                scope.get("selected_source_user_ids") or []
+            ),
+            username_strategy=str(
+                scope.get("username_strategy") or "userid"
+            ).strip(),
+            username_template=str(scope.get("username_template") or ""),
+            source_field=str(
+                scope.get("source_field") or "source_user_id"
+            ).strip(),
+            snapshot_id=int(scope.get("snapshot_id") or 0),
+            requested_by=requested_by,
+        )
+
+
 def publish_current_config_release_snapshot(
     db_manager: DatabaseManager,
     org_id: str,
@@ -583,7 +742,7 @@ def publish_current_config_release_snapshot(
 ) -> dict[str, Any]:
     repo = ConfigReleaseSnapshotRepository(db_manager)
     normalized_org_id = str(org_id or "").strip().lower() or "default"
-    current_bundle = export_organization_bundle(db_manager, normalized_org_id)
+    current_bundle = _build_current_release_bundle(db_manager, normalized_org_id)
     current_hash = build_config_release_bundle_hash(current_bundle)
     latest_snapshot = repo.get_latest_snapshot_record(org_id=normalized_org_id)
     if latest_snapshot and latest_snapshot.bundle_hash == current_hash and not force:
@@ -645,7 +804,7 @@ def build_config_release_center_data(
 ) -> dict[str, Any]:
     repo = ConfigReleaseSnapshotRepository(db_manager)
     normalized_org_id = str(org_id or "").strip().lower() or "default"
-    current_bundle = export_organization_bundle(db_manager, normalized_org_id)
+    current_bundle = _build_current_release_bundle(db_manager, normalized_org_id)
     current_hash = build_config_release_bundle_hash(current_bundle)
     snapshots = repo.list_snapshot_records(org_id=normalized_org_id, limit=snapshot_limit)
     latest_snapshot = snapshots[0] if snapshots else None
@@ -763,9 +922,14 @@ def rollback_config_release_snapshot(
         raise ValueError("Snapshot bundle payload is unavailable.")
 
     normalized_org_id = str(target_snapshot.org_id or org_id or "").strip().lower() or "default"
-    current_bundle = export_organization_bundle(db_manager, normalized_org_id)
+    current_bundle = _build_current_release_bundle(db_manager, normalized_org_id)
     current_hash = build_config_release_bundle_hash(current_bundle)
     target_hash = target_snapshot.bundle_hash or build_config_release_bundle_hash(target_snapshot.bundle)
+    target_scopes = _validate_release_sync_scopes(
+        db_manager,
+        normalized_org_id,
+        target_snapshot.bundle,
+    )
 
     safety_snapshot = None
     if current_hash != target_hash:
@@ -785,6 +949,12 @@ def rollback_config_release_snapshot(
         target_snapshot.bundle,
         target_org_id=normalized_org_id,
         replace_existing=True,
+    )
+    _restore_release_sync_scopes(
+        db_manager,
+        normalized_org_id,
+        target_scopes,
+        requested_by=created_by,
     )
     rollback_result = publish_current_config_release_snapshot(
         db_manager,

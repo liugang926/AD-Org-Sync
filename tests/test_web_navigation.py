@@ -56,9 +56,14 @@ class WebNavigationTests(WebAuthzBaseTestCase):
         ):
             with self.subTest(label=label):
                 self.assertIn(label, navigation)
-        for href in CANONICAL_ROUTE_PATHS.values():
+        formal_navigation_paths = {
+            item.href for group in NAVIGATION_GROUPS for item in group.items
+        }
+        for href in formal_navigation_paths:
             with self.subTest(href=href):
                 self.assertIn(f'href="{href}"', navigation)
+        self.assertNotIn('href="/sync-policies"', navigation)
+        self.assertNotIn('href="/sync-policies/releases"', navigation)
 
         self._login("operator1")
         self.session["ui_mode"] = "advanced"
@@ -96,7 +101,7 @@ class WebNavigationTests(WebAuthzBaseTestCase):
             with self.subTest(page=page, path=canonical_path):
                 canonical_endpoint = self._route(canonical_path, "GET")
                 legacy_endpoint = self._route(legacy_path, "GET")
-                if page == "config":
+                if page in {"config", "advanced-sync"}:
                     self.assertIsNot(canonical_endpoint, legacy_endpoint)
                 else:
                     self.assertIs(canonical_endpoint, legacy_endpoint)

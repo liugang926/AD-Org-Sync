@@ -861,12 +861,37 @@ class WebBrowserRegressionTests(unittest.TestCase):
             return_value=_MissingAccountPreviewProvider(),
         ):
             self.page.goto(
-                f"{self.base_url}/sync-policies/scope?lang=en&verify_ad=true",
+                f"{self.base_url}/identity-governance/identity-matching?lang=en&verify_ad=true",
                 wait_until="networkidle",
             )
-        self.assertTrue(self.page.get_by_role("heading", name="Sync Scope").is_visible())
-        self.assertEqual(self.page.locator("thead th").count(), 8)
-        self.assertEqual(self.page.locator('select[name="scope_type"]').count(), 1)
+        self.assertTrue(
+            self.page.get_by_role("heading", name="Identity Matching", level=1).is_visible()
+        )
+        matching_table = self.page.locator("[data-identity-matching-table]")
+        self.assertEqual(matching_table.locator("thead th").count(), 8)
+        alice_row = self.page.locator("tbody tr").filter(has_text="browser-alice")
+        self.assertTrue(
+            alice_row.get_by_text("Review Manual Override", exact=True).is_visible()
+        )
+        self.assertEqual(
+            alice_row.locator('input[name="selected_source_user_ids"]').count(), 0
+        )
+        bob_row = self.page.locator("tbody tr").filter(has_text="browser-bob")
+        bob_row.locator('input[name="selected_source_user_ids"]').check()
+        self.assertTrue(
+            bob_row.locator('input[name="selected_source_user_ids"]').is_checked()
+        )
+        self.assertTrue(
+            self.page.get_by_role(
+                "button", name="Prepare selected accounts for Dry Run"
+            ).is_enabled()
+        )
+        self._capture("identity-relationship-create-selection-desktop-en.png")
+
+        self.page.goto(
+            f"{self.base_url}/sync-policies/account-naming?lang=en",
+            wait_until="networkidle",
+        )
         self.assertEqual(self.page.locator('select[name="source_field"]').count(), 1)
         self.page.select_option('select[name="source_field"]', "source_user_id")
         self.assertEqual(
@@ -874,28 +899,6 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "source_user_id",
         )
         self.page.select_option('select[name="source_field"]', "employee_id")
-        alice_row = self.page.locator("tbody tr").filter(has_text="browser-alice")
-        self.assertTrue(
-            alice_row.get_by_text("Review identity", exact=True).is_visible()
-        )
-        bob_row = self.page.locator("tbody tr").filter(has_text="browser-bob")
-        bob_row.get_by_role("button", name="Select for creation").click()
-        self.assertTrue(
-            bob_row.locator('input[name="selected_source_user_ids"]').is_checked()
-        )
-        self.assertEqual(
-            self.page.locator('select[name="scope_type"]').input_value(),
-            "selected_users",
-        )
-        self.page.locator("details").filter(
-            has_text="Advanced: prepare account creation scope"
-        ).locator("summary").click()
-        self.assertTrue(
-            self.page.get_by_role(
-                "button", name="Prepare selected account creations"
-            ).is_enabled()
-        )
-        self._capture("identity-relationship-create-selection-desktop-en.png")
 
         self.page.goto(
             f"{self.base_url}/identity-governance/binding-reconciliation?lang=en",
@@ -1071,7 +1074,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.assertIn("Refresh Result", self.page.locator("body").inner_text())
         self.page.goto(
-            f"{self.base_url}/sync-policies/scope?lang=en",
+            f"{self.base_url}/sync-policies/account-naming?lang=en",
             wait_until="networkidle",
         )
         self.page.select_option('select[name="source_field"]', "employee_id")
@@ -1079,7 +1082,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             self.page.locator('select[name="source_field"]').input_value(),
             "employee_id",
         )
-        self._capture("sync-scope-refresh-complete-mapping-en.png")
+        self._capture("sync-account-naming-refresh-complete-mapping-en.png")
 
     def _assert_page_has_no_horizontal_overflow(self) -> None:
         dimensions = self.page.evaluate(
@@ -1232,6 +1235,74 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 )
                 self.assertEqual(layout["columns"], expected, layout)
                 self.assertLessEqual(layout["scrollWidth"], layout["clientWidth"] + 1, layout)
+
+    def test_sync_policy_pages_keep_one_primary_action_and_keyboard_flow(self):
+        self._login()
+        policy_pages = (
+            ("/sync-policies/scope?lang=en", "Sync Scope"),
+            ("/sync-policies/account-naming?lang=en", "Account Naming"),
+            ("/sync-policies/attribute-mappings?lang=en", "Attribute Mappings"),
+            ("/sync-policies/department-ou-routing?lang=en", "Department & OU Routing"),
+            ("/sync-policies/group-rules?lang=en", "Group Rules"),
+            ("/sync-policies/lifecycle?lang=en", "Lifecycle Policy"),
+            ("/sync-policies/security?lang=en", "Security Policy"),
+        )
+        for path, heading in policy_pages:
+            with self.subTest(path=path):
+                self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
+                self.assertTrue(
+                    self.page.get_by_role("heading", name=heading, level=1).is_visible()
+                )
+                self.assertEqual(
+                    self.page.locator(
+                        "main .button:not(.secondary):not(.ghost):not(.danger)"
+                    ).count(),
+                    1,
+                )
+                self.assertIn("Current status", self.page.locator("main").inner_text())
+                self.assertIn("Blocking reason", self.page.locator("main").inner_text())
+                self.assertIn("Next step", self.page.locator("main").inner_text())
+                for index in range(self.page.locator("main table").count()):
+                    self.assertLessEqual(
+                        self.page.locator("main table").nth(index).locator("thead th").count(),
+                        8,
+                    )
+
+        self.page.goto(
+            f"{self.base_url}/sync-policies/scope?lang=en",
+            wait_until="networkidle",
+        )
+        current_tab = self.page.locator(".policy-tabs__link[aria-current='page']")
+        current_tab.focus()
+        self.assertEqual(current_tab.evaluate("element => document.activeElement === element"), True)
+        self.page.keyboard.press("Tab")
+        self.assertIn(
+            "/sync-policies/account-naming",
+            self.page.evaluate("document.activeElement?.getAttribute('href') || ''"),
+        )
+
+        self.page.goto(
+            f"{self.base_url}/sync-policies/account-naming?lang=en",
+            wait_until="networkidle",
+        )
+        self.page.fill('input[name="sample_userid"]', "browser-policy-user")
+        self.page.fill('input[name="sample_name"]', "Browser Policy User")
+        self.page.get_by_role("button", name="Preview Username").click()
+        self.page.wait_for_function(
+            "() => (document.querySelector('[data-username-preview-results]')?.textContent || '').trim().length > 0"
+        )
+        self.assertNotIn("browser-directory-secret", self.page.content())
+        self._capture_viewport("sync-policy-account-naming-desktop-en.png")
+
+        self.page.set_viewport_size({"width": 390, "height": 900})
+        self.page.reload(wait_until="networkidle")
+        self._assert_page_has_no_horizontal_overflow()
+        tab_metrics = self.page.locator(".policy-tabs").evaluate(
+            "element => ({clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, overflowX: getComputedStyle(element).overflowX})"
+        )
+        self.assertIn(tab_metrics["overflowX"], {"auto", "scroll"}, tab_metrics)
+        self.assertGreaterEqual(tab_metrics["scrollWidth"], tab_metrics["clientWidth"], tab_metrics)
+        self._capture_viewport("sync-policy-account-naming-narrow-en.png")
 
     def test_login_page_loads_styles_and_primary_action(self):
         self.page.goto(f"{self.base_url}/login", wait_until="networkidle")
@@ -2081,6 +2152,30 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "sync-scope": (
                 "/sync-policies/scope?lang=zh-CN",
                 'select[name="scope_type"]',
+            ),
+            "sync-account-naming": (
+                "/sync-policies/account-naming?lang=zh-CN",
+                ".policy-status-grid",
+            ),
+            "sync-attribute-mappings": (
+                "/sync-policies/attribute-mappings?lang=zh-CN",
+                ".policy-status-grid",
+            ),
+            "sync-department-ou-routing": (
+                "/sync-policies/department-ou-routing?lang=zh-CN",
+                ".policy-status-grid",
+            ),
+            "sync-group-rules": (
+                "/sync-policies/group-rules?lang=zh-CN",
+                ".policy-status-grid",
+            ),
+            "sync-lifecycle-policy": (
+                "/sync-policies/lifecycle?lang=zh-CN",
+                ".policy-status-grid",
+            ),
+            "sync-security-policy": (
+                "/sync-policies/security?lang=zh-CN",
+                ".policy-status-grid",
             ),
             "mappings": ("/mappings?lang=zh-CN", ".table-shell"),
             "identity-job": (

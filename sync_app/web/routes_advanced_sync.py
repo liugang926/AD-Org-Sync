@@ -16,8 +16,17 @@ from sync_app.services.high_risk_operations import (
     HighRiskOperationPolicy,
     high_risk_audit_payload,
 )
+from sync_app.services.sync_policy_center import (
+    USERNAME_STRATEGY_BY_SOURCE_FIELD,
+    build_connector_policy_upsert,
+    update_policy_section,
+)
 from sync_app.services.typed_settings import AdvancedSyncPolicySettings
-from sync_app.web.app_state import get_web_repositories
+from sync_app.web.app_state import (
+    get_web_repositories,
+    get_web_runtime_state,
+    get_web_services,
+)
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
@@ -210,7 +219,116 @@ def register_advanced_sync_routes(
     to_bool: Callable[[Optional[str], bool], bool],
     translate_text: Callable[..., str],
 ) -> None:
+    def policy_release_context(request: Request, current_org: Any) -> dict[str, Any]:
+        release = get_web_services(request).config.build_release_center_context(
+            current_org=current_org,
+        )
+        return {
+            "has_unpublished_changes": bool(release.get("has_unpublished_changes")),
+            "latest_snapshot_title": str(release.get("latest_snapshot_title") or ""),
+            "snapshot_count": int(release.get("snapshot_count") or 0),
+        }
+
+    def policy_page_context(
+        request: Request,
+        *,
+        page: str,
+        title: str,
+        selected_connector_id: str = "",
+    ) -> dict[str, Any]:
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        connectors = list_org_connector_records(request)
+        selected_connector = next(
+            (
+                record
+                for record in connectors
+                if record.connector_id == str(selected_connector_id or "").strip()
+            ),
+            None,
+        )
+        return {
+            "page": page,
+            "title": title,
+            "current_org": current_org,
+            "connectors": connectors,
+            "selected_connector": selected_connector,
+            "policy_settings": AdvancedSyncPolicySettings.load(
+                repositories.settings_repo,
+                org_id=current_org.org_id,
+            ).to_dict(),
+            **policy_release_context(request, current_org),
+        }
+
+    def policy_redirect_path(request: Request, canonical_path: str) -> str:
+        return canonical_path if request.url.path.startswith("/sync-policies/") else "/advanced-sync"
+
+    def persist_connector_policy(
+        request: Request,
+        *,
+        connector_id: str,
+        section: str,
+        values: dict[str, Any],
+    ) -> Any:
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        record = repositories.connector_repo.get_connector_record(
+            str(connector_id or "").strip(),
+            org_id=current_org.org_id,
+        )
+        if record is None:
+            raise ValueError("Connector was not found in the selected organization")
+        repositories.connector_repo.upsert_connector(
+            **build_connector_policy_upsert(record, section, values)
+        )
+        return record
+
+    def audit_policy_change(
+        request: Request,
+        *,
+        user: Any,
+        section: str,
+        target_type: str,
+        target_id: str,
+        payload: dict[str, Any],
+        action: str = "update",
+    ) -> None:
+        current_org = get_current_org(request)
+        action_label = "Deleted" if action == "delete" else "Updated"
+        get_web_repositories(request).audit_repo.add_log(
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            action_type=f"sync_policy.{section}.{action}",
+            target_type=target_type,
+            target_id=target_id,
+            result="success",
+            message=f"{action_label} {section.replace('_', ' ')} sync policy",
+            payload={"org_id": current_org.org_id, **payload},
+        )
+
+    def persist_policy_settings_section(
+        request: Request,
+        *,
+        section: str,
+        values: dict[str, Any],
+    ) -> AdvancedSyncPolicySettings:
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        current = AdvancedSyncPolicySettings.load(
+            repositories.settings_repo,
+            org_id=current_org.org_id,
+        )
+        updated = update_policy_section(current, section, values)
+        updated.persist(repositories.settings_repo, org_id=current_org.org_id)
+        return updated
+
     @app.get(CANONICAL_ROUTE_PATHS["advanced-sync"], response_class=HTMLResponse)
+    def sync_policy_landing(request: Request):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        return RedirectResponse(url=CANONICAL_ROUTE_PATHS["sync-scope"], status_code=307)
+
     @app.get("/advanced-sync", response_class=HTMLResponse)
     def advanced_sync_page(request: Request):
         user = require_capability(request, "config.read")
@@ -290,6 +408,182 @@ def register_advanced_sync_routes(
             ],
         )
 
+    @app.get(CANONICAL_ROUTE_PATHS["sync-account-naming"], response_class=HTMLResponse)
+    def sync_account_naming_page(request: Request):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        repositories = get_web_repositories(request)
+        current_org = get_current_org(request)
+        runtime_state = get_web_runtime_state(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path or runtime_state.config_path,
+        )
+        source_snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=config.source_provider,
+        )
+        context = policy_page_context(
+            request,
+            page="sync-account-naming",
+            title="Account Naming",
+            selected_connector_id=str(request.query_params.get("connector_id") or ""),
+        )
+        return render(
+            request,
+            "sync_policy_account_naming.html",
+            **context,
+            source_provider=config.source_provider,
+            source_snapshot=source_snapshot,
+            source_fields=(
+                repositories.source_directory_repo.list_field_catalog(
+                    int(source_snapshot["id"]),
+                    org_id=current_org.org_id,
+                )
+                if source_snapshot
+                else []
+            ),
+            source_scope=repositories.source_directory_repo.get_scope_selection(
+                org_id=current_org.org_id,
+                provider_id=config.source_provider,
+            ),
+            employee_id_attribute=repositories.settings_repo.get_value(
+                "source_employee_id_attribute",
+                "",
+                org_id=current_org.org_id,
+            )
+            or "",
+            advanced_sync_client_i18n={
+                key: translate_text(get_ui_language(request), key)
+                for key in ADVANCED_SYNC_CLIENT_I18N_KEYS
+            },
+            username_strategy_options=[
+                ("userid", "Source User ID"),
+                ("email_localpart", "Email Local Part"),
+                ("employee_id", "Employee ID"),
+                ("pinyin_initials_employee_id", "Pinyin Initials + Employee ID"),
+                ("pinyin_full_employee_id", "Full Pinyin + Employee ID"),
+                ("family_name_pinyin_given_initials", "Family Pinyin + Given Initials"),
+                ("family_name_pinyin_given_name_pinyin", "Family Pinyin + Given Pinyin"),
+                ("custom_template", "Custom Template"),
+            ],
+            username_collision_policy_options=[
+                ("append_employee_id", "Append Employee ID"),
+                ("append_userid", "Append Source User ID"),
+                ("append_numeric_counter", "Append Numeric Counter"),
+                ("append_2digit_counter", "Append 2-Digit Sequence"),
+                ("append_3digit_counter", "Append 3-Digit Sequence"),
+                ("append_hash", "Append Deterministic Hash"),
+                ("custom_template", "Custom Collision Template"),
+            ],
+        )
+
+    @app.get(CANONICAL_ROUTE_PATHS["sync-attribute-mappings"], response_class=HTMLResponse)
+    def sync_attribute_mappings_page(request: Request):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        return render(
+            request,
+            "sync_policy_attribute_mappings.html",
+            **policy_page_context(
+                request,
+                page="sync-attribute-mappings",
+                title="Attribute Mappings",
+            ),
+            attribute_mappings=list_org_attribute_mapping_rules(request),
+            mapping_direction_options=[
+                ("source_to_ad", attribute_mapping_direction_labels["source_to_ad"]),
+                ("ad_to_source", attribute_mapping_direction_labels["ad_to_source"]),
+            ],
+            mapping_direction_labels=attribute_mapping_direction_labels,
+            mapping_mode_options=[(value, value) for value in ATTRIBUTE_SYNC_MODES],
+        )
+
+    @app.get(CANONICAL_ROUTE_PATHS["sync-department-ou-routing"], response_class=HTMLResponse)
+    def sync_department_ou_routing_page(request: Request):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        return render(
+            request,
+            "sync_policy_department_ou_routing.html",
+            **policy_page_context(
+                request,
+                page="sync-department-ou-routing",
+                title="Department & OU Routing",
+            ),
+            department_ou_mappings=get_web_repositories(
+                request
+            ).department_ou_mapping_repo.list_mapping_records(org_id=current_org.org_id),
+            department_ou_apply_mode_options=[
+                ("subtree", "Map subtree"),
+                ("exact", "Map exact department only"),
+            ],
+        )
+
+    @app.get(CANONICAL_ROUTE_PATHS["sync-group-rules"], response_class=HTMLResponse)
+    def sync_group_rules_page(request: Request):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        return render(
+            request,
+            "sync_policy_group_rules.html",
+            **policy_page_context(
+                request,
+                page="sync-group-rules",
+                title="Group Rules",
+                selected_connector_id=str(request.query_params.get("connector_id") or ""),
+            ),
+            group_type_options=[
+                (value, value.replace("_", " ").title()) for value in MANAGED_GROUP_TYPES
+            ],
+            custom_group_bindings=get_web_repositories(
+                request
+            ).custom_group_binding_repo.list_active_records(org_id=current_org.org_id),
+        )
+
+    @app.get(CANONICAL_ROUTE_PATHS["sync-lifecycle-policy"], response_class=HTMLResponse)
+    def sync_lifecycle_policy_page(request: Request):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        return render(
+            request,
+            "sync_policy_lifecycle.html",
+            **policy_page_context(
+                request,
+                page="sync-lifecycle-policy",
+                title="Lifecycle Policy",
+                selected_connector_id=str(request.query_params.get("connector_id") or ""),
+            ),
+        )
+
+    @app.get(CANONICAL_ROUTE_PATHS["sync-security-policy"], response_class=HTMLResponse)
+    def sync_security_policy_page(request: Request):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        return render(
+            request,
+            "sync_policy_security.html",
+            **policy_page_context(
+                request,
+                page="sync-security-policy",
+                title="Security Policy",
+                selected_connector_id=str(request.query_params.get("connector_id") or ""),
+            ),
+            first_sync_identity_claim_mode_options=[
+                ("auto_safe", "Auto-claim safe existing AD matches"),
+                ("review", "Review existing AD matches first"),
+            ],
+        )
+
+    @app.post(CANONICAL_ROUTE_PATHS["sync-account-naming"] + "/preview")
     @app.post("/advanced-sync/username-preview")
     def advanced_sync_username_preview(
         request: Request,
@@ -351,6 +645,473 @@ def register_advanced_sync_routes(
         except Exception as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
         return JSONResponse({"ok": True, "snapshot": snapshot})
+
+    @app.post(CANONICAL_ROUTE_PATHS["sync-account-naming"])
+    def sync_account_naming_submit(
+        request: Request,
+        csrf_token: str = Form(""),
+        policy_target: str = Form("source"),
+        connector_id: str = Form(""),
+        username_strategy: str = Form("userid"),
+        username_template: str = Form(""),
+        username_collision_policy: str = Form("append_employee_id"),
+        username_collision_template: str = Form(""),
+        employee_id_attribute: str = Form(""),
+        source_field: str = Form(""),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        redirect_url = CANONICAL_ROUTE_PATHS["sync-account-naming"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        normalized_target = str(policy_target or "source").strip().lower()
+        normalized_source_field = (
+            str(source_field or "").strip() if isinstance(source_field, str) else ""
+        )
+        normalized_strategy = normalize_username_strategy(username_strategy)
+        normalized_collision = normalize_username_collision_policy(username_collision_policy)
+        try:
+            if normalized_target == "source":
+                runtime_state = get_web_runtime_state(request)
+                config = repositories.org_config_repo.get_app_config(
+                    current_org.org_id,
+                    config_path=current_org.config_path or runtime_state.config_path,
+                )
+                scope = repositories.source_directory_repo.get_scope_selection(
+                    org_id=current_org.org_id,
+                    provider_id=config.source_provider,
+                )
+                if not scope:
+                    raise ValueError("Save synchronization scope before configuring source naming")
+                if normalized_source_field:
+                    normalized_strategy = USERNAME_STRATEGY_BY_SOURCE_FIELD.get(
+                        normalized_source_field,
+                        "custom_template",
+                    )
+                source_field_by_strategy = {
+                    strategy: field
+                    for field, strategy in USERNAME_STRATEGY_BY_SOURCE_FIELD.items()
+                }
+                normalized_template = str(username_template or "").strip()
+                if (
+                    normalized_source_field
+                    and normalized_source_field
+                    not in USERNAME_STRATEGY_BY_SOURCE_FIELD
+                ):
+                    normalized_template = "{" + normalized_source_field + "}"
+                repositories.source_directory_repo.save_scope_selection(
+                    org_id=current_org.org_id,
+                    provider_id=config.source_provider,
+                    connector_id=str(scope.get("connector_id") or "default"),
+                    scope_type=str(scope.get("scope_type") or "full"),
+                    selected_department_ids=scope.get("selected_department_ids") or (),
+                    selected_source_user_ids=scope.get("selected_source_user_ids") or (),
+                    username_strategy=normalized_strategy,
+                    username_template=normalized_template,
+                    source_field=(
+                        normalized_source_field
+                        or source_field_by_strategy[normalized_strategy]
+                    ),
+                    snapshot_id=int(scope.get("snapshot_id") or 0) or None,
+                    requested_by=user.username,
+                )
+                repositories.settings_repo.set_value(
+                    "source_employee_id_attribute",
+                    str(employee_id_attribute or "").strip(),
+                    "string",
+                    org_id=current_org.org_id,
+                )
+                target_id = config.source_provider
+            elif normalized_target == "connector":
+                normalized_connector_id = str(connector_id or "").strip()
+                persist_connector_policy(
+                    request,
+                    connector_id=normalized_connector_id,
+                    section="account_naming",
+                    values={
+                        "username_strategy": normalized_strategy,
+                        "username_template": str(username_template or "").strip(),
+                        "username_collision_policy": normalized_collision,
+                        "username_collision_template": str(
+                            username_collision_template or ""
+                        ).strip(),
+                    },
+                )
+                target_id = normalized_connector_id
+            else:
+                raise ValueError("Unsupported account naming target")
+        except (KeyError, TypeError, ValueError) as exc:
+            flash_t(request, "error", "Failed to save account naming: {error}", error=str(exc))
+            return RedirectResponse(url=redirect_url, status_code=303)
+        audit_policy_change(
+            request,
+            user=user,
+            section="account_naming",
+            target_type="source_provider" if normalized_target == "source" else "connector",
+            target_id=target_id,
+            payload={
+                "policy_target": normalized_target,
+                "connector_id": str(connector_id or "").strip(),
+                "username_strategy": normalized_strategy,
+                "username_collision_policy": normalized_collision,
+            },
+        )
+        flash_t(request, "success", "Account naming policy saved")
+        return RedirectResponse(url=redirect_url, status_code=303)
+
+    @app.post(CANONICAL_ROUTE_PATHS["sync-attribute-mappings"])
+    def sync_attribute_mapping_submit(
+        request: Request,
+        csrf_token: str = Form(""),
+        attribute_mapping_enabled: Optional[str] = Form(None),
+        write_back_enabled: Optional[str] = Form(None),
+        connector_id: str = Form(""),
+        direction: str = Form("source_to_ad"),
+        source_field: str = Form(""),
+        target_field: str = Form(""),
+        transform_template: str = Form(""),
+        sync_mode: str = Form("replace"),
+        notes: str = Form(""),
+        is_enabled: Optional[str] = Form(None),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        redirect_url = CANONICAL_ROUTE_PATHS["sync-attribute-mappings"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        normalized_connector_id = str(connector_id or "").strip()
+        normalized_source_field = str(source_field or "").strip()
+        normalized_target_field = str(target_field or "").strip()
+        if bool(normalized_source_field) != bool(normalized_target_field):
+            flash_t(
+                request,
+                "error",
+                "Failed to save mapping rule: {error}",
+                error="Both source and target fields are required",
+            )
+            return RedirectResponse(url=redirect_url, status_code=303)
+        if normalized_connector_id and not repositories.connector_repo.get_connector_record(
+            normalized_connector_id,
+            org_id=current_org.org_id,
+        ):
+            flash_t(
+                request,
+                "error",
+                "Failed to save mapping rule: {error}",
+                error="Connector was not found in the selected organization",
+            )
+            return RedirectResponse(url=redirect_url, status_code=303)
+        try:
+            updated = persist_policy_settings_section(
+                request,
+                section="attribute_mappings",
+                values={
+                    "attribute_mapping_enabled": to_bool(attribute_mapping_enabled, False),
+                    "write_back_enabled": to_bool(write_back_enabled, False),
+                },
+            )
+            if normalized_source_field:
+                repositories.attribute_mapping_repo.upsert_rule(
+                    connector_id=normalized_connector_id,
+                    direction=normalize_mapping_direction(direction),
+                    source_field=normalized_source_field,
+                    target_field=normalized_target_field,
+                    transform_template=str(transform_template or "").strip(),
+                    sync_mode=str(sync_mode or "replace").strip(),
+                    notes=str(notes or "").strip(),
+                    is_enabled=to_bool(is_enabled, True),
+                    org_id=current_org.org_id,
+                )
+        except (TypeError, ValueError) as exc:
+            flash_t(request, "error", "Failed to save mapping rule: {error}", error=str(exc))
+            return RedirectResponse(url=redirect_url, status_code=303)
+        audit_policy_change(
+            request,
+            user=user,
+            section="attribute_mappings",
+            target_type="attribute_mapping_rule",
+            target_id=(
+                f"{normalized_connector_id or 'global'}:{str(source_field or '').strip()}"
+                f"->{str(target_field or '').strip()}"
+            ),
+            payload={
+                "attribute_mapping_enabled": updated.attribute_mapping_enabled,
+                "write_back_enabled": updated.write_back_enabled,
+                "connector_id": normalized_connector_id,
+                "direction": normalize_mapping_direction(direction),
+                "source_field": str(source_field or "").strip(),
+                "target_field": str(target_field or "").strip(),
+            },
+        )
+        flash_t(request, "success", "Attribute mapping policy saved")
+        return RedirectResponse(url=redirect_url, status_code=303)
+
+    @app.post(CANONICAL_ROUTE_PATHS["sync-group-rules"])
+    def sync_group_rules_submit(
+        request: Request,
+        csrf_token: str = Form(""),
+        custom_group_sync_enabled: Optional[str] = Form(None),
+        managed_group_type: str = Form("security"),
+        managed_group_mail_domain: str = Form(""),
+        custom_group_ou_path: str = Form("Managed Groups"),
+        connector_id: str = Form(""),
+        connector_group_type: str = Form("security"),
+        connector_group_mail_domain: str = Form(""),
+        connector_custom_group_ou_path: str = Form("Managed Groups"),
+        managed_tag_ids: str = Form(""),
+        managed_external_chat_ids: str = Form(""),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        redirect_url = CANONICAL_ROUTE_PATHS["sync-group-rules"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
+        if csrf_error:
+            return csrf_error
+        normalized_connector_id = str(connector_id or "").strip()
+        if normalized_connector_id and not get_web_repositories(
+            request
+        ).connector_repo.get_connector_record(
+            normalized_connector_id,
+            org_id=get_current_org(request).org_id,
+        ):
+            flash_t(
+                request,
+                "error",
+                "Failed to save group rules: {error}",
+                error="Connector was not found in the selected organization",
+            )
+            return RedirectResponse(url=redirect_url, status_code=303)
+        updated = persist_policy_settings_section(
+            request,
+            section="group_rules",
+            values={
+                "custom_group_sync_enabled": to_bool(custom_group_sync_enabled, False),
+                "managed_group_type": managed_group_type,
+                "managed_group_mail_domain": managed_group_mail_domain,
+                "custom_group_ou_path": custom_group_ou_path,
+            },
+        )
+        try:
+            if normalized_connector_id:
+                persist_connector_policy(
+                    request,
+                    connector_id=normalized_connector_id,
+                    section="group_rules",
+                    values={
+                        "group_type": str(connector_group_type or "security").strip(),
+                        "group_mail_domain": str(connector_group_mail_domain or "").strip(),
+                        "custom_group_ou_path": str(
+                            connector_custom_group_ou_path or ""
+                        ).strip(),
+                        "managed_tag_ids": split_csv_values(managed_tag_ids),
+                        "managed_external_chat_ids": split_csv_values(
+                            managed_external_chat_ids
+                        ),
+                    },
+                )
+        except (TypeError, ValueError) as exc:
+            flash_t(request, "error", "Failed to save group rules: {error}", error=str(exc))
+            return RedirectResponse(url=redirect_url, status_code=303)
+        audit_policy_change(
+            request,
+            user=user,
+            section="group_rules",
+            target_type="connector" if normalized_connector_id else "settings",
+            target_id=normalized_connector_id or "group_rules",
+            payload={
+                "custom_group_sync_enabled": updated.custom_group_sync_enabled,
+                "managed_group_type": updated.managed_group_type,
+                "connector_id": normalized_connector_id,
+                "managed_tag_ids": split_csv_values(managed_tag_ids),
+                "managed_external_chat_ids": split_csv_values(managed_external_chat_ids),
+            },
+        )
+        flash_t(request, "success", "Group rules saved")
+        return RedirectResponse(url=redirect_url, status_code=303)
+
+    @app.post(CANONICAL_ROUTE_PATHS["sync-lifecycle-policy"])
+    def sync_lifecycle_policy_submit(
+        request: Request,
+        csrf_token: str = Form(""),
+        offboarding_grace_days: int = Form(0),
+        offboarding_notify_managers: Optional[str] = Form(None),
+        offboarding_lifecycle_enabled: Optional[str] = Form(None),
+        rehire_restore_enabled: Optional[str] = Form(None),
+        automatic_replay_enabled: Optional[str] = Form(None),
+        future_onboarding_enabled: Optional[str] = Form(None),
+        future_onboarding_start_field: str = Form("hire_date"),
+        contractor_lifecycle_enabled: Optional[str] = Form(None),
+        lifecycle_employment_type_field: str = Form("employment_type"),
+        contractor_end_field: str = Form("contract_end_date"),
+        lifecycle_sponsor_field: str = Form("sponsor_userid"),
+        contractor_type_values: str = Form("contractor,intern,vendor,temp"),
+        connector_id: str = Form(""),
+        disabled_users_ou: str = Form("Disabled Users"),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        redirect_url = CANONICAL_ROUTE_PATHS["sync-lifecycle-policy"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
+        if csrf_error:
+            return csrf_error
+        normalized_connector_id = str(connector_id or "").strip()
+        if normalized_connector_id and not get_web_repositories(
+            request
+        ).connector_repo.get_connector_record(
+            normalized_connector_id,
+            org_id=get_current_org(request).org_id,
+        ):
+            flash_t(
+                request,
+                "error",
+                "Failed to save lifecycle policy: {error}",
+                error="Connector was not found in the selected organization",
+            )
+            return RedirectResponse(url=redirect_url, status_code=303)
+        updated = persist_policy_settings_section(
+            request,
+            section="lifecycle",
+            values={
+                "offboarding_grace_days": offboarding_grace_days,
+                "offboarding_notify_managers": to_bool(offboarding_notify_managers, False),
+                "offboarding_lifecycle_enabled": to_bool(offboarding_lifecycle_enabled, False),
+                "rehire_restore_enabled": to_bool(rehire_restore_enabled, False),
+                "automatic_replay_enabled": to_bool(automatic_replay_enabled, False),
+                "future_onboarding_enabled": to_bool(future_onboarding_enabled, False),
+                "future_onboarding_start_field": future_onboarding_start_field,
+                "contractor_lifecycle_enabled": to_bool(contractor_lifecycle_enabled, False),
+                "lifecycle_employment_type_field": lifecycle_employment_type_field,
+                "contractor_end_field": contractor_end_field,
+                "lifecycle_sponsor_field": lifecycle_sponsor_field,
+                "contractor_type_values": contractor_type_values,
+            },
+        )
+        try:
+            if normalized_connector_id:
+                persist_connector_policy(
+                    request,
+                    connector_id=normalized_connector_id,
+                    section="lifecycle",
+                    values={"disabled_users_ou": str(disabled_users_ou or "").strip()},
+                )
+        except (TypeError, ValueError) as exc:
+            flash_t(request, "error", "Failed to save lifecycle policy: {error}", error=str(exc))
+            return RedirectResponse(url=redirect_url, status_code=303)
+        audit_policy_change(
+            request,
+            user=user,
+            section="lifecycle",
+            target_type="connector" if normalized_connector_id else "settings",
+            target_id=normalized_connector_id or "lifecycle",
+            payload={
+                "offboarding_lifecycle_enabled": updated.offboarding_lifecycle_enabled,
+                "future_onboarding_enabled": updated.future_onboarding_enabled,
+                "contractor_lifecycle_enabled": updated.contractor_lifecycle_enabled,
+                "connector_id": normalized_connector_id,
+            },
+        )
+        flash_t(request, "success", "Lifecycle policy saved")
+        return RedirectResponse(url=redirect_url, status_code=303)
+
+    @app.post(CANONICAL_ROUTE_PATHS["sync-security-policy"])
+    def sync_security_policy_submit(
+        request: Request,
+        csrf_token: str = Form(""),
+        advanced_connector_routing_enabled: Optional[str] = Form(None),
+        disable_circuit_breaker_enabled: Optional[str] = Form(None),
+        disable_circuit_breaker_percent: float = Form(5.0),
+        disable_circuit_breaker_min_count: int = Form(10),
+        disable_circuit_breaker_requires_approval: Optional[str] = Form(None),
+        first_sync_identity_claim_mode: str = Form("auto_safe"),
+        connector_id: str = Form(""),
+        force_change_password: str = Form(""),
+        password_complexity: str = Form(""),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        redirect_url = CANONICAL_ROUTE_PATHS["sync-security-policy"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
+        if csrf_error:
+            return csrf_error
+        normalized_connector_id = str(connector_id or "").strip()
+        if normalized_connector_id and not get_web_repositories(
+            request
+        ).connector_repo.get_connector_record(
+            normalized_connector_id,
+            org_id=get_current_org(request).org_id,
+        ):
+            flash_t(
+                request,
+                "error",
+                "Failed to save security policy: {error}",
+                error="Connector was not found in the selected organization",
+            )
+            return RedirectResponse(url=redirect_url, status_code=303)
+        updated = persist_policy_settings_section(
+            request,
+            section="security",
+            values={
+                "advanced_connector_routing_enabled": to_bool(
+                    advanced_connector_routing_enabled, False
+                ),
+                "disable_circuit_breaker_enabled": to_bool(
+                    disable_circuit_breaker_enabled, False
+                ),
+                "disable_circuit_breaker_percent": disable_circuit_breaker_percent,
+                "disable_circuit_breaker_min_count": disable_circuit_breaker_min_count,
+                "disable_circuit_breaker_requires_approval": to_bool(
+                    disable_circuit_breaker_requires_approval, False
+                ),
+                "first_sync_identity_claim_mode": first_sync_identity_claim_mode,
+            },
+        )
+        try:
+            if normalized_connector_id:
+                connector_values: dict[str, Any] = {
+                    "password_complexity": str(password_complexity or "").strip()
+                }
+                if str(force_change_password or "").strip().lower() in {"true", "false"}:
+                    connector_values["force_change_password"] = (
+                        str(force_change_password).strip().lower() == "true"
+                    )
+                persist_connector_policy(
+                    request,
+                    connector_id=normalized_connector_id,
+                    section="security",
+                    values=connector_values,
+                )
+        except (TypeError, ValueError) as exc:
+            flash_t(request, "error", "Failed to save security policy: {error}", error=str(exc))
+            return RedirectResponse(url=redirect_url, status_code=303)
+        audit_policy_change(
+            request,
+            user=user,
+            section="security",
+            target_type="connector" if normalized_connector_id else "settings",
+            target_id=normalized_connector_id or "security",
+            payload={
+                "advanced_connector_routing_enabled": updated.advanced_connector_routing_enabled,
+                "disable_circuit_breaker_enabled": updated.disable_circuit_breaker_enabled,
+                "disable_circuit_breaker_percent": updated.disable_circuit_breaker_percent,
+                "disable_circuit_breaker_min_count": updated.disable_circuit_breaker_min_count,
+                "disable_circuit_breaker_requires_approval": updated.disable_circuit_breaker_requires_approval,
+                "first_sync_identity_claim_mode": updated.first_sync_identity_claim_mode,
+                "connector_id": normalized_connector_id,
+            },
+        )
+        flash_t(request, "success", "Security policy saved")
+        return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post("/advanced-sync/policies")
     def advanced_sync_policy_submit(
@@ -544,6 +1305,7 @@ def register_advanced_sync_routes(
         flash_t(request, "success", "Connector {connector_id} saved", connector_id=connector_id.strip())
         return RedirectResponse(url="/advanced-sync", status_code=303)
 
+    @app.post(CANONICAL_ROUTE_PATHS["sync-department-ou-routing"])
     @app.post("/advanced-sync/department-ou-mappings")
     def advanced_sync_department_ou_mapping_submit(
         request: Request,
@@ -559,7 +1321,11 @@ def register_advanced_sync_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/advanced-sync")
+        redirect_url = policy_redirect_path(
+            request,
+            CANONICAL_ROUTE_PATHS["sync-department-ou-routing"],
+        )
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
         if csrf_error:
             return csrf_error
         current_org = get_current_org(request)
@@ -575,7 +1341,7 @@ def register_advanced_sync_routes(
                 "Connector {connector_id} was not found in the selected organization",
                 connector_id=normalized_connector_id,
             )
-            return RedirectResponse(url="/advanced-sync", status_code=303)
+            return RedirectResponse(url=redirect_url, status_code=303)
         try:
             repositories.department_ou_mapping_repo.upsert_mapping(
                 org_id=current_org.org_id,
@@ -589,10 +1355,26 @@ def register_advanced_sync_routes(
             )
         except Exception as exc:
             flash_t(request, "error", "Failed to save department routing: {error}", error=str(exc))
-            return RedirectResponse(url="/advanced-sync", status_code=303)
+            return RedirectResponse(url=redirect_url, status_code=303)
+        audit_policy_change(
+            request,
+            user=user,
+            section="department_ou_routing",
+            target_type="department_ou_mapping",
+            target_id=f"{normalized_connector_id or 'global'}:{source_department_id.strip()}",
+            payload={
+                "connector_id": normalized_connector_id,
+                "source_department_id": source_department_id.strip(),
+                "source_department_name": source_department_name.strip(),
+                "target_ou_path": target_ou_path.strip(),
+                "apply_mode": str(apply_mode or "subtree").strip().lower(),
+                "is_enabled": to_bool(is_enabled, True),
+            },
+        )
         flash_t(request, "success", "Department routing saved")
-        return RedirectResponse(url="/advanced-sync", status_code=303)
+        return RedirectResponse(url=redirect_url, status_code=303)
 
+    @app.post(CANONICAL_ROUTE_PATHS["sync-department-ou-routing"] + "/{mapping_id}/delete")
     @app.post("/advanced-sync/department-ou-mappings/{mapping_id}/delete")
     def advanced_sync_department_ou_mapping_delete(
         request: Request,
@@ -602,7 +1384,11 @@ def register_advanced_sync_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/advanced-sync")
+        redirect_url = policy_redirect_path(
+            request,
+            CANONICAL_ROUTE_PATHS["sync-department-ou-routing"],
+        )
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
         if csrf_error:
             return csrf_error
         current_org = get_current_org(request)
@@ -617,14 +1403,27 @@ def register_advanced_sync_routes(
         )
         if not record:
             flash_t(request, "error", "Department routing rule not found")
-            return RedirectResponse(url="/advanced-sync", status_code=303)
+            return RedirectResponse(url=redirect_url, status_code=303)
         repositories.department_ou_mapping_repo.delete_mapping(
             record.source_department_id,
             connector_id=record.connector_id,
             org_id=current_org.org_id,
         )
+        audit_policy_change(
+            request,
+            user=user,
+            section="department_ou_routing",
+            target_type="department_ou_mapping",
+            target_id=str(mapping_id),
+            action="delete",
+            payload={
+                "connector_id": record.connector_id,
+                "source_department_id": record.source_department_id,
+                "target_ou_path": record.target_ou_path,
+            },
+        )
         flash_t(request, "success", "Department routing deleted")
-        return RedirectResponse(url="/advanced-sync", status_code=303)
+        return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post("/advanced-sync/connectors/{connector_id}/toggle")
     def advanced_sync_connector_toggle(
@@ -794,9 +1593,28 @@ def register_advanced_sync_routes(
         except Exception as exc:
             flash_t(request, "error", "Failed to save mapping rule: {error}", error=str(exc))
             return RedirectResponse(url="/advanced-sync", status_code=303)
+        audit_policy_change(
+            request,
+            user=user,
+            section="attribute_mappings",
+            target_type="attribute_mapping_rule",
+            target_id=(
+                f"{normalized_connector_id or 'global'}:{source_field.strip()}"
+                f"->{target_field.strip()}"
+            ),
+            payload={
+                "connector_id": normalized_connector_id,
+                "direction": normalize_mapping_direction(direction),
+                "source_field": source_field.strip(),
+                "target_field": target_field.strip(),
+                "sync_mode": sync_mode.strip(),
+                "is_enabled": to_bool(is_enabled, True),
+            },
+        )
         flash_t(request, "success", "Mapping rule saved")
         return RedirectResponse(url="/advanced-sync", status_code=303)
 
+    @app.post(CANONICAL_ROUTE_PATHS["sync-attribute-mappings"] + "/{rule_id}/delete")
     @app.post("/advanced-sync/mappings/{rule_id}/delete")
     def advanced_sync_mapping_delete(
         request: Request,
@@ -806,14 +1624,35 @@ def register_advanced_sync_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/advanced-sync")
+        redirect_url = policy_redirect_path(
+            request,
+            CANONICAL_ROUTE_PATHS["sync-attribute-mappings"],
+        )
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
         if csrf_error:
             return csrf_error
         current_org = get_current_org(request)
         repositories = get_web_repositories(request)
-        if not repositories.attribute_mapping_repo.get_rule_record(rule_id, org_id=current_org.org_id):
+        record = repositories.attribute_mapping_repo.get_rule_record(
+            rule_id,
+            org_id=current_org.org_id,
+        )
+        if not record:
             flash_t(request, "error", "Mapping rule not found in the selected organization")
-            return RedirectResponse(url="/advanced-sync", status_code=303)
+            return RedirectResponse(url=redirect_url, status_code=303)
         repositories.attribute_mapping_repo.delete_rule(rule_id, org_id=current_org.org_id)
+        audit_policy_change(
+            request,
+            user=user,
+            section="attribute_mappings",
+            target_type="attribute_mapping_rule",
+            target_id=str(rule_id),
+            action="delete",
+            payload={
+                "connector_id": record.connector_id,
+                "source_field": record.source_field,
+                "target_field": record.target_field,
+            },
+        )
         flash_t(request, "success", "Mapping rule deleted")
-        return RedirectResponse(url="/advanced-sync", status_code=303)
+        return RedirectResponse(url=redirect_url, status_code=303)

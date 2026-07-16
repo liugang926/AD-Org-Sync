@@ -27,24 +27,20 @@ from sync_app.services.runtime_connectors import (
 )
 from sync_app.services.runtime_bootstrap import build_runtime_config_fingerprint
 from sync_app.services.source_directory import SourceDirectoryService
-from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
+from sync_app.services.sync_policy_center import (
+    USERNAME_STRATEGY_BY_SOURCE_FIELD,
+    build_connector_policy_upsert,
+)
+from sync_app.web.app_state import (
+    get_web_repositories,
+    get_web_runtime_state,
+    get_web_services,
+)
 
 
 LOGGER = logging.getLogger(__name__)
 BINDING_CLEANUP_PREVIEW_SESSION_KEY = "_binding_cleanup_preview"
 BINDING_CLEANUP_PREVIEW_MAX_AGE_SECONDS = 900
-STRATEGY_BY_SOURCE_FIELD = {
-    "source_user_id": "userid",
-    "employee_id": "employee_id",
-    "email_localpart": "email_localpart",
-    "pinyin_initials_employee_id": "pinyin_initials_employee_id",
-    "pinyin_full_employee_id": "pinyin_full_employee_id",
-    "family_name_pinyin_given_initials": "family_name_pinyin_given_initials",
-    "family_name_pinyin_given_name_pinyin": "family_name_pinyin_given_name_pinyin",
-    "custom_template": "custom_template",
-}
-
-
 def _row_dict(row: Any) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
@@ -804,6 +800,7 @@ def register_source_directory_routes(
             search=search,
             selected_relationship_status=relationship_status,
             ad_verified=page_data["ad_verified"],
+            creation_eligible_count=page_data["creation_eligible_count"],
         )
 
     @app.get(
@@ -868,7 +865,7 @@ def register_source_directory_routes(
         department_id: str = "",
         status: str = "",
         employee_id_state: str = "",
-        verify_ad: bool = False,
+        connector_id: str = "",
     ):
         user = require_capability(request, "config.read")
         if isinstance(user, RedirectResponse):
@@ -886,7 +883,21 @@ def register_source_directory_routes(
             status=status,
             employee_id_state=employee_id_state,
             relationship_status="all",
-            verify_ad=verify_ad,
+            verify_ad=False,
+        )
+        connectors = repositories.connector_repo.list_connector_records(
+            org_id=current_org.org_id,
+        )
+        selected_connector = next(
+            (
+                record
+                for record in connectors
+                if record.connector_id == str(connector_id or "").strip()
+            ),
+            None,
+        )
+        release = get_web_services(request).config.build_release_center_context(
+            current_org=current_org,
         )
         return render(
             request,
@@ -909,8 +920,10 @@ def register_source_directory_routes(
             selected_department_id=department_id,
             selected_status=status,
             selected_employee_id_state=employee_id_state,
-            ad_verified=page_data["ad_verified"],
-            creation_eligible_count=page_data["creation_eligible_count"],
+            connectors=connectors,
+            selected_connector=selected_connector,
+            has_unpublished_changes=bool(release.get("has_unpublished_changes")),
+            latest_snapshot_title=str(release.get("latest_snapshot_title") or ""),
             employee_id_attribute=repositories.settings_repo.get_value(
                 "source_employee_id_attribute",
                 "",
@@ -1445,6 +1458,7 @@ def register_source_directory_routes(
             status_code=303,
         )
 
+    @app.post(CANONICAL_ROUTE_PATHS["sync-scope"])
     @app.post("/source-directory/scope")
     def save_source_directory_scope(
         request: Request,
@@ -1452,9 +1466,11 @@ def register_source_directory_routes(
         scope_type: str = Form("full"),
         selected_department_ids: list[str] = Form(default=[]),
         selected_source_user_ids: list[str] = Form(default=[]),
-        source_field: str = Form("source_user_id"),
-        username_template: str = Form(""),
-        employee_id_attribute: str = Form(""),
+        source_field: str = Form(""),
+        username_template: str | None = Form(None),
+        employee_id_attribute: str | None = Form(None),
+        connector_id: str = Form(""),
+        root_department_ids: str = Form(""),
         selection_mode: str = Form("explicit"),
         selection_search: str = Form(""),
         selection_department_id: str = Form(""),
@@ -1478,9 +1494,63 @@ def register_source_directory_routes(
             current_org.org_id,
             config_path=current_org.config_path or runtime_state.config_path,
         )
-        strategy = STRATEGY_BY_SOURCE_FIELD.get(source_field, "custom_template")
-        if source_field not in STRATEGY_BY_SOURCE_FIELD:
-            username_template = "{" + source_field + "}"
+        existing_scope = repositories.source_directory_repo.get_scope_selection(
+            org_id=current_org.org_id,
+            provider_id=config.source_provider,
+        )
+        submitted_source_field = source_field if isinstance(source_field, str) else ""
+        normalized_source_field = str(submitted_source_field or "").strip() or str(
+            (existing_scope or {}).get("source_field") or "source_user_id"
+        )
+        normalized_username_template = (
+            str(username_template).strip()
+            if username_template is not None
+            else str((existing_scope or {}).get("username_template") or "")
+        )
+        strategy = (
+            USERNAME_STRATEGY_BY_SOURCE_FIELD.get(
+                normalized_source_field, "custom_template"
+            )
+            if str(submitted_source_field or "").strip()
+            else str((existing_scope or {}).get("username_strategy") or "userid")
+        )
+        if (
+            str(submitted_source_field or "").strip()
+            and normalized_source_field not in USERNAME_STRATEGY_BY_SOURCE_FIELD
+        ):
+            normalized_username_template = "{" + normalized_source_field + "}"
+        normalized_connector_id = (
+            str(connector_id or "").strip() if isinstance(connector_id, str) else ""
+        )
+        connector_record = None
+        normalized_root_department_ids: list[int] = []
+        if normalized_connector_id:
+            connector_record = repositories.connector_repo.get_connector_record(
+                normalized_connector_id,
+                org_id=current_org.org_id,
+            )
+            if connector_record is None:
+                flash(request, "error", "Connector was not found in the selected organization")
+                return RedirectResponse(
+                    url=CANONICAL_ROUTE_PATHS["sync-scope"],
+                    status_code=303,
+                )
+            try:
+                normalized_root_department_ids = [
+                    int(item.strip())
+                    for item in (
+                        str(root_department_ids or "")
+                        if isinstance(root_department_ids, str)
+                        else ""
+                    ).split(",")
+                    if item.strip()
+                ]
+            except ValueError:
+                flash(request, "error", "Connector root department IDs must be integers")
+                return RedirectResponse(
+                    url=CANONICAL_ROUTE_PATHS["sync-scope"],
+                    status_code=303,
+                )
         try:
             if selection_mode == "all_filtered" and scope_type == "selected_users":
                 snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
@@ -1507,12 +1577,13 @@ def register_source_directory_routes(
                     offset += len(page["items"])
                     if offset >= int(page["total"]) or not page["items"]:
                         break
-            repositories.settings_repo.set_value(
-                "source_employee_id_attribute",
-                str(employee_id_attribute or "").strip(),
-                "string",
-                org_id=current_org.org_id,
-            )
+            if employee_id_attribute is not None:
+                repositories.settings_repo.set_value(
+                    "source_employee_id_attribute",
+                    str(employee_id_attribute or "").strip(),
+                    "string",
+                    org_id=current_org.org_id,
+                )
             selection = repositories.source_directory_repo.save_scope_selection(
                 org_id=current_org.org_id,
                 provider_id=config.source_provider,
@@ -1520,10 +1591,18 @@ def register_source_directory_routes(
                 selected_department_ids=selected_department_ids,
                 selected_source_user_ids=selected_source_user_ids,
                 username_strategy=strategy,
-                username_template=username_template,
-                source_field=source_field,
+                username_template=normalized_username_template,
+                source_field=normalized_source_field,
                 requested_by=user.username,
             )
+            if connector_record is not None:
+                repositories.connector_repo.upsert_connector(
+                    **build_connector_policy_upsert(
+                        connector_record,
+                        "scope",
+                        {"root_department_ids": normalized_root_department_ids},
+                    )
+                )
         except ValueError as exc:
             flash(request, "error", str(exc))
             return RedirectResponse(
@@ -1537,12 +1616,13 @@ def register_source_directory_routes(
             target_type="sync_scope",
             target_id=config.source_provider,
             result="success",
-            message="Source sync scope and AD username mapping were updated",
+            message="Source and connector synchronization scope were updated",
             payload={
                 "scope_type": selection["scope_type"],
                 "selected_department_count": len(selection["selected_department_ids"]),
                 "selected_user_count": len(selection["selected_source_user_ids"]),
-                "source_field": source_field,
+                "connector_id": normalized_connector_id,
+                "connector_root_department_count": len(normalized_root_department_ids),
                 "selection_fingerprint": selection["selection_fingerprint"],
             },
         )
@@ -1561,10 +1641,11 @@ def register_source_directory_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
+        preparation_path = CANONICAL_ROUTE_PATHS["identity-matching"]
         csrf_error = reject_invalid_csrf(
             request,
             csrf_token,
-            CANONICAL_ROUTE_PATHS["sync-scope"],
+            preparation_path,
         )
         if csrf_error:
             return csrf_error
@@ -1583,7 +1664,7 @@ def register_source_directory_routes(
                 "Select at least one verified missing candidate account.",
             )
             return RedirectResponse(
-                url=CANONICAL_ROUTE_PATHS["sync-scope"],
+                url=preparation_path,
                 status_code=303,
             )
         if len(normalized_source_user_ids) > 100:
@@ -1593,7 +1674,7 @@ def register_source_directory_routes(
                 "Prepare no more than 100 candidate accounts at a time.",
             )
             return RedirectResponse(
-                url=CANONICAL_ROUTE_PATHS["sync-scope"],
+                url=preparation_path,
                 status_code=303,
             )
 
@@ -1640,7 +1721,7 @@ def register_source_directory_routes(
             )
             flash(request, "error", message)
             return RedirectResponse(
-                url=CANONICAL_ROUTE_PATHS["sync-scope"] + "?verify_ad=true",
+                url=preparation_path + "?verify_ad=true",
                 status_code=303,
             )
 
@@ -1665,7 +1746,7 @@ def register_source_directory_routes(
         except ValueError as exc:
             flash(request, "error", str(exc))
             return RedirectResponse(
-                url=CANONICAL_ROUTE_PATHS["sync-scope"] + "?verify_ad=true",
+                url=preparation_path + "?verify_ad=true",
                 status_code=303,
             )
 
