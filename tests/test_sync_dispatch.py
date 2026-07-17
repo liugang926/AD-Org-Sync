@@ -19,6 +19,7 @@ from sync_app.storage.local_db import (
     SyncJobRepository,
     WebAuditLogRepository,
 )
+from tests.helpers.execution_plans import create_eligible_execution_plan
 
 
 class SyncDispatchTests(unittest.TestCase):
@@ -225,7 +226,7 @@ class SyncDispatchTests(unittest.TestCase):
 
             self.assertFalse(result.accepted)
             self.assertIsNone(result.job)
-            self.assertIn("No successful dry run", result.message)
+            self.assertIn("no completed Dry Run plan", result.message)
             self.assertEqual(SyncJobRepository(db_manager).count_jobs(), 0)
 
     def test_enqueue_sync_job_blocks_scheduled_apply_after_dry_run_with_errors(self):
@@ -254,7 +255,7 @@ class SyncDispatchTests(unittest.TestCase):
 
             self.assertFalse(result.accepted)
             self.assertIsNone(result.job)
-            self.assertIn("Latest dry run did not complete successfully", result.message)
+            self.assertIn("no completed Dry Run plan", result.message)
             self.assertEqual(SyncJobRepository(db_manager).count_jobs(), 1)
 
     def test_enqueue_sync_job_allows_scheduled_apply_after_successful_dry_run(self):
@@ -262,24 +263,12 @@ class SyncDispatchTests(unittest.TestCase):
             db_path = Path(temp_dir) / "dispatch-schedule-ready.db"
             db_manager = DatabaseManager(db_path=str(db_path))
             db_manager.initialize()
-            job_repo = SyncJobRepository(db_manager)
-
-            job_repo.create_job(
+            create_eligible_execution_plan(
+                db_manager,
                 job_id="job-dry-run-green",
-                trigger_type="unit_test",
-                execution_mode="dry_run",
-                status="COMPLETED",
                 org_id="default",
-                started_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
-            )
-            job_repo.update_job(
-                "job-dry-run-green",
-                summary={
-                    "planned_operation_count": 1,
-                    "conflict_count": 0,
-                    "high_risk_operation_count": 0,
-                    "review_required": False,
-                },
+                high_risk_operation_count=0,
+                approved=True,
             )
 
             result = enqueue_sync_job(
@@ -293,6 +282,49 @@ class SyncDispatchTests(unittest.TestCase):
 
             self.assertTrue(result.accepted)
             self.assertIsNotNone(result.job)
+            self.assertEqual(SyncJobRepository(db_manager).count_jobs(), 2)
+            self.assertEqual(result.job.plan_source_job_id, "job-dry-run-green")
+
+    def test_enqueue_sync_job_does_not_reuse_a_consumed_plan(self):
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "dispatch-plan-once.db"
+            db_manager = DatabaseManager(db_path=str(db_path))
+            db_manager.initialize()
+            create_eligible_execution_plan(
+                db_manager,
+                job_id="job-plan-once",
+                approved=True,
+            )
+
+            first = enqueue_sync_job(
+                db_path=str(db_path),
+                execution_mode="apply",
+                trigger_type="web",
+                org_id="default",
+                config_path="config.ini",
+                requested_by="alice",
+                plan_source_job_id="job-plan-once",
+            )
+            self.assertTrue(first.accepted)
+            SyncJobRepository(db_manager).update_job(
+                first.job.job_id,
+                status="COMPLETED",
+                ended=True,
+            )
+
+            second = enqueue_sync_job(
+                db_path=str(db_path),
+                execution_mode="apply",
+                trigger_type="web",
+                org_id="default",
+                config_path="config.ini",
+                requested_by="alice",
+                plan_source_job_id="job-plan-once",
+            )
+
+            self.assertFalse(second.accepted)
+            self.assertIsNone(second.job)
+            self.assertIn("already has an Apply job", second.message)
             self.assertEqual(SyncJobRepository(db_manager).count_jobs(), 2)
 
 

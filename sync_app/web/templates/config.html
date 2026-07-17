@@ -469,11 +469,7 @@
         </div>
         <div class="config-action-row__actions">
           {% if config_rollout_status.show_run_dry_run and can("jobs.run") %}
-          <form class="inline" method="post" action="/jobs/run">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="mode" value="dry_run">
-            {{ ui.button(t("Run First Dry Run"), type="submit", variant="secondary", size="sm", icon="play") }}
-          </form>
+          {{ ui.button(t("Open Dry Run"), href="/execution-center/dry-run", variant="secondary", size="sm", icon="play") }}
           {% endif %}
           {% if config_rollout_status.open_conflict_count > 0 %}
           {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost", size="sm", icon="shield-alert") }}

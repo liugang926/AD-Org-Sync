@@ -18,6 +18,7 @@ from sync_app.storage.local_db import (
     OrganizationConfigRepository,
     OrganizationRepository,
     SettingsRepository,
+    SourceDirectoryRepository,
     SyncJobRepository,
     SyncPlanReviewRepository,
     SyncReplayRequestRepository,
@@ -27,6 +28,48 @@ from tests.helpers.runtime_fakes import FakeADSyncPolicy, FakeWeChatBot, FakeWeC
 
 
 class V1SmokePathTests(unittest.TestCase):
+    def _seed_source_scope(self, db_manager: DatabaseManager) -> None:
+        source_repo = SourceDirectoryRepository(db_manager)
+        snapshot_id = source_repo.start_refresh(
+            org_id="default",
+            provider_id="wecom",
+            created_by="test-v1-smoke",
+        )
+        source_repo.replace_snapshot(
+            snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "1",
+                    "name": "HQ",
+                    "parent_department_id": "0",
+                    "path_names": ["HQ"],
+                    "path_ids": [1],
+                }
+            ],
+            users=[
+                {
+                    "source_user_id": "alice",
+                    "display_name": "Alice",
+                    "email": "alice@example.com",
+                    "department_ids": [1],
+                    "department_names": ["HQ"],
+                    "primary_department_id": "1",
+                    "is_active": True,
+                    "raw_payload": FakeWeComProgrammableAPI.user_details["alice"],
+                }
+            ],
+            fields=[],
+            fingerprint="sha256:v2:test-v1-smoke-source",
+            ttl_minutes=240,
+        )
+        source_repo.save_scope_selection(
+            org_id="default",
+            provider_id="wecom",
+            scope_type="full",
+            snapshot_id=snapshot_id,
+            requested_by="tester",
+        )
+
     def _org_config_values(self, *, ldap_server: str = "dc01.example.local") -> dict:
         return {
             "corpid": "corp-001",
@@ -150,6 +193,7 @@ class V1SmokePathTests(unittest.TestCase):
             FakeADSyncPolicy.reset()
             FakeWeChatBot.reset()
             FakeADSyncPolicy.enabled_users_by_domain = {"example.com": ["bob"]}
+            self._seed_source_scope(db_manager)
 
             dry_run_result = self._run_job(
                 config=config,

@@ -8,16 +8,18 @@ from typing import Any, Optional
 
 from sync_app.core.common import generate_job_id
 from sync_app.core.models import SyncJobRecord
+from sync_app.services.execution_center import ExecutionCenterService
 from sync_app.services.high_risk_operations import (
-    HighRiskOperationPolicy,
-    build_apply_operation_context,
     high_risk_audit_payload,
+    resolve_environment_label,
 )
 from sync_app.services.notification_automation_center import evaluate_scheduled_apply_readiness
+from sync_app.services.runtime_bootstrap import resolve_runtime_config_fingerprint
 from sync_app.storage.local_db import (
     DatabaseManager,
     OrganizationRepository,
     SyncJobRepository,
+    SourceDirectoryRepository,
     WebAuditLogRepository,
 )
 from sync_app.storage.repositories.conflicts import SyncConflictRepository, SyncPlanReviewRepository
@@ -58,6 +60,35 @@ def _build_scheduled_apply_block_message(readiness: dict[str, Any]) -> str:
     if reasons:
         return "Scheduled apply blocked: " + " ".join(reasons)
     return str(readiness.get("summary") or "Scheduled apply blocked by automation policy.")
+
+
+APPLY_PLAN_BLOCK_MESSAGES = {
+    "high_risk.blocker.environment_unlabeled": (
+        "Apply blocked: this runtime environment is unlabeled. "
+        "Set AD_ORG_SYNC_ENVIRONMENT_LABEL and create a new Dry Run plan."
+    ),
+    "execution.blocker.no_dry_run": "Apply blocked: no completed Dry Run plan is available.",
+    "execution.blocker.not_dry_run": "Apply blocked: the selected job is not a Dry Run plan.",
+    "execution.blocker.plan_not_completed": "Apply blocked: the selected Dry Run did not complete successfully.",
+    "execution.blocker.plan_evidence_missing": "Apply blocked: the selected plan is missing fingerprint evidence.",
+    "execution.blocker.config_unavailable": "Apply blocked: the current configuration fingerprint could not be resolved.",
+    "execution.blocker.config_changed": "Apply blocked: the configuration changed after the Dry Run.",
+    "execution.blocker.plan_environment_unknown": "Apply blocked: the selected plan has no environment evidence.",
+    "execution.blocker.environment_changed": "Apply blocked: the environment changed after the Dry Run.",
+    "execution.blocker.plan_expired": "Apply blocked: the selected Dry Run plan expired.",
+    "execution.blocker.snapshot_evidence_missing": "Apply blocked: the selected plan has no source snapshot evidence.",
+    "execution.blocker.snapshot_changed": "Apply blocked: the source snapshot evidence changed.",
+    "execution.blocker.snapshot_unavailable": "Apply blocked: the source snapshot is no longer available.",
+    "execution.blocker.snapshot_expired": "Apply blocked: the source snapshot expired.",
+    "execution.blocker.scope_changed": "Apply blocked: the synchronization scope changed after the Dry Run.",
+    "execution.blocker.review_missing": "Apply blocked: the selected plan has no review record.",
+    "execution.blocker.review_mismatch": "Apply blocked: the review no longer matches the selected plan.",
+    "execution.blocker.review_pending": "Apply blocked: approve the selected Dry Run plan first.",
+    "execution.blocker.review_expired": "Apply blocked: the selected plan approval expired.",
+    "execution.blocker.plan_already_applied": (
+        "Apply blocked: the selected Dry Run plan already has an Apply job."
+    ),
+}
 
 
 class _LeaseHeartbeat:
@@ -143,6 +174,7 @@ def enqueue_sync_job(
     org_id: str,
     config_path: str,
     requested_by: str = "",
+    plan_source_job_id: str = "",
 ) -> SyncDispatchResult:
     _db_manager, job_repo = _open_job_repo(db_path)
     normalized_org_id = str(org_id or "").strip().lower() or "default"
@@ -156,41 +188,71 @@ def enqueue_sync_job(
             message=f"Synchronization job {existing_job.job_id} is already queued or running",
         )
 
+    selected_plan_job_id = ""
     if normalized_execution_mode == "apply":
         settings_repo = SettingsRepository(_db_manager)
         organization = OrganizationRepository(_db_manager).get_organization_record(
             normalized_org_id
         )
-        context = build_apply_operation_context(
+        environment_label = resolve_environment_label(
             settings_repo=settings_repo,
-            job_repo=job_repo,
-            organization_id=normalized_org_id,
-            organization_name=getattr(organization, "name", normalized_org_id),
+            org_id=normalized_org_id,
         )
-        gate = HighRiskOperationPolicy.evaluate(context)
-        if not gate.allowed:
+        execution_center = ExecutionCenterService(
+            job_repo=job_repo,
+            review_repo=SyncPlanReviewRepository(_db_manager),
+            source_directory_repo=SourceDirectoryRepository(_db_manager),
+            settings_repo=settings_repo,
+        )
+        evaluation_args = {
+            "org_id": normalized_org_id,
+            "organization_name": getattr(
+                organization,
+                "name",
+                normalized_org_id,
+            ),
+            "environment_label": environment_label,
+            "plan_job_id": str(plan_source_job_id or "").strip(),
+            "require_approval": True,
+        }
+        plan_evaluation = execution_center.evaluate_plan(**evaluation_args)
+        if plan_evaluation.allowed:
+            try:
+                current_config_fingerprint = resolve_runtime_config_fingerprint(
+                    db_manager=_db_manager,
+                    org_id=normalized_org_id,
+                    config_path=config_path,
+                )
+            except Exception:
+                current_config_fingerprint = None
+            plan_evaluation = execution_center.evaluate_plan(
+                **evaluation_args,
+                current_config_fingerprint=current_config_fingerprint,
+            )
+        if not plan_evaluation.allowed:
             WebAuditLogRepository(_db_manager).add_log(
                 org_id=normalized_org_id,
                 actor_username=str(requested_by or normalized_trigger_type),
                 action_type="high_risk.apply.blocked",
                 target_type="sync_apply",
-                target_id=context.preview_id or normalized_org_id,
+                target_id=plan_evaluation.context.preview_id or normalized_org_id,
                 result="blocked",
-                message="Apply was blocked because the runtime environment is unlabeled",
+                message="Apply was blocked because the selected plan is not eligible",
                 payload=high_risk_audit_payload(
-                    context,
+                    plan_evaluation.context,
                     trigger_type=normalized_trigger_type,
-                    reason_code=gate.reason_code,
+                    reason_code=plan_evaluation.reason_code,
                 ),
             )
             return SyncDispatchResult(
                 accepted=False,
                 job=None,
-                message=(
-                    "Apply blocked: this runtime environment is unlabeled. "
-                    "Set AD_ORG_SYNC_ENVIRONMENT_LABEL and retry after reviewing the same preview."
+                message=APPLY_PLAN_BLOCK_MESSAGES.get(
+                    plan_evaluation.reason_code,
+                    "Apply blocked: the selected Dry Run plan is not eligible.",
                 ),
             )
+        selected_plan_job_id = str(plan_evaluation.job.job_id or "")
 
     if _should_guard_scheduled_apply(
         execution_mode=normalized_execution_mode,
@@ -211,16 +273,44 @@ def enqueue_sync_job(
             )
 
     job_id = generate_job_id()
-    job_repo.create_job(
-        job_id=job_id,
-        org_id=normalized_org_id,
-        trigger_type=normalized_trigger_type,
-        execution_mode=normalized_execution_mode,
-        status="QUEUED",
-        requested_by=str(requested_by or "").strip(),
-        requested_config_path=str(config_path or "").strip(),
-    )
-    job_record = job_repo.get_job_record(job_id)
+    if normalized_execution_mode == "apply":
+        job_record, created, duplicate_plan = job_repo.create_apply_job_once(
+            job_id=job_id,
+            org_id=normalized_org_id,
+            trigger_type=normalized_trigger_type,
+            status="QUEUED",
+            requested_by=str(requested_by or "").strip(),
+            requested_config_path=str(config_path or "").strip(),
+            plan_source_job_id=selected_plan_job_id,
+        )
+        if not created:
+            if duplicate_plan:
+                return SyncDispatchResult(
+                    accepted=False,
+                    job=job_record,
+                    message=(
+                        f"Dry Run plan {selected_plan_job_id} already has Apply job "
+                        f"{job_record.job_id}. Run a new Dry Run before another Apply."
+                    ),
+                )
+            return SyncDispatchResult(
+                accepted=False,
+                job=job_record,
+                message=(
+                    f"Synchronization job {job_record.job_id} is already queued or running"
+                ),
+            )
+    else:
+        job_repo.create_job(
+            job_id=job_id,
+            org_id=normalized_org_id,
+            trigger_type=normalized_trigger_type,
+            execution_mode=normalized_execution_mode,
+            status="QUEUED",
+            requested_by=str(requested_by or "").strip(),
+            requested_config_path=str(config_path or "").strip(),
+        )
+        job_record = job_repo.get_job_record(job_id)
     return SyncDispatchResult(
         accepted=bool(job_record),
         job=job_record,
@@ -307,6 +397,7 @@ def run_sync_request(
     config_path: str,
     org_id: str,
     requested_by: str = "",
+    plan_source_job_id: str = "",
     stats_callback=None,
     cancel_flag=None,
 ) -> dict[str, Any]:
@@ -322,6 +413,7 @@ def run_sync_request(
         org_id=org_id,
         config_path=config_path,
         requested_by=requested_by,
+        plan_source_job_id=plan_source_job_id,
     )
     if not enqueue_result.accepted or not enqueue_result.job:
         raise RuntimeError(enqueue_result.message or "failed to enqueue sync job")

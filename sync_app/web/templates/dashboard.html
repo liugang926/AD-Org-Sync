@@ -26,7 +26,7 @@
         <div class="control-gate-card__label">{{ t("Latest Apply") }}</div>
         <div class="control-gate-card__status">
           {% if job_center_summary.latest_apply %}
-          {{ ui.identifier(job_center_summary.latest_apply.job_id, t("Copy Job ID"), t("Job ID copied"), "/jobs/" ~ job_center_summary.latest_apply.job_id) }}
+          {{ ui.identifier(job_center_summary.latest_apply.job_id, t("Copy Job ID"), t("Job ID copied"), "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id) }}
           {% else %}
           <strong>-</strong>
           {% endif %}
@@ -47,7 +47,7 @@
         <span>{{ t("Latest Dry Run") }}</span>
         <strong>
           {% if job_center_summary.latest_dry_run %}
-          {{ ui.identifier(job_center_summary.latest_dry_run.job_id, t("Copy Dry Run ID"), t("Dry Run ID copied"), "/jobs/" ~ job_center_summary.latest_dry_run.job_id) }}
+          {{ ui.identifier(job_center_summary.latest_dry_run.job_id, t("Copy Dry Run ID"), t("Dry Run ID copied"), "/execution-center/jobs/" ~ job_center_summary.latest_dry_run.job_id) }}
           {% else %}
           -
           {% endif %}
@@ -128,7 +128,7 @@
           {% if can("config.read") %}
           {{ ui.button(t("Open Organization Config"), href="/config", variant="secondary") }}
           {% endif %}
-          {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost") }}
+          {{ ui.button(t("Open Job History"), href="/execution-center/jobs", variant="ghost") }}
         </div>
       </div>
     {% endcall %}
@@ -259,37 +259,8 @@
     {% endcall %}
   </div>
 
-  {% call ui.panel(t("Recent Jobs"), description=t("Use this table to confirm the latest dry run, apply, and conflict counts.")) %}
-    {% call ui.table_shell() %}
-      <table>
-        <thead>
-          <tr>
-            <th>{{ t("Job ID") }}</th>
-            <th>{{ t("Mode") }}</th>
-            <th>{{ t("Status") }}</th>
-            <th>{{ t("Planned") }}</th>
-            <th>{{ t("Executed") }}</th>
-            <th>{{ t("Errors") }}</th>
-            <th>{{ t("Started At") }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for job in recent_jobs %}
-          <tr>
-            <td>{{ ui.identifier(job.job_id, t("Copy Job ID"), t("Job ID copied"), "/jobs/" ~ job.job_id) }}</td>
-            <td>{{ t(job.execution_mode) }}</td>
-            <td>{{ ui.badge(t(job.status), 'success' if job.status == 'success' else 'error') }}</td>
-            <td>{{ job.planned_operation_count }}</td>
-            <td>{{ job.executed_operation_count }}</td>
-            <td>{{ job.error_count }}</td>
-            <td>{{ ui.local_time(job.started_at) }}</td>
-          </tr>
-          {% else %}
-          <tr><td class="table-empty" colspan="7">{{ t("No job history yet.") }}</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% endcall %}
+  {% call ui.helper_block(t("Execution history moved to Execution Center"), t("Control Tower keeps only rollout status, blockers, and the next action. Use Job History for the complete run list and technical evidence."), "info") %}
+    <a href="/execution-center/jobs">{{ t("Open Job History") }}</a>
   {% endcall %}
 </div>
 {% endblock %}

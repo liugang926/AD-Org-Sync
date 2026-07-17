@@ -14,6 +14,7 @@ from sync_app.storage.local_db import (
     SyncConflictRepository,
     SyncJobRepository,
     SyncPlanReviewRepository,
+    SourceDirectoryRepository,
     WebAuditLogRepository,
 )
 from sync_app.web.services.config import WebConfigService
@@ -45,6 +46,7 @@ def build_web_service_state(
     planned_operation_repo: PlannedOperationRepository,
     conflict_repo: SyncConflictRepository,
     audit_repo: WebAuditLogRepository,
+    source_directory_repo: SourceDirectoryRepository,
 ) -> WebServiceState:
     approve_plan_use_case = build_approve_plan_use_case(db_manager)
     return WebServiceState(
@@ -54,6 +56,8 @@ def build_web_service_state(
             review_repo=review_repo,
             planned_operation_repo=planned_operation_repo,
             conflict_repo=conflict_repo,
+            source_directory_repo=source_directory_repo,
+            settings_repo=settings_repo,
         ),
         conflicts=WebConflictService(
             conflict_repo=conflict_repo,

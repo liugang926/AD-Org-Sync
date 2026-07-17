@@ -5,7 +5,7 @@
 <div class="page-stack">
   {% set status_level = 'success' if job.status == 'COMPLETED' else ('error' if job.status == 'FAILED' else 'warning') %}
   {% set summary = job.summary or {} %}
-  <a href="/jobs" class="back-link">&larr; {{ t("Back to Run Review") }}</a>
+  <a href="/execution-center/jobs" class="back-link">&larr; {{ t("Back to Job History") }}</a>
 
   <section class="job-review-hero job-review-hero--{{ status_level }}">
     <div class="job-review-hero__main">
@@ -24,7 +24,7 @@
     <div class="job-review-hero__facts">
       <div class="dense-meta">
         <div><strong>{{ t("Started At") }}</strong><br>{{ ui.local_time(job.started_at) }}</div>
-        <div><strong>{{ t("Ended At") }}</strong><br>{{ job.ended_at or "-" }}</div>
+        <div><strong>{{ t("Ended At") }}</strong><br>{{ ui.local_time(job.ended_at) }}</div>
         <div><strong>{{ t("Mode") }}</strong><br>{{ t(job.execution_mode) }}</div>
         <div><strong>{{ t("Status") }}</strong><br>{{ t(job.status) }}</div>
       </div>
@@ -148,7 +148,7 @@
           </div>
           <div class="detail-item">
             <div class="label">{{ t("Reviewed At") }}</div>
-            <div class="value">{{ review_record.reviewed_at }}</div>
+            <div class="value">{{ ui.local_time(review_record.reviewed_at) }}</div>
           </div>
           {% endif %}
         </div>
@@ -158,13 +158,8 @@
       <div class="panel-note warning">
         <div class="stack-md">
           <div class="cell-strong">{{ t("Action Required") }}</div>
-          <form method="post" action="/jobs/{{ job.job_id }}/approve">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <textarea name="review_notes" placeholder="{{ t('Enter approval notes (optional)...') }}"></textarea>
-            <div class="actions">
-              {{ ui.button(t("Approve High-Risk Plan"), type="submit", variant="success", block=True) }}
-            </div>
-          </form>
+          <p>{{ t("Approval decisions are recorded in Plan Review, where the current environment, snapshot, scope, and expiry are revalidated.") }}</p>
+          <a href="/execution-center/plan-review?plan_id={{ job.job_id|urlencode }}">{{ t("Open Plan Review") }}</a>
         </div>
       </div>
       {% endif %}
@@ -182,7 +177,7 @@
           <h3 class="section-header__title">{{ t(section.label_code) }}</h3>
           <p class="section-header__description">
             {% if diff.baseline_job_id %}
-            <a href="/jobs/{{ diff.baseline_job_id }}">{{ diff.baseline_job_id }}</a>
+            <a href="/execution-center/jobs/{{ diff.baseline_job_id }}">{{ diff.baseline_job_id }}</a>
             {% else %}
             -
             {% endif %}
@@ -305,10 +300,10 @@
     {% set i_data = identity_resolutions_page_data %}
     {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=i_data.total_items, page=i_data.page, pages=i_data.total_pages)) %}
       {% if i_data.has_previous %}
-      {{ ui.button(t("Previous"), href="/jobs/" ~ job.job_id ~ "?identity_page=" ~ i_data.previous_page, variant="secondary", size="small") }}
+      {{ ui.button(t("Previous"), href="/execution-center/jobs/" ~ job.job_id ~ "?identity_page=" ~ i_data.previous_page, variant="secondary", size="small") }}
       {% endif %}
       {% if i_data.has_next %}
-      {{ ui.button(t("Next"), href="/jobs/" ~ job.job_id ~ "?identity_page=" ~ i_data.next_page, variant="secondary", size="small") }}
+      {{ ui.button(t("Next"), href="/execution-center/jobs/" ~ job.job_id ~ "?identity_page=" ~ i_data.next_page, variant="secondary", size="small") }}
       {% endif %}
     {% endcall %}
   {% endcall %}
@@ -345,10 +340,10 @@
     {% set p_data = planned_operations_page_data %}
     {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=p_data.total_items, page=p_data.page, pages=p_data.total_pages)) %}
       {% if p_data.has_previous %}
-      {{ ui.button(t("Previous"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ p_data.previous_page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
+      {{ ui.button(t("Previous"), href="/execution-center/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ p_data.previous_page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
       {% endif %}
       {% if p_data.has_next %}
-      {{ ui.button(t("Next"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ p_data.next_page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
+      {{ ui.button(t("Next"), href="/execution-center/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ p_data.next_page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
       {% endif %}
     {% endcall %}
   {% endcall %}
@@ -388,10 +383,10 @@
     {% set op_data = operation_records_page_data %}
     {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=op_data.total_items, page=op_data.page, pages=op_data.total_pages)) %}
       {% if op_data.has_previous %}
-      {{ ui.button(t("Previous"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ op_data.previous_page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
+      {{ ui.button(t("Previous"), href="/execution-center/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ op_data.previous_page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
       {% endif %}
       {% if op_data.has_next %}
-      {{ ui.button(t("Next"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ op_data.next_page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
+      {{ ui.button(t("Next"), href="/execution-center/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ op_data.next_page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
       {% endif %}
     {% endcall %}
   {% endcall %}
@@ -418,10 +413,10 @@
       {% set c_data = job_conflicts_page_data %}
       {% call ui.pagination(t("Page {page}/{pages}", page=c_data.page, pages=c_data.total_pages)) %}
         {% if c_data.has_previous %}
-        {{ ui.button(t("Previous"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ c_data.previous_page, variant="secondary", size="small") }}
+        {{ ui.button(t("Previous"), href="/execution-center/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ c_data.previous_page, variant="secondary", size="small") }}
         {% endif %}
         {% if c_data.has_next %}
-        {{ ui.button(t("Next"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ c_data.next_page, variant="secondary", size="small") }}
+        {{ ui.button(t("Next"), href="/execution-center/jobs/" ~ job.job_id ~ "?events_page=" ~ events_page_data.page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ c_data.next_page, variant="secondary", size="small") }}
         {% endif %}
       {% endcall %}
     {% endcall %}
@@ -457,10 +452,10 @@
       {% set e_data = events_page_data %}
       {% call ui.pagination(t("Page {page}/{pages}", page=e_data.page, pages=e_data.total_pages)) %}
         {% if e_data.has_previous %}
-        {{ ui.button(t("Previous"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ e_data.previous_page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
+        {{ ui.button(t("Previous"), href="/execution-center/jobs/" ~ job.job_id ~ "?events_page=" ~ e_data.previous_page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
         {% endif %}
         {% if e_data.has_next %}
-        {{ ui.button(t("Next"), href="/jobs/" ~ job.job_id ~ "?events_page=" ~ e_data.next_page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
+        {{ ui.button(t("Next"), href="/execution-center/jobs/" ~ job.job_id ~ "?events_page=" ~ e_data.next_page ~ "&planned_page=" ~ planned_operations_page_data.page ~ "&operations_page=" ~ operation_records_page_data.page ~ "&conflicts_page=" ~ job_conflicts_page_data.page, variant="secondary", size="small") }}
         {% endif %}
       {% endcall %}
     {% endcall %}

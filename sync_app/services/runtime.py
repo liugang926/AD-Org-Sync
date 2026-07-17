@@ -17,7 +17,9 @@ from sync_app.services.high_risk_operations import (
     HighRiskOperationPolicy,
     build_apply_operation_context,
     high_risk_audit_payload,
+    resolve_environment_label,
 )
+from sync_app.services.execution_center import ExecutionCenterService
 from sync_app.services.ad_sync import (
     ADSyncLDAPS,
     build_custom_group_sam,
@@ -584,12 +586,58 @@ def run_sync_job(
     sync_stats['config_resolved_file_path'] = bootstrap.config_resolved_file_path
     job_id = str(job_id or generate_job_id()).strip() or generate_job_id()
     sync_stats['job_id'] = job_id
+    existing_job_record = job_repo.get_job_record(job_id)
+    if existing_job_record:
+        sync_stats.plan_source_job_id = str(
+            existing_job_record.plan_source_job_id or ""
+        )
+    sync_stats.environment_label = resolve_environment_label(
+        settings_repo=settings_repo,
+        org_id=organization.org_id,
+    )
     if execution_mode == 'apply':
+        if sync_stats.plan_source_job_id:
+            selected_plan = ExecutionCenterService(
+                job_repo=job_repo,
+                review_repo=repositories.review_repo,
+                source_directory_repo=repositories.source_directory_repo,
+                settings_repo=settings_repo,
+            ).evaluate_plan(
+                org_id=organization.org_id,
+                organization_name=organization.name,
+                environment_label=sync_stats.environment_label,
+                plan_job_id=sync_stats.plan_source_job_id,
+                require_approval=True,
+                require_unused=False,
+                current_config_fingerprint=config_hash,
+            )
+            if not selected_plan.allowed:
+                WebAuditLogRepository(db_manager).add_log(
+                    org_id=organization.org_id,
+                    actor_username=str(requested_by or trigger_type),
+                    action_type='high_risk.apply.blocked',
+                    target_type='sync_apply',
+                    target_id=sync_stats.plan_source_job_id,
+                    result='blocked',
+                    message='Apply execution was blocked because the selected plan is no longer eligible',
+                    payload=high_risk_audit_payload(
+                        selected_plan.context,
+                        trigger_type=trigger_type,
+                        reason_code=selected_plan.reason_code,
+                        job_id=job_id,
+                    ),
+                )
+                raise RuntimeError(
+                    'Apply blocked: the selected Dry Run plan is no longer eligible. '
+                    f'Reason: {selected_plan.reason_code}'
+                )
         high_risk_context = build_apply_operation_context(
             settings_repo=settings_repo,
             job_repo=job_repo,
             organization_id=organization.org_id,
             organization_name=organization.name,
+            environment_label=sync_stats.environment_label,
+            preview_job_id=sync_stats.plan_source_job_id,
         )
         high_risk_gate = HighRiskOperationPolicy.evaluate(high_risk_context)
         if not high_risk_gate.allowed:
@@ -625,7 +673,6 @@ def run_sync_job(
         hooks=None,
     )
 
-    existing_job_record = job_repo.get_job_record(job_id)
     if existing_job_record:
         job_repo.update_job(
             job_id,

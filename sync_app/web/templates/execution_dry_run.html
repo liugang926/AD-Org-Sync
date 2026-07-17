@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+{% import "components/execution_center.html" as execution with context %}
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Dry Run"), t("Generate an immutable change plan from the saved scope without modifying Active Directory."), eyebrow=t("Execution Center"), badge_text=current_org.name, badge_level="info") %}
+    {% if can("jobs.run") and not blocker_code %}
+    <form method="post" action="/execution-center/dry-run/run">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {{ ui.button(t("Run Dry Run"), type="submit", icon="play-circle") }}
+    </form>
+    {% else %}
+    {{ ui.button(t(next_action_code), href=next_action_url, icon="arrow-right") }}
+    {% endif %}
+  {% endcall %}
+
+  {{ execution.tabs("execution-dry-run") }}
+  {{ execution.scope_context(current_org, environment_label) }}
+  {{ execution.status(blocker_code, next_action_code, "The saved scope and preflight evidence are ready to generate a plan.") }}
+
+  {% if sync_runner_error %}<div class="callout callout--danger" role="alert"><strong>{{ t("Last background execution error") }}</strong><span>{{ sync_runner_error }}</span></div>{% endif %}
+
+  {% call ui.panel(t("Recent Dry Runs"), description=t("Basic mode shows only the evidence needed to choose a plan. Open a job for technical details.")) %}
+    {% if recent_dry_runs %}
+    <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Recent Dry Runs') }}">
+      <table>
+        <thead><tr><th>{{ t("Dry Run ID") }}</th><th>{{ t("Status") }}</th><th>{{ t("Snapshot Version") }}</th><th>{{ t("Planned Changes") }}</th><th>{{ t("Completed") }}</th><th>{{ t("Next step") }}</th></tr></thead>
+        <tbody>{% for job in recent_dry_runs %}{% set summary = job.summary or {} %}<tr>
+          <td>{{ ui.identifier(job.job_id, t("Copy Dry Run ID"), t("Dry Run ID copied"), "/execution-center/jobs/" ~ job.job_id) }}</td>
+          <td>{{ ui.badge(t(job.status|capitalize), "success" if job.status|upper == "COMPLETED" else ("error" if job.status|upper == "FAILED" else "warning")) }}</td>
+          <td>#{{ summary.source_snapshot_id or "-" }}</td>
+          <td>{{ summary.planned_operation_count or job.planned_operation_count or 0 }}</td>
+          <td>{{ ui.local_time(job.ended_at) }}</td>
+          <td><a href="/execution-center/plan-review?plan_id={{ job.job_id|urlencode }}">{{ t("Review plan") }}</a></td>
+        </tr>{% endfor %}</tbody>
+      </table>
+    </div>
+    {% else %}
+    {{ ui.empty_state(t("No Dry Run plans yet"), t("Run a Dry Run after the source snapshot and synchronization scope are ready."), "warning") }}
+    {% endif %}
+  {% endcall %}
+
+  {% call ui.helper_block(t("Next step"), t("Review the generated plan, resolve blockers, and approve it before opening Apply."), "info") %}
+    <a href="/execution-center/plan-review">{{ t("Open Plan Review") }}</a>
+  {% endcall %}
+</div>
+{% endblock %}

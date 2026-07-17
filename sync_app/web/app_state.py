@@ -231,6 +231,7 @@ def initialize_web_app_state(
         planned_operation_repo=repositories.planned_operation_repo,
         conflict_repo=repositories.conflict_repo,
         audit_repo=repositories.audit_repo,
+        source_directory_repo=repositories.source_directory_repo,
     )
 
     return WebAppState(repositories=repositories, runtime=runtime, services=services)

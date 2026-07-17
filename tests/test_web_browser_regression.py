@@ -31,6 +31,7 @@ from sync_app.web.security import hash_password
 from sync_app.modules.sspr import SSPRVerifiedIdentity
 from sync_app.modules.sspr.repositories import hash_capability
 from sync_app.services.typed_settings import SSPRSettings
+from tests.helpers.execution_plans import create_eligible_execution_plan
 
 try:
     from playwright.sync_api import Error as PlaywrightError
@@ -1304,6 +1305,174 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertGreaterEqual(tab_metrics["scrollWidth"], tab_metrics["clientWidth"], tab_metrics)
         self._capture_viewport("sync-policy-account-naming-narrow-en.png")
 
+    def test_execution_center_pages_and_review_apply_flow_are_accessible(self):
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        with manager.transaction() as connection:
+            connection.execute(
+                "UPDATE sync_conflicts SET status = 'resolved' WHERE status = 'open'"
+            )
+            connection.execute(
+                "UPDATE sync_jobs SET status = 'FAILED', ended_at = ? "
+                "WHERE org_id = 'default' AND status IN "
+                "('QUEUED', 'LEASED', 'CREATED', 'PLANNING', 'READY', 'RUNNING', 'CANCELING')",
+                (datetime.now(timezone.utc).isoformat(timespec="seconds"),),
+            )
+        OrganizationConfigRepository(manager).save_config(
+            "default",
+            {
+                "source_provider": "wecom",
+                "corpid": "browser-execution-corp",
+                "agentid": "10001",
+                "corpsecret": "browser-execution-secret",
+                "webhook_url": "",
+                "ldap_server": "dc.browser.example",
+                "ldap_domain": "browser.example",
+                "ldap_username": "svc-browser-execution",
+                "ldap_password": "browser-directory-secret",
+                "ldap_use_ssl": True,
+                "ldap_port": 636,
+                "ldap_validate_cert": False,
+                "ldap_ca_cert_path": "",
+                "default_password": "ChangeMe123!",
+                "force_change_password": True,
+                "password_complexity": "strong",
+            },
+            config_path="config.ini",
+        )
+        created = create_eligible_execution_plan(
+            manager,
+            job_id="browser-execution-plan",
+            environment_label="Local environment",
+            planned_operation_count=3,
+        )
+
+        self._login()
+        pages = (
+            ("/execution-center/dry-run?lang=en", "Dry Run"),
+            (
+                "/execution-center/plan-review?plan_id=browser-execution-plan&lang=en",
+                "Plan Review",
+            ),
+            (
+                "/execution-center/apply?plan_id=browser-execution-plan&lang=en",
+                "Apply",
+            ),
+            ("/execution-center/jobs?lang=en", "Job History"),
+        )
+        for path, heading in pages:
+            with self.subTest(path=path):
+                self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
+                self.assertTrue(
+                    self.page.get_by_role("heading", name=heading, level=1).is_visible()
+                )
+                self.assertEqual(
+                    self.page.locator(".page-header__actions .button").count(),
+                    1,
+                )
+                self.assertEqual(
+                    self.page.locator(".execution-tabs a[aria-current='page']").count(),
+                    1,
+                )
+                main_text = self.page.locator("main").inner_text().lower()
+                self.assertIn("organization", main_text)
+                self.assertIn("environment", main_text)
+                self.assertIn("snapshot version", main_text)
+                self.assertIn("impact count", main_text)
+                for index in range(self.page.locator("main table").count()):
+                    self.assertLessEqual(
+                        self.page.locator("main table")
+                        .nth(index)
+                        .locator("thead th")
+                        .count(),
+                        8,
+                    )
+
+        self.page.goto(
+            f"{self.base_url}/execution-center/plan-review?plan_id=browser-execution-plan&lang=en",
+            wait_until="networkidle",
+        )
+        current_tab = self.page.locator(
+            ".execution-tabs a[aria-current='page']"
+        )
+        current_tab.focus()
+        self.assertTrue(
+            current_tab.evaluate("element => document.activeElement === element")
+        )
+        self.page.keyboard.press("Tab")
+        self.assertIn(
+            "/execution-center/apply",
+            self.page.evaluate("document.activeElement?.getAttribute('href') || ''"),
+        )
+
+        self.page.get_by_role("button", name="Approve selected plan").click()
+        approval_dialog = self.page.locator("[data-confirm-dialog]")
+        self.assertTrue(approval_dialog.is_visible())
+        approval_dialog.locator("[data-confirm-approve]").click()
+        self.page.wait_for_load_state("networkidle")
+        self.assertIn("approved", self.page.locator("main").inner_text().lower())
+
+        self.page.goto(
+            f"{self.base_url}/execution-center/apply?plan_id=browser-execution-plan&lang=en",
+            wait_until="networkidle",
+        )
+        self.assertIn(f"#{created['snapshot_id']}", self.page.locator("main").inner_text())
+        apply_button = self.page.get_by_role("button", name="Apply 3 Changes")
+        with patch.object(
+            self.server.config.app.state.sync_runner,
+            "launch",
+            return_value=(True, "Apply queued for browser regression"),
+        ) as launch:
+            apply_button.click()
+            dialog = self.page.locator("[data-confirm-dialog]")
+            self.assertTrue(dialog.is_visible())
+            details = dialog.locator("[data-confirm-details]").inner_text()
+            self.assertIn("Default Organization", details)
+            self.assertIn("Local environment", details)
+            self.assertIn(f"#{created['snapshot_id']}", details)
+            self.assertIn("3", details)
+            dialog.locator("[data-confirm-approve]").click()
+            self.page.wait_for_load_state("networkidle")
+        self.assertEqual(
+            launch.call_args.kwargs["plan_source_job_id"],
+            "browser-execution-plan",
+        )
+
+        self.page.goto(
+            f"{self.base_url}/execution-center/jobs?lang=en",
+            wait_until="networkidle",
+        )
+        local_time = self.page.locator("time[data-local-time]").first
+        self.assertTrue(local_time.is_visible())
+        self.assertTrue(local_time.get_attribute("datetime"))
+        self.assertTrue(local_time.get_attribute("title"))
+        self._capture_viewport("execution-center-desktop-en.png")
+
+        self.page.goto(
+            f"{self.base_url}/execution-center/plan-review?plan_id=browser-execution-plan&lang=zh-CN",
+            wait_until="networkidle",
+        )
+        self.assertTrue(
+            self.page.get_by_role("heading", name="计划审核", level=1).is_visible()
+        )
+
+        self.page.set_viewport_size({"width": 390, "height": 900})
+        self.page.goto(
+            f"{self.base_url}/execution-center/jobs?lang=zh-CN",
+            wait_until="networkidle",
+        )
+        self._assert_page_has_no_horizontal_overflow()
+        context_columns = self.page.locator(".execution-context").evaluate(
+            "element => getComputedStyle(element).gridTemplateColumns.split(' ').length"
+        )
+        self.assertEqual(context_columns, 1)
+        tabs = self.page.locator(".execution-tabs").evaluate(
+            "element => ({clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, overflowX: getComputedStyle(element).overflowX})"
+        )
+        self.assertIn(tabs["overflowX"], {"auto", "scroll"}, tabs)
+        self.assertGreaterEqual(tabs["scrollWidth"], tabs["clientWidth"], tabs)
+        self._capture_viewport("execution-center-narrow-zh.png")
+
     def test_login_page_loads_styles_and_primary_action(self):
         self.page.goto(f"{self.base_url}/login", wait_until="networkidle")
         stylesheet_loaded = self.page.evaluate(
@@ -1384,10 +1553,38 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.assertEqual(recent_links.count(), 1)
         self.assertEqual(
-            recent_links.first.get_attribute("href"), "/execution-center/run-review"
+            recent_links.first.get_attribute("href"), "/execution-center/dry-run"
         )
         self.assertEqual(
             self.page.locator("[data-sidebar-recent-link].active").count(), 0
+        )
+
+    def test_legacy_job_detail_keeps_job_history_navigation_active(self):
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        job_repo = SyncJobRepository(manager)
+        if job_repo.get_job_record("browser-legacy-job") is None:
+            job_repo.create_job(
+                "browser-legacy-job",
+                trigger_type="unit_test",
+                execution_mode="dry_run",
+                status="COMPLETED",
+                org_id="default",
+            )
+
+        self._login()
+        self.page.goto(
+            f"{self.base_url}/jobs/browser-legacy-job",
+            wait_until="networkidle",
+        )
+
+        current_links = self.page.locator(
+            "[data-sidebar-nav] a[aria-current='page']"
+        )
+        self.assertEqual(current_links.count(), 1)
+        self.assertEqual(
+            current_links.first.get_attribute("href"),
+            "/execution-center/jobs",
         )
 
     def test_mobile_navigation_traps_focus_and_restores_the_menu_button(self):
@@ -1691,37 +1888,51 @@ class WebBrowserRegressionTests(unittest.TestCase):
             .is_visible()
         )
 
-    def test_jobs_empty_state_actions_remain_visually_consistent(self):
-        self._login()
-        self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
-        self.assertTrue(self.page.locator(".run-review").is_visible())
-        self.assertEqual(self.page.locator("[data-high-risk-step]").count(), 5)
-        self.assertTrue(self.page.locator("[data-high-risk-context]").is_visible())
-        self.assertIn(
-            "execution readiness and impact preview",
-            self.page.locator(".run-review").inner_text().lower(),
+    def test_legacy_jobs_actions_remain_visually_consistent_when_blocked(self):
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        job_repo = SyncJobRepository(manager)
+        job_repo.create_job(
+            "browser-jobs-active-blocker",
+            trigger_type="browser_regression",
+            execution_mode="dry_run",
+            status="RUNNING",
+            org_id="default",
         )
-        dry_run_button = self.page.locator("button:has-text('Run Dry Run')").first
-        apply_button = self.page.locator(
-            "form:has(input[name='mode'][value='apply']) button[type='submit']"
-        )
-        self.assertTrue(apply_button.is_disabled())
-        dry_run_box = dry_run_button.bounding_box()
-        apply_box = apply_button.bounding_box()
-        self.assertIsNotNone(dry_run_box)
-        self.assertIsNotNone(apply_box)
-        self.assertLessEqual(abs(float(dry_run_box["y"]) - float(apply_box["y"])), 8.0)
-        self.assertGreater(float(apply_box["x"]) - float(dry_run_box["x"]), 20.0)
-        self.page.wait_for_selector(".empty-state .button")
-        button_count = self.page.locator(".empty-state .button").count()
-        self.assertGreaterEqual(button_count, 2)
-        heights = self.page.locator(".empty-state .button").evaluate_all(
-            "elements => elements.map(element => parseFloat(getComputedStyle(element).height || '0'))"
-        )
-        first_height = float(heights[0])
-        for height in heights[1:]:
-            self.assertLessEqual(abs(first_height - float(height)), 6.0)
-        self._capture("jobs-page.png")
+        try:
+            self._login()
+            self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
+            self.assertTrue(self.page.locator(".run-review").is_visible())
+            self.assertEqual(self.page.locator("[data-high-risk-step]").count(), 5)
+            self.assertTrue(self.page.locator("[data-high-risk-context]").is_visible())
+            self.assertIn(
+                "execution readiness and impact preview",
+                self.page.locator(".run-review").inner_text().lower(),
+            )
+            dry_run_button = self.page.locator("button:has-text('Run Dry Run')").first
+            apply_button = self.page.locator(
+                "form:has(input[name='mode'][value='apply']) button[type='submit']"
+            )
+            self.assertTrue(apply_button.is_disabled())
+            dry_run_box = dry_run_button.bounding_box()
+            apply_box = apply_button.bounding_box()
+            self.assertIsNotNone(dry_run_box)
+            self.assertIsNotNone(apply_box)
+            self.assertLessEqual(
+                abs(float(dry_run_box["y"]) - float(apply_box["y"])),
+                8.0,
+            )
+            self.assertGreater(
+                float(apply_box["x"]) - float(dry_run_box["x"]),
+                20.0,
+            )
+            self._capture("jobs-page.png")
+        finally:
+            job_repo.update_job(
+                "browser-jobs-active-blocker",
+                status="COMPLETED",
+                ended=True,
+            )
 
     def test_z_job_detail_prioritizes_run_review_summary(self):
         manager = DatabaseManager(db_path=str(self.db_path))
@@ -1933,24 +2144,19 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "password_complexity": "strong",
         }
         config_repo.save_config("default", configured_values, config_path="config.ini")
-        job_repo = SyncJobRepository(manager)
-        job_repo.create_job(
-            "browser-apply-ready-001",
-            trigger_type="browser_regression",
-            execution_mode="dry_run",
-            status="COMPLETED",
-            org_id="default",
-        )
-        job_repo.update_job(
-            "browser-apply-ready-001",
+        created = create_eligible_execution_plan(
+            manager,
+            job_id="browser-apply-ready-001",
+            environment_label="Local environment",
             planned_operation_count=126,
-            error_count=0,
-            summary={
-                "planned_operation_count": 126,
-                "high_risk_operation_count": 3,
-                "conflict_count": 0,
-                "review_required": False,
-            },
+            high_risk_operation_count=3,
+            approved=True,
+        )
+        SyncJobRepository(manager).update_job(
+            "browser-apply-ready-001",
+            started_at=datetime.now(timezone.utc).isoformat(
+                timespec="microseconds"
+            ),
         )
 
         try:
@@ -1975,7 +2181,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             for expected in (
                 "Default Organization",
                 "Local environment",
-                "Snapshot Version\nNot available",
+                f"Snapshot Version\n#{created['snapshot_id']}",
                 "Impact Count\n126",
                 "browser-apply-ready-001",
                 "Planned Changes\n126",

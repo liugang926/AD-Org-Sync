@@ -41,7 +41,7 @@
       <div class="dense-meta">
         <div>{{ t("Source User") }}: <strong>{{ decision_guide.source_user.name or decision_guide.source_user.userid or "-" }}</strong></div>
         <div>{{ t("Source User ID") }}: <strong class="cell-mono">{{ decision_guide.source_user.userid or conflict.source_id or "-" }}</strong></div>
-        <div>{{ t("Job ID") }}: <a href="/jobs/{{ conflict.job_id }}">{{ conflict.job_id }}</a></div>
+        <div>{{ t("Job ID") }}: <a href="/execution-center/jobs/{{ conflict.job_id }}">{{ conflict.job_id }}</a></div>
       </div>
       {% if can("mappings.write") and decision_guide.selected_target_username %}
       <form method="post" action="{{ conflicts_base_path }}/{{ conflict.id }}/resolve-binding">

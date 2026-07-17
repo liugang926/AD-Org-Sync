@@ -1769,7 +1769,10 @@ def register_source_directory_routes(
             "success",
             "Verified missing accounts are selected. Start a Dry Run to review the create operations; no AD changes have been made.",
         )
-        return RedirectResponse(url="/jobs", status_code=303)
+        return RedirectResponse(
+            url="/execution-center/dry-run",
+            status_code=303,
+        )
 
     @app.get("/api/source-directory/status")
     def source_directory_status(request: Request):

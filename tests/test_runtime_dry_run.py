@@ -951,7 +951,12 @@ class RunSyncDryRunTests(unittest.TestCase):
 
         self.assertEqual(result["skipped_operations"]["by_action"]["disable_user"], 1)
         self.assertEqual(result["high_risk_operation_count"], 0)
-        self.assertFalse(result["summary"]["review_required"])
+        self.assertTrue(result["summary"]["review_required"])
+        review = SyncPlanReviewRepository(manager).get_review_record_by_job_id(
+            result["job_id"]
+        )
+        self.assertIsNotNone(review)
+        self.assertEqual(review.status, "pending")
 
         planned_operations = PlannedOperationRepository(manager).list_operations_for_job(result["job_id"])
         self.assertFalse(any(item["operation_type"] == "disable_user" for item in planned_operations))

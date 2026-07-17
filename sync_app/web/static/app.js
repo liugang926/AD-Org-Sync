@@ -448,13 +448,17 @@
     const pathMatches = (routePath) =>
       routePath === currentPath ||
       (routePath !== "/" && currentPath.startsWith(`${routePath}/`));
-    const activeLink = links
+    const serverActiveLink = links.find(
+      (link) => link.getAttribute("aria-current") === "page"
+    );
+    const matchedActiveLink = links
       .filter((link) => routePaths(link).some(pathMatches))
       .sort((left, right) => {
         const leftLength = Math.max(...routePaths(left).filter(pathMatches).map((path) => path.length));
         const rightLength = Math.max(...routePaths(right).filter(pathMatches).map((path) => path.length));
         return rightLength - leftLength;
       })[0];
+    const activeLink = serverActiveLink || matchedActiveLink;
 
     links.forEach((link) => {
       const isActive = link === activeLink;

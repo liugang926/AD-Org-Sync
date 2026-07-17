@@ -85,6 +85,8 @@ class SyncRunStats(MappingLikeModel):
     requested_by: str = ""
     org_id: str = "default"
     organization_name: str = ""
+    environment_label: str = ""
+    plan_generated_at: str = ""
     organization_config_path: str = ""
     config_source_kind: str = ""
     config_resolved_file_path: str = ""
@@ -139,6 +141,8 @@ class SyncRunStats(MappingLikeModel):
             requested_by=str(value.get("requested_by") or ""),
             org_id=str(value.get("org_id") or "default"),
             organization_name=str(value.get("organization_name") or ""),
+            environment_label=str(value.get("environment_label") or ""),
+            plan_generated_at=str(value.get("plan_generated_at") or ""),
             organization_config_path=str(value.get("organization_config_path") or ""),
             config_source_kind=str(value.get("config_source_kind") or ""),
             config_resolved_file_path=str(value.get("config_resolved_file_path") or ""),

@@ -305,6 +305,7 @@ def _build_config_hash(
             "managed_group_type": policy_settings.global_group_type,
             "managed_group_mail_domain": policy_settings.global_group_mail_domain,
             "custom_group_ou_path": policy_settings.global_custom_group_ou_path,
+            "group_display_separator": policy_settings.display_separator,
         },
     }
     return fingerprint_json(config_snapshot_payload, namespace="sync-config")
@@ -342,6 +343,45 @@ def build_runtime_config_fingerprint(
         enabled_department_ou_mappings=policy_settings.enabled_department_ou_mappings,
         organization=organization,
         policy_settings=policy_settings,
+    )
+
+
+def resolve_runtime_config_fingerprint(
+    *,
+    db_manager: DatabaseManager,
+    org_id: str,
+    config_path: str = "config.ini",
+    load_sync_config_fn=load_sync_config,
+) -> str:
+    """Resolve the current organization config and fingerprint without starting a job."""
+
+    normalized_org_id = str(org_id or "").strip().lower() or "default"
+    organization_repo = OrganizationRepository(db_manager)
+    organization = organization_repo.get_organization_record(normalized_org_id)
+    if organization is None:
+        raise ValueError(f"organization not found: {normalized_org_id}")
+    resolved_config_path = organization.config_path or config_path
+    config = resolve_organization_config(
+        OrganizationConfigRepository(db_manager),
+        org_id=organization.org_id,
+        config_path=resolved_config_path,
+        file_loader=load_sync_config_fn,
+    ).config
+    return build_runtime_config_fingerprint(
+        config=config,
+        organization=organization,
+        settings_repo=SettingsRepository(db_manager),
+        exclusion_repo=GroupExclusionRuleRepository(
+            db_manager,
+            default_org_id=organization.org_id,
+        ),
+        exception_rule_repo=SyncExceptionRuleRepository(
+            db_manager,
+            default_org_id=organization.org_id,
+        ),
+        mapping_rule_repo=AttributeMappingRuleRepository(db_manager),
+        department_ou_mapping_repo=DepartmentOuMappingRepository(db_manager),
+        connector_repo=SyncConnectorRepository(db_manager),
     )
 
 
