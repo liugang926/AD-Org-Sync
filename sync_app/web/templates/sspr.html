@@ -36,17 +36,21 @@
       {% endif %}
 
       {% if state == "initializing" %}
-      <div
+      <form
+        method="post"
+        action="{{ oauth_start_url }}"
         class="sspr-state sspr-state--center"
         data-sspr-start
-        data-next-url="{{ oauth_start_url }}"
         data-submitting-message="{{ t('Preparing secure verification…') }}"
       >
+        <input type="hidden" name="csrf_token" value="{{ oauth_start_csrf_token }}">
+        <input type="hidden" name="corpid" value="{{ oauth_start_params.corpid }}">
+        <input type="hidden" name="reason" value="{{ oauth_start_params.reason or '' }}">
         <div class="sspr-spinner" aria-hidden="true"></div>
         <h2 id="sspr-card-title">{{ t("Preparing secure verification…") }}</h2>
         <p>{{ t("Do not close this page while the secure verification is in progress.") }}</p>
-        <a class="sspr-button sspr-button--secondary" href="{{ oauth_start_url }}">{{ t("Continue to DingTalk verification") }}</a>
-      </div>
+        {{ ui.button(t("Continue to DingTalk verification"), type="submit", class_name="sspr-button sspr-button--secondary") }}
+      </form>
 
       {% elif state == "authenticating" %}
       <div
@@ -157,7 +161,7 @@
         <p>{{ t("Your new password is active. Use it the next time you sign in to AD services.") }}</p>
         <dl class="sspr-account-summary">
           <div><dt>{{ t("AD Login Account") }}</dt><dd>{{ receipt.ad_username }}</dd></div>
-          <div><dt>{{ t("Completed At") }}</dt><dd>{{ receipt.completed_at.astimezone().strftime('%Y-%m-%d %H:%M:%S') }}</dd></div>
+          <div><dt>{{ t("Completed At") }}</dt><dd>{{ ui.local_time(receipt.completed_at.isoformat()) }}</dd></div>
           {% if receipt.unlock_requested %}
           <div><dt>{{ t("Account Unlock") }}</dt><dd>{{ t("Completed") if receipt.unlock_succeeded else t("Not completed; contact the IT service desk if sign-in remains blocked.") }}</dd></div>
           {% endif %}

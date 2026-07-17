@@ -17,8 +17,8 @@
   <link href="/static/vendor/tom-select.default.min.css?v={{ static_asset_version }}" rel="stylesheet">
   {% endif %}
 </head>
-<body class="{% if not current_user %}login-page{% endif %}" data-confirm-message="{{ t('Are you sure you want to perform this action?') }}" data-clear-all-label="{{ t('Clear all') }}" data-remove-item-label="{{ t('Remove item') }}" data-table-scroll-label="{{ t('Scrollable data table. Use arrow keys to review hidden columns.') }}">
-  {% if current_user %}
+<body class="{% if not current_user or is_lightweight_shell %}login-page{% endif %}" data-confirm-message="{{ t('Are you sure you want to perform this action?') }}" data-clear-all-label="{{ t('Clear all') }}" data-remove-item-label="{{ t('Remove item') }}" data-table-scroll-label="{{ t('Scrollable data table. Use arrow keys to review hidden columns.') }}">
+  {% if current_user and not is_lightweight_shell %}
   <div class="mobile-nav-backdrop" data-mobile-nav-close></div>
   <aside id="app-sidebar" data-app-sidebar aria-label="{{ t('Primary navigation') }}">
     <div class="sidebar-mobile-bar">
@@ -83,7 +83,7 @@
   {% endif %}
 
   <main>
-    {% if current_user %}
+    {% if current_user and not is_lightweight_shell %}
     <header>
       <div class="header-leading">
         <button class="topbar-icon-button mobile-nav-toggle" type="button" data-mobile-nav-toggle aria-controls="app-sidebar" aria-expanded="false" aria-label="{{ t('Open navigation') }}">
@@ -136,14 +136,15 @@
             secondary_text=t(current_user.role),
             logout_action="/logout",
             csrf_token=csrf_token,
-            logout_label=t("Sign Out")
+            logout_label=t("Sign Out"),
+            account_href="/system-management/account"
           ) }}
         </div>
       </div>
     </header>
     {% endif %}
 
-    <div class="{% if current_user %}content-wrapper{% else %}login-shell{% endif %}">
+    <div class="{% if current_user and not is_lightweight_shell %}content-wrapper{% else %}login-shell{% endif %}">
       <div class="sr-only" role="status" aria-live="polite" aria-atomic="true" data-copy-status></div>
       {% if flash %}
       <div class="flash {{ flash.level }}" id="global-flash" role="{% if flash.level == 'error' %}alert{% else %}status{% endif %}" aria-live="{% if flash.level == 'error' %}assertive{% else %}polite{% endif %}" aria-atomic="true">
@@ -209,5 +210,6 @@
   {% endif %}
   <script src="/static/app.js?v={{ static_asset_version }}" defer></script>
   {% endif %}
+  {% block scripts %}{% endblock %}
 </body>
 </html>

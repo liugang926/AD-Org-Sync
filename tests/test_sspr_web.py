@@ -135,9 +135,23 @@ class SSPRWebRouteTests(unittest.TestCase):
         matches = [cookie.value for cookie in self.client.cookies.jar if cookie.name == name]
         return matches[-1] if matches else ""
 
-    def _authenticate(self):
-        start = self.client.get("/sspr/oauth/start?corpid=ding-corp-id")
+    def _start_oauth(self):
+        entry = self.client.get("/sspr?corpid=ding-corp-id")
+        self.assertEqual(entry.status_code, 200)
+        csrf = self._cookie("ad_org_sync_sspr_start_csrf")
+        self.assertTrue(csrf)
+        start = self.client.post(
+            "/sspr/oauth/start",
+            data={
+                "csrf_token": csrf,
+                "corpid": "ding-corp-id",
+            },
+        )
         self.assertEqual(start.status_code, 200)
+        return start
+
+    def _authenticate(self):
+        self._start_oauth()
         state = self._cookie("ad_org_sync_sspr_oauth")
         self.assertTrue(state)
         response = self.client.post(
@@ -154,7 +168,7 @@ class SSPRWebRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("data-sspr-start", response.text)
         self.assertNotIn("/login", response.text)
-        start = self.client.get("/sspr/oauth/start?corpid=ding-corp-id")
+        start = self._start_oauth()
         self.assertIn("data-sspr-auth", start.text)
         self.assertIn("requestAuthCode", self.client.get("/static/sspr.js").text)
         self.assertEqual(start.headers["cache-control"], "no-store, max-age=0")
@@ -256,8 +270,7 @@ class SSPRWebRouteTests(unittest.TestCase):
         self.assertNotIn(session, str(audit_payloads))
 
     def test_oauth_state_is_one_time_and_org_configuration_change_is_rejected(self):
-        start = self.client.get("/sspr/oauth/start?corpid=ding-corp-id")
-        self.assertEqual(start.status_code, 200)
+        self._start_oauth()
         state = self._cookie("ad_org_sync_sspr_oauth")
         SSPRSettings(
             enabled=True,
@@ -352,7 +365,7 @@ class SSPRWebRouteTests(unittest.TestCase):
         self.assertEqual(account.status_code, 303)
         self.assertEqual(account.headers["location"], "/sspr?reason=session_expired")
         self.assertEqual(self.target.state_calls, [])
-        self.assertIn(
+        self.assertNotIn(
             "sspr.session.expired",
             [item.action_type for item in self.app.state.audit_repo.list_recent_logs(10)],
         )
@@ -387,12 +400,14 @@ class SSPRWebRouteTests(unittest.TestCase):
         ).persist(self.app.state.settings_repo, org_id="default")
 
         entry = self.client.get("/sspr?corpid=ding-corp-id")
-        start = self.client.get("/sspr/oauth/start?corpid=ding-corp-id")
+        start = self.client.get(
+            "/sspr/oauth/start?corpid=ding-corp-id",
+            follow_redirects=False,
+        )
 
         self.assertEqual(entry.status_code, 200)
-        self.assertEqual(start.status_code, 200)
+        self.assertEqual(start.status_code, 303)
         self.assertNotIn("data-sspr-auth", entry.text)
-        self.assertNotIn("data-sspr-auth", start.text)
         self.assertEqual(self.source.codes, [])
 
     def test_existing_session_is_revoked_when_source_provider_changes(self):
@@ -427,12 +442,23 @@ class SSPRWebRouteTests(unittest.TestCase):
         self.assertEqual(reset.headers["location"], "/sspr")
         self.assertEqual(self.target.reset_calls, [])
 
-    def test_callback_exists_without_accepting_secrets_in_query(self):
-        callback = self.client.get("/sspr/callback/dingtalk")
+    def test_callback_get_is_read_only_and_redirects_without_accepting_secrets(self):
+        callback = self.client.get("/sspr/callback/dingtalk", follow_redirects=False)
 
-        self.assertEqual(callback.status_code, 200)
-        self.assertIn("data-sspr-auth", callback.text)
-        self.assertEqual(callback.headers["cache-control"], "no-store, max-age=0")
+        self.assertEqual(callback.status_code, 303)
+        self.assertEqual(callback.headers["location"], "/sspr?lang=en")
+
+    def test_oauth_start_requires_matching_double_submit_csrf(self):
+        entry = self.client.get("/sspr?corpid=ding-corp-id")
+        self.assertEqual(entry.status_code, 200)
+
+        rejected = self.client.post(
+            "/sspr/oauth/start",
+            data={"csrf_token": "forged", "corpid": "ding-corp-id"},
+        )
+
+        self.assertEqual(rejected.status_code, 403)
+        self.assertEqual(self._cookie("ad_org_sync_sspr_oauth"), "")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Lifecycle Workbench"), t("Review scheduled onboarding, contract expiry, offboarding grace periods, and replay backlog from one daily operations page."), eyebrow=t("Operations"), badge_text=t("Organization Scope"), badge_level="info") %}
+    {{ ui.button(t("Review Actionable Queue"), href="#actionable-queues", icon="list-checks") }}
     <div class="surface-inline">
       <span class="muted">{{ t("Current organization") }}:</span>
       <strong>{{ current_org.name }}</strong>
@@ -52,8 +53,8 @@
     {% endcall %}
   </div>
 
-  <div class="lifecycle-board">
-    <form method="post" action="/lifecycle/lifecycle-queue" class="lifecycle-lane" data-selection-scope>
+  <div class="lifecycle-board" id="actionable-queues">
+    <form method="post" action="/operations-center/lifecycle-queue/lifecycle-queue" class="lifecycle-lane" data-selection-scope>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="lifecycle_type" value="future_onboarding">
       <div class="lifecycle-lane__header">
@@ -94,7 +95,7 @@
           {% if row.manual_hold %}
           <div class="panel-note warning">
             {{ row.manual_hold.reason or t("Manual hold is active.") }}
-            {% if row.manual_hold.expires_at %}{{ t("Until {expires_at}", expires_at=row.manual_hold.expires_at) }}{% endif %}
+            {% if row.manual_hold.expires_at %}{{ t("Until") }} {{ ui.local_time(row.manual_hold.expires_at) }}{% endif %}
           </div>
           {% endif %}
         </article>
@@ -104,7 +105,7 @@
       </div>
     </form>
 
-    <form method="post" action="/lifecycle/lifecycle-queue" class="lifecycle-lane" data-selection-scope>
+    <form method="post" action="/operations-center/lifecycle-queue/lifecycle-queue" class="lifecycle-lane" data-selection-scope>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="lifecycle_type" value="contractor_expiry">
       <div class="lifecycle-lane__header">
@@ -146,7 +147,7 @@
           {% if row.manual_hold %}
           <div class="panel-note warning">
             {{ row.manual_hold.reason or t("Manual hold is active.") }}
-            {% if row.manual_hold.expires_at %}{{ t("Until {expires_at}", expires_at=row.manual_hold.expires_at) }}{% endif %}
+            {% if row.manual_hold.expires_at %}{{ t("Until") }} {{ ui.local_time(row.manual_hold.expires_at) }}{% endif %}
           </div>
           {% endif %}
         </article>
@@ -156,7 +157,7 @@
       </div>
     </form>
 
-    <form method="post" action="/lifecycle/offboarding" class="lifecycle-lane" data-selection-scope>
+    <form method="post" action="/operations-center/lifecycle-queue/offboarding" class="lifecycle-lane" data-selection-scope>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="lifecycle-lane__header">
         <div>
@@ -196,7 +197,7 @@
           {% if row.manual_hold %}
           <div class="panel-note warning">
             {{ row.manual_hold.reason or t("Manual hold is active.") }}
-            {% if row.manual_hold.expires_at %}{{ t("Until {expires_at}", expires_at=row.manual_hold.expires_at) }}{% endif %}
+            {% if row.manual_hold.expires_at %}{{ t("Until") }} {{ ui.local_time(row.manual_hold.expires_at) }}{% endif %}
           </div>
           {% endif %}
         </article>
@@ -206,7 +207,7 @@
       </div>
     </form>
 
-    <form method="post" action="/lifecycle/replay" class="lifecycle-lane" data-selection-scope>
+    <form method="post" action="/operations-center/lifecycle-queue/replay" class="lifecycle-lane" data-selection-scope>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="lifecycle-lane__header">
         <div>

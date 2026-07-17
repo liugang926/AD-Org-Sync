@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Employee Self-Service"), t("Configure the organization-scoped employee password reset portal without mixing connector or account lifecycle settings."), eyebrow=t("System Management"), badge_text=t("Organization Scope"), badge_level="info") %}
+    {{ ui.button(t("Open Employee Portal"), href="/sspr", variant="secondary", icon="external-link", attrs='target="_blank" rel="noopener"') }}
+  {% endcall %}
+
+  <div class="compact-stats">
+    {{ ui.compact_stat(t("Portal Status"), (t("Enabled") if settings.enabled else t("Disabled"))) }}
+    {{ ui.compact_stat(t("Enabled DingTalk to AD Bindings"), enabled_binding_count) }}
+    {{ ui.compact_stat(t("Minimum Password Length"), settings.min_password_length) }}
+    {{ ui.compact_stat(t("Verification Session"), settings.verification_session_ttl_seconds ~ "s") }}
+  </div>
+
+  {% if settings.enabled and not settings.dingtalk_corp_id %}
+  <div class="panel-note warning" role="status">
+    <strong>{{ t("Blocked") }}:</strong> {{ t("The portal is enabled, but DingTalk CorpId is missing. Save a CorpId before asking employees to use self-service.") }}
+  </div>
+  {% elif not settings.enabled %}
+  <div class="panel-note info" role="status">
+    <strong>{{ t("Current state") }}:</strong> {{ t("Employee self-service is disabled. Review the settings below, then enable it when the identity bindings are ready.") }}
+  </div>
+  {% else %}
+  <div class="panel-note success" role="status">
+    <strong>{{ t("Ready") }}:</strong> {{ t("The portal is enabled and its organization identifier is configured. Next, verify the public callback from a non-production test account.") }}
+  </div>
+  {% endif %}
+
+  {% call ui.panel(t("Password Reset Portal"), t("Organization Scope"), "info", t("These settings apply only to the selected organization. They do not change source connectors or AD accounts.")) %}
+    <form method="post" action="/system-management/employee-self-service" class="page-stack tight">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="inline-checkbox" for="sspr_enabled">
+            <input id="sspr_enabled" type="checkbox" name="sspr_enabled" value="1" {% if settings.enabled %}checked{% endif %}>
+            {{ t("Enable self-service password reset") }}
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="sspr_dingtalk_corp_id">{{ t("DingTalk CorpId") }}</label>
+          <input id="sspr_dingtalk_corp_id" name="sspr_dingtalk_corp_id" value="{{ settings.dingtalk_corp_id }}" autocomplete="off">
+          <div class="help-text">{{ t("Use the DingTalk organization CorpId, not the AppKey or client ID.") }}</div>
+        </div>
+        <div class="form-group">
+          <label for="sspr_min_password_length">{{ t("Minimum Password Length") }}</label>
+          <input id="sspr_min_password_length" name="sspr_min_password_length" type="number" min="8" value="{{ settings.min_password_length }}">
+        </div>
+        <div class="form-group">
+          <label class="inline-checkbox" for="sspr_unlock_account_default">
+            <input id="sspr_unlock_account_default" type="checkbox" name="sspr_unlock_account_default" value="1" {% if settings.unlock_account_default %}checked{% endif %}>
+            {{ t("Unlock account after a successful reset by default") }}
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="sspr_verification_session_ttl_seconds">{{ t("Verification Session TTL (sec)") }}</label>
+          <input id="sspr_verification_session_ttl_seconds" name="sspr_verification_session_ttl_seconds" type="number" min="60" step="60" value="{{ settings.verification_session_ttl_seconds }}">
+        </div>
+      </div>
+      <div class="actions">
+        {{ ui.button(t("Save Self-Service Settings"), type="submit", icon="save") }}
+      </div>
+    </form>
+  {% endcall %}
+
+  {% call ui.helper_block(t("Next Step"), t("After saving, open the employee portal and verify the callback with a non-production test identity. No real AD account is changed by saving this page."), "info") %}{% endcall %}
+</div>
+{% endblock %}

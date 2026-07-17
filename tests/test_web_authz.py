@@ -1102,11 +1102,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
-        self.assertIn("Notification And Automation Center", body)
+        self.assertIn("Automation And Schedules", body)
         self.assertIn("Scheduled Apply Readiness", body)
-        self.assertIn("Conflict Backlog", body)
-        self.assertIn("High-Risk Approval Queue", body)
-        self.assertIn("Rule Expiry And Review", body)
+        self.assertIn("Save Automation Policy", body)
+        self.assertIn("Configure Notifications", body)
         self.assertIn("job-automation-dryrun", body)
         match = re.search(r'name="csrf_token" value="([^"]+)"', body)
         self.assertIsNotNone(match)
@@ -1187,7 +1186,8 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         response = self._route("/integrations", "GET")(self._request("/integrations"))
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
-        self.assertIn("External Integration Center", body)
+        self.assertIn("Notifications", body)
+        self.assertIn("Notification Policy", body)
         self.assertIn("/api/integrations/orgs/default/jobs", body)
         self.assertIn("Webhook Subscriptions", body)
         match = re.search(r'name="csrf_token" value="([^"]+)"', body)
@@ -3261,7 +3261,13 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             'data-provider-secret-configured-provider="wecom"',
             corpsecret_match.group(0),
         )
-        self.assertIn("Secure Cookie Policy", text)
+        self.assertIn("Open Deployment Settings", text)
+
+        deployment = self._route("/system-management/deployment", "GET")(
+            self._request("/system-management/deployment")
+        )
+        self.assertEqual(deployment.status_code, 200)
+        self.assertIn("Secure Cookie Policy", self._text(deployment))
 
         dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))
         self.assertEqual(dashboard.status_code, 200)
@@ -3272,14 +3278,15 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             dashboard_text,
         )
 
-    def test_config_page_separates_optional_notification_settings(self):
+    def test_config_page_moves_optional_notification_settings_to_notifications(self):
         self._login("superadmin")
 
         response = self._route("/config", "GET")(self._request("/config"))
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
-        self.assertIn("Optional Notifications", text)
-        self.assertIn("does not block preflight, dry run, or apply", text)
+        self.assertIn("Notification channel moved", text)
+        self.assertIn("/operations-center/notifications", text)
+        self.assertNotIn('name="webhook_url"', text)
 
     def test_config_page_includes_sync_scope_and_ou_mapping_controls(self):
         self._login("superadmin")
@@ -3685,14 +3692,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("Current provider", text)
         self.assertIn("DingTalk Source Connector", text)
         self.assertIn("AppKey / Client ID", text)
-        webhook_group = re.search(
-            r'(?s)<div class="form-group field-span-full" id="group-webhook_url">.*?</div>\s*</div>',
-            text,
-        )
-        self.assertIsNotNone(webhook_group)
-        webhook_html = webhook_group.group(0)
-        self.assertIn("DingTalk Bot Webhook", webhook_html)
-        self.assertNotIn("WeCom Webhook", webhook_html)
+        self.assertIn("Notification channel moved", text)
+        self.assertIn('href="/operations-center/notifications"', text)
+        self.assertNotIn('name="webhook_url"', text)
 
     def test_config_page_persists_web_deployment_settings_and_reloaded_app_uses_them(
         self,
@@ -3960,8 +3962,8 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         response = self._route("/config", "GET")(self._request("/config"))
         self.assertEqual(response.status_code, 200)
         page_text = self._text(response)
-        self.assertIn("Self-Service Password Reset", page_text)
-        self.assertIn("/sspr/callback/dingtalk", page_text)
+        self.assertIn("Employee self-service moved", page_text)
+        self.assertIn("/system-management/employee-self-service", page_text)
         match = re.search(r'name="csrf_token" value="([^"]+)"', page_text)
         self.assertIsNotNone(match)
 
@@ -4817,7 +4819,8 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         config_text = self._text(config_response)
         self.assertIn("Organization Settings", config_text)
         self.assertIn("Global Settings", config_text)
-        self.assertIn("Web Deployment", config_text)
+        self.assertIn("Global settings moved", config_text)
+        self.assertIn("Open Deployment Settings", config_text)
 
         organizations_response = self._route("/organizations", "GET")(
             self._request("/organizations")

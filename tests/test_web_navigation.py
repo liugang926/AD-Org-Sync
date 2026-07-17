@@ -126,7 +126,10 @@ class WebNavigationTests(WebAuthzBaseTestCase):
         self.assertIn("Save Connection Settings", connector_body)
         self.assertIn("Test Saved Connections", connector_body)
         self.assertNotIn("Web Deployment", connector_body)
-        self.assertIn("Web Deployment", self._text(legacy_page))
+        legacy_body = self._text(legacy_page)
+        self.assertIn("Global settings moved", legacy_body)
+        self.assertIn("Open Deployment Settings", legacy_body)
+        self.assertIn("Open Branding And Appearance", legacy_body)
 
     def test_canonical_routes_keep_existing_permission_checks(self):
         self._login("operator1")

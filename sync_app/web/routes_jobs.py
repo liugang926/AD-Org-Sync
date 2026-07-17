@@ -839,12 +839,18 @@ def register_job_routes(
             },
         )
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['database']}/check")
     @app.post("/database/check")
     def database_check(request: Request, csrf_token: str = Form("")):
         user = require_capability(request, "database.manage")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/database")
+        return_path = (
+            "/database"
+            if request.url.path.startswith("/database")
+            else CANONICAL_ROUTE_PATHS["database"]
+        )
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
@@ -865,14 +871,20 @@ def register_job_routes(
             "Integrity check result: {result}",
             result=str(result.get("result") or "-"),
         )
-        return RedirectResponse(url="/database", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['database']}/backup")
     @app.post("/database/backup")
     def database_backup(request: Request, csrf_token: str = Form("")):
         user = require_capability(request, "database.manage")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/database")
+        return_path = (
+            "/database"
+            if request.url.path.startswith("/database")
+            else CANONICAL_ROUTE_PATHS["database"]
+        )
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
@@ -905,4 +917,4 @@ def register_job_routes(
             )
         else:
             flash_t(request, "success", "Backup created: {backup_path}", backup_path=backup_path)
-        return RedirectResponse(url="/database", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)

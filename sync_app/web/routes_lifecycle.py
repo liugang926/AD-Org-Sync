@@ -67,6 +67,11 @@ def register_lifecycle_routes(
     render: Callable[..., Any],
     require_capability: Callable[[Request, str], Any],
 ) -> None:
+    canonical_page_path = CANONICAL_ROUTE_PATHS["lifecycle"]
+
+    def _page_path(request: Request) -> str:
+        return "/lifecycle" if request.url.path.startswith("/lifecycle") else canonical_page_path
+
     @app.get(CANONICAL_ROUTE_PATHS["lifecycle"], response_class=HTMLResponse)
     @app.get("/lifecycle", response_class=HTMLResponse)
     def lifecycle_workbench_page(request: Request):
@@ -87,6 +92,7 @@ def register_lifecycle_routes(
             ),
         )
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['lifecycle']}/offboarding")
     @app.post("/lifecycle/offboarding")
     def lifecycle_offboarding_action(
         request: Request,
@@ -98,14 +104,15 @@ def register_lifecycle_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/lifecycle")
+        return_path = _page_path(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
         normalized_ids = _normalize_id_list(record_ids)
         if not normalized_ids:
             flash(request, "warning", "Select at least one offboarding queue item.")
-            return RedirectResponse(url="/lifecycle", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
 
         current_org = get_current_org(request)
         repositories = get_web_repositories(request)
@@ -120,7 +127,7 @@ def register_lifecycle_routes(
             )
         except ValueError as exc:
             flash(request, "error", str(exc))
-            return RedirectResponse(url="/lifecycle", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
 
         repositories.audit_repo.add_log(
             org_id=current_org.org_id,
@@ -141,8 +148,9 @@ def register_lifecycle_routes(
             ("success" if int(result.get("processed_count") or 0) > 0 else "warning"),
             _build_result_message("Offboarding Queue", result),
         )
-        return RedirectResponse(url="/lifecycle", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['lifecycle']}/lifecycle-queue")
     @app.post("/lifecycle/lifecycle-queue")
     def lifecycle_queue_action(
         request: Request,
@@ -155,14 +163,15 @@ def register_lifecycle_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/lifecycle")
+        return_path = _page_path(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
         normalized_ids = _normalize_id_list(record_ids)
         if not normalized_ids:
             flash(request, "warning", "Select at least one lifecycle queue item.")
-            return RedirectResponse(url="/lifecycle", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
 
         current_org = get_current_org(request)
         repositories = get_web_repositories(request)
@@ -178,7 +187,7 @@ def register_lifecycle_routes(
             )
         except ValueError as exc:
             flash(request, "error", str(exc))
-            return RedirectResponse(url="/lifecycle", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
 
         repositories.audit_repo.add_log(
             org_id=current_org.org_id,
@@ -207,8 +216,9 @@ def register_lifecycle_routes(
                 result,
             ),
         )
-        return RedirectResponse(url="/lifecycle", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['lifecycle']}/replay")
     @app.post("/lifecycle/replay")
     def lifecycle_replay_action(
         request: Request,
@@ -219,14 +229,15 @@ def register_lifecycle_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/lifecycle")
+        return_path = _page_path(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
         normalized_ids = _normalize_id_list(request_ids)
         if not normalized_ids:
             flash(request, "warning", "Select at least one replay request.")
-            return RedirectResponse(url="/lifecycle", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
 
         current_org = get_current_org(request)
         repositories = get_web_repositories(request)
@@ -240,7 +251,7 @@ def register_lifecycle_routes(
             )
         except ValueError as exc:
             flash(request, "error", str(exc))
-            return RedirectResponse(url="/lifecycle", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
 
         repositories.audit_repo.add_log(
             org_id=current_org.org_id,
@@ -260,4 +271,4 @@ def register_lifecycle_routes(
             ("success" if int(result.get("processed_count") or 0) > 0 else "warning"),
             _build_result_message("Replay Queue", result),
         )
-        return RedirectResponse(url="/lifecycle", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)

@@ -60,7 +60,7 @@
         <span data-config-provider-current>{{ t(source_provider_name) }}</span>
         <span class="config-brief__separator" aria-hidden="true">/</span>
         <strong>{{ t("Organization Settings") }}</strong>
-        <span class="muted">{{ t("Global Settings") }}: {{ t("Web Deployment") }}</span>
+        <span class="muted">{{ t("Global Settings") }}: {{ t("System Management") }}</span>
       </p>
     </div>
     <div class="config-brief__status">
@@ -178,13 +178,13 @@
           <strong>{{ t("Target AD") }}</strong><small>{{ t("LDAP and OU roots") }}</small>
         {% endcall %}
         {% call ui.button(type="button", variant="ghost", icon="shield-check", class_name="config-section-tab", attrs='data-config-section-target="security" aria-controls="config-section-security" aria-selected="false"') %}
-          <strong>{{ t("Account Security") }}</strong><small>{{ t("Passwords and SSPR") }}</small>
+          <strong>{{ t("Account Security") }}</strong><small>{{ t("Password policy; self-service moved") }}</small>
         {% endcall %}
         {% call ui.button(type="button", variant="ghost", icon="workflow", class_name="config-section-tab", attrs='data-config-section-target="runtime" aria-controls="config-section-runtime" aria-selected="false"') %}
-          <strong>{{ t("Runtime Rules") }}</strong><small>{{ t("Schedule and groups") }}</small>
+          <strong>{{ t("Runtime Rules") }}</strong><small>{{ t("Placement and group rules") }}</small>
         {% endcall %}
         {% call ui.button(type="button", variant="ghost", icon="server-cog", class_name="config-section-tab", attrs='data-config-section-target="web" aria-controls="config-section-web" aria-selected="false"') %}
-          <strong>{{ t("Web Deployment") }}</strong><small>{{ t("Server-wide settings") }}</small>
+          <strong>{{ t("Moved Global Settings") }}</strong><small>{{ t("Open the owning system pages") }}</small>
         {% endcall %}
       </nav>
 
@@ -211,23 +211,9 @@
             </section>
 
             {% if source_notification_fields %}
-            <section class="subcard stack-tight">
-              <div class="section-header">
-                <div class="section-header__copy">
-                  <h3 class="section-header__title">{{ t("Optional Notifications") }}</h3>
-                  <p class="section-header__description">{{ t("Webhook delivery is only used for operational notifications. It does not block preflight, dry run, or apply.") }}</p>
-                </div>
-              </div>
-              <div class="form-grid">
-                {% for field in source_notification_fields %}
-                {% set field_attrs = 'data-source-provider-field="' ~ field.name ~ '"' %}
-                {% if field.secret and field.configured %}
-                {% set field_attrs = field_attrs ~ ' data-provider-secret-configured="true" data-provider-secret-configured-provider="' ~ editable.source_provider ~ '"' %}
-                {% endif %}
-                {{ forms.input(field.name, t(field.label), field.value, type=field.type, placeholder=t(field.placeholder), help_text=t(field.help_text), required=field.required, class_name=field.class_name, autocomplete=field.autocomplete, attrs=field_attrs) }}
-                {% endfor %}
-              </div>
-            </section>
+            {% call ui.helper_block(t("Notification channel moved"), t("Operational notification webhook settings now belong to Notifications. Existing secret values are preserved when this connector draft is saved."), "info") %}
+              {{ ui.button(t("Open Notifications"), href="/operations-center/notifications", variant="secondary", icon="bell-ring") }}
+            {% endcall %}
             {% endif %}
 
             <section class="subcard stack-tight">
@@ -340,32 +326,13 @@
               </div>
             {% endcall %}
 
-            {% call ui.panel(t("Employee Self-Service"), t("Organization Scope"), "info", t("Control the public employee password reset portal for this organization.")) %}
-              <div class="form-grid">
-                {{ forms.select("sspr_enabled", t("Self-Service Password Reset"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.sspr_enabled|lower) }}
-                {{ forms.input("sspr_dingtalk_corp_id", t("DingTalk CorpId"), editable.sspr_dingtalk_corp_id, help_text=t("The DingTalk organization CorpId; this is not the AppKey / Client ID.")) }}
-                {{ forms.input("sspr_min_password_length", t("SSPR Minimum Password Length"), editable.sspr_min_password_length, type="number", min_value="8") }}
-                {{ forms.select("sspr_unlock_account_default", t("Unlock Account By Default"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.sspr_unlock_account_default|lower) }}
-                {{ forms.input("sspr_verification_session_ttl_seconds", t("Verification Session TTL (sec)"), editable.sspr_verification_session_ttl_seconds, type="number", min_value="60", step="60") }}
-              </div>
-              <div class="helper-block">
-                <div class="helper-block__header">
-                  <div class="helper-block__title">{{ t("SSPR Status") }}</div>
-                  {{ ui.badge(t(sspr_status.badge_text), sspr_status.badge_level) }}
-                </div>
-                <ul class="helper-list">
-                  <li><strong>{{ t("Portal URL") }}</strong>: <code>{{ sspr_status.portal_url }}</code></li>
-                  <li><strong>{{ t("DingTalk Auth Endpoint") }}</strong>: <code>{{ sspr_status.auth_url }}</code></li>
-                  <li><strong>{{ t("DingTalk Callback URL") }}</strong>: <code>{{ sspr_status.callback_url }}</code></li>
-                  <li><strong>{{ t("Public Base URL / Port") }}</strong>: <code>{{ sspr_status.public_base_url }}</code> / {{ sspr_status.public_port }}</li>
-                  <li><strong>{{ t("Enabled DingTalk to AD Bindings") }}</strong>: {{ sspr_status.enabled_binding_count }}</li>
-                  <li><strong>{{ t("Latest DingTalk Verification") }}</strong>: {% if sspr_status.last_verification %}{{ sspr_status.last_verification.created_at }} / {{ sspr_status.last_verification.result }}{% else %}{{ t("Never") }}{% endif %}</li>
-                  <li><strong>{{ t("Latest Password Reset") }}</strong>: {% if sspr_status.last_password_reset %}{{ sspr_status.last_password_reset.created_at }} / {{ sspr_status.last_password_reset.result }}{% else %}{{ t("Never") }}{% endif %}</li>
-                  {% for item in sspr_status.missing %}
-                  <li><strong>{{ t("Missing") }}</strong>: {{ t(item) }}</li>
-                  {% endfor %}
-                </ul>
-              </div>
+            <input type="hidden" name="sspr_enabled" value="{{ editable.sspr_enabled|lower }}">
+            <input type="hidden" name="sspr_dingtalk_corp_id" value="{{ editable.sspr_dingtalk_corp_id }}">
+            <input type="hidden" name="sspr_min_password_length" value="{{ editable.sspr_min_password_length }}">
+            <input type="hidden" name="sspr_unlock_account_default" value="{{ editable.sspr_unlock_account_default|lower }}">
+            <input type="hidden" name="sspr_verification_session_ttl_seconds" value="{{ editable.sspr_verification_session_ttl_seconds }}">
+            {% call ui.helper_block(t("Employee self-service moved"), t("Password reset portal settings now have a dedicated system-management page. Values are preserved when this connector draft is saved."), "info") %}
+              {{ ui.button(t("Open Employee Self-Service"), href="/system-management/employee-self-service", variant="secondary", icon="key-round") }}
             {% endcall %}
 
             {% call ui.panel(t("Directory Safety"), t("Organization Scope"), "warning", t("System-protected accounts are always skipped for binding, create, update, reactivation, and disable actions.")) %}
@@ -382,15 +349,16 @@
           <div class="page-stack tight">
             {% call ui.panel(t("Runtime Policy"), t("Organization Scope"), "info", t("Set scheduled execution, placement strategy, and managed relation cleanup.")) %}
               <div class="form-grid">
-                {{ forms.input("schedule_time", t("Daily Schedule Time"), editable.schedule_time, placeholder="HH:mm") }}
-                {{ forms.input("retry_interval", t("Retry Interval (min)"), editable.retry_interval, type="number") }}
-                {{ forms.input("max_retries", t("Max Retries"), editable.max_retries, type="number") }}
-                {{ forms.select("schedule_execution_mode", t("Scheduled Mode"), [("apply", t("Apply")), ("dry_run", t("Dry Run"))], selected_value=editable.schedule_execution_mode) }}
+                <input type="hidden" name="schedule_time" value="{{ editable.schedule_time }}">
+                <input type="hidden" name="retry_interval" value="{{ editable.retry_interval }}">
+                <input type="hidden" name="max_retries" value="{{ editable.max_retries }}">
+                <input type="hidden" name="schedule_execution_mode" value="{{ editable.schedule_execution_mode }}">
                 {{ forms.select("user_ou_placement_strategy", t("OU Placement Strategy"), translated_placement_strategy_options.items(), selected_value=editable.user_ou_placement_strategy) }}
                 {{ forms.select("group_display_separator", t("Group Separator"), [("-", "-"), ("_", "_"), (" ", t("Space"))], selected_value=editable.group_display_separator) }}
                 {{ forms.select("group_recursive_enabled", t("Recursive Group Sync"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.group_recursive_enabled|lower) }}
                 {{ forms.select("managed_relation_cleanup_enabled", t("Relation Cleanup"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.managed_relation_cleanup_enabled|lower) }}
               </div>
+              <div class="panel-note info">{{ t("Schedule timing, retry behavior, and unattended Apply gating are managed in Automation And Schedules.") }} <a href="/operations-center/automation">{{ t("Open Automation And Schedules") }}</a></div>
             {% endcall %}
 
             {% call ui.panel(t("Group Rules"), t("Organization Scope"), "info") %}
@@ -421,22 +389,19 @@
 
         <section id="config-section-web" class="config-section-panel" data-config-section-panel="web" hidden>
           <div class="page-stack tight">
-            {% call ui.panel(t("Web Deployment"), t("Global Scope"), "warning", t("These settings affect the whole server, regardless of which organization is selected.")) %}
-              <p class="section-subtitle">{{ t("Changes take effect after restarting the service.") }}</p>
-              <div class="form-grid">
-                {{ forms.input("web_bind_host", t("Bind Host"), editable.web_bind_host) }}
-                {{ forms.input("web_bind_port", t("Bind Port"), editable.web_bind_port, type="number") }}
-                {{ forms.input("web_public_base_url", t("Public Base URL"), editable.web_public_base_url, placeholder="https://sync.example.com", class_name="field-span-full") }}
-                {{ forms.select("web_session_cookie_secure_mode", t("Secure Cookie Policy"), [("auto", "auto"), ("always", "always"), ("never", "never")], selected_value=editable.web_session_cookie_secure_mode) }}
-                {{ forms.select("web_trust_proxy_headers", t("Trust Proxy Headers"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.web_trust_proxy_headers|lower) }}
-                {{ forms.input("web_forwarded_allow_ips", t("Forwarded Allow IPs"), editable.web_forwarded_allow_ips, placeholder="127.0.0.1, 10.0.0.0/24", class_name="field-span-full") }}
-              </div>
-            {% endcall %}
-            {% call ui.panel(t("Branding"), t("Global Scope"), "info", t("Use these values to control the product title, short mark, and footer attribution shown across login and in-product pages.")) %}
-              <div class="form-grid">
-                {{ forms.input("brand_display_name", t("Brand Display Name"), editable.brand_display_name, help_text=t("Controls the browser title, sidebar label, and login page heading."), class_name="field-span-full") }}
-                {{ forms.input("brand_mark_text", t("Brand Mark Text"), editable.brand_mark_text, help_text=t("Short text shown inside the brand mark on the login page and sidebar.")) }}
-                {{ forms.input("brand_attribution", t("Footer Attribution"), editable.brand_attribution, help_text=t("Footer text shown on the login page and in the in-product sidebar."), class_name="field-span-full") }}
+            <input type="hidden" name="web_bind_host" value="{{ editable.web_bind_host }}">
+            <input type="hidden" name="web_bind_port" value="{{ editable.web_bind_port }}">
+            <input type="hidden" name="web_public_base_url" value="{{ editable.web_public_base_url }}">
+            <input type="hidden" name="web_session_cookie_secure_mode" value="{{ editable.web_session_cookie_secure_mode }}">
+            <input type="hidden" name="web_trust_proxy_headers" value="{{ editable.web_trust_proxy_headers|lower }}">
+            <input type="hidden" name="web_forwarded_allow_ips" value="{{ editable.web_forwarded_allow_ips }}">
+            <input type="hidden" name="brand_display_name" value="{{ editable.brand_display_name }}">
+            <input type="hidden" name="brand_mark_text" value="{{ editable.brand_mark_text }}">
+            <input type="hidden" name="brand_attribution" value="{{ editable.brand_attribution }}">
+            {% call ui.helper_block(t("Global settings moved"), t("Deployment and branding now have separate system-management pages. Their current values remain preserved when this connector draft is saved."), "warning") %}
+              <div class="actions">
+                {{ ui.button(t("Open Deployment Settings"), href="/system-management/deployment", variant="secondary", icon="server-cog") }}
+                {{ ui.button(t("Open Branding And Appearance"), href="/system-management/branding", variant="secondary", icon="palette") }}
               </div>
             {% endcall %}
           </div>

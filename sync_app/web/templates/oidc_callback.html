@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="login-hero">
+  <div class="login-mark">
+    <span class="login-mark__text">{{ brand_mark_text }}</span>
+  </div>
+  <h1 class="hero-title">{{ t("Completing Single Sign-On") }}</h1>
+  <p class="section-subtitle">{{ t("The identity provider has returned. Complete the secure sign-in handoff to continue.") }}</p>
+</div>
+
+<div class="card login-card">
+  <form method="post" action="/auth/oidc/callback" data-oidc-callback-form>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="code" value="{{ oidc_query.code }}">
+    <input type="hidden" name="state" value="{{ oidc_query.state }}">
+    <input type="hidden" name="error" value="{{ oidc_query.error }}">
+    <input type="hidden" name="error_description" value="{{ oidc_query.error_description }}">
+    <div class="page-stack tight">
+      <div class="sspr-spinner" aria-hidden="true"></div>
+      <p role="status">{{ t("Verifying the returned identity and security state. No account data is changed by this page load.") }}</p>
+      {{ ui.button(t("Complete Sign-In"), type="submit", icon="key-round", block=True) }}
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/oidc-callback.js?v={{ static_asset_version }}" defer></script>
+{% endblock %}

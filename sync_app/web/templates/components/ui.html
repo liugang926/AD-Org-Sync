@@ -235,14 +235,14 @@
 </nav>
 {% endmacro %}
 
-{% macro topbar_account(username, secondary_text='', logout_action='/logout', csrf_token='', logout_label='Sign Out', class_name='') %}
+{% macro topbar_account(username, secondary_text='', logout_action='/logout', csrf_token='', logout_label='Sign Out', class_name='', account_href='') %}
 <div class="topbar-account {{ class_name }}">
-  <div class="topbar-account__meta">
+  {% if account_href %}<a class="topbar-account__meta" href="{{ account_href }}" aria-label="{{ username }}">{% else %}<div class="topbar-account__meta">{% endif %}
     <div class="topbar-account__name">{{ username }}</div>
     {% if secondary_text %}
     <div class="topbar-account__secondary">{{ secondary_text }}</div>
     {% endif %}
-  </div>
+  {% if account_href %}</a>{% else %}</div>{% endif %}
   <form action="{{ logout_action }}" method="post" class="topbar-account__action">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button class="topbar-icon-button header-signout" type="submit" aria-label="{{ logout_label }}">

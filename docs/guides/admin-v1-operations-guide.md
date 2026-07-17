@@ -8,18 +8,10 @@ This guide is the operator-facing manual for the current `v1` control plane.
 
 It assumes the following capabilities are already available in the deployed build:
 
-- `Dashboard`
-- `Config`
-- `Advanced Sync`
-- `Job Center`
-- `Conflict Queue`
-- `Identity Overrides`
-- `Exception Rules`
-- `Config Release Center`
-- `Notification And Automation Center`
-- `Data Quality Center`
-- `Lifecycle Workbench`
-- `External Integration Center`
+- Control Tower, Data Sources, Identity Governance, Sync Policies, and Execution Center
+- Operations Center: lifecycle queue, automation, notifications, and audit log
+- System Management: organizations, administrators, employee self-service, database, branding, and deployment settings
+- Config Release Center and the organization-scoped external integration API
 
 The recommended operating model is still:
 
@@ -32,19 +24,19 @@ The recommended operating model is still:
 
 Use this lightweight sequence at the start of each admin session:
 
-1. Open `/dashboard`
+1. Open `/overview/control-tower`
    - Confirm the selected organization.
    - Review preflight status, active jobs, and the latest warnings.
    - Switch to `Advanced` mode if you need routing, lifecycle, or governance views.
-2. Open `/jobs`
+2. Open `/execution-center/dry-run`
    - Check whether the organization is `Ready`, `Needs Attention`, or `Blocked`.
    - Run the next `dry run` if configuration or source data changed.
 3. Open the latest job detail
    - Review `Change Comparison`.
    - Check planned operations, conflicts, and failure diagnostics.
-4. Open `/conflicts`
+4. Open `/identity-governance/conflicts`
    - Clear open identity conflicts before `apply`.
-5. Open `/automation-center`
+5. Open `/operations-center/automation`
    - Confirm whether scheduled `apply` is still allowed.
 6. If you are preparing a release, open `/config/releases`
    - Publish a fresh configuration snapshot before rollout.
@@ -53,7 +45,7 @@ Use this lightweight sequence at the start of each admin session:
 
 Use this sequence for a new organization or a newly enabled connector:
 
-1. Complete `/config`
+1. Complete `/data-sources/connectors` and the relevant `/sync-policies/*` pages
    - Save source connector settings.
    - Save LDAP settings.
    - Confirm sync scope, root OU, disabled-user OU, and naming defaults.
@@ -61,12 +53,12 @@ Use this sequence for a new organization or a newly enabled connector:
    - Source connectivity
    - LDAP connectivity
    - directory / scope preview where applicable
-3. Open `/jobs`
+3. Open `/execution-center/dry-run`
    - Run `dry run`.
 4. Open the resulting job detail
    - Review `Change Comparison`.
    - Review planned operations and `high-risk` counts.
-5. Open `/conflicts`
+5. Open `/identity-governance/conflicts`
    - Resolve `multiple_ad_candidates`, `shared_ad_account`, and other open conflicts.
 6. If the plan is high-risk, approve the review
    - From the job detail, approve the dry-run plan.
@@ -78,8 +70,8 @@ Use this sequence for a new organization or a newly enabled connector:
 Use this flow for connector, mapping, exception, lifecycle, or naming changes:
 
 1. Publish a configuration snapshot in `/config/releases`.
-2. Save the new change in `/config`, `/advanced-sync`, `/mappings`, or `/exceptions`.
-3. Run `dry run`.
+2. Save the new change in its owning connector, identity-governance, or sync-policy page.
+3. Run `dry run` from `/execution-center/dry-run`.
 4. Compare the new job against:
    - the previous successful `dry run`
    - the previous `apply`
@@ -93,7 +85,7 @@ Use this flow for connector, mapping, exception, lifecycle, or naming changes:
 
 Use this flow when a source user may need to bind to an existing AD account:
 
-1. Open the relevant item in `/conflicts`.
+1. Open the relevant item in `/identity-governance/conflicts`.
 2. Open the `Same-Account Decision Guide`.
 3. Confirm the candidate AD account:
    - enabled state
@@ -111,7 +103,7 @@ Use this flow when a source user may need to bind to an existing AD account:
 
 ## Rule Governance
 
-Use `/mappings` and `/exceptions` as governed policy stores, not as a scratchpad.
+Use `/identity-governance/manual-overrides` and `/identity-governance/exception-rules` as governed policy stores, not as a scratchpad.
 
 Every long-lived binding, override, or exception should have:
 
@@ -131,7 +123,7 @@ Avoid carrying temporary conflict workarounds indefinitely. If a rule has stoppe
 
 ## Lifecycle Operations
 
-Use `/lifecycle` as the daily queue for time-based actions.
+Use `/operations-center/lifecycle-queue` as the daily queue for time-based actions.
 
 Work through these sections:
 
@@ -149,7 +141,7 @@ Preferred actions:
 
 ## Data Quality Operations
 
-Use `/data-quality` after source-side changes, before go-live, and during weekly hygiene reviews.
+Use `/data-sources/data-quality` after source-side changes, before go-live, and during weekly hygiene reviews.
 
 Watch these indicators:
 
@@ -166,15 +158,15 @@ Recommended cadence:
 2. Export repair items for HR or source-system owners.
 3. Track whether the total backlog is shrinking over time.
 
-## Notification And Automation
+## Automation And Notifications
 
-Use `/automation-center` to keep unattended execution safe.
+Use `/operations-center/automation` for schedule time, retry behavior, execution mode, and the unattended Apply safety gate. Use `/operations-center/notifications` for signal selection, channels, webhooks, and failed-delivery evidence.
 
 Minimum recommended settings:
 
 1. Keep `schedule_execution_mode` on `dry_run` until production rollout is stable.
-2. Enable dry-run failure reminders.
-3. Enable conflict backlog reminders.
+2. In Notifications, enable dry-run failure reminders.
+3. In Notifications, enable conflict backlog reminders.
 4. Keep the scheduled-apply safety gate enabled.
 5. Require:
    - a recent successful `dry run`
@@ -198,7 +190,7 @@ Do not make large production changes without a fresh snapshot and a verified rol
 
 ## External Integrations
 
-Use `/integrations` when an external workflow or dashboard needs access.
+Use the advanced channel section on `/operations-center/notifications` when an external workflow or dashboard needs access.
 
 Current `v1` support:
 
@@ -215,6 +207,25 @@ Recommended practice:
 4. Use a per-target shared secret if the receiver validates HMAC signatures.
 
 See `docs/api/external-integrations-v1.md` for the wire contract.
+
+## System Management
+
+Use the owning page instead of editing global and organization settings from the legacy Config form:
+
+- `/system-management/organizations`: tenant definitions and configuration bundles
+- `/system-management/administrators`: local administrators and roles
+- `/system-management/employee-self-service`: organization-scoped SSPR policy; saving does not reset a real account
+- `/system-management/database`: integrity state and manual backup
+- `/system-management/branding`: global product appearance
+- `/system-management/deployment`: persisted web runtime settings and restart status
+
+Deployment settings are configuration only. If the page reports `Restart required`, use the approved CI/CD deployment workflow. Confirm `/healthz` and `/readyz` after restart before treating the values as active.
+
+All administration timestamps show the browser-local absolute time and a relative time. Hover or inspect the time element for its raw ISO value.
+
+Legacy Phase 7 GET URLs permanently redirect to their canonical routes and preserve query parameters. Legacy POST paths remain available for compatibility, but new automation should use canonical paths.
+
+Authentication handoffs also preserve safe HTTP semantics. Starting SSPR or administrator SSO requires a CSRF-checked POST. Provider callback GET pages only display and automatically submit the secure handoff; OAuth transaction consumption, login-state changes, and audit records occur on POST.
 
 ## Escalation Triggers
 
