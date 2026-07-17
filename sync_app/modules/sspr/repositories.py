@@ -575,6 +575,31 @@ class SQLiteSSPRResetReceiptStore:
                 consumed_at=now,
             )
 
+    def get_receipt(self, token: str) -> SSPRResetReceipt | None:
+        """Read a valid receipt without changing database state.
+
+        The web result page clears its HttpOnly capability cookie after this read,
+        so refreshing the GET cannot replay the result while GET remains read-only.
+        """
+        now = _as_utc(self.now_factory())
+        token_hash = hash_capability(token)
+        with self.db.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM sspr_reset_receipts WHERE token_hash = ? LIMIT 1",
+                (token_hash,),
+            ).fetchone()
+        if not row or row["consumed_at"] or str(row["expires_at"] or "") <= _iso(now):
+            return None
+        return SSPRResetReceipt(
+            token=str(token or ""),
+            org_id=str(row["org_id"] or "default"),
+            ad_username=str(row["ad_username"] or ""),
+            completed_at=_parse_datetime(row["completed_at"]) or now,
+            expires_at=_parse_datetime(row["expires_at"]) or now,
+            unlock_requested=bool(row["unlock_requested"]),
+            unlock_succeeded=bool(row["unlock_succeeded"]),
+        )
+
     def cleanup_expired(self, *, retention_seconds: int = 86400) -> int:
         cutoff = _as_utc(self.now_factory()) - timedelta(seconds=max(int(retention_seconds or 0), 0))
         with self.db.transaction() as connection:

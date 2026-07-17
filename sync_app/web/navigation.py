@@ -37,7 +37,22 @@ CANONICAL_ROUTE_PATHS = {
     "organizations": "/system-management/organizations",
     "users": "/system-management/administrators",
     "database": "/system-management/database",
+    "employee-self-service": "/system-management/employee-self-service",
+    "branding": "/system-management/branding",
+    "deployment": "/system-management/deployment",
     "account": "/system-management/account",
+}
+
+
+PHASE7_LEGACY_GET_REDIRECTS = {
+    "/lifecycle": CANONICAL_ROUTE_PATHS["lifecycle"],
+    "/automation-center": CANONICAL_ROUTE_PATHS["automation-center"],
+    "/integrations": CANONICAL_ROUTE_PATHS["integrations"],
+    "/audit": CANONICAL_ROUTE_PATHS["audit"],
+    "/organizations": CANONICAL_ROUTE_PATHS["organizations"],
+    "/users": CANONICAL_ROUTE_PATHS["users"],
+    "/database": CANONICAL_ROUTE_PATHS["database"],
+    "/account": CANONICAL_ROUTE_PATHS["account"],
 }
 
 
@@ -269,7 +284,7 @@ NAVIGATION_GROUPS = (
             ),
             NavigationItem(
                 page="integrations",
-                label="Notifications & Integrations",
+                label="Notifications",
                 icon="bell-ring",
                 capability="config.read",
                 legacy_paths=("/integrations",),
@@ -306,6 +321,14 @@ NAVIGATION_GROUPS = (
                 advanced_only=True,
             ),
             NavigationItem(
+                page="employee-self-service",
+                label="Employee Self-Service",
+                icon="key-round",
+                capability="config.read",
+                legacy_paths=("/config#config-section-security",),
+                advanced_only=True,
+            ),
+            NavigationItem(
                 page="database",
                 label="Database",
                 icon="database",
@@ -314,11 +337,19 @@ NAVIGATION_GROUPS = (
                 advanced_only=True,
             ),
             NavigationItem(
-                page="account",
-                label="My Account",
-                icon="user-cog",
-                capability="account.manage",
-                legacy_paths=("/account",),
+                page="branding",
+                label="Branding & Appearance",
+                icon="palette",
+                capability="config.read",
+                legacy_paths=("/config#config-section-web",),
+                advanced_only=True,
+            ),
+            NavigationItem(
+                page="deployment",
+                label="Deployment Settings",
+                icon="server-cog",
+                capability="config.read",
+                legacy_paths=("/config#config-section-web",),
                 advanced_only=True,
             ),
         ),

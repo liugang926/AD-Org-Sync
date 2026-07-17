@@ -27,6 +27,7 @@ from sync_app.web.i18n import detect_browser_ui_language, normalize_ui_language,
 
 SSPR_SESSION_COOKIE = "ad_org_sync_sspr"
 SSPR_CSRF_COOKIE = "ad_org_sync_sspr_csrf"
+SSPR_START_CSRF_COOKIE = "ad_org_sync_sspr_start_csrf"
 SSPR_OAUTH_COOKIE = "ad_org_sync_sspr_oauth"
 SSPR_RECEIPT_COOKIE = "ad_org_sync_sspr_result"
 SSPR_COOKIE_PATH = "/sspr"
@@ -229,6 +230,11 @@ def register_sspr_routes(
         )
         return True
 
+    def is_expired_session(session_token: str) -> bool:
+        record_fn = getattr(session_store, "get_session_record", None)
+        record = record_fn(session_token) if callable(record_fn) else None
+        return bool(record is not None and record.is_expired())
+
     def render_auth_start(request: Request, corp_id: str = "", reason: str = "") -> Response:
         context = resolve_context(request, corp_id)
         if context is None:
@@ -335,10 +341,13 @@ def register_sspr_routes(
         start_params = {"corpid": context.corp_id, "lang": _language(request)}
         if reason == "session_expired":
             start_params["reason"] = reason
-        return render_page(
+        start_csrf_token = secrets.token_urlsafe(32)
+        response = render_page(
             request,
             state="initializing",
-            oauth_start_url="/sspr/oauth/start?" + urlencode(start_params),
+            oauth_start_url="/sspr/oauth/start",
+            oauth_start_params=start_params,
+            oauth_start_csrf_token=start_csrf_token,
             status_message=(
                 translate(
                     _language(request),
@@ -348,16 +357,47 @@ def register_sspr_routes(
                 else ""
             ),
         )
+        response.set_cookie(
+            SSPR_START_CSRF_COOKIE,
+            start_csrf_token,
+            max_age=OAUTH_TTL_SECONDS,
+            secure=request.url.scheme.lower() == "https",
+            httponly=True,
+            samesite="lax",
+            path="/sspr/oauth/start",
+        )
+        return response
 
     @app.get("/sspr/oauth/start", response_class=HTMLResponse)
     def sspr_oauth_start(request: Request, corpid: str = "", reason: str = ""):
-        return render_auth_start(request, corpid, reason)
+        params = {"corpid": corpid, "lang": _language(request)}
+        if reason:
+            params["reason"] = reason
+        return RedirectResponse(url="/sspr?" + urlencode(params), status_code=303)
+
+    @app.post("/sspr/oauth/start", response_class=HTMLResponse)
+    def sspr_oauth_start_submit(
+        request: Request,
+        csrf_token: str = Form(""),
+        corpid: str = Form(""),
+        reason: str = Form(""),
+    ):
+        cookie_token = str(request.cookies.get(SSPR_START_CSRF_COOKIE) or "")
+        if (
+            not csrf_token
+            or not cookie_token
+            or not secrets.compare_digest(csrf_token, cookie_token)
+        ):
+            return Response(status_code=403)
+        response = render_auth_start(request, corpid, reason)
+        response.delete_cookie(SSPR_START_CSRF_COOKIE, path="/sspr/oauth/start")
+        return response
 
     @app.get("/sspr/callback/dingtalk", response_class=HTMLResponse)
     def sspr_dingtalk_callback(request: Request):
         # requestAuthCode does not require a redirect callback. This safe fallback
         # never accepts auth codes or state in the query string; both are posted.
-        return render_auth_start(request)
+        return RedirectResponse(url=f"/sspr?lang={_language(request)}", status_code=303)
 
     @app.post("/sspr/auth/dingtalk")
     async def sspr_dingtalk_auth(request: Request):
@@ -450,7 +490,7 @@ def register_sspr_routes(
         session_token = request.cookies.get(SSPR_SESSION_COOKIE, "")
         csrf_token = request.cookies.get(SSPR_CSRF_COOKIE, "")
         if not session_store.validate_csrf_token(session_token, csrf_token):
-            expired = audit_expired_session(request, session_token)
+            expired = is_expired_session(session_token)
             return _clear_sspr_cookies(
                 RedirectResponse(
                     url="/sspr?reason=session_expired" if expired else "/sspr",
@@ -482,7 +522,6 @@ def register_sspr_routes(
             or source_config is None
             or normalize_source_provider(source_config.source_provider) != "dingtalk"
         ):
-            session_store.invalidate(session_token)
             return _clear_sspr_cookies(RedirectResponse(url="/sspr", status_code=303))
         service = build_service(request)
         account = service.get_account(
@@ -647,7 +686,7 @@ def register_sspr_routes(
 
     @app.get("/sspr/result", response_class=HTMLResponse)
     def sspr_result(request: Request):
-        receipt = receipt_store.consume_receipt(request.cookies.get(SSPR_RECEIPT_COOKIE, ""))
+        receipt = receipt_store.get_receipt(request.cookies.get(SSPR_RECEIPT_COOKIE, ""))
         if receipt is None:
             return RedirectResponse(url="/sspr", status_code=303)
         response = render_page(request, state="success", receipt=receipt)

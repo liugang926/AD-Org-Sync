@@ -1,6 +1,6 @@
 # AD Org Sync 管理后台信息架构重构路线图
 
-> 状态：前五阶段已合并、CI 通过并部署；第六阶段（执行中心拆分）实现与本地 CI 等价验证已完成，待 Draft PR CI
+> 状态：前六阶段已合并、CI 通过并部署；第七阶段（运营中心与系统管理收口）实现与本地 CI 等价验证已完成，待 Draft PR CI。
 > 约束：不操作真实 AD 账号，不修改真实生产绑定数据，不在 GET 请求中写入数据。
 
 ## 1. 当前信息架构清单
@@ -87,10 +87,10 @@
 | 执行中心 | `/execution-center/plan-review` | 审核计划、风险和影响范围 | 批准计划 |
 | 执行中心 | `/execution-center/apply` | 显示组织、环境、快照和影响数并执行已批准计划 | Apply 已批准计划 |
 | 执行中心 | `/execution-center/jobs` | 查询任务历史、阶段、日志和结果 | 查看最新任务 |
-| 运营中心 | `/operations-center/lifecycle` | 处理生命周期运营队列 | 处理选中项 |
+| 运营中心 | `/operations-center/lifecycle-queue` | 处理生命周期运营队列 | 处理选中项 |
 | 运营中心 | `/operations-center/automation` | 管理自动化和计划任务 | 保存计划任务 |
 | 运营中心 | `/operations-center/notifications` | 管理通知渠道、Webhook 与失败投递 | 保存通知配置 |
-| 运营中心 | `/operations-center/audit` | 查询不可变审计证据 | 查询审计日志 |
+| 运营中心 | `/operations-center/audit-log` | 查询不可变审计证据 | 查询审计日志 |
 | 系统管理 | `/system-management/organizations` | 管理组织及配置包 | 新建组织 |
 | 系统管理 | `/system-management/administrators` | 管理管理员、角色与权限 | 新建管理员 |
 | 系统管理 | `/system-management/employee-self-service` | 管理 SSPR 可用性、身份源与安全策略；不承载员工实际重置 | 保存自助服务设置 |
@@ -164,9 +164,13 @@
 
 ### PR 7：运营中心与系统管理收口
 
+实现与验收契约见 [`operations-system-migration-contract.md`](operations-system-migration-contract.md)。
+
 - 拆出生命周期、自动化、通知、审计，以及组织、管理员、自助服务、数据库、品牌、部署设置。
 - 所有时间按用户本地时区显示，同时提供相对时间和原始时间。
 - 完成旧 URL 重定向策略、运维手册和最终浏览器矩阵。
+- 旧 GET URL 使用保留查询字符串的 `308` 重定向；旧 POST 处理器继续兼容，规范页面只提交本页负责的设置。
+- 本阶段无数据库迁移，不连接真实 AD，不修改真实生产绑定；全部新增写操作保持 POST、CSRF、RBAC 与审计。
 
 ## 5. 风险与兼容方案
 

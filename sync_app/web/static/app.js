@@ -570,6 +570,16 @@
       minute: "2-digit",
       timeZoneName: "short",
     });
+    const relativeFormatter = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+    const relativeUnits = [
+      ["year", 365 * 24 * 60 * 60],
+      ["month", 30 * 24 * 60 * 60],
+      ["week", 7 * 24 * 60 * 60],
+      ["day", 24 * 60 * 60],
+      ["hour", 60 * 60],
+      ["minute", 60],
+      ["second", 1],
+    ];
     document.querySelectorAll("time[data-local-time]").forEach((element) => {
       const rawValue = element.getAttribute("datetime") || "";
       const parsed = new Date(rawValue);
@@ -577,8 +587,14 @@
         return;
       }
       const formatted = formatter.format(parsed);
-      element.textContent = formatted;
-      element.setAttribute("aria-label", formatted);
+      const deltaSeconds = (parsed.getTime() - Date.now()) / 1000;
+      const [relativeUnit, divisor] =
+        relativeUnits.find(([, seconds]) => Math.abs(deltaSeconds) >= seconds) || relativeUnits.at(-1);
+      const relative = relativeFormatter.format(Math.round(deltaSeconds / divisor), relativeUnit);
+      const display = `${formatted} · ${relative}`;
+      element.textContent = display;
+      element.setAttribute("title", rawValue);
+      element.setAttribute("aria-label", `${display}; ${rawValue}`);
     });
   }
 

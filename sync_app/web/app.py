@@ -74,6 +74,7 @@ from sync_app.web.routes_organizations import register_organization_routes
 from sync_app.web.routes_public import register_public_routes
 from sync_app.web.routes_source_directory import register_source_directory_routes
 from sync_app.web.routes_sspr import register_sspr_routes
+from sync_app.web.routes_system_management import register_system_management_routes
 from sync_app.web.runtime import (
     resolve_web_runtime_settings as resolve_web_runtime_settings,
     web_runtime_requires_restart as web_runtime_requires_restart,
@@ -84,6 +85,7 @@ from sync_app.web.security import (
     rotate_csrf_token,
     verify_password,
 )
+from sync_app.web.navigation import PHASE7_LEGACY_GET_REDIRECTS
 
 LOGGER = logging.getLogger(__name__)
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
@@ -121,6 +123,9 @@ ADVANCED_NAV_PAGES = {
     "mappings",
     "exceptions",
     "database",
+    "employee-self-service",
+    "branding",
+    "deployment",
     "users",
     "audit",
 }
@@ -336,6 +341,18 @@ def create_app(
         return response
 
     @app.middleware("http")
+    async def legacy_get_redirect_middleware(request: Request, call_next):
+        if request.method.upper() == "GET":
+            target = PHASE7_LEGACY_GET_REDIRECTS.get(request.url.path)
+            if target:
+                query = str(request.url.query or "")
+                return RedirectResponse(
+                    url=f"{target}?{query}" if query else target,
+                    status_code=308,
+                )
+        return await call_next(request)
+
+    @app.middleware("http")
     async def require_login_middleware(request: Request, call_next):
         if request.method.upper() == "OPTIONS" or _is_public_auth_path(request.url.path):
             return await call_next(request)
@@ -467,6 +484,7 @@ def create_app(
     register_automation_center_routes(
         app,
         flash=request_support.flash,
+        flash_t=request_support.flash_t,
         get_current_org=request_support.get_current_org,
         reject_invalid_csrf=request_support.reject_invalid_csrf,
         render=request_support.render,
@@ -488,6 +506,7 @@ def create_app(
     register_integration_routes(
         app,
         flash=request_support.flash,
+        flash_t=request_support.flash_t,
         get_current_org=request_support.get_current_org,
         reject_invalid_csrf=request_support.reject_invalid_csrf,
         render=request_support.render,
@@ -559,6 +578,20 @@ def create_app(
         reject_invalid_csrf=request_support.reject_invalid_csrf,
         render=request_support.render,
         require_capability=request_support.require_capability,
+    )
+
+    register_system_management_routes(
+        app,
+        default_brand_display_name=DEFAULT_BRAND_DISPLAY_NAME,
+        default_brand_mark_text=DEFAULT_BRAND_MARK_TEXT,
+        default_brand_attribution=DEFAULT_BRAND_ATTRIBUTION,
+        flash=request_support.flash,
+        flash_t=request_support.flash_t,
+        get_current_org=request_support.get_current_org,
+        reject_invalid_csrf=request_support.reject_invalid_csrf,
+        render=request_support.render,
+        require_capability=request_support.require_capability,
+        to_bool=_to_bool,
     )
 
     register_sspr_routes(

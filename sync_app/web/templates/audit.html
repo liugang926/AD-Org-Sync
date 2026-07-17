@@ -12,7 +12,7 @@
   {% endcall %}
 
   {% call ui.panel(t("Audit Logs"), description=t("Search by actor, action, target, or message.")) %}
-    <form method="get" action="/audit">
+    <form method="get" action="/operations-center/audit-log">
       <div class="form-grid">
         {{ forms.input("q", t("Keyword"), audit_query or '', placeholder="login, backup, alice, sync_job") }}
       </div>
@@ -21,7 +21,7 @@
       {% endif %}
       <div class="actions">
         {{ ui.button(t("Search"), type="submit") }}
-        {{ ui.button(t("Reset"), href="/audit?clear_filters=1", variant="secondary") }}
+        {{ ui.button(t("Reset"), href="/operations-center/audit-log?clear_filters=1", variant="secondary") }}
       </div>
     </form>
   {% endcall %}
@@ -57,10 +57,10 @@
     {% endcall %}
     {% call ui.pagination(t("Total {count} items, page {page} / {pages}", count=audit_page_data.total_items, page=audit_page_data.page, pages=audit_page_data.total_pages)) %}
       {% if audit_page_data.has_previous %}
-      {{ ui.button(t("Previous"), href="/audit?q=" ~ (audit_query or '') ~ "&page_number=" ~ audit_page_data.previous_page, variant="secondary") }}
+      {{ ui.button(t("Previous"), href="/operations-center/audit-log?q=" ~ (audit_query or '') ~ "&page_number=" ~ audit_page_data.previous_page, variant="secondary") }}
       {% endif %}
       {% if audit_page_data.has_next %}
-      {{ ui.button(t("Next"), href="/audit?q=" ~ (audit_query or '') ~ "&page_number=" ~ audit_page_data.next_page, variant="secondary") }}
+      {{ ui.button(t("Next"), href="/operations-center/audit-log?q=" ~ (audit_query or '') ~ "&page_number=" ~ audit_page_data.next_page, variant="secondary") }}
       {% endif %}
     {% endcall %}
   {% endcall %}

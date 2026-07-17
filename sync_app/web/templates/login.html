@@ -31,7 +31,10 @@
   </div>
   {% if login_capabilities.sso_enabled %}
   <div class="login-sso-primary">
-    {{ ui.button(t("Sign in with {provider}", provider=login_capabilities.sso_name), href="/auth/oidc/start", icon="key-round", block=True) }}
+    <form method="post" action="/auth/oidc/start">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {{ ui.button(t("Sign in with {provider}", provider=login_capabilities.sso_name), type="submit", icon="key-round", block=True) }}
+    </form>
     <p>{{ t("Your organization uses single sign-on as the primary authentication method.") }}</p>
   </div>
   <details class="login-local-fallback">

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Deployment Settings"), t("Manage global web binding, public URL, cookie, and trusted-proxy settings separately from organization connectors."), eyebrow=t("System Management"), badge_text=t("Global Scope"), badge_level="warning") %}{% endcall %}
+
+  {% if restart_required %}
+  <div class="panel-note warning" role="status">
+    <strong>{{ t("Restart required") }}:</strong> {{ t("Persisted deployment settings differ from the active process. Restart the service through the approved deployment workflow, then verify health checks.") }}
+  </div>
+  {% else %}
+  <div class="panel-note success" role="status">
+    <strong>{{ t("Current state") }}:</strong> {{ t("The active process matches the persisted deployment settings. No restart is pending.") }}
+  </div>
+  {% endif %}
+
+  {% if settings.warnings %}
+  <div class="list-stack">
+    {% for warning in settings.warnings %}<div class="panel-note warning">{{ t(warning) }}</div>{% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="grid cols-2">
+    {% call ui.panel(t("Persisted Settings"), t("Global Scope"), "warning", t("Saving writes configuration only. It does not restart the service or deploy code.")) %}
+      <form method="post" action="/system-management/deployment" class="page-stack tight">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="web_bind_host">{{ t("Bind Host") }}</label>
+            <input id="web_bind_host" name="web_bind_host" value="{{ settings.bind_host }}" required>
+          </div>
+          <div class="form-group">
+            <label for="web_bind_port">{{ t("Bind Port") }}</label>
+            <input id="web_bind_port" name="web_bind_port" type="number" min="1" max="65535" value="{{ settings.bind_port }}" required>
+          </div>
+          <div class="form-group field-span-full">
+            <label for="web_public_base_url">{{ t("Public Base URL") }}</label>
+            <input id="web_public_base_url" name="web_public_base_url" type="url" value="{{ settings.public_base_url }}" placeholder="https://sync.example.com">
+          </div>
+          <div class="form-group">
+            <label for="web_session_cookie_secure_mode">{{ t("Secure Cookie Policy") }}</label>
+            <select id="web_session_cookie_secure_mode" name="web_session_cookie_secure_mode">
+              {% for value in ["auto", "always", "never"] %}<option value="{{ value }}" {% if settings.session_cookie_secure_mode == value %}selected{% endif %}>{{ value }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="inline-checkbox" for="web_trust_proxy_headers">
+              <input id="web_trust_proxy_headers" type="checkbox" name="web_trust_proxy_headers" value="1" {% if settings.trust_proxy_headers %}checked{% endif %}>
+              {{ t("Trust Proxy Headers") }}
+            </label>
+          </div>
+          <div class="form-group field-span-full">
+            <label for="web_forwarded_allow_ips">{{ t("Forwarded Allow IPs") }}</label>
+            <input id="web_forwarded_allow_ips" name="web_forwarded_allow_ips" value="{{ settings.forwarded_allow_ips }}" required>
+          </div>
+        </div>
+        <div class="actions">
+          {{ ui.button(t("Save Deployment Settings"), type="submit", icon="save") }}
+        </div>
+      </form>
+    {% endcall %}
+
+    {% call ui.panel(t("Active Process"), description=t("Read-only values loaded when this web process started.")) %}
+      <div class="detail-grid">
+        <div class="detail-item"><div class="label">{{ t("Environment") }}</div><div class="value">{{ t(environment_label) }}</div></div>
+        <div class="detail-item"><div class="label">{{ t("Bind Host") }}</div><div class="value">{{ active_settings.bind_host }}</div></div>
+        <div class="detail-item"><div class="label">{{ t("Bind Port") }}</div><div class="value">{{ active_settings.bind_port }}</div></div>
+        <div class="detail-item"><div class="label">{{ t("Public Base URL") }}</div><div class="value">{{ active_settings.public_base_url or "-" }}</div></div>
+        <div class="detail-item"><div class="label">{{ t("Secure Cookie Policy") }}</div><div class="value">{{ active_settings.session_cookie_secure_mode }}</div></div>
+        <div class="detail-item"><div class="label">{{ t("Trust Proxy Headers") }}</div><div class="value">{{ t("Enabled") if active_settings.trust_proxy_headers else t("Disabled") }}</div></div>
+      </div>
+      <p class="muted">{{ t("Next step: if a restart is required, use the approved CI/CD deployment workflow and confirm /healthz and /readyz before declaring the change active.") }}</p>
+    {% endcall %}
+  </div>
+</div>
+{% endblock %}

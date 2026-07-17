@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Branding And Appearance"), t("Manage the global product name, short mark, and attribution shown across the administration experience."), eyebrow=t("System Management"), badge_text=t("Global Scope"), badge_level="warning") %}{% endcall %}
+
+  <div class="panel-note warning" role="status">
+    <strong>{{ t("Global setting") }}:</strong> {{ t("Changes are visible to every organization on this deployment. Review the preview, save once, then refresh another page to verify the result.") }}
+  </div>
+
+  <div class="grid cols-2">
+    {% call ui.panel(t("Appearance Settings"), t("Global Scope"), "warning", t("Keep the short mark concise so it remains readable in the sidebar and at narrow widths.")) %}
+      <form method="post" action="/system-management/branding" class="page-stack tight">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-grid">
+          <div class="form-group field-span-full">
+            <label for="brand_display_name">{{ t("Brand Display Name") }}</label>
+            <input id="brand_display_name" name="brand_display_name" value="{{ settings.brand_display_name }}" required>
+          </div>
+          <div class="form-group">
+            <label for="brand_mark_text">{{ t("Brand Mark Text") }}</label>
+            <input id="brand_mark_text" name="brand_mark_text" value="{{ settings.brand_mark_text }}" required maxlength="12">
+          </div>
+          <div class="form-group field-span-full">
+            <label for="brand_attribution">{{ t("Footer Attribution") }}</label>
+            <input id="brand_attribution" name="brand_attribution" value="{{ settings.brand_attribution }}">
+          </div>
+        </div>
+        <div class="actions">
+          {{ ui.button(t("Save Appearance"), type="submit", icon="save") }}
+        </div>
+      </form>
+    {% endcall %}
+
+    {% call ui.panel(t("Preview"), description=t("This preview uses the persisted values currently loaded in the form.")) %}
+      <div class="brand">
+        <div class="login-mark login-mark--sidebar">{{ settings.brand_mark_text }}</div>
+        <h2>{{ settings.brand_display_name }}</h2>
+        <div class="footer">{{ settings.brand_attribution }}</div>
+      </div>
+      <p class="muted">{{ t("Next step: save the values, then verify the login page, sidebar, browser title, and narrow-screen header.") }}</p>
+    {% endcall %}
+  </div>
+</div>
+{% endblock %}

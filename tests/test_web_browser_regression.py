@@ -1702,7 +1702,10 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(any("Feishu" in item for item in option_text))
         self.assertTrue(self.page.locator("#group-corpid").is_visible())
         self.assertTrue(self.page.locator("#group-corpsecret").is_visible())
-        self.assertTrue(self.page.locator("#group-webhook_url").is_visible())
+        self.assertEqual(self.page.locator("#group-webhook_url").count(), 0)
+        self.assertTrue(
+            self.page.get_by_role("link", name="Open Notifications").is_visible()
+        )
         self.page.select_option("#source_provider", "dingtalk")
         self.page.wait_for_function(
             "() => document.querySelector('[data-config-provider-card-title]')?.textContent.includes('DingTalk Source Connector')"
@@ -1720,10 +1723,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "The DingTalk application key or client ID.",
             self.page.locator("#group-corpid").inner_text(),
         )
-        self.assertIn(
-            "DingTalk Bot Webhook",
-            self.page.locator("#group-webhook_url label").inner_text(),
-        )
+        self.assertEqual(self.page.locator("#group-webhook_url").count(), 0)
         self.assertTrue(self.page.get_by_text("Source Scope").first.is_visible())
         browse_source_button = self.page.get_by_role(
             "button", name="Browse Source Unit Tree"
@@ -1985,10 +1985,10 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.page = self.context.new_page()
         self._login()
-        self.page.goto(f"{self.base_url}/organizations", wait_until="networkidle")
+        self.page.goto(f"{self.base_url}/system-management/organizations", wait_until="networkidle")
 
         delete_form = self.page.locator(
-            "form[action='/organizations/browser-delete/delete']"
+            "form[action='/system-management/organizations/browser-delete/delete']"
         )
         delete_button = delete_form.get_by_role("button", name="Delete Organization")
         self.assertEqual(delete_button.count(), 1)
@@ -2536,12 +2536,98 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self._capture("config-release-page.png")
 
-        self.page.goto(f"{self.base_url}/integrations", wait_until="networkidle")
+        self.page.goto(f"{self.base_url}/operations-center/notifications", wait_until="networkidle")
+        self.page.locator("details.detail-toggle > summary").click()
         self.assertTrue(self.page.locator(".integration-portal-hero").is_visible())
         self.assertIn(
             "integration portal", self.page.locator("body").inner_text().lower()
         )
         self._capture("integration-center-page.png")
+
+    def test_z_phase7_operations_and_system_matrix(self):
+        self._login()
+        pages = {
+            "lifecycle": ("/operations-center/lifecycle-queue?lang=zh-CN", ".lifecycle-command-center"),
+            "automation": ("/operations-center/automation?lang=zh-CN", "form[action='/operations-center/automation/policy']"),
+            "notifications": ("/operations-center/notifications?lang=zh-CN", "form[action='/operations-center/notifications/policy']"),
+            "audit": ("/operations-center/audit-log?lang=zh-CN", ".table-shell"),
+            "organizations": ("/system-management/organizations?lang=zh-CN", ".table-shell"),
+            "administrators": ("/system-management/administrators?lang=zh-CN", "form[action='/system-management/administrators']"),
+            "employee-self-service": ("/system-management/employee-self-service?lang=zh-CN", "form[action='/system-management/employee-self-service']"),
+            "database": ("/system-management/database?lang=zh-CN", "time[data-local-time]"),
+            "branding": ("/system-management/branding?lang=zh-CN", "form[action='/system-management/branding']"),
+            "deployment": ("/system-management/deployment?lang=zh-CN", "form[action='/system-management/deployment']"),
+        }
+        for width in (390, 1440):
+            self.page.set_viewport_size({"width": width, "height": 900})
+            for name, (path, selector) in pages.items():
+                with self.subTest(width=width, page=name):
+                    self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
+                    self.assertTrue(self.page.locator(selector).first.is_visible())
+                    dimensions = self.page.evaluate(
+                        "() => ({clientWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth})"
+                    )
+                    self.assertLessEqual(dimensions["scrollWidth"], dimensions["clientWidth"] + 1)
+                    primary = self.page.locator(
+                        "main .button:not(.secondary):not(.ghost):not(.danger)"
+                    )
+                    self.assertEqual(primary.count(), 1, f"{name} must expose one primary CTA")
+                    self._capture(f"phase7-{name}-{width}.png")
+
+        self.page.goto(f"{self.base_url}/database?lang=en", wait_until="networkidle")
+        self.assertEqual(
+            self.page.url,
+            f"{self.base_url}/system-management/database?lang=en",
+        )
+        localized_time = self.page.locator("time[data-local-time]").first
+        self.assertIn("·", localized_time.inner_text())
+        raw_timestamp = localized_time.get_attribute("title")
+        self.assertTrue(raw_timestamp)
+        self.assertIn("T", raw_timestamp)
+
+        account_link = self.page.locator(".topbar-account__meta")
+        account_link.focus()
+        self.assertTrue(account_link.evaluate("element => document.activeElement === element"))
+
+        self.page.route(
+            "**/static/oidc-callback.js*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/javascript",
+                body="",
+            ),
+        )
+        self.page.set_viewport_size({"width": 390, "height": 900})
+        self.page.goto(
+            f"{self.base_url}/auth/oidc/callback"
+            "?code=browser-code&state=browser-state&lang=zh-CN",
+            wait_until="networkidle",
+        )
+        self.assertTrue(
+            self.page.get_by_role("heading", name="正在完成单点登录").is_visible()
+        )
+        callback_form = self.page.locator(
+            "form[method='post'][action='/auth/oidc/callback']"
+        )
+        self.assertTrue(callback_form.is_visible())
+        self.assertEqual(
+            self.page.locator(
+                "main .button:not(.secondary):not(.ghost):not(.danger)"
+            ).count(),
+            1,
+        )
+        self._assert_page_has_no_horizontal_overflow()
+        complete_button = self.page.get_by_role("button", name="完成登录")
+        complete_button.focus()
+        self.assertTrue(
+            complete_button.evaluate("element => document.activeElement === element")
+        )
+        self.assertEqual(
+            self.page.evaluate("document.querySelector('[data-app-sidebar]') === null"),
+            True,
+        )
+        self._capture("phase7-oidc-callback-390.png")
+        self.page.unroute("**/static/oidc-callback.js*")
 
     def test_mappings_page_uses_search_selectors_instead_of_manual_ids(self):
         self._login()

@@ -26,6 +26,12 @@ def register_admin_routes(
     validate_admin_password: Callable[[Request, str], str | None],
     verify_password: Callable[[str, str], bool],
 ) -> None:
+    def _account_path(request: Request) -> str:
+        return "/account" if request.url.path.startswith("/account") else CANONICAL_ROUTE_PATHS["account"]
+
+    def _users_path(request: Request) -> str:
+        return "/users" if request.url.path.startswith("/users") else CANONICAL_ROUTE_PATHS["users"]
+
     @app.get(CANONICAL_ROUTE_PATHS["account"], response_class=HTMLResponse)
     @app.get("/account", response_class=HTMLResponse)
     def account_page(request: Request):
@@ -34,6 +40,7 @@ def register_admin_routes(
             return user
         return render(request, "account.html", page="account", title="My Account")
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['account']}/password")
     @app.post("/account/password")
     def change_password(
         request: Request,
@@ -46,20 +53,21 @@ def register_admin_routes(
         if isinstance(user, RedirectResponse):
             return user
         repositories = get_web_repositories(request)
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/account")
+        return_path = _account_path(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
         if not verify_password(current_password, user.password_hash):
             flash(request, "error", "Current password is incorrect")
-            return RedirectResponse(url="/account", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
         if new_password != confirm_password:
             flash(request, "error", "New passwords do not match")
-            return RedirectResponse(url="/account", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
         password_error = validate_admin_password(request, new_password)
         if password_error:
             flash(request, "error", password_error)
-            return RedirectResponse(url="/account", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
 
         repositories.user_repo.set_password(user.username, hash_password(new_password))
         repositories.audit_repo.add_log(
@@ -71,7 +79,7 @@ def register_admin_routes(
             message="Changed account password",
         )
         flash(request, "success", "Password updated")
-        return RedirectResponse(url="/account", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)
 
     @app.get(CANONICAL_ROUTE_PATHS["users"], response_class=HTMLResponse)
     @app.get("/users", response_class=HTMLResponse)
@@ -88,6 +96,7 @@ def register_admin_routes(
             users=repositories.user_repo.list_user_records(),
         )
 
+    @app.post(CANONICAL_ROUTE_PATHS["users"])
     @app.post("/users")
     def create_user(
         request: Request,
@@ -100,7 +109,8 @@ def register_admin_routes(
         if isinstance(user, RedirectResponse):
             return user
         repositories = get_web_repositories(request)
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/users")
+        return_path = _users_path(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
@@ -110,14 +120,14 @@ def register_admin_routes(
             role = "operator"
         if not username:
             flash(request, "error", "Username is required")
-            return RedirectResponse(url="/users", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
         password_error = validate_admin_password(request, password)
         if password_error:
             flash(request, "error", password_error)
-            return RedirectResponse(url="/users", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
         if repositories.user_repo.get_user_record_by_username(username):
             flash(request, "error", "Username already exists")
-            return RedirectResponse(url="/users", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
 
         repositories.user_repo.create_user(username, hash_password(password), role=role)
         repositories.audit_repo.add_log(
@@ -130,8 +140,9 @@ def register_admin_routes(
             payload={"role": role},
         )
         flash_t(request, "success", "User {username} created", username=username)
-        return RedirectResponse(url="/users", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['users']}/{{user_id}}/toggle")
     @app.post("/users/{user_id}/toggle")
     def toggle_user(
         request: Request,
@@ -142,17 +153,18 @@ def register_admin_routes(
         if isinstance(user, RedirectResponse):
             return user
         repositories = get_web_repositories(request)
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/users")
+        return_path = _users_path(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
         target = repositories.user_repo.get_user_record_by_id(user_id)
         if not target:
             flash(request, "error", "Target account was not found")
-            return RedirectResponse(url="/users", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
         if target.username == user.username and target.is_enabled:
             flash(request, "error", "You cannot disable the account currently signed in")
-            return RedirectResponse(url="/users", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
 
         new_state = not target.is_enabled
         repositories.user_repo.set_enabled(user_id, new_state)
@@ -170,7 +182,7 @@ def register_admin_routes(
             "User {username} enabled" if new_state else "User {username} disabled",
             username=target.username,
         )
-        return RedirectResponse(url="/users", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)
 
     @app.get(CANONICAL_ROUTE_PATHS["audit"], response_class=HTMLResponse)
     @app.get("/audit", response_class=HTMLResponse)

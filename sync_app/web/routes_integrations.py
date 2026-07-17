@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from sync_app.web.app_state import get_web_runtime_state, get_web_services
+from sync_app.services.notification_automation_center import build_notification_automation_center_context
+from sync_app.services.typed_settings import NotificationAutomationPolicySettings
+from sync_app.web.app_state import get_web_repositories, get_web_runtime_state, get_web_services
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
@@ -13,12 +15,18 @@ def register_integration_routes(
     app: FastAPI,
     *,
     flash: Callable[..., None],
+    flash_t: Callable[..., None],
     get_current_org: Callable[[Request], Any],
     reject_invalid_csrf: Callable[[Request, str, str], Any],
     render: Callable[..., Any],
     require_capability: Callable[[Request, str], Any],
     to_bool: Callable[[str | None, bool], bool],
 ) -> None:
+    canonical_page_path = CANONICAL_ROUTE_PATHS["integrations"]
+
+    def _page_path(request: Request) -> str:
+        return "/integrations" if request.url.path.startswith("/integrations") else canonical_page_path
+
     def _wake_outbox_worker(request: Request) -> None:
         worker = get_web_runtime_state(request).integration_outbox_worker
         if worker is not None:
@@ -57,15 +65,25 @@ def register_integration_routes(
             return user
         current_org = get_current_org(request)
         services = get_web_services(request)
+        runtime_state = get_web_runtime_state(request)
+        context = services.integrations.build_center_context(org_id=current_org.org_id)
+        context.update(
+            build_notification_automation_center_context(
+                get_web_repositories(request).db_manager,
+                current_org.org_id,
+                config_path=current_org.config_path or runtime_state.config_path,
+            )
+        )
         return render(
             request,
             "integration_center.html",
             page="integrations",
-            title="External Integration Center",
+            title="Notifications",
             current_org=current_org,
-            **services.integrations.build_center_context(org_id=current_org.org_id),
+            **context,
         )
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['integrations']}/token/rotate")
     @app.post("/integrations/token/rotate")
     def rotate_integration_api_token(
         request: Request,
@@ -74,7 +92,8 @@ def register_integration_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/integrations")
+        return_path = _page_path(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
@@ -88,8 +107,9 @@ def register_integration_routes(
             "success",
             f"Integration API token rotated. Save this token now: {token}",
         )
-        return RedirectResponse(url="/integrations", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['integrations']}/token/clear")
     @app.post("/integrations/token/clear")
     def clear_integration_api_token(
         request: Request,
@@ -98,7 +118,8 @@ def register_integration_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/integrations")
+        return_path = _page_path(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
@@ -108,8 +129,9 @@ def register_integration_routes(
             actor_username=user.username,
         )
         flash(request, "success", "Integration API token cleared.")
-        return RedirectResponse(url="/integrations", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['integrations']}/subscriptions")
     @app.post("/integrations/subscriptions")
     def save_integration_subscription(
         request: Request,
@@ -123,7 +145,8 @@ def register_integration_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/integrations")
+        return_path = _page_path(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
@@ -140,10 +163,11 @@ def register_integration_routes(
             )
         except ValueError as exc:
             flash(request, "error", str(exc))
-            return RedirectResponse(url="/integrations", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
         flash(request, "success", "Webhook subscription saved.")
-        return RedirectResponse(url="/integrations", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['integrations']}/subscriptions/{{subscription_id}}/delete")
     @app.post("/integrations/subscriptions/{subscription_id}/delete")
     def delete_integration_subscription(
         request: Request,
@@ -153,7 +177,8 @@ def register_integration_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/integrations")
+        return_path = _page_path(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
@@ -165,10 +190,11 @@ def register_integration_routes(
         )
         if not deleted:
             flash(request, "error", "Webhook subscription not found.")
-            return RedirectResponse(url="/integrations", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
         flash(request, "success", "Webhook subscription deleted.")
-        return RedirectResponse(url="/integrations", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['integrations']}/deliveries/{{delivery_id}}/retry")
     @app.post("/integrations/deliveries/{delivery_id}/retry")
     def retry_integration_delivery(
         request: Request,
@@ -178,7 +204,8 @@ def register_integration_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/integrations")
+        return_path = _page_path(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
@@ -191,12 +218,13 @@ def register_integration_routes(
             )
         except ValueError as exc:
             flash(request, "error", str(exc))
-            return RedirectResponse(url="/integrations", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
 
         _wake_outbox_worker(request)
         flash(request, "success", "Failed delivery requeued and scheduled for retry.")
-        return RedirectResponse(url="/integrations", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)
 
+    @app.post(f"{CANONICAL_ROUTE_PATHS['integrations']}/deliveries/retry-failed")
     @app.post("/integrations/deliveries/retry-failed")
     def retry_failed_integration_deliveries(
         request: Request,
@@ -205,7 +233,8 @@ def register_integration_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, "/integrations")
+        return_path = _page_path(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
 
@@ -216,11 +245,90 @@ def register_integration_routes(
         )
         if retried_count <= 0:
             flash(request, "warning", "No failed deliveries are waiting for manual replay.")
-            return RedirectResponse(url="/integrations", status_code=303)
+            return RedirectResponse(url=return_path, status_code=303)
 
         _wake_outbox_worker(request)
         flash(request, "success", f"Requeued {retried_count} failed deliveries.")
-        return RedirectResponse(url="/integrations", status_code=303)
+        return RedirectResponse(url=return_path, status_code=303)
+
+    @app.post(f"{CANONICAL_ROUTE_PATHS['integrations']}/policy")
+    def save_notification_policy(
+        request: Request,
+        csrf_token: str = Form(""),
+        ops_notify_dry_run_failure_enabled: Optional[str] = Form(None),
+        ops_notify_conflict_backlog_enabled: Optional[str] = Form(None),
+        ops_notify_conflict_backlog_threshold: int = Form(5),
+        ops_notify_review_pending_enabled: Optional[str] = Form(None),
+        ops_notify_rule_governance_enabled: Optional[str] = Form(None),
+        notification_webhook_url: str = Form(""),
+        clear_notification_webhook_url: Optional[str] = Form(None),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        csrf_error = reject_invalid_csrf(request, csrf_token, canonical_page_path)
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        existing = NotificationAutomationPolicySettings.load(
+            repositories.settings_repo,
+            org_id=current_org.org_id,
+        )
+        policy_settings = NotificationAutomationPolicySettings.from_mapping(
+            {
+                **existing.to_dict(),
+                "notify_dry_run_failure_enabled": to_bool(ops_notify_dry_run_failure_enabled, False),
+                "notify_conflict_backlog_enabled": to_bool(ops_notify_conflict_backlog_enabled, False),
+                "notify_conflict_backlog_threshold": ops_notify_conflict_backlog_threshold,
+                "notify_review_pending_enabled": to_bool(ops_notify_review_pending_enabled, False),
+                "notify_rule_governance_enabled": to_bool(ops_notify_rule_governance_enabled, False),
+            }
+        )
+        policy_settings.persist(repositories.settings_repo, org_id=current_org.org_id)
+        raw_config = repositories.org_config_repo.get_raw_config(
+            current_org.org_id,
+            config_path=current_org.config_path,
+        )
+        submitted_webhook_url = (
+            notification_webhook_url.strip()
+            if isinstance(notification_webhook_url, str)
+            else ""
+        )
+        clear_webhook = (
+            to_bool(clear_notification_webhook_url, False)
+            if isinstance(clear_notification_webhook_url, str)
+            else False
+        )
+        if submitted_webhook_url or clear_webhook:
+            raw_config["webhook_url"] = (
+                "" if clear_webhook else submitted_webhook_url
+            )
+            raw_config = repositories.org_config_repo.save_config(
+                current_org.org_id,
+                raw_config,
+                config_path=current_org.config_path,
+            )
+        repositories.audit_repo.add_log(
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            action_type="operations_center.notifications.update",
+            target_type="settings",
+            target_id="notification_policy",
+            result="success",
+            message="Updated operational notification signal policy",
+            payload={
+                "org_id": current_org.org_id,
+                "notify_dry_run_failure_enabled": policy_settings.notify_dry_run_failure_enabled,
+                "notify_conflict_backlog_enabled": policy_settings.notify_conflict_backlog_enabled,
+                "notify_conflict_backlog_threshold": policy_settings.notify_conflict_backlog_threshold,
+                "notify_review_pending_enabled": policy_settings.notify_review_pending_enabled,
+                "notify_rule_governance_enabled": policy_settings.notify_rule_governance_enabled,
+                "notification_webhook_configured": bool(raw_config.get("webhook_url")),
+            },
+        )
+        flash_t(request, "success", "Notification policy saved.")
+        return RedirectResponse(url=canonical_page_path, status_code=303)
 
     @app.get("/api/integrations/orgs/{org_id}/jobs")
     def integration_jobs_api(request: Request, org_id: str):

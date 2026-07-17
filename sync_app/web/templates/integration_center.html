@@ -3,12 +3,49 @@
 
 {% block content %}
 <div class="page-stack">
-{% call ui.page_header(t("External Integration Center"), t("Expose job status, conflicts, approval callbacks, and outbound webhooks through one organization-scoped integration surface."), eyebrow=t("Operations"), badge_text=t("Organization Scope"), badge_level="info") %}
+{% call ui.page_header(t("Notifications"), t("Choose operational signals, verify delivery readiness, and manage organization-scoped notification channels."), eyebrow=t("Operations Center"), badge_text=t("Organization Scope"), badge_level="info") %}
   {{ ui.button(t("Open Job History"), href="/execution-center/jobs", variant="ghost", icon="refresh-cw") }}
   {{ ui.button(t("Open Conflicts"), href="/conflicts", variant="ghost", icon="shield-alert") }}
   {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost", icon="waypoints") }}
 {% endcall %}
 
+{% if notification_warnings %}
+<div class="list-stack" role="status">
+  {% for warning in notification_warnings %}<div class="panel-note warning"><strong>{{ t("Blocked") }}:</strong> {{ t(warning) }}</div>{% endfor %}
+</div>
+{% else %}
+<div class="panel-note success" role="status"><strong>{{ t("Current state") }}:</strong> {{ t("Enabled notification signals have a configured delivery channel. Next, review failed deliveries and send a controlled test event.") }}</div>
+{% endif %}
+
+{% call ui.panel(t("Notification Policy"), t("Organization Scope"), "info", t("Select which operational conditions should notify operators. Schedule timing and unattended Apply gates are owned by Automation And Schedules.")) %}
+  <form method="post" action="/operations-center/notifications/policy" class="page-stack tight">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-grid">
+      <label class="inline-checkbox"><input type="checkbox" name="ops_notify_dry_run_failure_enabled" value="1" {% if policy_settings.notify_dry_run_failure_enabled %}checked{% endif %}>{{ t("Notify when Dry Run fails") }}</label>
+      <label class="inline-checkbox"><input type="checkbox" name="ops_notify_conflict_backlog_enabled" value="1" {% if policy_settings.notify_conflict_backlog_enabled %}checked{% endif %}>{{ t("Notify when conflict backlog grows") }}</label>
+      <label class="inline-checkbox"><input type="checkbox" name="ops_notify_review_pending_enabled" value="1" {% if policy_settings.notify_review_pending_enabled %}checked{% endif %}>{{ t("Notify when high-risk approval is pending") }}</label>
+      <label class="inline-checkbox"><input type="checkbox" name="ops_notify_rule_governance_enabled" value="1" {% if policy_settings.notify_rule_governance_enabled %}checked{% endif %}>{{ t("Notify when rules are expiring or overdue") }}</label>
+      <div class="form-group">
+        <label for="ops_notify_conflict_backlog_threshold">{{ t("Conflict Backlog Threshold") }}</label>
+        <input id="ops_notify_conflict_backlog_threshold" type="number" min="1" name="ops_notify_conflict_backlog_threshold" value="{{ policy_settings.notify_conflict_backlog_threshold }}">
+      </div>
+      <div class="form-group field-span-full">
+        <label for="notification_webhook_url">{{ t("Notification Webhook URL") }}</label>
+        <input id="notification_webhook_url" name="notification_webhook_url" type="password" value="" placeholder="{{ notification_channel.webhook_masked if notification_channel.webhook_configured else 'https://...' }}" autocomplete="new-password">
+        <div class="help-text">{{ t("Leave blank to keep the current channel. Webhook credentials are never rendered back to the browser.") }}</div>
+      </div>
+      {% if notification_channel.webhook_configured %}
+      <label class="inline-checkbox"><input type="checkbox" name="clear_notification_webhook_url" value="1">{{ t("Clear the current notification webhook") }}</label>
+      {% endif %}
+    </div>
+    <div class="actions">
+      {{ ui.button(t("Save Notification Policy"), type="submit", icon="save") }}
+      {{ ui.button(t("Configure Automation"), href="/operations-center/automation", variant="secondary", icon="calendar-clock") }}
+    </div>
+  </form>
+{% endcall %}
+
+{% call ui.detail_toggle(t("Channels, Webhooks, And Delivery Evidence"), t("Advanced organization-scoped integration details are collapsed during routine notification review.")) %}
 <section class="integration-portal-hero">
   <div>
     <div class="decision-wizard__eyebrow">{{ t("Integration Portal") }}</div>
@@ -59,11 +96,11 @@
       </div>
       <div class="muted">{{ t("Token storage is organization-scoped and excluded from config bundle export.") }}</div>
       <div class="actions">
-        <form method="post" action="/integrations/token/rotate">
+        <form method="post" action="/operations-center/notifications/token/rotate">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          {{ ui.button(t("Rotate Token"), type="submit", icon="key") }}
+          {{ ui.button(t("Rotate Token"), type="submit", variant="secondary", icon="key") }}
         </form>
-        <form method="post" action="/integrations/token/clear">
+        <form method="post" action="/operations-center/notifications/token/clear">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           {{ ui.button(t("Clear Token"), type="submit", variant="secondary") }}
         </form>
@@ -87,7 +124,7 @@
 </div>
 
 {% call ui.panel(t("Webhook Subscriptions"), description=t("Register one outbound target per event type and URL combination. Saving an existing pair updates it in place.")) %}
-  <form method="post" action="/integrations/subscriptions" class="page-stack tight">
+  <form method="post" action="/operations-center/notifications/subscriptions" class="page-stack tight">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-grid">
       <div class="form-group">
@@ -118,7 +155,7 @@
       </div>
     </div>
     <div class="actions">
-      {{ ui.button(t("Save Subscription"), type="submit") }}
+      {{ ui.button(t("Save Subscription"), type="submit", variant="secondary") }}
     </div>
   </form>
 
@@ -154,9 +191,9 @@
           <div class="muted">{{ item.last_error }}</div>
           {% endif %}
         </td>
-        <td>{{ item.last_attempt_at or "-" }}</td>
+        <td>{{ ui.local_time(item.last_attempt_at) }}</td>
         <td>
-          <form method="post" action="/integrations/subscriptions/{{ item.id }}/delete" data-confirm="{{ t('Deleting this webhook subscription stops future deliveries to the target URL.') }}" data-confirm-title="{{ t('Confirm Webhook Subscription Deletion') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Event') }}" data-confirm-detail-2-value="{{ item.event_type }}" data-confirm-detail-3-label="{{ t('Target URL') }}" data-confirm-detail-3-value="{{ item.target_url }}" data-confirm-detail-4-label="{{ t('Requested Action') }}" data-confirm-detail-4-value="{{ t('Permanent deletion') }}">
+          <form method="post" action="/operations-center/notifications/subscriptions/{{ item.id }}/delete" data-confirm="{{ t('Deleting this webhook subscription stops future deliveries to the target URL.') }}" data-confirm-title="{{ t('Confirm Webhook Subscription Deletion') }}" data-confirm-detail-1-label="{{ t('Organization') }}" data-confirm-detail-1-value="{{ current_org.name if current_org else '-' }}" data-confirm-detail-2-label="{{ t('Event') }}" data-confirm-detail-2-value="{{ item.event_type }}" data-confirm-detail-3-label="{{ t('Target URL') }}" data-confirm-detail-3-value="{{ item.target_url }}" data-confirm-detail-4-label="{{ t('Requested Action') }}" data-confirm-detail-4-value="{{ t('Permanent deletion') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             {{ ui.button(t("Delete"), type="submit", variant="secondary") }}
           </form>
@@ -174,9 +211,9 @@
   <div class="page-stack tight">
     {% if retryable_delivery_count %}
     <div class="actions">
-      <form method="post" action="/integrations/deliveries/retry-failed">
+      <form method="post" action="/operations-center/notifications/deliveries/retry-failed">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        {{ ui.button(t("Retry Failed Deliveries"), type="submit", icon="rotate-cw") }}
+        {{ ui.button(t("Retry Failed Deliveries"), type="submit", variant="secondary", icon="rotate-cw") }}
       </form>
     </div>
     {% endif %}
@@ -210,9 +247,9 @@
             <div class="muted">{{ item.last_error or t("No error detail captured") }}</div>
           </td>
           <td>{{ item.attempt_count }}/{{ item.max_attempts }}</td>
-          <td>{{ item.last_attempt_at or "-" }}</td>
+          <td>{{ ui.local_time(item.last_attempt_at) }}</td>
           <td>
-            <form method="post" action="/integrations/deliveries/{{ item.id }}/retry">
+            <form method="post" action="/operations-center/notifications/deliveries/{{ item.id }}/retry">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               {{ ui.button(t("Retry Now"), type="submit", variant="secondary") }}
             </form>
@@ -257,8 +294,8 @@
         </td>
         <td>{{ item.attempt_count }}/{{ item.max_attempts }}</td>
         <td>{{ item.target_url }}</td>
-        <td>{{ item.last_attempt_at or "-" }}</td>
-        <td>{{ item.next_attempt_at or "-" }}</td>
+        <td>{{ ui.local_time(item.last_attempt_at) }}</td>
+        <td>{{ ui.local_time(item.next_attempt_at) }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -294,5 +331,6 @@
 </table>
 {% endcall %}
 {% endif %}
+{% endcall %}
 </div>
 {% endblock %}

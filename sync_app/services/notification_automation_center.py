@@ -338,6 +338,8 @@ def build_notification_automation_center_context(
             "webhook_configured": webhook_configured,
             "webhook_masked": mask_webhook_url(app_config.webhook_url),
             "schedule_time": str(editable_config.get("schedule_time") or "03:00"),
+            "retry_interval": int(editable_config.get("retry_interval") or 60),
+            "max_retries": int(editable_config.get("max_retries") or 3),
             "schedule_execution_mode": policy_settings["schedule_execution_mode"],
         },
         "latest_dry_run": latest_dry_run,

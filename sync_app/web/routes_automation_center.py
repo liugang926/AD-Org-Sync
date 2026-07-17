@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Optional
 
 from fastapi import FastAPI, Form, Request
@@ -15,6 +16,7 @@ def register_automation_center_routes(
     app: FastAPI,
     *,
     flash: Callable[..., None],
+    flash_t: Callable[..., None],
     get_current_org: Callable[[Request], Any],
     reject_invalid_csrf: Callable[[Request, str, str], Any],
     render: Callable[..., Any],
@@ -34,7 +36,7 @@ def register_automation_center_routes(
             request,
             "automation_center.html",
             page="automation-center",
-            title="Notification And Automation Center",
+            title="Automation And Schedules",
             current_org=current_org,
             **build_notification_automation_center_context(
                 repositories.db_manager,
@@ -104,3 +106,89 @@ def register_automation_center_routes(
         )
         flash(request, "success", "Notification and automation policies saved.")
         return RedirectResponse(url="/automation-center", status_code=303)
+
+    @app.post(f"{CANONICAL_ROUTE_PATHS['automation-center']}/policy")
+    def automation_schedule_save(
+        request: Request,
+        csrf_token: str = Form(""),
+        schedule_time: str = Form("03:00"),
+        retry_interval: int = Form(60),
+        max_retries: int = Form(3),
+        schedule_execution_mode: str = Form("dry_run"),
+        ops_scheduled_apply_gate_enabled: Optional[str] = Form(None),
+        ops_scheduled_apply_max_dry_run_age_hours: int = Form(24),
+        ops_scheduled_apply_requires_zero_conflicts: Optional[str] = Form(None),
+        ops_scheduled_apply_requires_review_approval: Optional[str] = Form(None),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        return_path = CANONICAL_ROUTE_PATHS["automation-center"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
+        if csrf_error:
+            return csrf_error
+
+        normalized_schedule_time = str(schedule_time or "").strip()
+        if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", normalized_schedule_time):
+            flash_t(request, "error", "Daily schedule time must use 24-hour HH:mm format.")
+            return RedirectResponse(url=return_path, status_code=303)
+
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        existing = NotificationAutomationPolicySettings.load(
+            repositories.settings_repo,
+            org_id=current_org.org_id,
+        )
+        policy_settings = NotificationAutomationPolicySettings.from_mapping(
+            {
+                **existing.to_dict(),
+                "schedule_execution_mode": schedule_execution_mode,
+                "scheduled_apply_gate_enabled": to_bool(ops_scheduled_apply_gate_enabled, False),
+                "scheduled_apply_max_dry_run_age_hours": ops_scheduled_apply_max_dry_run_age_hours,
+                "scheduled_apply_requires_zero_conflicts": to_bool(
+                    ops_scheduled_apply_requires_zero_conflicts,
+                    False,
+                ),
+                "scheduled_apply_requires_review_approval": to_bool(
+                    ops_scheduled_apply_requires_review_approval,
+                    False,
+                ),
+            }
+        )
+        policy_settings.persist(repositories.settings_repo, org_id=current_org.org_id)
+        raw_config = repositories.org_config_repo.get_raw_config(
+            current_org.org_id,
+            config_path=current_org.config_path,
+        )
+        repositories.org_config_repo.save_config(
+            current_org.org_id,
+            {
+                **raw_config,
+                "schedule_time": normalized_schedule_time,
+                "retry_interval": max(int(retry_interval or 0), 1),
+                "max_retries": max(int(max_retries or 0), 0),
+            },
+            config_path=current_org.config_path,
+        )
+        repositories.audit_repo.add_log(
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            action_type="operations_center.automation.update",
+            target_type="settings",
+            target_id="automation",
+            result="success",
+            message="Updated automation schedule and unattended apply gate",
+            payload={
+                "org_id": current_org.org_id,
+                "schedule_time": normalized_schedule_time,
+                "retry_interval": max(int(retry_interval or 0), 1),
+                "max_retries": max(int(max_retries or 0), 0),
+                "schedule_execution_mode": policy_settings.schedule_execution_mode,
+                "scheduled_apply_gate_enabled": policy_settings.scheduled_apply_gate_enabled,
+                "scheduled_apply_max_dry_run_age_hours": policy_settings.scheduled_apply_max_dry_run_age_hours,
+                "scheduled_apply_requires_zero_conflicts": policy_settings.scheduled_apply_requires_zero_conflicts,
+                "scheduled_apply_requires_review_approval": policy_settings.scheduled_apply_requires_review_approval,
+            },
+        )
+        flash_t(request, "success", "Automation and schedule settings saved.")
+        return RedirectResponse(url=return_path, status_code=303)

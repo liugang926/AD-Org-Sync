@@ -287,7 +287,7 @@
             <td>{{ t(item.resolution_source) if item.resolution_source else '-' }}</td>
             <td>{{ t(item.planned_operation) if item.planned_operation else '-' }}</td>
             <td>{{ ui.badge(t(item.result_status or 'unknown'), 'error' if item.result_status in ['conflict','error','skipped'] else 'info') }}</td>
-            <td>{% if item.apply_result == 'succeeded' %}<span class="cell-mono">{{ item.actual_ad_username }}</span><div>{{ t(item.actual_operation) }}</div><div class="muted">{{ item.completed_at }}</div>{% else %}{{ t(item.apply_result) }}{% endif %}</td>
+            <td>{% if item.apply_result == 'succeeded' %}<span class="cell-mono">{{ item.actual_ad_username }}</span><div>{{ t(item.actual_operation) }}</div><div class="muted">{{ ui.local_time(item.completed_at) }}</div>{% else %}{{ t(item.apply_result) }}{% endif %}</td>
             <td>{{ t(item.post_apply_ad_account_state.status or 'not_checked') if item.post_apply_ad_account_state else t('not_checked') }}</td>
             <td>{% if item.risks %}{% for risk in item.risks %}{{ ui.badge(t(risk), 'error') }}{% endfor %}{% else %}-{% endif %}</td>
           </tr>

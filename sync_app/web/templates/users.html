@@ -5,7 +5,7 @@
 {% block content %}
 <div class="page-stack">
   {% call ui.panel(t("Local Admin Users")) %}
-    <form method="post" action="/users">
+    <form method="post" action="/system-management/administrators">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         {{ forms.input("username", t("Username"), required=True, autocomplete="username") }}
@@ -28,9 +28,9 @@
             <td class="cell-strong">{{ item.username }}</td>
             <td>{{ t(item.role) }}</td>
             <td>{{ t("Enabled") if item.is_enabled else t("Disabled") }}</td>
-            <td>{{ item.last_login_at or "-" }}</td>
+            <td>{{ ui.local_time(item.last_login_at) }}</td>
             <td>
-              <form class="inline" method="post" action="/users/{{ item.id }}/toggle">
+              <form class="inline" method="post" action="/system-management/administrators/{{ item.id }}/toggle">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 {{ ui.button(t("Disable") if item.is_enabled else t("Enable"), type="submit", variant=("danger" if item.is_enabled else "secondary")) }}
               </form>

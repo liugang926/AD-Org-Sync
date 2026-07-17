@@ -6,6 +6,26 @@
     if (live) live.textContent = message || "";
   }
 
+  function localizeTimes() {
+    var locale = document.documentElement.lang || navigator.language || "en";
+    var absolute = new Intl.DateTimeFormat(locale, {
+      year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short"
+    });
+    var relative = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+    var units = [["year", 31536000], ["month", 2592000], ["week", 604800], ["day", 86400], ["hour", 3600], ["minute", 60], ["second", 1]];
+    document.querySelectorAll("time[data-local-time]").forEach(function (element) {
+      var raw = element.getAttribute("datetime") || "";
+      var parsed = new Date(raw);
+      if (!raw || Number.isNaN(parsed.getTime())) return;
+      var delta = (parsed.getTime() - Date.now()) / 1000;
+      var selected = units.find(function (item) { return Math.abs(delta) >= item[1]; }) || units[units.length - 1];
+      var display = absolute.format(parsed) + " · " + relative.format(Math.round(delta / selected[1]), selected[0]);
+      element.textContent = display;
+      element.title = raw;
+      element.setAttribute("aria-label", display + "; " + raw);
+    });
+  }
+
   function startDingTalkAuthentication(root) {
     var retry = root.querySelector("[data-sspr-retry]");
     var title = root.querySelector("h2");
@@ -110,11 +130,12 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
+    localizeTimes();
     var start = document.querySelector("[data-sspr-start]");
     if (start) {
-      var nextUrl = start.dataset.nextUrl || "";
       announce(start.dataset.submittingMessage);
-      if (nextUrl.indexOf("/sspr/oauth/start?") === 0) window.location.replace(nextUrl);
+      if (typeof start.requestSubmit === "function") start.requestSubmit();
+      else start.submit();
     }
     var auth = document.querySelector("[data-sspr-auth]");
     if (auth) startDingTalkAuthentication(auth);

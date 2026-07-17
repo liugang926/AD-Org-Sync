@@ -1114,6 +1114,13 @@ tr:hover td { background: var(--surface-tint); transition: background 0.2s ease;
 
 .topbar-account__meta {
   text-align: right;
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+
+.topbar-account__meta:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 4px;
 }
 
 .topbar-account__name {

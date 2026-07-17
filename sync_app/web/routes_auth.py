@@ -191,9 +191,19 @@ def register_auth_routes(
         )
 
     @app.get("/auth/oidc/start")
-    def oidc_start(request: Request):
+    def oidc_start_legacy(request: Request):
+        return RedirectResponse(url="/login", status_code=303)
+
+    @app.post("/auth/oidc/start")
+    def oidc_start(
+        request: Request,
+        csrf_token: str = Form(""),
+    ):
         if get_current_user(request):
             return RedirectResponse(url="/dashboard", status_code=303)
+        csrf_error = reject_invalid_csrf(request, csrf_token, "/login")
+        if csrf_error:
+            return csrf_error
         if not oidc_service.settings.configured:
             flash_t(request, "error", "Single sign-on is not configured.")
             return RedirectResponse(url="/login", status_code=303)
@@ -216,13 +226,50 @@ def register_auth_routes(
 
     @app.get("/auth/oidc/callback", name="oidc_callback")
     def oidc_callback(request: Request):
+        response = render(
+            request,
+            "oidc_callback.html",
+            title="Completing Single Sign-On",
+            page="oidc-callback",
+            lightweight_shell=True,
+            oidc_query={
+                "code": str(request.query_params.get("code") or ""),
+                "state": str(request.query_params.get("state") or ""),
+                "error": str(request.query_params.get("error") or ""),
+                "error_description": str(
+                    request.query_params.get("error_description") or ""
+                ),
+            },
+        )
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    @app.post("/auth/oidc/callback")
+    def oidc_callback_submit(
+        request: Request,
+        csrf_token: str = Form(""),
+        code: str = Form(""),
+        state: str = Form(""),
+        error: str = Form(""),
+        error_description: str = Form(""),
+    ):
+        csrf_error = reject_invalid_csrf(request, csrf_token, "/login")
+        if csrf_error:
+            return csrf_error
         transaction = request.session.pop("_oidc_transaction", None)
         if not isinstance(transaction, dict):
             flash_t(request, "error", "Single sign-on session expired. Try again.")
             return RedirectResponse(url="/login", status_code=303)
         try:
             identity = oidc_service.finish(
-                query={key: str(value) for key, value in request.query_params.items()},
+                query={
+                    "code": str(code or ""),
+                    "state": str(state or ""),
+                    "error": str(error or ""),
+                    "error_description": str(error_description or ""),
+                },
                 transaction={key: str(value) for key, value in transaction.items()},
             )
         except OIDCError as exc:

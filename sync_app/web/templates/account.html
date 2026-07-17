@@ -4,7 +4,7 @@
 
 {% block content %}
 {% call ui.panel(t("Change Password")) %}
-  <form method="post" action="/account/password">
+  <form method="post" action="/system-management/account/password">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-grid">
       {{ forms.input("current_password", t("Current Password"), type="password", required=True, autocomplete="current-password") }}

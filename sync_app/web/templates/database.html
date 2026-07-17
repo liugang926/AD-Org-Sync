@@ -15,7 +15,7 @@
       </div>
       <div class="detail-item">
         <div class="label">{{ t("Last integrity check") }}</div>
-        <div class="value">{{ integrity.result }} / {{ integrity.checked_at }}</div>
+        <div class="value">{{ integrity.result }} / {{ ui.local_time(integrity.checked_at) }}</div>
       </div>
       {% if db_info.last_startup_snapshot_path %}
       <div class="detail-item">
@@ -44,11 +44,11 @@
   {% call ui.panel(t("Database Actions")) %}
     {% if can("database.manage") %}
     <div class="actions">
-      <form class="inline" method="post" action="/database/check">
+      <form class="inline" method="post" action="/system-management/database/check">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         {{ ui.button(t("Run Integrity Check"), type="submit", variant="secondary") }}
       </form>
-      <form class="inline" method="post" action="/database/backup">
+      <form class="inline" method="post" action="/system-management/database/backup">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         {{ ui.button(t("Create Backup"), type="submit") }}
       </form>
