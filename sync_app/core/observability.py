@@ -17,10 +17,10 @@ _JOB_ID = ContextVar("observability_job_id", default="-")
 
 _BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _SENSITIVE_QUOTED_PATTERN = re.compile(
-    r"(?i)([\"']?(?:password|passwd|corpsecret|client_secret|api_token|access_token|refresh_token|authorization|secret)[\"']?\s*[:=]\s*)([\"'])(.*?)(\2)"
+    r"(?i)([\"']?(?:password|passwd|corpsecret|client_secret|api_token|access_token|refresh_token|authorization|secret|token)[\"']?\s*[:=]\s*)([\"'])(.*?)(\2)"
 )
 _SENSITIVE_UNQUOTED_PATTERN = re.compile(
-    r"(?i)\b(password|passwd|corpsecret|client_secret|api_token|access_token|refresh_token|authorization|secret)\s*[:=]\s*([^\s,;&]+)"
+    r"(?i)\b(password|passwd|corpsecret|client_secret|api_token|access_token|refresh_token|authorization|secret|token)\s*[:=]\s*([^\s,;&]+)"
 )
 _BASIC_AUTH_URL_PATTERN = re.compile(r"(?i)(https?://[^:/\s]+:)([^@/\s]+)(@)")
 _EMAIL_PATTERN = re.compile(r"(?<![\w.+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?![\w.-])", re.IGNORECASE)

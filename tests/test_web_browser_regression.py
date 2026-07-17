@@ -434,7 +434,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self._assert_page_has_no_horizontal_overflow()
         self._capture("sspr-auth-error-mobile-zh.png")
 
-    def test_source_directory_page_renders_paginated_scope_workflow_without_secrets(self):
+    def test_source_directory_page_renders_snapshot_views_without_secrets(self):
         manager = DatabaseManager(db_path=str(self.db_path))
         manager.initialize(create_startup_snapshot=False, verify_integrity=True)
         source_repo = SourceDirectoryRepository(manager)
@@ -767,9 +767,21 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(self.page.get_by_role("button", name="Refresh Directory").is_visible())
         self.assertEqual(self.page.get_by_role("button", name="Test Connection").count(), 0)
         self.assertEqual(self.page.locator('select[name="scope_type"]').count(), 0)
+        self.assertEqual(self.page.locator(".source-directory-tabs a").count(), 4)
+        self.assertEqual(self.page.locator(".source-metric-card").count(), 9)
+        self.assertEqual(
+            self.page.locator(".page-header__actions .button:not(.secondary):not(.ghost)").count(),
+            1,
+        )
+        self._capture("source-directory-overview-desktop-en.png")
+
+        self.page.locator(".source-directory-tabs").get_by_role(
+            "link", name="Users", exact=True
+        ).click()
+        self.page.wait_for_load_state("networkidle")
         source_table = self.page.locator(".source-directory-business-table")
         self.assertTrue(source_table.is_visible())
-        self.assertEqual(source_table.locator("thead th").count(), 8)
+        self.assertEqual(source_table.locator("thead th").count(), 7)
         source_text = source_table.inner_text()
         for expected in ("Alice Zhang", "browser-alice", "TJ001", "Headquarters"):
             self.assertIn(expected.lower(), source_text.lower())
@@ -777,8 +789,37 @@ class WebBrowserRegressionTests(unittest.TestCase):
             self.assertNotIn(excluded.lower(), source_text.lower())
         self.assertNotIn("corpsecret", self.page.content().lower())
         self.assertNotIn("distinguishedname", self.page.content().lower())
-        self._capture("source-directory-business-list-desktop-en.png")
+        self._capture("source-directory-users-desktop-en.png")
 
+        self.page.locator(".source-directory-tabs").get_by_role(
+            "link", name="Departments", exact=True
+        ).click()
+        self.page.wait_for_load_state("networkidle")
+        department_table = self.page.locator(".source-department-tree")
+        self.assertTrue(department_table.is_visible())
+        self.assertEqual(department_table.locator("thead th").count(), 4)
+        self.assertIn("Headquarters", department_table.inner_text())
+        self._capture("source-directory-departments-desktop-en.png")
+
+        self.page.locator(".source-directory-tabs").get_by_role(
+            "link", name="Snapshot History", exact=True
+        ).click()
+        self.page.wait_for_load_state("networkidle")
+        history_table = self.page.locator(".source-snapshot-history")
+        self.assertTrue(history_table.is_visible())
+        self.assertEqual(history_table.locator("thead th").count(), 6)
+        self._capture("source-directory-snapshot-history-desktop-en.png")
+
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.page.goto(
+            f"{self.base_url}/source-directory?view=overview&lang=zh-CN",
+            wait_until="networkidle",
+        )
+        self._assert_page_has_no_horizontal_overflow()
+        self.assertEqual(self.page.locator(".source-directory-tabs a").count(), 4)
+        self._capture("source-directory-overview-mobile-zh.png")
+
+        self.page.set_viewport_size({"width": 1440, "height": 1100})
         self.page.goto(
             f"{self.base_url}/identity-governance/binding-reconciliation?lang=en",
             wait_until="networkidle",
@@ -1014,7 +1055,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self._capture("identity-resolution-job-detail-zh.png")
 
         self.page.goto(
-            f"{self.base_url}/source-directory?lang=en&search=no-such-browser-user",
+            f"{self.base_url}/source-directory?view=users&lang=en&search=no-such-browser-user",
             wait_until="networkidle",
         )
         self.assertIn("No cached users match", self.page.locator("body").inner_text())
@@ -1030,8 +1071,11 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(self.page.locator("[data-source-refresh-poll]").is_visible())
         self.assertTrue(
             self.page.get_by_text(
-                "This page will update automatically.", exact=False
+                "previous successful snapshot remains available", exact=False
             ).is_visible()
+        )
+        self.assertTrue(
+            self.page.get_by_role("link", name="View refresh task").is_visible()
         )
         self._capture("source-directory-refreshing-auto-update-en.png")
         source_repo.replace_snapshot(
@@ -1073,6 +1117,10 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.page.locator("[data-source-refresh-poll]").wait_for(
             state="detached", timeout=8000
         )
+        self.page.locator(".source-directory-tabs").get_by_role(
+            "link", name="Users", exact=True
+        ).click()
+        self.page.wait_for_load_state("networkidle")
         self.assertIn("Refresh Result", self.page.locator("body").inner_text())
         self.page.goto(
             f"{self.base_url}/sync-policies/account-naming?lang=en",
@@ -2329,7 +2377,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "connectors": ("/data-sources/connectors?lang=zh-CN", ".page-header"),
             "source-directory": (
                 "/data-sources/source-directory?lang=zh-CN",
-                ".source-directory-business-table",
+                ".source-metric-grid",
             ),
             "snapshot-history": (
                 "/data-sources/snapshots?lang=zh-CN",
@@ -2580,7 +2628,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             f"{self.base_url}/system-management/database?lang=en",
         )
         localized_time = self.page.locator("time[data-local-time]").first
-        self.assertIn("·", localized_time.inner_text())
+        self.assertRegex(localized_time.inner_text(), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}, ")
         raw_timestamp = localized_time.get_attribute("title")
         self.assertTrue(raw_timestamp)
         self.assertIn("T", raw_timestamp)

@@ -1,84 +1,194 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
 {% block content %}
-<div class="page-stack">
-  {% call ui.page_header(t("Source Directory"), t("Browse employees and departments from the latest successful source snapshot. Connection settings, identity decisions, and synchronization policy are handled on their own pages."), eyebrow=t("Data Sources"), badge_text=(t("Refreshing") if latest_refresh and latest_refresh.status == "refreshing" else (t("No snapshot") if not snapshot else (t("Stale") if snapshot_expired else t("Current")))), badge_level=("warning" if snapshot_expired or not snapshot else "success")) %}
+<div class="page-stack source-directory-page">
+  {% call ui.page_header(t("Source Directory"), t("Browse source users, departments, and immutable refresh snapshots. Identity governance and synchronization policy are managed on their owning pages."), eyebrow=t("Data Sources"), badge_text=(t("Refreshing") if refresh_in_progress else (t("No snapshot") if not snapshot else (t("Historical") if viewing_historical_snapshot else (t("Stale") if snapshot_expired else t("Current"))))), badge_level=("warning" if refresh_in_progress or snapshot_expired or viewing_historical_snapshot or not snapshot else "success")) %}
     {% if can("config.write") %}
     <form method="post" action="/source-directory/refresh" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ ui.button(t("Refresh Directory"), type="submit", variant="primary", icon="refresh-cw", disabled=(latest_refresh and latest_refresh.status == "refreshing")) }}
+      {{ ui.button(t("Refresh Directory"), type="submit", variant="primary", icon="refresh-cw", disabled=refresh_in_progress) }}
     </form>
     {% endif %}
   {% endcall %}
 
-  {% if latest_refresh and latest_refresh.status == 'failed' %}
+  <nav class="source-directory-tabs" aria-label="{{ t('Source Directory views') }}">
+    {% set snapshot_query = ("&snapshot_id=" ~ snapshot.id) if viewing_historical_snapshot and snapshot else "" %}
+    <a href="/data-sources/source-directory?view=overview{{ snapshot_query }}" {% if active_view == "overview" %}aria-current="page"{% endif %}>{{ t("Overview") }}</a>
+    <a href="/data-sources/source-directory?view=users{{ snapshot_query }}" {% if active_view == "users" %}aria-current="page"{% endif %}>{{ t("Users") }}</a>
+    <a href="/data-sources/source-directory?view=departments{{ snapshot_query }}" {% if active_view == "departments" %}aria-current="page"{% endif %}>{{ t("Departments") }}</a>
+    <a href="/data-sources/source-directory?view=history{% if selected_history_snapshot %}&snapshot_id={{ selected_history_snapshot.id }}{% endif %}" {% if active_view == "history" %}aria-current="page"{% endif %}>{{ t("Snapshot History") }}</a>
+  </nav>
+
+  {% if latest_refresh and latest_refresh.status == "failed" %}
   <div class="callout callout--danger" role="alert">
     <strong>{{ t("The latest refresh failed.") }}</strong>
-    <span>{{ latest_refresh.error_summary }}</span>
-    {% if snapshot %}<span>{{ t("The previous successful snapshot is still being used.") }}</span>{% endif %}
-    <a href="/data-sources/connectors">{{ t("Check saved connectors") }}</a>
+    <span>{{ latest_refresh.error_summary or t("No failure reason was recorded.") }}</span>
+    {% if snapshot %}
+    <span>{{ t("The previous successful snapshot remains available.") }} {{ t("Snapshot") }} #{{ snapshot.id }} · {{ ui.local_time(snapshot.completed_at) }}</span>
+    <span>{{ t("High-risk actions that require a newer snapshot remain blocked until refresh succeeds.") }}</span>
+    {% endif %}
+    <a href="/data-sources/source-directory?view=history&snapshot_id={{ latest_refresh.id }}">{{ t("View refresh task") }}</a>
   </div>
-  {% elif latest_refresh and latest_refresh.status == 'refreshing' %}
-  <div class="callout callout--info" role="status" aria-live="polite" data-source-refresh-poll data-status-url="/api/source-directory/status" data-refreshing-text="{{ t('Directory refresh is in progress. This page will update automatically.') }}" data-long-running-text="{{ t('Directory refresh is taking longer than expected, but it is still running. You can leave this page and return later.') }}" data-succeeded-text="{{ t('Directory refresh completed. Reloading the latest users and mapping fields.') }}" data-failed-text="{{ t('Directory refresh failed. Reloading the failure details.') }}">
+  {% elif refresh_in_progress %}
+  <div
+    class="callout callout--info source-refresh-banner"
+    role="status"
+    aria-live="polite"
+    data-source-refresh-poll
+    data-status-url="/api/source-directory/status"
+    data-refreshing-text="{{ t('Directory refresh is in progress. The previous successful snapshot remains available.') }}"
+    data-long-running-text="{{ t('Directory refresh is taking longer than expected, but the previous snapshot remains available.') }}"
+    data-succeeded-text="{{ t('Directory refresh completed. Loading the new snapshot.') }}"
+    data-failed-text="{{ t('Directory refresh failed. Loading the failure details while keeping the previous snapshot.') }}"
+  >
     <strong>{{ t("Directory refresh is in progress.") }}</strong>
-    <span data-source-refresh-message>{{ t("Directory refresh is in progress. This page will update automatically.") }}</span>
+    <span data-source-refresh-message>{{ t("Directory refresh is in progress. The previous successful snapshot remains available.") }}</span>
+    {% if snapshot %}
+    <span>{{ t("Currently browsing snapshot") }} #{{ snapshot.id }} · {{ ui.local_time(snapshot.completed_at) }}</span>
+    {% else %}
+    <span>{{ t("No previous successful snapshot is available.") }}</span>
+    {% endif %}
+    <span>{{ t("High-risk actions that require the new snapshot remain blocked until refresh succeeds.") }}</span>
+    <a href="/data-sources/source-directory?view=history&snapshot_id={{ latest_refresh.id }}">{{ t("View refresh task") }}</a>
   </div>
   {% elif not snapshot %}
   <div class="callout callout--warning" role="status">
     <strong>{{ t("No successful source directory snapshot is available yet.") }}</strong>
-    <span>{{ t("Save and test the connector, then refresh the directory. No cached employee data is available until refresh succeeds.") }}</span>
+    <span>{{ t("Configure and test the source connection on Connectors, then refresh the directory.") }}</span>
     <a href="/data-sources/connectors">{{ t("Open Connectors") }}</a>
+  </div>
+  {% elif viewing_historical_snapshot %}
+  <div class="callout callout--warning" role="status">
+    <strong>{{ t("You are browsing a historical source snapshot.") }}</strong>
+    <span>{{ t("Snapshot") }} #{{ snapshot.id }} · {{ ui.local_time(snapshot.completed_at) }}</span>
+    <span>{{ t("High-risk actions are blocked for historical snapshots.") }}</span>
+    <a href="/data-sources/source-directory?view={{ active_view }}">{{ t("Return to current snapshot") }}</a>
   </div>
   {% elif snapshot_expired %}
   <div class="callout callout--warning" role="status">
     <strong>{{ t("This source snapshot is stale.") }}</strong>
-    <span>{{ t("Refresh it before starting a new Dry Run.") }}</span>
+    <span>{{ t("Snapshot") }} #{{ snapshot.id }} · {{ ui.local_time(snapshot.completed_at) }}</span>
+    <span>{{ t("Browsing remains available, but high-risk actions are blocked until refresh succeeds.") }}</span>
   </div>
   {% else %}
   <div class="callout callout--success" role="status">
     <strong>{{ t("Latest source snapshot is ready.") }}</strong>
-    <span>{{ t("Use filters to find employees. Open Data Quality for repair work or Binding Reconciliation for identity evidence.") }}</span>
+    <span>{{ t("Snapshot") }} #{{ snapshot.id }} · {{ ui.local_time(snapshot.completed_at) }}</span>
   </div>
   {% endif %}
 
-  <div class="stat-grid">
-    <article class="stat-card"><span>{{ t("Provider") }}</span><strong>{{ t(provider_name) }}</strong></article>
-    <article class="stat-card"><span>{{ t("Snapshot Version") }}</span><strong>{{ "#" ~ snapshot.id if snapshot else "-" }}</strong></article>
-    <article class="stat-card"><span>{{ t("Users") }}</span><strong>{{ snapshot.user_count if snapshot else 0 }}</strong></article>
-    <article class="stat-card"><span>{{ t("Departments") }}</span><strong>{{ snapshot.department_count if snapshot else 0 }}</strong></article>
-    <article class="stat-card"><span>{{ t("Fields") }}</span><strong>{{ field_count }}</strong></article>
-    <article class="stat-card"><span>{{ t("Updated") }}</span><strong>{% if snapshot %}{{ ui.local_time(snapshot.completed_at) }}{% else %}-{% endif %}</strong></article>
-  </div>
+  {% if active_view == "overview" %}
+  <section aria-labelledby="source-directory-overview-title">
+    <div class="panel__intro">
+      <div class="panel__header">
+        <h2 class="panel__title" id="source-directory-overview-title">{{ t("Overview") }}</h2>
+      </div>
+      <p class="panel__description">{{ t("Click a metric to open its source record or the matching data-quality filter.") }}</p>
+    </div>
+    <div class="source-metric-grid">
+      <a class="source-metric-card" href="/data-sources/connectors">
+        <span>{{ t("Data Source") }}</span>
+        <strong>{{ t(provider_name) }}</strong>
+        <small>{{ t("Open connector settings") }}</small>
+      </a>
+      <a class="source-metric-card" href="/data-sources/connectors">
+        <span>{{ t("Connection Status") }}</span>
+        <strong>{{ t("Ready") if source_connection_ready else t("Incomplete") }}</strong>
+        <small>{{ t("Test connection in Connectors") }}</small>
+      </a>
+      <a class="source-metric-card" href="/data-sources/source-directory?view=history{% if snapshot %}&snapshot_id={{ snapshot.id }}{% endif %}">
+        <span>{{ t("Current Snapshot Version") }}</span>
+        <strong>{{ "#" ~ snapshot.id if snapshot else "-" }}</strong>
+        <small>{{ t("Open snapshot history") }}</small>
+      </a>
+      <a class="source-metric-card" href="/data-sources/source-directory?view=users{{ snapshot_query }}">
+        <span>{{ t("Users") }}</span>
+        <strong>{{ snapshot.user_count if snapshot else 0 }}</strong>
+        <small>{{ t("Browse source users") }}</small>
+      </a>
+      <a class="source-metric-card" href="/data-sources/source-directory?view=departments{{ snapshot_query }}">
+        <span>{{ t("Departments") }}</span>
+        <strong>{{ snapshot.department_count if snapshot else 0 }}</strong>
+        <small>{{ t("Browse department tree") }}</small>
+      </a>
+      <a class="source-metric-card" href="/data-sources/source-directory?view=users&quality=missing_employee_id{{ snapshot_query }}">
+        <span>{{ t("Missing Employee ID") }}</span>
+        <strong>{{ snapshot.missing_employee_id_count if snapshot else 0 }}</strong>
+        <small>{{ t("Filter affected users") }}</small>
+      </a>
+      <a class="source-metric-card" href="/data-sources/source-directory?view=users&quality=duplicate_employee_id{{ snapshot_query }}">
+        <span>{{ t("Duplicate Employee ID") }}</span>
+        <strong>{{ snapshot.duplicate_employee_id_count if snapshot else 0 }}</strong>
+        <small>{{ t("Filter affected users") }}</small>
+      </a>
+      <a class="source-metric-card" href="/data-sources/source-directory?view=users&quality=username_collision{{ snapshot_query }}">
+        <span>{{ t("Username Collisions") }}</span>
+        <strong>{{ mapping_quality.normalized_username_collision_count or 0 }}</strong>
+        <small>{{ t("Filter affected users") }}</small>
+      </a>
+      <a class="source-metric-card" href="/data-sources/source-directory?view=users&quality=mapping_gap{{ snapshot_query }}">
+        <span>{{ t("Mapping Coverage") }}</span>
+        <strong>{{ mapping_quality.mapping_coverage_percent or 0 }}%</strong>
+        <small>{{ t("Filter mapping gaps") }}</small>
+      </a>
+    </div>
+  </section>
 
-  {% call ui.panel(t("Employees"), description=t("This daily list contains eight business columns. Technical source evidence stays collapsed inside each employee row.")) %}
+  {% call ui.helper_block(t("Connection testing moved to Connectors"), t("Source Directory keeps the latest read-only source snapshot. Test or edit the saved connection from the connector page."), "info") %}
+    <a href="/data-sources/connectors">{{ t("Test connection in Connectors") }}</a>
+  {% endcall %}
+
+  {% elif active_view == "users" %}
+  {% call ui.panel(t("Users"), description=t("This read-only list is paged on the server and keeps mobile numbers masked inside source details.")) %}
     <form method="get" action="/data-sources/source-directory" class="filter-bar">
-      <label>{{ t("Search") }}<input type="search" name="search" value="{{ search }}" placeholder="{{ t('Name, user ID, employee ID, email') }}"></label>
+      <input type="hidden" name="view" value="users">
+      {% if viewing_historical_snapshot and snapshot %}<input type="hidden" name="snapshot_id" value="{{ snapshot.id }}">{% endif %}
+      <label>{{ t("Search") }}<input type="search" name="search" value="{{ search }}" placeholder="{{ t('Name, platform user ID, employee ID, email') }}"></label>
       <label>{{ t("Department") }}
         <select name="department_id">
           <option value="">{{ t("All departments") }}</option>
-          {% for department in departments %}<option value="{{ department.source_department_id }}" {% if selected_department_id == department.source_department_id %}selected{% endif %}>{{ department.path_names|join(' / ') }}</option>{% endfor %}
+          {% for department in departments %}<option value="{{ department.source_department_id }}" {% if selected_department_id == department.source_department_id %}selected{% endif %}>{{ department.path_names|join(" / ") }}</option>{% endfor %}
         </select>
       </label>
       <label>{{ t("Status") }}
-        <select name="status"><option value="">{{ t("All statuses") }}</option><option value="active" {% if selected_status == 'active' %}selected{% endif %}>{{ t("Active") }}</option><option value="inactive" {% if selected_status == 'inactive' %}selected{% endif %}>{{ t("Inactive") }}</option></select>
+        <select name="status">
+          <option value="">{{ t("All statuses") }}</option>
+          <option value="active" {% if selected_status == "active" %}selected{% endif %}>{{ t("Active") }}</option>
+          <option value="inactive" {% if selected_status == "inactive" %}selected{% endif %}>{{ t("Inactive") }}</option>
+        </select>
       </label>
-      <label>{{ t("Employee ID") }}
-        <select name="employee_id_state"><option value="">{{ t("Any") }}</option><option value="present" {% if selected_employee_id_state == 'present' %}selected{% endif %}>{{ t("Present") }}</option><option value="missing" {% if selected_employee_id_state == 'missing' %}selected{% endif %}>{{ t("Missing") }}</option></select>
+      <label>{{ t("Data Quality") }}
+        <select name="quality">
+          <option value="">{{ t("All users") }}</option>
+          <option value="missing_employee_id" {% if selected_quality_filter == "missing_employee_id" %}selected{% endif %}>{{ t("Missing Employee ID") }}</option>
+          <option value="duplicate_employee_id" {% if selected_quality_filter == "duplicate_employee_id" %}selected{% endif %}>{{ t("Duplicate Employee ID") }}</option>
+          <option value="username_collision" {% if selected_quality_filter == "username_collision" %}selected{% endif %}>{{ t("Username Collisions") }}</option>
+          <option value="mapping_gap" {% if selected_quality_filter == "mapping_gap" %}selected{% endif %}>{{ t("Mapping Gaps") }}</option>
+        </select>
       </label>
       {{ ui.button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
     </form>
 
-    <div class="table-scroll source-directory-business-table" tabindex="0" role="region" aria-label="{{ t('Source directory employees') }}">
+    <div class="table-scroll source-directory-business-table" tabindex="0" role="region" aria-label="{{ t('Source directory users') }}">
       <table>
-        <thead><tr><th>{{ t("Employee") }}</th><th>{{ t("Department") }}</th><th>{{ t("Employee ID") }}</th><th>{{ t("Email") }}</th><th>{{ t("Source Status") }}</th><th>{{ t("Provider") }}</th><th>{{ t("Data Readiness") }}</th><th>{{ t("Next Step") }}</th></tr></thead>
+        <thead>
+          <tr>
+            <th>{{ t("Name") }}</th>
+            <th>{{ t("Employee ID") }}</th>
+            <th>{{ t("Platform User ID") }}</th>
+            <th>{{ t("Department") }}</th>
+            <th>{{ t("Status") }}</th>
+            <th>{{ t("Email") }}</th>
+            <th>{{ t("Identity Details") }}</th>
+          </tr>
+        </thead>
         <tbody>
           {% for item in users %}
           <tr>
             <td>
               <strong>{{ item.display_name or "-" }}</strong>
-              <div class="muted cell-mono">{{ item.source_user_id }}</div>
               <details class="detail-toggle compact-evidence">
-                <summary>{{ t("Source evidence") }}</summary>
+                <summary>{{ t("Source details") }}</summary>
                 <dl class="detail-grid">
                   <div class="detail-item"><dt class="label">{{ t("Position") }}</dt><dd class="value">{{ item.position or "-" }}</dd></div>
                   <div class="detail-item"><dt class="label">{{ t("Mobile") }}</dt><dd class="value">{{ item.mobile_masked or "-" }}</dd></div>
@@ -86,24 +196,15 @@
                 </dl>
               </details>
             </td>
-            <td>{{ item.department_names|join(' / ') or "-" }}</td>
             <td class="cell-mono">{{ item.employee_id or "-" }}</td>
-            <td>{{ item.email or "-" }}</td>
+            <td class="cell-mono">{{ item.source_user_id }}</td>
+            <td>{{ item.department_names|join(" / ") or "-" }}</td>
             <td>{{ ui.badge(t("Active") if item.is_active else t("Inactive"), "success" if item.is_active else "warning") }}</td>
-            <td>{{ t(provider_name) }}</td>
-            <td>
-              {% if item.readiness_issues %}
-                {% for issue in item.readiness_issues %}{{ ui.badge(t(issue), "warning") }}{% endfor %}
-              {% else %}
-                {{ ui.badge(t("Ready"), "success") }}
-              {% endif %}
-            </td>
-            <td>
-              {% if item.readiness_issues %}<a href="/data-sources/data-quality">{{ t("Review data quality") }}</a>{% else %}<a href="/identity-governance/binding-reconciliation?search={{ item.source_user_id|urlencode }}">{{ t("Review identity") }}</a>{% endif %}
-            </td>
+            <td>{{ item.email or "-" }}</td>
+            <td><a href="/identity-governance/binding-reconciliation?search={{ item.source_user_id|urlencode }}">{{ t("View identity details") }}</a></td>
           </tr>
           {% else %}
-          <tr><td colspan="8" class="table-empty">{{ t("No cached users match the current filters.") if snapshot else t("No successful source snapshot is available. Refresh the directory to load users.") }}</td></tr>
+          <tr><td colspan="7" class="table-empty">{{ t("No cached users match the current filters.") if snapshot else t("No successful source snapshot is available. Refresh the directory to load users.") }}</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -112,20 +213,105 @@
     <div class="pagination-bar">
       <span>{{ t("{count} matching users", count=total_users) }}</span>
       <div>
-        {% if page_number > 1 %}{{ ui.button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state, variant="secondary") }}{% endif %}
+        {% set user_query = "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&quality=" ~ selected_quality_filter ~ snapshot_query %}
+        {% if page_number > 1 %}{{ ui.button(t("Previous"), href="/data-sources/source-directory?view=users&page_number=" ~ (page_number - 1) ~ user_query, variant="secondary") }}{% endif %}
         <span>{{ page_number }} / {{ total_pages }}</span>
-        {% if page_number < total_pages %}{{ ui.button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state, variant="secondary") }}{% endif %}
+        {% if page_number < total_pages %}{{ ui.button(t("Next"), href="/data-sources/source-directory?view=users&page_number=" ~ (page_number + 1) ~ user_query, variant="secondary") }}{% endif %}
       </div>
     </div>
   {% endcall %}
 
-  {% call ui.helper_block(t("Next step"), t("Data Quality owns repair work; Binding Reconciliation owns candidate, binding, Dry Run, Apply, and live AD evidence; Sync Scope owns inclusion rules."), "info") %}
-    <div class="actions">
-      {{ ui.button(t("Open Snapshot History"), href="/data-sources/snapshots", variant="secondary", icon="history") }}
-      {{ ui.button(t("Open Data Quality"), href="/data-sources/data-quality", variant="ghost", icon="circle-check-big") }}
-      {{ ui.button(t("Open Binding Reconciliation"), href="/identity-governance/binding-reconciliation", variant="ghost", icon="scan-search") }}
-      {{ ui.button(t("Open Sync Scope"), href="/sync-policies/scope", variant="ghost", icon="list-filter") }}
+  {% elif active_view == "departments" %}
+  {% call ui.panel(t("Departments"), description=t("Browse the snapshot department tree, direct membership counts, parent departments, and the current read-only scope status.")) %}
+    <div class="table-scroll source-department-tree" tabindex="0" role="region" aria-label="{{ t('Source department tree') }}">
+      <table>
+        <thead><tr><th>{{ t("Department Tree") }}</th><th>{{ t("Users") }}</th><th>{{ t("Parent Department") }}</th><th>{{ t("Sync Scope Status") }}</th></tr></thead>
+        <tbody>
+          {% for department in department_rows %}
+          <tr>
+            <td>
+              <div class="department-tree-node department-tree-node--depth-{{ department.depth }}">
+                <i data-lucide="{{ 'folder-tree' if department.depth == 0 else 'corner-down-right' }}" class="icon icon-sm" aria-hidden="true"></i>
+                <span><strong>{{ department.name or department.source_department_id }}</strong><small class="cell-mono">{{ department.source_department_id }}</small></span>
+              </div>
+            </td>
+            <td>{{ department.user_count }}</td>
+            <td>{{ department.parent_department_name or t("Root") }}</td>
+            <td>{{ ui.badge(t(department.scope_status), "success" if department.scope_status == "Included" else ("warning" if department.scope_status == "Partial" else "info")) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="table-empty">{{ t("No departments are available in this snapshot.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
   {% endcall %}
+
+  {% elif active_view == "history" %}
+  {% call ui.panel(t("Snapshot History"), description=t("Review immutable refresh attempts, source-data quality changes, duration, and redacted failure reasons.")) %}
+    <form method="get" action="/data-sources/source-directory" class="filter-bar source-history-filters">
+      <input type="hidden" name="view" value="history">
+      <label>{{ t("Status") }}
+        <select name="snapshot_status">
+          <option value="">{{ t("All statuses") }}</option>
+          <option value="succeeded" {% if selected_history_status == "succeeded" %}selected{% endif %}>{{ t("Succeeded") }}</option>
+          <option value="refreshing" {% if selected_history_status == "refreshing" %}selected{% endif %}>{{ t("Refreshing") }}</option>
+          <option value="failed" {% if selected_history_status == "failed" %}selected{% endif %}>{{ t("Failed") }}</option>
+        </select>
+      </label>
+      {{ ui.button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
+    </form>
+
+    <div class="table-scroll source-snapshot-history" tabindex="0" role="region" aria-label="{{ t('Source snapshot history') }}">
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t("Snapshot Time") }}</th>
+            <th>{{ t("Status") }}</th>
+            <th>{{ t("Users") }}</th>
+            <th>{{ t("Quality Change") }}</th>
+            <th>{{ t("Refresh Duration") }}</th>
+            <th>{{ t("Failure Reason") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in history_rows %}
+          {% set item = row.snapshot %}
+          <tr {% if selected_history_snapshot and selected_history_snapshot.id == item.id %}aria-current="true"{% endif %}>
+            <td><strong>#{{ item.id }}</strong><div>{{ ui.local_time(item.completed_at or item.started_at) }}</div></td>
+            <td>{{ ui.badge(t(item.status|capitalize), "success" if item.status == "succeeded" else ("error" if item.status == "failed" else "warning")) }}</td>
+            <td>{{ item.user_count or 0 }}</td>
+            <td>
+              {% if item.status == "succeeded" %}
+              <div>{{ t("Identifier issues") }}: {{ row.quality_issue_count }}</div>
+              <div class="muted">
+                {% if row.quality_delta is none %}{{ t("Baseline") }}{% elif row.quality_delta > 0 %}+{{ row.quality_delta }}{% else %}{{ row.quality_delta }}{% endif %}
+              </div>
+              {% else %}-{% endif %}
+            </td>
+            <td>{{ row.duration_label }}</td>
+            <td>
+              <div>{{ item.error_summary or "-" }}</div>
+              {% if item.status == "succeeded" %}<a href="/data-sources/source-directory?view=overview&snapshot_id={{ item.id }}">{{ t("Browse snapshot") }}</a>{% else %}<a href="/data-sources/source-directory?view=history&snapshot_id={{ item.id }}">{{ t("View refresh task") }}</a>{% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="table-empty">{{ t("No source snapshots match the current filters.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pagination-bar">
+      <span>{{ t("{count} snapshots", count=total_snapshots) }}</span>
+      <div>
+        {% set history_query = "&snapshot_status=" ~ (selected_history_status|urlencode) %}
+        {% if page_number > 1 %}{{ ui.button(t("Previous"), href="/data-sources/source-directory?view=history&page_number=" ~ (page_number - 1) ~ history_query, variant="secondary") }}{% endif %}
+        <span>{{ page_number }} / {{ history_total_pages }}</span>
+        {% if page_number < history_total_pages %}{{ ui.button(t("Next"), href="/data-sources/source-directory?view=history&page_number=" ~ (page_number + 1) ~ history_query, variant="secondary") }}{% endif %}
+      </div>
+    </div>
+  {% endcall %}
+  {% endif %}
 </div>
 {% endblock %}

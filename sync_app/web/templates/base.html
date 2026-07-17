@@ -4,7 +4,8 @@
 {% set load_advanced_sync_page_script = (not is_lightweight_shell) and page in ['advanced-sync', 'sync-account-naming'] %}
 {% set load_config_page_script = (not is_lightweight_shell) and page == 'config' %}
 {% set load_mappings_page_script = (not is_lightweight_shell) and page == 'mappings' %}
-{% set load_source_directory_page_script = (not is_lightweight_shell) and page in ['source-directory', 'sync-scope'] %}
+{% set load_source_directory_page_script = (not is_lightweight_shell) and page == 'source-directory' %}
+{% set load_sync_scope_page_script = (not is_lightweight_shell) and page == 'sync-scope' %}
 <!DOCTYPE html>
 <html lang="{{ ui_language if ui_language == 'zh-CN' else 'en' }}">
 <head>
@@ -207,6 +208,9 @@
   {% endif %}
   {% if load_source_directory_page_script %}
   <script src="/static/source-directory-page.js?v={{ static_asset_version }}" defer></script>
+  {% endif %}
+  {% if load_sync_scope_page_script %}
+  <script src="/static/sync-scope-page.js?v={{ static_asset_version }}" defer></script>
   {% endif %}
   <script src="/static/app.js?v={{ static_asset_version }}" defer></script>
   {% endif %}

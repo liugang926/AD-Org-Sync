@@ -185,7 +185,7 @@ class WebDataSourcesTests(WebAuthzBaseTestCase):
         self.assertEqual(quality_response.status_code, 303)
         self.assertEqual(quality_response.headers["location"], "/dashboard")
 
-    def test_snapshot_history_page_is_eight_columns_and_organization_scoped(self):
+    def test_snapshot_history_view_is_six_columns_and_organization_scoped(self):
         self._login("superadmin")
         first = self.app.state.source_directory_repo.start_refresh(
             org_id="default", provider_id="wecom", created_by="superadmin"
@@ -215,8 +215,11 @@ class WebDataSourcesTests(WebAuthzBaseTestCase):
         self.assertIn(f"#{first}", body)
         self.assertNotIn(f"#{other}", body)
         self.assertNotIn("private other-organization failure", body)
-        self.assertEqual(body.count("<th>"), 8)
-        self.assertIn("Open Data Quality", body)
+        self.assertEqual(body.count("<th>"), 6)
+        self.assertIn("Quality Change", body)
+        self.assertIn("Refresh Duration", body)
+        self.assertIn("Failure Reason", body)
+        self.assertIn('aria-current="page">Snapshot History', body)
 
 
 if __name__ == "__main__":
