@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from fastapi import BackgroundTasks, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from sync_app.core.observability import redact_sensitive_text
 from sync_app.providers.source import build_source_provider, get_source_provider_display_name
 from sync_app.core.models import DepartmentNode
 from sync_app.services.identity_relationships import (
@@ -41,6 +42,15 @@ from sync_app.web.app_state import (
 LOGGER = logging.getLogger(__name__)
 BINDING_CLEANUP_PREVIEW_SESSION_KEY = "_binding_cleanup_preview"
 BINDING_CLEANUP_PREVIEW_MAX_AGE_SECONDS = 900
+SOURCE_DIRECTORY_VIEWS = {"overview", "users", "departments", "history"}
+SOURCE_DIRECTORY_QUALITY_FILTERS = {
+    "missing_employee_id",
+    "duplicate_employee_id",
+    "username_collision",
+    "mapping_gap",
+}
+
+
 def _row_dict(row: Any) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
@@ -55,6 +65,31 @@ def _is_expired(snapshot: Any) -> bool:
         return expires <= datetime.now(timezone.utc)
     except ValueError:
         return False
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _refresh_duration_label(snapshot: dict[str, Any]) -> str:
+    started_at = _parse_timestamp(snapshot.get("started_at"))
+    completed_at = _parse_timestamp(snapshot.get("completed_at"))
+    if started_at is None or completed_at is None:
+        return "-"
+    duration_seconds = max(int((completed_at - started_at).total_seconds()), 0)
+    minutes, seconds = divmod(duration_seconds, 60)
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
 
 
 def register_source_directory_routes(
@@ -309,6 +344,11 @@ def register_source_directory_routes(
         department_id: str,
         status: str,
         employee_id_state: str,
+        snapshot_id: int | None = None,
+        quality_filter: str = "",
+        include_quality: bool = False,
+        include_users: bool = True,
+        include_department_counts: bool = False,
     ) -> dict[str, Any]:
         repositories = get_web_repositories(request)
         current_org = get_current_org(request)
@@ -318,10 +358,27 @@ def register_source_directory_routes(
             config_path=current_org.config_path or runtime_state.config_path,
         )
         provider_id = str(config.source_provider or "").strip().lower()
-        snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+        active_snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
             org_id=current_org.org_id,
             provider_id=provider_id,
         )
+        requested_snapshot = (
+            repositories.source_directory_repo.get_snapshot(
+                int(snapshot_id),
+                org_id=current_org.org_id,
+            )
+            if snapshot_id
+            else None
+        )
+        if (
+            requested_snapshot is not None
+            and (
+                str(requested_snapshot["provider_id"] or "") != provider_id
+                or str(requested_snapshot["status"] or "") != "succeeded"
+            )
+        ):
+            requested_snapshot = None
+        snapshot = requested_snapshot or active_snapshot
         latest_refresh = repositories.source_directory_repo.get_latest_refresh(
             org_id=current_org.org_id,
             provider_id=provider_id,
@@ -329,46 +386,201 @@ def register_source_directory_routes(
         if not snapshot:
             return {
                 "provider_id": provider_id,
+                "config": config,
                 "snapshot": None,
+                "active_snapshot": active_snapshot,
                 "latest_refresh": latest_refresh,
                 "departments": [],
+                "department_rows": [],
                 "users": [],
                 "total": 0,
                 "field_count": 0,
+                "scope": None,
+                "mapping_quality": {
+                    "mapping_coverage_percent": 0.0,
+                    "normalized_username_collision_count": 0,
+                    "issues_by_user": {},
+                },
             }
         departments = repositories.source_directory_repo.list_departments(
             int(snapshot["id"]),
             org_id=current_org.org_id,
         )
-        result = repositories.source_directory_repo.list_users(
-            int(snapshot["id"]),
+        scope = repositories.source_directory_repo.get_scope_selection(
             org_id=current_org.org_id,
             provider_id=provider_id,
-            search=search,
-            department_id=department_id,
-            status=status,
-            employee_id_state=employee_id_state,
-            limit=page_size,
-            offset=(max(int(page_number or 1), 1) - 1) * page_size,
-        )
+        ) or {}
+        mapping_quality = {
+            "mapping_coverage_percent": 0.0,
+            "normalized_username_collision_count": 0,
+            "issues_by_user": {},
+        }
+        normalized_quality_filter = str(quality_filter or "").strip().lower()
+        if normalized_quality_filter not in SOURCE_DIRECTORY_QUALITY_FILTERS:
+            normalized_quality_filter = ""
+        if include_quality:
+            mapping_quality = SourceDirectoryService(
+                repositories.source_directory_repo
+            ).build_mapping_quality_report(
+                snapshot_id=int(snapshot["id"]),
+                org_id=current_org.org_id,
+                provider_id=provider_id,
+                username_strategy=str(scope.get("username_strategy") or "userid"),
+                username_template=str(scope.get("username_template") or ""),
+                source_field=str(scope.get("source_field") or "source_user_id"),
+            )
+        filtered_source_user_ids: list[str] | None = None
+        if normalized_quality_filter in {"username_collision", "mapping_gap"}:
+            issue_key = (
+                "normalized_username_collision"
+                if normalized_quality_filter == "username_collision"
+                else "mapping_field_missing"
+            )
+            filtered_source_user_ids = [
+                str(source_user_id)
+                for source_user_id, issues in dict(
+                    mapping_quality.get("issues_by_user") or {}
+                ).items()
+                if issue_key in list(issues or [])
+            ]
+        effective_employee_id_state = str(employee_id_state or "").strip().lower()
+        if normalized_quality_filter == "missing_employee_id":
+            effective_employee_id_state = "missing"
+        elif normalized_quality_filter == "duplicate_employee_id":
+            effective_employee_id_state = "duplicate"
+        if not include_users:
+            result = {
+                "items": [],
+                "total": int(snapshot["user_count"] or 0),
+            }
+        elif filtered_source_user_ids == []:
+            result = {
+                "items": [],
+                "total": 0,
+            }
+        else:
+            result = repositories.source_directory_repo.list_users(
+                int(snapshot["id"]),
+                org_id=current_org.org_id,
+                provider_id=provider_id,
+                search=search,
+                department_id=department_id,
+                status=status,
+                employee_id_state=effective_employee_id_state,
+                source_user_ids=filtered_source_user_ids,
+                limit=page_size,
+                offset=(max(int(page_number or 1), 1) - 1) * page_size,
+            )
         users = []
         for row in result["items"]:
-            readiness_issues = []
+            quality_issues = list(
+                dict(mapping_quality.get("issues_by_user") or {}).get(
+                    str(row.get("source_user_id") or ""),
+                    [],
+                )
+            )
             if not str(row.get("employee_id") or "").strip():
-                readiness_issues.append("Missing Employee ID")
+                quality_issues.append("missing_employee_id")
             if not str(row.get("email") or "").strip():
-                readiness_issues.append("Missing Email")
+                quality_issues.append("missing_email")
             if not list(row.get("department_ids") or []):
-                readiness_issues.append("Missing Department")
-            users.append({**row, "readiness_issues": readiness_issues})
+                quality_issues.append("missing_department")
+            users.append(
+                {
+                    **row,
+                    "quality_issues": sorted(set(quality_issues)),
+                }
+            )
+        selected_source_user_ids = (
+            list(scope.get("selected_source_user_ids") or [])
+            if str(scope.get("scope_type") or "") in {"selected_users", "source_user"}
+            else None
+        )
+        department_counts = (
+            repositories.source_directory_repo.get_department_user_counts(
+                int(snapshot["id"]),
+                org_id=current_org.org_id,
+                selected_source_user_ids=selected_source_user_ids,
+            )
+            if include_department_counts
+            else {}
+        )
+        selected_department_ids = {
+            str(value)
+            for value in list(scope.get("selected_department_ids") or [])
+        }
+        scope_type = str(scope.get("scope_type") or "")
+        department_rows = []
+        department_name_by_id = {
+            str(item.get("source_department_id") or ""): str(item.get("name") or "")
+            for item in departments
+        }
+        for department in (departments if include_department_counts else []):
+            department_id_value = str(
+                department.get("source_department_id") or ""
+            )
+            path_ids = {
+                str(value)
+                for value in list(department.get("path_ids") or [])
+            }
+            count_data = department_counts.get(
+                department_id_value,
+                {"total": 0, "selected": 0},
+            )
+            if not scope_type:
+                scope_status = "Not configured"
+            elif scope_type == "full":
+                scope_status = "Included"
+            elif scope_type == "department":
+                scope_status = (
+                    "Included"
+                    if path_ids & selected_department_ids
+                    else "Excluded"
+                )
+            else:
+                selected_count = int(count_data.get("selected") or 0)
+                total_count = int(count_data.get("total") or 0)
+                if selected_count <= 0:
+                    scope_status = "Excluded"
+                elif selected_count >= total_count:
+                    scope_status = "Included"
+                else:
+                    scope_status = "Partial"
+            parent_department_id = str(
+                department.get("parent_department_id") or ""
+            )
+            department_rows.append(
+                {
+                    **department,
+                    "user_count": int(count_data.get("total") or 0),
+                    "parent_department_name": (
+                        department_name_by_id.get(parent_department_id)
+                        if parent_department_id not in {"", "0"}
+                        else ""
+                    ),
+                    "scope_status": scope_status,
+                    "depth": min(
+                        max(
+                            len(list(department.get("path_names") or [])) - 1,
+                            0,
+                        ),
+                        8,
+                    ),
+                }
+            )
         return {
             "provider_id": provider_id,
+            "config": config,
             "snapshot": snapshot,
+            "active_snapshot": active_snapshot,
             "latest_refresh": latest_refresh,
             "departments": departments,
+            "department_rows": department_rows,
             "users": users,
             "total": int(result["total"]),
             "field_count": int(snapshot["field_count"] or 0),
+            "scope": scope,
+            "mapping_quality": mapping_quality,
         }
 
     def build_relationship_page(
@@ -611,55 +823,245 @@ def register_source_directory_routes(
             "mapping_quality": mapping_quality,
         }
 
-    @app.get(CANONICAL_ROUTE_PATHS["source-directory"], response_class=HTMLResponse)
-    @app.get("/source-directory", response_class=HTMLResponse)
-    def source_directory_page(
+    def render_source_directory_page(
         request: Request,
-        page_number: int = 1,
+        *,
+        active_view: str,
+        page_number: int,
         search: str = "",
         department_id: str = "",
-        status: str = "",
+        user_status: str = "",
         employee_id_state: str = "",
+        quality_filter: str = "",
+        snapshot_id: int | None = None,
+        history_provider_id: str = "",
+        history_status: str = "",
     ):
         user = require_capability(request, "config.read")
         if isinstance(user, RedirectResponse):
             return user
+        normalized_view = str(active_view or "overview").strip().lower()
+        if normalized_view not in SOURCE_DIRECTORY_VIEWS:
+            normalized_view = "overview"
         current_org = get_current_org(request)
         page_size = 50
         page_number = max(int(page_number or 1), 1)
+        normalized_quality_filter = str(quality_filter or "").strip().lower()
+        if normalized_quality_filter not in SOURCE_DIRECTORY_QUALITY_FILTERS:
+            normalized_quality_filter = ""
         page_data = build_source_catalog_page(
             request,
             page_number=page_number,
             page_size=page_size,
             search=search,
             department_id=department_id,
-            status=status,
+            status=user_status,
             employee_id_state=employee_id_state,
+            snapshot_id=snapshot_id,
+            quality_filter=normalized_quality_filter,
+            include_quality=(
+                normalized_view == "overview"
+                or (
+                    normalized_view == "users"
+                    and normalized_quality_filter
+                    in {"username_collision", "mapping_gap"}
+                )
+            ),
+            include_users=normalized_view == "users",
+            include_department_counts=normalized_view == "departments",
         )
         provider_id = page_data["provider_id"]
         snapshot = page_data["snapshot"]
         total_pages = max((int(page_data["total"]) + page_size - 1) // page_size, 1)
+        active_snapshot = page_data["active_snapshot"]
+        viewing_historical_snapshot = bool(
+            snapshot
+            and active_snapshot
+            and int(snapshot["id"]) != int(active_snapshot["id"])
+        )
+        latest_refresh = page_data["latest_refresh"]
+        refresh_in_progress = bool(
+            latest_refresh
+            and str(latest_refresh["status"] or "") == "refreshing"
+        )
+        snapshot_expired = _is_expired(snapshot)
+
+        runtime_state = get_web_runtime_state(request)
+        editable = get_web_repositories(request).org_config_repo.get_editable_config(
+            current_org.org_id,
+            config_path=current_org.config_path or runtime_state.config_path,
+        )
+        source_connection_ready = bool(
+            str(editable.get("corpid") or "").strip()
+            and bool(editable.get("corpsecret_configured"))
+        )
+
+        history_rows: list[dict[str, Any]] = []
+        total_snapshots = 0
+        history_total_pages = 1
+        selected_history_snapshot: dict[str, Any] | None = None
+        if normalized_view == "history":
+            history_page_size = 30
+            effective_history_provider_id = (
+                str(history_provider_id or "").strip().lower() or provider_id
+            )
+            history = get_web_repositories(
+                request
+            ).source_directory_repo.list_snapshots(
+                org_id=current_org.org_id,
+                provider_id=effective_history_provider_id,
+                status=history_status,
+                limit=history_page_size,
+                offset=(page_number - 1) * history_page_size,
+            )
+            all_recent = get_web_repositories(
+                request
+            ).source_directory_repo.list_snapshots(
+                org_id=current_org.org_id,
+                provider_id=effective_history_provider_id,
+                limit=200,
+            )["items"]
+            previous_by_id: dict[int, dict[str, Any] | None] = {}
+            for item in all_recent:
+                previous_by_id[int(item["id"])] = next(
+                    (
+                        candidate
+                        for candidate in all_recent
+                        if int(candidate["id"]) < int(item["id"])
+                        and str(candidate.get("provider_id") or "")
+                        == str(item.get("provider_id") or "")
+                        and str(candidate.get("status") or "") == "succeeded"
+                    ),
+                    None,
+                )
+            for item in history["items"]:
+                previous = previous_by_id.get(int(item["id"]))
+                current_quality_issues = (
+                    int(item.get("missing_employee_id_count") or 0)
+                    + int(item.get("duplicate_employee_id_count") or 0)
+                )
+                previous_quality_issues = (
+                    int(previous.get("missing_employee_id_count") or 0)
+                    + int(previous.get("duplicate_employee_id_count") or 0)
+                    if previous
+                    else None
+                )
+                history_rows.append(
+                    {
+                        "snapshot": {
+                            **item,
+                            "error_summary": redact_sensitive_text(
+                                item.get("error_summary")
+                            ),
+                        },
+                        "quality_issue_count": current_quality_issues,
+                        "quality_delta": (
+                            current_quality_issues - previous_quality_issues
+                            if (
+                                previous_quality_issues is not None
+                                and str(item.get("status") or "") == "succeeded"
+                            )
+                            else None
+                        ),
+                        "duration_label": _refresh_duration_label(item),
+                    }
+                )
+            total_snapshots = int(history["total"])
+            history_total_pages = max(
+                (total_snapshots + history_page_size - 1) // history_page_size,
+                1,
+            )
+            requested_history_snapshot = (
+                get_web_repositories(request).source_directory_repo.get_snapshot(
+                    int(snapshot_id),
+                    org_id=current_org.org_id,
+                )
+                if snapshot_id
+                else None
+            )
+            selected_history_snapshot = _row_dict(
+                requested_history_snapshot
+                or (history["items"][0] if history["items"] else None)
+            )
+
+        latest_refresh_context = _row_dict(latest_refresh)
+        if latest_refresh_context is not None:
+            latest_refresh_context["error_summary"] = redact_sensitive_text(
+                latest_refresh_context.get("error_summary")
+            )
         return render(
             request,
             "source_directory.html",
             page="source-directory",
             title="Source Directory",
             current_org=current_org,
+            active_view=normalized_view,
             provider_id=provider_id,
             provider_name=get_source_provider_display_name(provider_id),
             snapshot=_row_dict(snapshot),
-            latest_refresh=_row_dict(page_data["latest_refresh"]),
-            snapshot_expired=_is_expired(snapshot),
+            active_snapshot=_row_dict(active_snapshot),
+            latest_refresh=latest_refresh_context,
+            refresh_in_progress=refresh_in_progress,
+            snapshot_expired=snapshot_expired,
+            viewing_historical_snapshot=viewing_historical_snapshot,
+            high_risk_actions_blocked=(
+                snapshot_expired
+                or viewing_historical_snapshot
+                or refresh_in_progress
+                or bool(
+                    latest_refresh
+                    and str(latest_refresh["status"] or "") == "failed"
+                )
+            ),
+            source_connection_ready=source_connection_ready,
             users=page_data["users"],
             total_users=page_data["total"],
             departments=page_data["departments"],
+            department_rows=page_data["department_rows"],
             field_count=page_data["field_count"],
+            mapping_quality=page_data["mapping_quality"],
             page_number=page_number,
             total_pages=total_pages,
             search=search,
             selected_department_id=department_id,
-            selected_status=status,
+            selected_status=user_status,
             selected_employee_id_state=employee_id_state,
+            selected_quality_filter=normalized_quality_filter,
+            history_rows=history_rows,
+            total_snapshots=total_snapshots,
+            history_total_pages=history_total_pages,
+            selected_history_provider_id=(
+                str(history_provider_id or "").strip().lower() or provider_id
+            ),
+            selected_history_status=history_status,
+            selected_history_snapshot=selected_history_snapshot,
+        )
+
+    @app.get(CANONICAL_ROUTE_PATHS["source-directory"], response_class=HTMLResponse)
+    @app.get("/source-directory", response_class=HTMLResponse)
+    def source_directory_page(
+        request: Request,
+        view: str = "overview",
+        page_number: int = 1,
+        search: str = "",
+        department_id: str = "",
+        status: str = "",
+        employee_id_state: str = "",
+        quality: str = "",
+        snapshot_id: int | None = None,
+        snapshot_status: str = "",
+    ):
+        return render_source_directory_page(
+            request,
+            active_view=view,
+            page_number=page_number,
+            search=search,
+            department_id=department_id,
+            user_status=status,
+            employee_id_state=employee_id_state,
+            quality_filter=quality,
+            snapshot_id=snapshot_id,
+            history_status=snapshot_status,
         )
 
     @app.get(CANONICAL_ROUTE_PATHS["snapshots"], response_class=HTMLResponse)
@@ -670,83 +1072,13 @@ def register_source_directory_routes(
         status: str = "",
         snapshot_id: int | None = None,
     ):
-        user = require_capability(request, "config.read")
-        if isinstance(user, RedirectResponse):
-            return user
-        repositories = get_web_repositories(request)
-        current_org = get_current_org(request)
-        page_size = 30
-        page_number = max(int(page_number or 1), 1)
-        history = repositories.source_directory_repo.list_snapshots(
-            org_id=current_org.org_id,
-            provider_id=provider_id,
-            status=status,
-            limit=page_size,
-            offset=(page_number - 1) * page_size,
-        )
-        all_recent = repositories.source_directory_repo.list_snapshots(
-            org_id=current_org.org_id,
-            provider_id=provider_id,
-            limit=200,
-        )["items"]
-        previous_by_id: dict[int, dict[str, Any] | None] = {}
-        for item in all_recent:
-            previous_by_id[int(item["id"])] = next(
-                (
-                    candidate
-                    for candidate in all_recent
-                    if int(candidate["id"]) < int(item["id"])
-                    and str(candidate.get("provider_id") or "")
-                    == str(item.get("provider_id") or "")
-                    and str(candidate.get("status") or "") == "succeeded"
-                ),
-                None,
-            )
-        rows = []
-        for item in history["items"]:
-            previous = previous_by_id.get(int(item["id"]))
-            rows.append(
-                {
-                    "snapshot": item,
-                    "previous": previous,
-                    "user_delta": (
-                        int(item.get("user_count") or 0)
-                        - int(previous.get("user_count") or 0)
-                        if previous
-                        else None
-                    ),
-                    "department_delta": (
-                        int(item.get("department_count") or 0)
-                        - int(previous.get("department_count") or 0)
-                        if previous
-                        else None
-                    ),
-                }
-            )
-        requested_snapshot = (
-            repositories.source_directory_repo.get_snapshot(
-                snapshot_id,
-                org_id=current_org.org_id,
-            )
-            if snapshot_id
-            else None
-        )
-        selected_snapshot = requested_snapshot or (
-            history["items"][0] if history["items"] else None
-        )
-        return render(
+        return render_source_directory_page(
             request,
-            "source_snapshot_history.html",
-            page="snapshots",
-            title="Snapshot History",
-            current_org=current_org,
-            rows=rows,
-            selected_snapshot=_row_dict(selected_snapshot),
-            total_snapshots=int(history["total"]),
+            active_view="history",
             page_number=page_number,
-            total_pages=max((int(history["total"]) + page_size - 1) // page_size, 1),
-            selected_provider_id=provider_id,
-            selected_snapshot_status=status,
+            snapshot_id=snapshot_id,
+            history_provider_id=provider_id,
+            history_status=status,
         )
 
     @app.get(CANONICAL_ROUTE_PATHS["identity-matching"], response_class=HTMLResponse)

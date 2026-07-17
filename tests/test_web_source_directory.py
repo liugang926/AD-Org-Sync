@@ -1,6 +1,8 @@
 import json
 from unittest.mock import patch
 
+from starlette.background import BackgroundTasks
+
 from sync_app.core.models import DirectoryUserRecord
 from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
@@ -130,6 +132,108 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         )
         return snapshot_id
 
+    def _seed_source_views(self):
+        snapshot_id = self.app.state.source_directory_repo.start_refresh(
+            org_id="default", provider_id="wecom", created_by="superadmin"
+        )
+        self.app.state.source_directory_repo.replace_snapshot(
+            snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "10",
+                    "name": "Headquarters",
+                    "parent_department_id": "0",
+                    "path_ids": ["10"],
+                    "path_names": ["Headquarters"],
+                },
+                {
+                    "source_department_id": "11",
+                    "name": "Engineering",
+                    "parent_department_id": "10",
+                    "path_ids": ["10", "11"],
+                    "path_names": ["Headquarters", "Engineering"],
+                },
+                {
+                    "source_department_id": "20",
+                    "name": "Remote",
+                    "parent_department_id": "0",
+                    "path_ids": ["20"],
+                    "path_names": ["Remote"],
+                },
+            ],
+            users=[
+                {
+                    "source_user_id": "alice",
+                    "display_name": "Alice",
+                    "employee_id": "E100",
+                    "email": "alice@example.com",
+                    "mobile_masked": "138****0000",
+                    "department_ids": ["10", "11"],
+                    "department_names": ["Headquarters", "Engineering"],
+                    "primary_department_id": "11",
+                    "is_active": True,
+                    "raw_payload": {"employee_id": "E100"},
+                    "search_text": "Alice E100 alice@example.com",
+                },
+                {
+                    "source_user_id": "bob",
+                    "display_name": "Bob",
+                    "employee_id": "E100",
+                    "email": "bob@example.com",
+                    "department_ids": ["11"],
+                    "department_names": ["Engineering"],
+                    "primary_department_id": "11",
+                    "is_active": True,
+                    "raw_payload": {"employee_id": "E100"},
+                    "search_text": "Bob E100 bob@example.com",
+                },
+                {
+                    "source_user_id": "carol",
+                    "display_name": "Carol",
+                    "employee_id": "",
+                    "email": "carol@example.com",
+                    "department_ids": ["20"],
+                    "department_names": ["Remote"],
+                    "primary_department_id": "20",
+                    "is_active": False,
+                    "raw_payload": {},
+                    "search_text": "Carol carol@example.com",
+                },
+                {
+                    "source_user_id": "david",
+                    "display_name": "David",
+                    "employee_id": "E400",
+                    "email": "david@example.com",
+                    "department_ids": ["20"],
+                    "department_names": ["Remote"],
+                    "primary_department_id": "20",
+                    "is_active": True,
+                    "raw_payload": {"employee_id": "E400"},
+                    "search_text": "David E400 david@example.com",
+                },
+            ],
+            fields=[
+                {
+                    "name": "employee_id",
+                    "label": "Employee ID",
+                    "coverage": 3,
+                    "samples": ["E100", "E400"],
+                }
+            ],
+            fingerprint="source-views-v1",
+        )
+        self.app.state.source_directory_repo.save_scope_selection(
+            org_id="default",
+            provider_id="wecom",
+            scope_type="department",
+            selected_department_ids=["10"],
+            username_strategy="employee_id",
+            source_field="employee_id",
+            snapshot_id=snapshot_id,
+            requested_by="superadmin",
+        )
+        return snapshot_id
+
     def test_super_admin_can_open_source_directory_without_exposing_secrets(self):
         self._login("superadmin")
         response = self._route("/source-directory", "GET")(
@@ -140,17 +244,26 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertIn("Source Directory", body)
         self.assertIn("Refresh Directory", body)
         self.assertNotIn("secret-001", body)
-        self.assertIn("This daily list contains eight business columns", body)
-        self.assertEqual(body.count("<th>"), 8)
+        self.assertIn("Overview", body)
+        self.assertIn("Users", body)
+        self.assertIn("Departments", body)
+        self.assertIn("Snapshot History", body)
+        self.assertEqual(body.count('class="source-metric-card"'), 9)
+        self.assertEqual(body.count('class="button"'), 1)
+        self.assertIn("Test connection in Connectors", body)
         self.assertNotIn("Test Connection", body)
         self.assertNotIn("Save Scope and Mapping", body)
         self.assertNotIn("Before synchronization", body)
+        self.assertNotIn("Candidate", body)
+        self.assertNotIn("Planned", body)
+        self.assertNotIn("Applied", body)
 
-    def test_empty_directory_explains_refresh_prerequisite_and_keeps_daily_columns_visible(self):
+    def test_empty_directory_explains_refresh_prerequisite_and_keeps_user_columns_visible(self):
         self._login("superadmin")
 
         response = self._route("/source-directory", "GET")(
-            self._request("/source-directory")
+            self._request("/source-directory", query={"view": "users"}),
+            view="users",
         )
 
         self.assertEqual(response.status_code, 200)
@@ -158,7 +271,9 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertIn("No successful source directory snapshot is available yet", body)
         self.assertIn("Employee ID", body)
         self.assertIn("Open Connectors", body)
-        self.assertEqual(body.count("<th>"), 8)
+        self.assertEqual(body.count("<th>"), 7)
+        self.assertIn("Platform User ID", body)
+        self.assertIn("Identity Details", body)
         self.assertNotIn("verify_ad=true", body)
 
     def test_refreshing_directory_renders_automatic_status_poll(self):
@@ -175,8 +290,159 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         body = self._text(response)
         self.assertIn("data-source-refresh-poll", body)
         self.assertIn('data-status-url="/api/source-directory/status"', body)
-        self.assertIn("This page will update automatically", body)
+        self.assertIn("previous successful snapshot remains available", body)
+        self.assertIn("View refresh task", body)
+        self.assertIn("High-risk actions", body)
         self.assertIn("disabled aria-disabled=\"true\"", body)
+
+    def test_refresh_is_post_only_csrf_protected_and_uses_existing_permission(self):
+        self._login("superadmin")
+        rejected_tasks = BackgroundTasks()
+        rejected = self._route("/source-directory/refresh", "POST")(
+            self._request("/source-directory/refresh", "POST"),
+            background_tasks=rejected_tasks,
+            csrf_token="invalid",
+        )
+        self.assertEqual(rejected.status_code, 303)
+        self.assertEqual(len(rejected_tasks.tasks), 0)
+
+        accepted_tasks = BackgroundTasks()
+        accepted = self._route("/source-directory/refresh", "POST")(
+            self._request("/source-directory/refresh", "POST"),
+            background_tasks=accepted_tasks,
+            csrf_token=self.session["_csrf_token"],
+        )
+        self.assertEqual(accepted.status_code, 303)
+        self.assertEqual(
+            accepted.headers["location"],
+            "/data-sources/source-directory",
+        )
+        self.assertEqual(len(accepted_tasks.tasks), 1)
+
+        self._login("operator1")
+        blocked_tasks = BackgroundTasks()
+        blocked = self._route("/source-directory/refresh", "POST")(
+            self._request("/source-directory/refresh", "POST"),
+            background_tasks=blocked_tasks,
+            csrf_token=self.session["_csrf_token"],
+        )
+        self.assertEqual(blocked.status_code, 303)
+        self.assertEqual(blocked.headers["location"], "/dashboard")
+        self.assertEqual(len(blocked_tasks.tasks), 0)
+
+    def test_overview_metrics_link_to_quality_filters_and_user_view_is_seven_columns(self):
+        self._login("superadmin")
+        snapshot_id = self._seed_source_views()
+
+        overview = self._route("/source-directory", "GET")(
+            self._request("/source-directory", query={"view": "overview"}),
+            view="overview",
+        )
+        body = self._text(overview)
+        self.assertIn(f"#{snapshot_id}", body)
+        self.assertIn("75.0%", body)
+        self.assertIn(
+            "view=users&quality=duplicate_employee_id",
+            body,
+        )
+        self.assertIn(
+            "view=users&quality=username_collision",
+            body,
+        )
+
+        duplicate_users = self._route("/source-directory", "GET")(
+            self._request(
+                "/source-directory",
+                query={"view": "users", "quality": "duplicate_employee_id"},
+            ),
+            view="users",
+            quality="duplicate_employee_id",
+        )
+        duplicate_body = self._text(duplicate_users)
+        self.assertEqual(duplicate_body.count("<th>"), 7)
+        self.assertIn("2 matching users", duplicate_body)
+        self.assertIn("Alice", duplicate_body)
+        self.assertIn("Bob", duplicate_body)
+        self.assertNotIn("Carol", duplicate_body)
+        self.assertIn("138****0000", duplicate_body)
+        self.assertNotIn("13812340000", duplicate_body)
+        self.assertIn("View identity details", duplicate_body)
+
+    def test_department_tree_has_counts_parents_and_read_only_scope_status(self):
+        self._login("superadmin")
+        self._seed_source_views()
+
+        response = self._route("/source-directory", "GET")(
+            self._request("/source-directory", query={"view": "departments"}),
+            view="departments",
+        )
+
+        body = self._text(response)
+        self.assertEqual(body.count("<th>"), 4)
+        self.assertIn("Department Tree", body)
+        self.assertIn("Parent Department", body)
+        self.assertIn("Sync Scope Status", body)
+        self.assertIn("Headquarters", body)
+        self.assertIn("Engineering", body)
+        self.assertIn("Remote", body)
+        self.assertIn("Excluded", body)
+        self.assertNotIn("Save Sync Scope", body)
+        self.assertNotIn('name="scope_type"', body)
+
+    def test_historical_snapshot_remains_browsable_and_blocks_high_risk_actions(self):
+        self._login("superadmin")
+        first_snapshot_id = self._seed_source_views()
+        second_snapshot_id = self.app.state.source_directory_repo.start_refresh(
+            org_id="default", provider_id="wecom", created_by="superadmin"
+        )
+        self.app.state.source_directory_repo.replace_snapshot(
+            second_snapshot_id,
+            departments=[],
+            users=[],
+            fields=[],
+            fingerprint="source-views-v2",
+        )
+
+        response = self._route("/source-directory", "GET")(
+            self._request(
+                "/source-directory",
+                query={
+                    "view": "overview",
+                    "snapshot_id": str(first_snapshot_id),
+                },
+            ),
+            view="overview",
+            snapshot_id=first_snapshot_id,
+        )
+
+        body = self._text(response)
+        self.assertIn("browsing a historical source snapshot", body)
+        self.assertIn(f"#{first_snapshot_id}", body)
+        self.assertNotIn(f"#{second_snapshot_id}", body)
+        self.assertIn("High-risk actions are blocked", body)
+        self.assertIn("Return to current snapshot", body)
+
+    def test_snapshot_history_redacts_failure_reasons(self):
+        self._login("superadmin")
+        self._seed_source_views()
+        failed_snapshot_id = self.app.state.source_directory_repo.start_refresh(
+            org_id="default", provider_id="wecom", created_by="superadmin"
+        )
+        self.app.state.source_directory_repo.fail_refresh(
+            failed_snapshot_id,
+            "request failed token=source-secret password='unsafe-value'",
+        )
+
+        response = self._route("/data-sources/snapshots", "GET")(
+            self._request("/data-sources/snapshots"),
+        )
+
+        body = self._text(response)
+        self.assertEqual(body.count("<th>"), 6)
+        self.assertIn("[REDACTED]", body)
+        self.assertNotIn("source-secret", body)
+        self.assertNotIn("unsafe-value", body)
+        self.assertIn("0s", body)
 
     def test_operator_cannot_open_or_modify_source_directory(self):
         self._login("operator1")

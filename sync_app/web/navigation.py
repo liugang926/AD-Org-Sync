@@ -109,14 +109,6 @@ NAVIGATION_GROUPS = (
                 legacy_paths=("/source-directory",),
             ),
             NavigationItem(
-                page="snapshots",
-                label="Snapshot History",
-                icon="history",
-                capability="config.read",
-                legacy_paths=(),
-                advanced_only=True,
-            ),
-            NavigationItem(
                 page="data-quality",
                 label="Data Quality",
                 icon="circle-check-big",

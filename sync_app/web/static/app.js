@@ -562,14 +562,6 @@
 
   function initLocalizedTimes() {
     const locale = document.documentElement.lang || navigator.language || "en";
-    const formatter = new Intl.DateTimeFormat(locale, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZoneName: "short",
-    });
     const relativeFormatter = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
     const relativeUnits = [
       ["year", 365 * 24 * 60 * 60],
@@ -586,12 +578,18 @@
       if (!rawValue || Number.isNaN(parsed.getTime())) {
         return;
       }
-      const formatted = formatter.format(parsed);
+      const pad = (value) => String(value).padStart(2, "0");
+      const formatted = [
+        parsed.getFullYear(),
+        pad(parsed.getMonth() + 1),
+        pad(parsed.getDate()),
+      ].join("-") + ` ${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
       const deltaSeconds = (parsed.getTime() - Date.now()) / 1000;
       const [relativeUnit, divisor] =
         relativeUnits.find(([, seconds]) => Math.abs(deltaSeconds) >= seconds) || relativeUnits.at(-1);
       const relative = relativeFormatter.format(Math.round(deltaSeconds / divisor), relativeUnit);
-      const display = `${formatted} · ${relative}`;
+      const separator = String(locale).toLowerCase().startsWith("zh") ? "，" : ", ";
+      const display = `${formatted}${separator}${relative}`;
       element.textContent = display;
       element.setAttribute("title", rawValue);
       element.setAttribute("aria-label", `${display}; ${rawValue}`);

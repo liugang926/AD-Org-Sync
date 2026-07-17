@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
 from sync_app.core.fingerprints import fingerprint_json
+from sync_app.core.observability import redact_sensitive_text
 from sync_app.storage.local_db import BaseRepository, utcnow_iso
 
 
@@ -50,7 +51,11 @@ class SourceDirectoryRepository(BaseRepository):
                 SET status = 'failed', completed_at = ?, error_summary = ?
                 WHERE id = ?
                 """,
-                (utcnow_iso(), str(error_summary or "")[:500], int(snapshot_id)),
+                (
+                    utcnow_iso(),
+                    redact_sensitive_text(error_summary)[:500],
+                    int(snapshot_id),
+                ),
             )
 
     def replace_snapshot(
@@ -249,6 +254,47 @@ class SourceDirectoryRepository(BaseRepository):
         )
         return [dict(row) | {"path_names": _json_list(row["path_names_json"]), "path_ids": _json_list(row["path_ids_json"])} for row in rows]
 
+    def get_department_user_counts(
+        self,
+        snapshot_id: int,
+        *,
+        org_id: str,
+        selected_source_user_ids: Optional[Iterable[str]] = None,
+    ) -> dict[str, dict[str, int]]:
+        selected_ids = (
+            {
+                str(value).strip()
+                for value in selected_source_user_ids
+                if str(value).strip()
+            }
+            if selected_source_user_ids is not None
+            else None
+        )
+        rows = self._fetchall(
+            """
+            SELECT source_user_id, department_ids_json
+            FROM source_user_snapshots
+            WHERE snapshot_id = ? AND org_id = ?
+            """,
+            (int(snapshot_id), org_id),
+        )
+        counts: dict[str, dict[str, int]] = {}
+        for row in rows:
+            source_user_id = str(row["source_user_id"] or "")
+            for department_id in {
+                str(value).strip()
+                for value in _json_list(row["department_ids_json"])
+                if str(value).strip()
+            }:
+                item = counts.setdefault(
+                    department_id,
+                    {"total": 0, "selected": 0},
+                )
+                item["total"] += 1
+                if selected_ids is not None and source_user_id in selected_ids:
+                    item["selected"] += 1
+        return counts
+
     def list_users(
         self,
         snapshot_id: int,
@@ -280,6 +326,23 @@ class SourceDirectoryRepository(BaseRepository):
             clauses.append("TRIM(employee_id) = ''")
         elif employee_id_state == "present":
             clauses.append("TRIM(employee_id) <> ''")
+        elif employee_id_state == "duplicate":
+            clauses.append("TRIM(employee_id) <> ''")
+            clauses.append(
+                """
+                LOWER(TRIM(employee_id)) IN (
+                  SELECT LOWER(TRIM(duplicate_user.employee_id))
+                  FROM source_user_snapshots AS duplicate_user
+                  WHERE duplicate_user.snapshot_id = ?
+                    AND duplicate_user.org_id = ?
+                    AND duplicate_user.provider_id = ?
+                    AND TRIM(duplicate_user.employee_id) <> ''
+                  GROUP BY LOWER(TRIM(duplicate_user.employee_id))
+                  HAVING COUNT(1) > 1
+                )
+                """
+            )
+            params.extend([int(snapshot_id), org_id, provider_id])
         selected_ids = sorted({str(value).strip() for value in source_user_ids or [] if str(value).strip()})
         if selected_ids:
             placeholders = ",".join("?" for _ in selected_ids)
