@@ -1,6 +1,9 @@
 from sync_app.services.identity_relationships import (
     IdentityRelationshipPreview,
     assess_identity_match,
+    classify_identity_relationship,
+    filter_identity_workbench_rows,
+    summarize_identity_workbench_rows,
 )
 
 
@@ -106,3 +109,109 @@ def test_disabled_binding_is_blocked_even_when_candidate_text_matches():
 
     assert result["status"] == "blocked"
     assert result["next_action"] == "Review Binding"
+
+
+def test_workbench_business_conclusions_cover_binding_creation_and_ad_failures():
+    bound = classify_identity_relationship(
+        _preview(
+            before_state={
+                "bound_ad_username": "E001",
+                "binding_source": "managed_generated",
+                "binding_enabled": True,
+                "ad_account_state": {"status": "enabled", "exists": True},
+            }
+        )
+    )
+    candidate_exists = classify_identity_relationship(
+        _preview(
+            candidate_ad_state={"status": "exists", "exists": True},
+        )
+    )
+    creatable = classify_identity_relationship(
+        _preview(
+            candidate_ad_state={"status": "missing", "exists": False},
+            creation_eligibility={"eligible": True},
+        )
+    )
+    stale = classify_identity_relationship(
+        _preview(
+            before_state={
+                "bound_ad_username": "legacy.alice",
+                "binding_source": "manual",
+                "binding_enabled": True,
+                "ad_account_state": {"status": "missing", "exists": False},
+            }
+        )
+    )
+    mismatch = classify_identity_relationship(
+        _preview(
+            before_state={
+                "bound_ad_username": "legacy.alice",
+                "binding_source": "manual",
+                "binding_enabled": True,
+                "ad_account_state": {"status": "exists", "exists": True},
+            }
+        )
+    )
+    conflict = classify_identity_relationship(
+        _preview(
+            effective_ad_username="",
+            effective_resolution_source="conflict",
+            risks=["normalized_username_collision"],
+        )
+    )
+    unknown = classify_identity_relationship(_preview())
+    unavailable = classify_identity_relationship(
+        _preview(
+            candidate_ad_state={"status": "unavailable", "exists": None},
+            before_state={
+                "bound_ad_username": "",
+                "binding_source": "",
+                "ad_account_state": {"status": "unavailable", "exists": None},
+            },
+        )
+    )
+
+    assert bound["code"] == "bound_account_exists"
+    assert candidate_exists["code"] == "unbound_candidate_exists"
+    assert creatable["code"] == "creatable"
+    assert stale["code"] == "saved_binding_expired"
+    assert mismatch["code"] == "candidate_binding_mismatch"
+    assert conflict["code"] == "multiple_user_candidate_conflict"
+    assert unknown["code"] == "ad_status_unknown"
+    assert unavailable["code"] == "connector_unavailable"
+
+
+def test_workbench_summary_and_filters_use_the_same_queue_membership():
+    rows = [
+        {
+            "relationship": _preview(source_user_id="bound"),
+            "workbench": {
+                "queues": ["all", "bound"],
+                "identity_status": "bound_account_exists",
+                "ad_status": "enabled",
+            },
+        },
+        {
+            "relationship": _preview(source_user_id="create"),
+            "workbench": {
+                "queues": ["all", "creatable", "pending", "unbound"],
+                "identity_status": "creatable",
+                "ad_status": "missing",
+            },
+        },
+    ]
+
+    counts = summarize_identity_workbench_rows(rows)
+    filtered = filter_identity_workbench_rows(
+        rows,
+        queue="creatable",
+        identity_status="creatable",
+        ad_status="missing",
+    )
+
+    assert counts["all"] == 2
+    assert counts["bound"] == 1
+    assert counts["pending"] == 1
+    assert counts["creatable"] == 1
+    assert [row["relationship"].source_user_id for row in filtered] == ["create"]

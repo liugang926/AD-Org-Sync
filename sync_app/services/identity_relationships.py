@@ -132,6 +132,212 @@ def assess_identity_match(item: IdentityRelationshipPreview) -> dict[str, str]:
     }
 
 
+IDENTITY_WORKBENCH_QUEUES = (
+    "pending",
+    "creatable",
+    "unbound",
+    "bound",
+    "conflict",
+    "all",
+)
+
+
+def classify_identity_relationship(
+    item: IdentityRelationshipPreview,
+    *,
+    deferred: bool = False,
+) -> dict[str, Any]:
+    """Return one business-facing conclusion for the identity workbench."""
+
+    candidate = str(item.candidate_mapping.get("ad_username") or "").strip()
+    binding = str(item.before_state.get("bound_ad_username") or "").strip()
+    candidate_state = dict(item.candidate_ad_state or {})
+    binding_state = dict(item.before_state.get("ad_account_state") or {})
+    if binding:
+        ad_state = binding_state
+        ad_subject = binding
+    elif item.effective_resolution_source == "existing_ad_match":
+        ad_state = binding_state
+        ad_subject = str(item.before_state.get("checked_ad_username") or candidate)
+    elif str(candidate_state.get("status") or "") not in {"", "not_checked"}:
+        ad_state = candidate_state
+        ad_subject = candidate
+    else:
+        ad_state = binding_state or candidate_state
+        ad_subject = candidate
+    ad_status = str(ad_state.get("status") or "not_checked").strip().lower()
+    if ad_status in {"", "not_checked"}:
+        ad_status = "unknown"
+
+    conflict_risks = {
+        "connector_conflict",
+        "connector_migration_required",
+        "multiple_ad_candidates",
+        "multiple_bindings",
+        "normalized_username_collision",
+    }
+    is_conflict = bool(
+        item.effective_resolution_source == "conflict"
+        or conflict_risks.intersection(item.risks)
+        or "conflict" in str(item.difference.get("status") or "")
+        or any(
+            str(record.get("status") or "").strip().lower() == "open"
+            for record in item.evidence.get("conflict_records") or []
+        )
+    )
+    candidate_differs = bool(
+        binding and candidate and binding.casefold() != candidate.casefold()
+    )
+    ad_exists = bool(ad_state.get("exists") is True) or ad_status in {
+        "exists",
+        "enabled",
+        "disabled",
+        "locked",
+        "protected",
+    }
+    ad_missing = bool(ad_state.get("exists") is False) or ad_status == "missing"
+
+    if is_conflict:
+        code = "multiple_user_candidate_conflict"
+        conclusion = (
+            "Multiple users share the same candidate AD account"
+            if "normalized_username_collision" in item.risks
+            else "Identity evidence conflicts and requires review"
+        )
+        level = "error"
+        suggested_action = "View conflict"
+        action_code = "conflict"
+    elif ad_status == "unavailable":
+        code = "connector_unavailable"
+        conclusion = "Connector unavailable"
+        level = "error"
+        suggested_action = "View identity details"
+        action_code = "details"
+    elif binding and ad_missing:
+        code = "saved_binding_expired"
+        conclusion = "Saved binding has expired"
+        level = "error"
+        suggested_action = "View or modify binding"
+        action_code = "binding"
+    elif binding and candidate_differs:
+        code = "candidate_binding_mismatch"
+        conclusion = "Candidate AD account differs from saved binding"
+        level = "warning"
+        suggested_action = "View or modify binding"
+        action_code = "binding"
+    elif binding and ad_status == "unknown":
+        code = "ad_status_unknown"
+        conclusion = "AD status unknown"
+        level = "warning"
+        suggested_action = "View identity details"
+        action_code = "details"
+    elif binding and ad_exists:
+        code = "bound_account_exists"
+        conclusion = "Bound and AD account exists"
+        level = "success"
+        suggested_action = "View or modify binding"
+        action_code = "binding"
+    elif not binding and ad_exists:
+        code = "unbound_candidate_exists"
+        conclusion = "No binding; candidate AD account exists"
+        level = "warning"
+        suggested_action = "Bind existing account"
+        action_code = "bind"
+    elif (
+        not binding
+        and ad_missing
+        and bool(item.creation_eligibility.get("eligible"))
+    ):
+        code = "creatable"
+        conclusion = "No binding; candidate AD account does not exist and can be created"
+        level = "success"
+        suggested_action = "Select for creation"
+        action_code = "create"
+    elif ad_status == "unknown":
+        code = "ad_status_unknown"
+        conclusion = "AD status unknown"
+        level = "warning"
+        suggested_action = "View identity details"
+        action_code = "details"
+    elif not candidate:
+        code = "candidate_unavailable"
+        conclusion = "No candidate AD account can be calculated"
+        level = "error"
+        suggested_action = "View identity details"
+        action_code = "details"
+    else:
+        code = "unbound_candidate_missing"
+        conclusion = "No binding; candidate AD account does not exist"
+        level = "warning"
+        suggested_action = "View identity details"
+        action_code = "details"
+
+    queues = {"all"}
+    if binding:
+        queues.add("bound")
+    else:
+        queues.add("unbound")
+    if code == "creatable":
+        queues.add("creatable")
+    if is_conflict:
+        queues.add("conflict")
+    if code != "bound_account_exists" and not deferred:
+        queues.add("pending")
+
+    return {
+        "code": code,
+        "conclusion": conclusion,
+        "level": level,
+        "suggested_action": suggested_action,
+        "action_code": action_code,
+        "queues": sorted(queues),
+        "identity_status": code,
+        "ad_status": ad_status,
+        "ad_state": ad_state,
+        "ad_subject": ad_subject,
+        "has_binding": bool(binding),
+        "is_conflict": is_conflict,
+        "deferred": bool(deferred),
+    }
+
+
+def filter_identity_workbench_rows(
+    rows: Iterable[dict[str, Any]],
+    *,
+    queue: str = "all",
+    identity_status: str = "",
+    ad_status: str = "",
+) -> list[dict[str, Any]]:
+    normalized_queue = str(queue or "all").strip().lower()
+    if normalized_queue not in IDENTITY_WORKBENCH_QUEUES:
+        normalized_queue = "pending"
+    normalized_identity_status = str(identity_status or "").strip().lower()
+    normalized_ad_status = str(ad_status or "").strip().lower()
+    return [
+        row
+        for row in rows
+        if (
+            (not normalized_identity_status or row["workbench"]["identity_status"] == normalized_identity_status)
+            and (not normalized_ad_status or row["workbench"]["ad_status"] == normalized_ad_status)
+            and normalized_queue in row["workbench"]["queues"]
+        )
+    ]
+
+
+def summarize_identity_workbench_rows(
+    rows: Iterable[dict[str, Any]],
+) -> dict[str, int]:
+    materialized = list(rows)
+    return {
+        queue: (
+            len(materialized)
+            if queue == "all"
+            else sum(1 for row in materialized if queue in row["workbench"]["queues"])
+        )
+        for queue in IDENTITY_WORKBENCH_QUEUES
+    }
+
+
 def build_identity_preview_fingerprint(
     *,
     org_id: str,
@@ -315,6 +521,7 @@ class IdentityRelationshipPreviewService:
         usernames_by_connector: dict[str, Iterable[str]],
         *,
         protected_accounts_by_connector: dict[str, Iterable[str]] | None = None,
+        batch_size: int = 100,
     ) -> dict[tuple[str, str], dict[str, Any]]:
         """Query each connector once and never expose directory exceptions."""
 
@@ -352,17 +559,25 @@ class IdentityRelationshipPreviewService:
                 continue
             try:
                 provider = target_provider_factory(connector_id)
-                records = provider.get_users_batch(query_usernames)
-                if bool(getattr(provider, "last_batch_lookup_failed", False)):
-                    raise RuntimeError("target directory batch lookup unavailable")
-                records_lower = {str(key).lower(): value for key, value in dict(records or {}).items()}
-                for username in query_usernames:
-                    state = IdentityRelationshipPreviewService._ad_state_from_record(
-                        records_lower.get(username.lower()),
-                        protected=False,
-                    )
-                    state["verified_at"] = verified_at
-                    result[(connector_id, username.lower())] = state
+                bounded_batch_size = min(max(int(batch_size or 100), 1), 500)
+                for batch_start in range(0, len(query_usernames), bounded_batch_size):
+                    batch = query_usernames[
+                        batch_start : batch_start + bounded_batch_size
+                    ]
+                    records = provider.get_users_batch(batch)
+                    if bool(getattr(provider, "last_batch_lookup_failed", False)):
+                        raise RuntimeError("target directory batch lookup unavailable")
+                    records_lower = {
+                        str(key).lower(): value
+                        for key, value in dict(records or {}).items()
+                    }
+                    for username in batch:
+                        state = IdentityRelationshipPreviewService._ad_state_from_record(
+                            records_lower.get(username.lower()),
+                            protected=False,
+                        )
+                        state["verified_at"] = verified_at
+                        result[(connector_id, username.lower())] = state
             except Exception:
                 for username in query_usernames:
                     result[(connector_id, username.lower())] = {
@@ -1234,8 +1449,12 @@ class IdentityRelationshipPreviewService:
 
 
 __all__ = [
+    "IDENTITY_WORKBENCH_QUEUES",
     "IdentityRelationshipPreview",
     "IdentityRelationshipPreviewService",
+    "classify_identity_relationship",
+    "filter_identity_workbench_rows",
     "build_identity_preview_fingerprint",
     "build_runtime_identity_evidence",
+    "summarize_identity_workbench_rows",
 ]

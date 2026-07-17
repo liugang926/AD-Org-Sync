@@ -690,8 +690,9 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         body = self._text(page)
         self.assertIn("missing", body)
         self.assertIn("Select for creation", body)
-        self.assertIn("Review Manual Override", body)
-        self.assertIn("Current Binding", body)
+        self.assertIn("Saved binding has expired", body)
+        self.assertIn("View or modify binding", body)
+        self.assertIn("Current binding", body)
         scope = self._route("/sync-policies/scope", "GET")(
             self._request("/sync-policies/scope")
         )

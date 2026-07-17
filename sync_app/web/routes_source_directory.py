@@ -4,7 +4,7 @@ import logging
 import secrets
 from datetime import datetime, timezone
 from typing import Any, Callable
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode
 
 from fastapi import BackgroundTasks, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -14,7 +14,9 @@ from sync_app.providers.source import build_source_provider, get_source_provider
 from sync_app.core.models import DepartmentNode
 from sync_app.services.identity_relationships import (
     IdentityRelationshipPreviewService,
-    assess_identity_match,
+    classify_identity_relationship,
+    filter_identity_workbench_rows,
+    summarize_identity_workbench_rows,
 )
 from sync_app.services.high_risk_operations import (
     HighRiskOperationContext,
@@ -42,6 +44,7 @@ from sync_app.web.app_state import (
 LOGGER = logging.getLogger(__name__)
 BINDING_CLEANUP_PREVIEW_SESSION_KEY = "_binding_cleanup_preview"
 BINDING_CLEANUP_PREVIEW_MAX_AGE_SECONDS = 900
+IDENTITY_WORKBENCH_DEFERRED_SESSION_KEY = "_identity_workbench_deferred"
 SOURCE_DIRECTORY_VIEWS = {"overview", "users", "departments", "history"}
 SOURCE_DIRECTORY_QUALITY_FILTERS = {
     "missing_employee_id",
@@ -595,6 +598,11 @@ def register_source_directory_routes(
         relationship_status: str,
         verify_ad: bool,
         source_user_ids: list[str] | None = None,
+        workbench_queue: str = "",
+        identity_status: str = "",
+        ad_status: str = "",
+        include_workbench_summary: bool = False,
+        deferred_source_user_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         repositories = get_web_repositories(request)
         current_org = get_current_org(request)
@@ -632,6 +640,8 @@ def register_source_directory_routes(
                 "candidate_missing_count": 0,
                 "creation_eligible_count": 0,
                 "mapping_quality": {},
+                "workbench_rows": [],
+                "workbench_counts": summarize_identity_workbench_rows([]),
             }
         scope = repositories.source_directory_repo.get_scope_selection(
             org_id=current_org.org_id,
@@ -668,10 +678,16 @@ def register_source_directory_routes(
             if "normalized_username_collision" in issues
         }
         offset = (max(int(page_number or 1), 1) - 1) * page_size
-        requires_relationship_filter = str(relationship_status or "all").strip().lower() not in {
-            "",
-            "all",
-        }
+        requires_relationship_filter = (
+            str(relationship_status or "all").strip().lower() not in {"", "all"}
+        )
+        requires_full_relationship_set = bool(
+            requires_relationship_filter
+            or include_workbench_summary
+            or str(workbench_queue or "").strip()
+            or str(identity_status or "").strip()
+            or str(ad_status or "").strip()
+        )
         if source_user_ids:
             result = repositories.source_directory_repo.list_users(
                 int(snapshot["id"]),
@@ -682,7 +698,7 @@ def register_source_directory_routes(
             )
             base_users = result["items"]
             total = int(result["total"])
-        elif requires_relationship_filter:
+        elif requires_full_relationship_set:
             base_users = []
             source_offset = 0
             total = 0
@@ -737,14 +753,6 @@ def register_source_directory_routes(
             config_fingerprint=config_fingerprint,
             candidate_collision_source_ids=candidate_collision_source_ids,
         )
-        if requires_relationship_filter:
-            relationships = [
-                item
-                for item in relationships
-                if service.matches_filter(item, relationship_status)
-            ]
-            total = len(relationships)
-            relationships = relationships[offset : offset + page_size]
 
         ad_verified = False
         if verify_ad and relationships and build_target_provider_for_connector:
@@ -777,20 +785,22 @@ def register_source_directory_routes(
                 usernames_by_connector,
                 protected_accounts_by_connector=protected_by_connector,
             )
-            page_user_ids = [item.source_user_id for item in relationships]
-            page_users_by_id = {
+            relationship_user_ids = [item.source_user_id for item in relationships]
+            users_by_id = {
                 str(item.get("source_user_id") or ""): item for item in base_users
             }
-            page_users = [page_users_by_id[user_id] for user_id in page_user_ids]
+            relationship_users = [
+                users_by_id[user_id] for user_id in relationship_user_ids
+            ]
             relationships = service.build_relationships(
-                page_users,
+                relationship_users,
                 org_id=current_org.org_id,
                 source_provider=provider_id,
                 snapshot=snapshot,
                 scope=scope,
                 connector_specs_by_id=specs_by_id,
                 connector_ids_by_source_user={
-                    user_id: assignments[user_id] for user_id in page_user_ids
+                    user_id: assignments[user_id] for user_id in relationship_user_ids
                 },
                 field_labels=field_labels,
                 ad_states=ad_states,
@@ -798,6 +808,95 @@ def register_source_directory_routes(
                 candidate_collision_source_ids=candidate_collision_source_ids,
             )
             ad_verified = True
+
+        if requires_relationship_filter:
+            relationships = [
+                item
+                for item in relationships
+                if service.matches_filter(item, relationship_status)
+            ]
+
+        relationship_source_user_ids = {
+            item.source_user_id for item in relationships
+        }
+        if relationship_source_user_ids:
+            conflict_records = repositories.conflict_repo.list_conflict_records(
+                limit=500,
+                org_id=current_org.org_id,
+            )
+            audit_records, _audit_total = repositories.audit_repo.list_recent_logs_page(
+                limit=500,
+                offset=0,
+                org_id=current_org.org_id,
+                include_global=False,
+            )
+            for item in relationships:
+                item.evidence["conflict_records"] = [
+                    {
+                        "id": int(record.id or 0),
+                        "job_id": record.job_id,
+                        "type": record.conflict_type,
+                        "status": record.status,
+                        "message": record.message,
+                        "created_at": record.created_at,
+                    }
+                    for record in conflict_records
+                    if record.source_id == item.source_user_id
+                ][:10]
+                item.evidence["audit_records"] = [
+                    {
+                        "id": int(record.id or 0),
+                        "actor": record.actor_username,
+                        "action": record.action_type,
+                        "result": record.result,
+                        "message": record.message,
+                        "created_at": record.created_at,
+                    }
+                    for record in audit_records
+                    if (
+                        record.target_id == item.source_user_id
+                        or str((record.payload or {}).get("source_user_id") or "")
+                        == item.source_user_id
+                        or item.source_user_id
+                        in {
+                            str(value or "").strip()
+                            for value in (
+                                (record.payload or {}).get("source_user_ids") or []
+                            )
+                            if str(value or "").strip()
+                        }
+                    )
+                ][:10]
+
+        deferred_ids = set(deferred_source_user_ids or set())
+        all_workbench_rows = [
+            {
+                "relationship": item,
+                "workbench": classify_identity_relationship(
+                    item,
+                    deferred=item.source_user_id in deferred_ids,
+                ),
+            }
+            for item in relationships
+        ]
+        filtered_for_counts = filter_identity_workbench_rows(
+            all_workbench_rows,
+            queue="all",
+            identity_status=identity_status,
+            ad_status=ad_status,
+        )
+        workbench_counts = summarize_identity_workbench_rows(filtered_for_counts)
+        filtered_workbench_rows = filter_identity_workbench_rows(
+            filtered_for_counts,
+            queue=workbench_queue or "all",
+        )
+
+        if requires_full_relationship_set:
+            total = len(filtered_workbench_rows)
+            workbench_rows = filtered_workbench_rows[offset : offset + page_size]
+            relationships = [row["relationship"] for row in workbench_rows]
+        else:
+            workbench_rows = filtered_workbench_rows
 
         candidate_missing_count = sum(
             1
@@ -821,6 +920,8 @@ def register_source_directory_routes(
             "candidate_missing_count": candidate_missing_count,
             "creation_eligible_count": creation_eligible_count,
             "mapping_quality": mapping_quality,
+            "workbench_rows": workbench_rows,
+            "workbench_counts": workbench_counts,
         }
 
     def render_source_directory_page(
@@ -1088,6 +1189,12 @@ def register_source_directory_routes(
         search: str = "",
         relationship_status: str = "all",
         verify_ad: bool = False,
+        queue: str = "pending",
+        department_id: str = "",
+        employee_status: str = "",
+        identity_status: str = "",
+        ad_status: str = "",
+        mode: str = "basic",
     ):
         user = require_capability(request, "mappings.read")
         if isinstance(user, RedirectResponse):
@@ -1095,25 +1202,218 @@ def register_source_directory_routes(
         current_org = get_current_org(request)
         page_size = 50
         page_number = max(int(page_number or 1), 1)
+        normalized_queue = str(queue or "pending").strip().lower()
+        if normalized_queue not in {
+            "pending",
+            "creatable",
+            "unbound",
+            "bound",
+            "conflict",
+            "all",
+        }:
+            normalized_queue = "pending"
+        normalized_employee_status = str(employee_status or "").strip().lower()
+        if normalized_employee_status not in {"", "active", "inactive"}:
+            normalized_employee_status = ""
+        normalized_identity_status = str(identity_status or "").strip().lower()
+        allowed_identity_statuses = {
+            "bound_account_exists",
+            "unbound_candidate_exists",
+            "creatable",
+            "saved_binding_expired",
+            "candidate_binding_mismatch",
+            "multiple_user_candidate_conflict",
+            "ad_status_unknown",
+            "connector_unavailable",
+            "candidate_unavailable",
+            "unbound_candidate_missing",
+        }
+        if normalized_identity_status not in allowed_identity_statuses:
+            normalized_identity_status = ""
+        normalized_ad_status = str(ad_status or "").strip().lower()
+        if normalized_ad_status not in {
+            "",
+            "exists",
+            "enabled",
+            "disabled",
+            "locked",
+            "missing",
+            "protected",
+            "unknown",
+            "unavailable",
+        }:
+            normalized_ad_status = ""
+        normalized_mode = (
+            "advanced" if str(mode or "").strip().lower() == "advanced" else "basic"
+        )
+        repositories = get_web_repositories(request)
+        runtime_state = get_web_runtime_state(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path or runtime_state.config_path,
+        )
+        provider_id = str(config.source_provider or "").strip().lower()
+        current_snapshot = (
+            repositories.source_directory_repo.get_latest_successful_snapshot(
+                org_id=current_org.org_id,
+                provider_id=provider_id,
+            )
+        )
+        deferred_state = dict(
+            request.session.get(IDENTITY_WORKBENCH_DEFERRED_SESSION_KEY) or {}
+        )
+        deferred_scope_matches = bool(
+            current_snapshot
+            and deferred_state.get("org_id") == current_org.org_id
+            and deferred_state.get("provider_id") == provider_id
+            and int(deferred_state.get("snapshot_id") or 0)
+            == int(current_snapshot["id"] or 0)
+        )
+        deferred_source_user_ids = (
+            {
+                str(value or "").strip()
+                for value in deferred_state.get("source_user_ids") or []
+                if str(value or "").strip()
+            }
+            if deferred_scope_matches
+            else set()
+        )
         page_data = build_relationship_page(
             request,
             page_number=page_number,
             page_size=page_size,
             search=search,
-            department_id="",
-            status="",
+            department_id=department_id,
+            status=normalized_employee_status,
             employee_id_state="",
             relationship_status=relationship_status,
             verify_ad=verify_ad,
+            workbench_queue=normalized_queue,
+            identity_status=normalized_identity_status,
+            ad_status=normalized_ad_status,
+            include_workbench_summary=True,
+            deferred_source_user_ids=deferred_source_user_ids,
         )
-        identity_matches = [
-            {"relationship": item, "assessment": assess_identity_match(item)}
-            for item in page_data["relationships"]
+
+        base_query = {
+            "queue": normalized_queue,
+            "search": str(search or "").strip(),
+            "department_id": str(department_id or "").strip(),
+            "employee_status": normalized_employee_status,
+            "identity_status": normalized_identity_status,
+            "ad_status": normalized_ad_status,
+            "mode": normalized_mode,
+        }
+        if verify_ad:
+            base_query["verify_ad"] = "true"
+
+        def workbench_url(
+            *,
+            updates: dict[str, Any] | None = None,
+            remove: tuple[str, ...] = (),
+        ) -> str:
+            query_values = {**base_query, **dict(updates or {})}
+            for key in remove:
+                query_values.pop(key, None)
+            query_values = {
+                key: value
+                for key, value in query_values.items()
+                if str(value or "").strip()
+            }
+            return CANONICAL_ROUTE_PATHS["identity-matching"] + (
+                "?" + urlencode(query_values) if query_values else ""
+            )
+
+        queue_labels = {
+            "pending": "Pending identities",
+            "creatable": "Creatable",
+            "unbound": "Unbound",
+            "bound": "Bound",
+            "conflict": "Conflict",
+            "all": "All",
+        }
+        queue_tabs = [
+            {
+                "value": value,
+                "label": label,
+                "count": int(page_data["workbench_counts"].get(value) or 0),
+                "href": workbench_url(
+                    updates={"queue": value, "page_number": 1},
+                    remove=("page_number",),
+                ),
+            }
+            for value, label in queue_labels.items()
         ]
-        assessment_counts: dict[str, int] = {}
-        for match in identity_matches:
-            status_key = str(match["assessment"]["status"])
-            assessment_counts[status_key] = assessment_counts.get(status_key, 0) + 1
+        department_names = {
+            str(item.get("source_department_id") or ""): str(item.get("name") or "")
+            for item in page_data["departments"]
+        }
+        identity_labels = {
+            "bound_account_exists": "Bound and AD account exists",
+            "unbound_candidate_exists": "No binding; candidate AD account exists",
+            "creatable": "Can create account",
+            "saved_binding_expired": "Saved binding has expired",
+            "candidate_binding_mismatch": "Candidate differs from saved binding",
+            "multiple_user_candidate_conflict": "Candidate account conflict",
+            "ad_status_unknown": "AD status unknown",
+            "connector_unavailable": "Connector unavailable",
+            "candidate_unavailable": "Candidate unavailable",
+            "unbound_candidate_missing": "Unbound candidate is missing",
+        }
+        ad_status_labels = {
+            "exists": "Exists",
+            "enabled": "Enabled",
+            "disabled": "Disabled",
+            "locked": "Locked",
+            "missing": "Missing",
+            "protected": "Protected",
+            "unknown": "Unknown",
+            "unavailable": "Connector unavailable",
+        }
+        active_filters = []
+        for key, label, value, display_value in (
+            ("search", "Keyword", str(search or "").strip(), str(search or "").strip()),
+            (
+                "department_id",
+                "Department",
+                str(department_id or "").strip(),
+                department_names.get(str(department_id or "").strip(), str(department_id or "").strip()),
+            ),
+            (
+                "employee_status",
+                "Employee status",
+                normalized_employee_status,
+                normalized_employee_status.capitalize(),
+            ),
+            (
+                "identity_status",
+                "Identity status",
+                normalized_identity_status,
+                identity_labels.get(normalized_identity_status, normalized_identity_status),
+            ),
+            (
+                "ad_status",
+                "AD status",
+                normalized_ad_status,
+                ad_status_labels.get(normalized_ad_status, normalized_ad_status),
+            ),
+        ):
+            if value:
+                active_filters.append(
+                    {
+                        "key": key,
+                        "label": label,
+                        "value": display_value,
+                        "remove_href": workbench_url(
+                            updates={"page_number": 1},
+                            remove=(key, "page_number"),
+                        ),
+                    }
+                )
+        total_pages = max(
+            (int(page_data["total"]) + page_size - 1) // page_size,
+            1,
+        )
         return render(
             request,
             "identity_matching.html",
@@ -1124,16 +1424,190 @@ def register_source_directory_routes(
             provider_name=get_source_provider_display_name(page_data["provider_id"]),
             snapshot=_row_dict(page_data["snapshot"]),
             snapshot_expired=_is_expired(page_data["snapshot"]),
-            identity_matches=identity_matches,
-            assessment_counts=assessment_counts,
+            identity_matches=page_data["workbench_rows"],
+            workbench_counts=page_data["workbench_counts"],
+            queue_tabs=queue_tabs,
             total_users=page_data["total"],
             page_number=page_number,
-            total_pages=max((int(page_data["total"]) + page_size - 1) // page_size, 1),
+            total_pages=total_pages,
             search=search,
-            selected_relationship_status=relationship_status,
+            selected_queue=normalized_queue,
+            selected_department_id=str(department_id or "").strip(),
+            selected_employee_status=normalized_employee_status,
+            selected_identity_status=normalized_identity_status,
+            selected_ad_status=normalized_ad_status,
+            selected_mode=normalized_mode,
+            departments=page_data["departments"],
+            identity_status_options=identity_labels.items(),
+            ad_status_options=ad_status_labels.items(),
+            active_filters=active_filters,
             ad_verified=page_data["ad_verified"],
             creation_eligible_count=page_data["creation_eligible_count"],
+            verify_url=workbench_url(
+                updates={"verify_ad": "true", "page_number": 1},
+                remove=("page_number",),
+            ),
+            reset_filters_url=workbench_url(
+                updates={"queue": normalized_queue, "mode": normalized_mode},
+                remove=(
+                    "search",
+                    "department_id",
+                    "employee_status",
+                    "identity_status",
+                    "ad_status",
+                    "page_number",
+                ),
+            ),
+            mode_toggle_url=workbench_url(
+                updates={
+                    "mode": "basic" if normalized_mode == "advanced" else "advanced"
+                },
+                remove=("page_number",),
+            ),
+            previous_page_url=(
+                workbench_url(updates={"page_number": page_number - 1})
+                if page_number > 1
+                else ""
+            ),
+            next_page_url=(
+                workbench_url(updates={"page_number": page_number + 1})
+                if page_number < total_pages
+                else ""
+            ),
+            return_query=urlencode(
+                {
+                    key: value
+                    for key, value in base_query.items()
+                    if str(value or "").strip()
+                }
+            ),
         )
+
+    @app.post("/identity-governance/identity-matching/defer")
+    def defer_identity_workbench_users(
+        request: Request,
+        csrf_token: str = Form(""),
+        selected_source_user_ids: list[str] = Form(default=[]),
+        return_query: str = Form(""),
+    ):
+        user = require_capability(request, "mappings.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        return_path = CANONICAL_ROUTE_PATHS["identity-matching"]
+        allowed_query_keys = {
+            "queue",
+            "search",
+            "department_id",
+            "employee_status",
+            "identity_status",
+            "ad_status",
+            "mode",
+            "verify_ad",
+        }
+        safe_query = [
+            (key, value)
+            for key, value in parse_qsl(str(return_query or ""), keep_blank_values=False)
+            if key in allowed_query_keys
+        ]
+        if safe_query:
+            return_path += "?" + urlencode(safe_query)
+        csrf_error = reject_invalid_csrf(
+            request,
+            csrf_token,
+            return_path,
+        )
+        if csrf_error:
+            return csrf_error
+
+        normalized_source_user_ids = list(
+            dict.fromkeys(
+                str(value or "").strip()
+                for value in selected_source_user_ids
+                if str(value or "").strip()
+            )
+        )
+        if not normalized_source_user_ids or len(normalized_source_user_ids) > 100:
+            flash_t(
+                request,
+                "error",
+                "Select between 1 and 100 users to defer.",
+            )
+            return RedirectResponse(url=return_path, status_code=303)
+
+        page_data = build_relationship_page(
+            request,
+            page_number=1,
+            page_size=len(normalized_source_user_ids),
+            search="",
+            department_id="",
+            status="",
+            employee_id_state="",
+            relationship_status="all",
+            verify_ad=False,
+            source_user_ids=normalized_source_user_ids,
+        )
+        relationship_ids = {
+            item.source_user_id for item in page_data["relationships"]
+        }
+        if (
+            not page_data["snapshot"]
+            or relationship_ids != set(normalized_source_user_ids)
+        ):
+            flash_t(
+                request,
+                "error",
+                "One or more selected users are not in the current organization snapshot.",
+            )
+            return RedirectResponse(url=return_path, status_code=303)
+
+        current_org = get_current_org(request)
+        previous = dict(
+            request.session.get(IDENTITY_WORKBENCH_DEFERRED_SESSION_KEY) or {}
+        )
+        previous_ids = (
+            {
+                str(value or "").strip()
+                for value in previous.get("source_user_ids") or []
+                if str(value or "").strip()
+            }
+            if (
+                previous.get("org_id") == current_org.org_id
+                and previous.get("provider_id") == page_data["provider_id"]
+                and int(previous.get("snapshot_id") or 0)
+                == int(page_data["snapshot"]["id"] or 0)
+            )
+            else set()
+        )
+        deferred_ids = sorted(previous_ids.union(normalized_source_user_ids))
+        request.session[IDENTITY_WORKBENCH_DEFERRED_SESSION_KEY] = {
+            "org_id": current_org.org_id,
+            "provider_id": page_data["provider_id"],
+            "snapshot_id": int(page_data["snapshot"]["id"] or 0),
+            "source_user_ids": deferred_ids,
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        repositories = get_web_repositories(request)
+        repositories.audit_repo.add_log(
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            action_type="identity_workbench.defer",
+            target_type="source_directory_snapshot",
+            target_id=str(page_data["snapshot"]["id"]),
+            result="success",
+            message="Selected source identities were temporarily deferred in the current workbench session",
+            payload={
+                "source_provider": page_data["provider_id"],
+                "source_user_ids": normalized_source_user_ids,
+                "selected_user_count": len(normalized_source_user_ids),
+            },
+        )
+        flash_t(
+            request,
+            "success",
+            "Temporarily deferred {count} user(s).",
+            count=len(normalized_source_user_ids),
+        )
+        return RedirectResponse(url=return_path, status_code=303)
 
     @app.get(
         CANONICAL_ROUTE_PATHS["binding-reconciliation"],
