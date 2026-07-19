@@ -1253,9 +1253,6 @@ def register_source_directory_routes(
             "unavailable",
         }:
             normalized_ad_status = ""
-        normalized_mode = (
-            "advanced" if str(mode or "").strip().lower() == "advanced" else "basic"
-        )
         repositories = get_web_repositories(request)
         runtime_state = get_web_runtime_state(request)
         config = repositories.org_config_repo.get_app_config(
@@ -1312,7 +1309,6 @@ def register_source_directory_routes(
             "employee_status": normalized_employee_status,
             "identity_status": normalized_identity_status,
             "ad_status": normalized_ad_status,
-            "mode": normalized_mode,
         }
         if verify_ad:
             base_query["verify_ad"] = "true"
@@ -1446,7 +1442,6 @@ def register_source_directory_routes(
             selected_employee_status=normalized_employee_status,
             selected_identity_status=normalized_identity_status,
             selected_ad_status=normalized_ad_status,
-            selected_mode=normalized_mode,
             departments=page_data["departments"],
             identity_status_options=identity_labels.items(),
             ad_status_options=ad_status_labels.items(),
@@ -1458,7 +1453,7 @@ def register_source_directory_routes(
                 remove=("page_number",),
             ),
             reset_filters_url=workbench_url(
-                updates={"queue": normalized_queue, "mode": normalized_mode},
+                updates={"queue": normalized_queue},
                 remove=(
                     "search",
                     "department_id",
@@ -1467,12 +1462,6 @@ def register_source_directory_routes(
                     "ad_status",
                     "page_number",
                 ),
-            ),
-            mode_toggle_url=workbench_url(
-                updates={
-                    "mode": "basic" if normalized_mode == "advanced" else "advanced"
-                },
-                remove=("page_number",),
             ),
             previous_page_url=(
                 workbench_url(updates={"page_number": page_number - 1})

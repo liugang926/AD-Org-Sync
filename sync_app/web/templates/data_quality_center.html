@@ -87,8 +87,7 @@
           <th>{{ t("Snapshot") }}</th>
           <th>{{ t("Generated At") }}</th>
           <th>{{ t("Users") }}</th>
-          <th>{{ t("Missing Email") }}</th>
-          <th>{{ t("Missing Employee ID") }}</th>
+          {% if ui_presentation.is_basic %}<th>{{ t("Missing Identifiers") }}</th>{% else %}<th>{{ t("Missing Email") }}</th><th>{{ t("Missing Employee ID") }}</th>{% endif %}
           <th>{{ t("Department Anomalies") }}</th>
           <th>{{ t("Naming Risks") }}</th>
           <th>{{ t("Duplicate Identifiers") }}</th>
@@ -106,8 +105,7 @@
           </td>
           <td>{{ ui.local_time(row.snapshot.created_at) }}</td>
           <td>{{ row.summary.total_users or 0 }}</td>
-          <td>{{ row.summary.users_missing_email or 0 }}</td>
-          <td>{{ row.summary.users_missing_employee_id or 0 }}</td>
+          {% if ui_presentation.is_basic %}<td>{{ t("Email") }}: {{ row.summary.users_missing_email or 0 }}<div class="muted">{{ t("Employee ID") }}: {{ row.summary.users_missing_employee_id or 0 }}</div></td>{% else %}<td>{{ row.summary.users_missing_email or 0 }}</td><td>{{ row.summary.users_missing_employee_id or 0 }}</td>{% endif %}
           <td>{{ row.department_anomaly_count }}</td>
           <td>{{ row.naming_risk_count }}</td>
           <td>{{ row.duplicate_identifier_count }}</td>
@@ -157,7 +155,7 @@
           <tr>
             <th>{{ t("Category") }}</th>
             <th>{{ t("Title") }}</th>
-            <th>{{ t("Connector") }}</th>
+            <th>{{ t(ui_presentation.choose("Target", "Connector")) }}</th>
             <th>{{ t("Detail") }}</th>
           </tr>
         </thead>
@@ -166,7 +164,7 @@
           <tr>
             <td>{{ ui.badge((t(item.label) if item.label else "-"), ("error" if item.severity == "error" else "warning")) }}</td>
             <td>{{ t(item.title) if item.title else "-" }}</td>
-            <td>{{ item.connector_name or item.connector_id or "-" }}</td>
+            <td>{{ ui_presentation.choose(item.connector_name or "-", item.connector_name or item.connector_id or "-") }}</td>
             <td>{{ t(item.detail) if item.detail else "-" }}</td>
           </tr>
           {% else %}
@@ -189,7 +187,7 @@
           <tr>
             <th>{{ t("Issue") }}</th>
             <th>{{ t("Title") }}</th>
-            <th>{{ t("Source User") }}</th>
+            {% if ui_presentation.show_internal_identifiers %}<th>{{ t("Source User") }}</th>{% endif %}
             <th>{{ t("Detail") }}</th>
           </tr>
         </thead>
@@ -198,11 +196,11 @@
           <tr>
             <td>{{ t(item.label) if item.label else "-" }}</td>
             <td>{{ t(item.title) if item.title else "-" }}</td>
-            <td>{{ item.source_user_id or (item.source_user_ids|join(", ") if item.source_user_ids else "-") }}</td>
+            {% if ui_presentation.show_internal_identifiers %}<td>{{ item.source_user_id or (item.source_user_ids|join(", ") if item.source_user_ids else "-") }}</td>{% endif %}
             <td>{{ t(item.detail) if item.detail else "-" }}</td>
           </tr>
           {% else %}
-          <tr><td colspan="4" class="table-empty">{{ t("No repair rows were captured for this snapshot.") }}</td></tr>
+          <tr><td colspan="{{ ui_presentation.choose(3, 4) }}" class="table-empty">{{ t("No repair rows were captured for this snapshot.") }}</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -216,7 +214,7 @@
         <thead>
           <tr>
             <th>{{ t("Connector") }}</th>
-            <th>{{ t("Connector ID") }}</th>
+            {% if ui_presentation.show_provider_connector_details %}<th>{{ t("Connector ID") }}</th>{% endif %}
             <th>{{ t("User Count") }}</th>
           </tr>
         </thead>
@@ -224,11 +222,11 @@
           {% for row in selected_connector_breakdown %}
           <tr>
             <td>{{ row.name or "-" }}</td>
-            <td>{{ row.connector_id or "-" }}</td>
+            {% if ui_presentation.show_provider_connector_details %}<td>{{ row.connector_id or "-" }}</td>{% endif %}
             <td>{{ row.user_count or 0 }}</td>
           </tr>
           {% else %}
-          <tr><td colspan="3" class="table-empty">{{ t("No connector breakdown was captured for this snapshot.") }}</td></tr>
+          <tr><td colspan="{{ ui_presentation.choose(2, 3) }}" class="table-empty">{{ t("No connector breakdown was captured for this snapshot.") }}</td></tr>
           {% endfor %}
         </tbody>
       </table>

@@ -13,11 +13,11 @@
 </ol>
 {%- endmacro %}
 
-{% macro context_details(context) -%}
+{% macro context_details(context, presentation=none) -%}
 <div class="detail-grid high-risk-context" data-high-risk-context>
   <div class="detail-item">
     <div class="label">{{ t("Organization") }}</div>
-    <div class="value" data-high-risk-organization>{{ context.organization_name }} <span class="muted">({{ context.organization_id }})</span></div>
+    <div class="value" data-high-risk-organization>{{ context.organization_name }}{% if presentation %}{% call mode_ui.advanced_inline(presentation, "muted") %}({{ context.organization_id }}){% endcall %}{% else %} <span class="muted">({{ context.organization_id }})</span>{% endif %}</div>
   </div>
   <div class="detail-item">
     <div class="label">{{ t("Environment") }}</div>
@@ -31,7 +31,7 @@
     <div class="label">{{ t("Impact Count") }}</div>
     <div class="value" data-high-risk-impact>{{ context.impact_count }}</div>
   </div>
-  {% if context.preview_id %}
+  {% if context.preview_id and (not presentation or presentation.show_internal_identifiers) %}
   <div class="detail-item">
     <div class="label">{{ t("Preview ID") }}</div>
     <div class="value cell-mono" data-high-risk-preview>{{ context.preview_id }}</div>
@@ -48,3 +48,4 @@
 <input type="hidden" name="impact_count" value="{{ context.impact_count }}">
 <input type="hidden" name="preview_id" value="{{ context.preview_id }}">
 {%- endmacro %}
+{% import "components/mode.html" as mode_ui %}

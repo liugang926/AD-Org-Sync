@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
+{% import "components/mode.html" as mode_ui %}
 
 {% block content %}
 <div class="page-stack">
@@ -45,6 +46,7 @@
   </form>
 {% endcall %}
 
+{% call mode_ui.advanced(ui_presentation) %}
 {% call ui.detail_toggle(t("Channels, Webhooks, And Delivery Evidence"), t("Advanced organization-scoped integration details are collapsed during routine notification review.")) %}
 <section class="integration-portal-hero">
   <div>
@@ -331,6 +333,7 @@
 </table>
 {% endcall %}
 {% endif %}
+{% endcall %}
 {% endcall %}
 </div>
 {% endblock %}

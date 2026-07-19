@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
+{% import "components/mode.html" as mode_ui %}
 {% import "components/identity_timeline.html" as identity_timeline with context %}
 {% block content %}
 <div class="page-stack identity-workbench" data-identity-workbench>
@@ -9,13 +10,13 @@
     {% elif not snapshot %}
     {{ ui.button(t("Open Source Directory"), href="/data-sources/source-directory", variant="primary", icon="users-round") }}
     {% endif %}
-    {{ ui.button(t("Basic mode") if selected_mode == "advanced" else t("Advanced mode"), href=mode_toggle_url, variant="secondary", icon="sliders-horizontal") }}
   {% endcall %}
+  {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t("Start with the suggested action for the first pending identity. Open details only when the business conclusion needs more evidence."), t("Review next candidate"), "#identity-results") }}
 
   <div class="identity-workbench__scope" role="status">
     <div>
       <strong>{{ current_org.name }}</strong>
-      <span>{{ provider_name }} · {{ t("Snapshot {snapshot_id}", snapshot_id=snapshot.id) if snapshot else t("No snapshot") }}</span>
+      <span>{{ ui_presentation.choose(t("Directory snapshot"), provider_name) }} · {{ t("Snapshot {snapshot_id}", snapshot_id=snapshot.id) if snapshot else t("No snapshot") }}</span>
     </div>
     <nav aria-label="{{ t('Related identity pages') }}">
       <a href="/jobs?context=identity-matching#history">{{ t("Jobs") }}</a>
@@ -54,7 +55,6 @@
   {% call ui.panel(t("Find identities"), description=t("Keyword, department, employee, identity, and AD filters are applied on the server before pagination."), class_name="identity-workbench-filter-panel") %}
     <form method="get" action="/identity-governance/identity-matching" class="identity-workbench-filters">
       <input type="hidden" name="queue" value="{{ selected_queue }}">
-      <input type="hidden" name="mode" value="{{ selected_mode }}">
       {% if ad_verified %}<input type="hidden" name="verify_ad" value="true">{% endif %}
       <label class="field"><span>{{ t("Keyword") }}</span><input type="search" name="search" value="{{ search }}" placeholder="{{ t('Name, source ID, employee ID, or email') }}"></label>
       <label class="field"><span>{{ t("Department") }}</span><select name="department_id">
@@ -110,7 +110,7 @@
     </div>
     {% endif %}
 
-    <div class="table-scroll identity-governance-table identity-workbench-table" tabindex="0" role="region" aria-label="{{ t('Identity matching workbench results') }}">
+    <div id="identity-results" class="table-scroll identity-governance-table identity-workbench-table" tabindex="0" role="region" aria-label="{{ t('Identity matching workbench results') }}">
       <table data-identity-matching-table>
         <thead>
           <tr>
@@ -130,16 +130,16 @@
             <td>
               <div class="identity-user-cell">
                 {% if can("config.write") or can("mappings.write") %}
-                <input type="checkbox" name="selected_source_user_ids" value="{{ item.source_user_id }}" data-identity-select data-supported-modes="{% if can('config.write') and item.creation_eligibility.eligible %}create,{% endif %}{% if can('mappings.write') %}defer{% endif %}" data-binding-url="/identity-governance/manual-overrides?q={{ item.source_user_id|urlencode }}" aria-label="{{ t('Select {name}', name=(item.source_display_name or item.source_user_id)) }}">
+                <input type="checkbox" name="selected_source_user_ids" value="{{ item.source_user_id }}" data-identity-select data-supported-modes="{% if can('config.write') and item.creation_eligibility.eligible %}create,{% endif %}{% if can('mappings.write') %}defer{% endif %}" data-binding-url="/identity-governance/manual-overrides?q={{ item.source_user_id|urlencode }}" aria-label="{{ t('Select {name}', name=(item.source_display_name or t('Unnamed user'))) }}">
                 {% endif %}
-                <span><strong>{{ item.source_display_name or "-" }}</strong><span class="muted cell-mono">{{ item.source_user_id }}</span></span>
+                <span><strong>{{ item.source_display_name or "-" }}</strong>{% call mode_ui.advanced_inline(ui_presentation, "muted cell-mono") %}{{ item.source_user_id }}{% endcall %}</span>
               </div>
-              {% if selected_mode == "advanced" %}<div class="advanced-evidence"><span>{{ item.source_provider }}</span><span class="cell-mono">{{ item.connector_id }}</span></div>{% endif %}
+              {% call mode_ui.advanced(ui_presentation, "advanced-evidence") %}<span>{{ item.source_provider }}</span><span class="cell-mono">{{ item.connector_id }}</span>{% endcall %}
             </td>
             <td><span class="cell-mono">{{ item.employee_id or "-" }}</span></td>
             <td>
               <span class="cell-mono cell-strong">{{ item.candidate_mapping.ad_username or "-" }}</span>
-              {% if selected_mode == "advanced" %}<div class="muted">{{ t(item.mapping_input.method) }} · {{ item.mapping_input.field_name or "-" }}</div>{% endif %}
+              {% call mode_ui.advanced(ui_presentation, "muted") %}{{ t(item.mapping_input.method) }} · {{ item.mapping_input.field_name or "-" }}{% endcall %}
             </td>
             <td>
               <span class="cell-mono">{{ item.before_state.bound_ad_username or "-" }}</span>
@@ -152,7 +152,7 @@
             <td>
               {{ ui.badge(t(workbench.conclusion), workbench.level) }}
               {% if workbench.deferred %}<div class="muted">{{ t("Temporarily deferred") }}</div>{% endif %}
-              {% if selected_mode == "advanced" %}<div class="muted cell-mono">{{ workbench.code }}</div>{% endif %}
+              {% call mode_ui.advanced(ui_presentation, "muted cell-mono") %}{{ workbench.code }}{% endcall %}
             </td>
             <td>
               <strong>{{ t(workbench.suggested_action) }}</strong>
@@ -217,21 +217,21 @@
     <header class="identity-drawer__header">
       <div>
         <div class="page-header__eyebrow">{{ t("Identity Evidence") }}</div>
-        <h2 id="identity-drawer-title-{{ loop.index }}">{{ item.source_display_name or item.source_user_id }}</h2>
+        <h2 id="identity-drawer-title-{{ loop.index }}">{{ item.source_display_name or t("Unnamed user") }}</h2>
         <p>{{ t(workbench.conclusion) }}</p>
       </div>
       {{ ui.button("", icon="x", variant="ghost", class_name="topbar-icon-button", attrs='data-identity-drawer-close aria-label="' ~ t("Close identity details") ~ '"') }}
     </header>
     <div class="identity-drawer__body">
       <dl class="detail-list">
-        <dt>{{ t("Source User ID") }}</dt><dd class="cell-mono">{{ item.source_user_id }}</dd>
+        {% call mode_ui.advanced(ui_presentation) %}<dt>{{ t("Source User ID") }}</dt><dd class="cell-mono">{{ item.source_user_id }}</dd>{% endcall %}
         <dt>{{ t("Employee ID") }}</dt><dd class="cell-mono">{{ item.employee_id or "-" }}</dd>
         <dt>{{ t("Business conclusion") }}</dt><dd>{{ ui.badge(t(workbench.conclusion), workbench.level) }}</dd>
         <dt>{{ t("Suggested action") }}</dt><dd>{{ t(workbench.suggested_action) }}</dd>
       </dl>
       <h3>{{ t("Complete evidence timeline") }}</h3>
-      <div data-identity-timeline>{{ identity_timeline.timeline(item, compact=False, full=True, workbench=workbench) }}</div>
-      <details class="detail-toggle">
+      <div data-identity-timeline>{{ identity_timeline.timeline(item, compact=False, full=True, workbench=workbench, presentation=ui_presentation) }}</div>
+      {% call mode_ui.advanced(ui_presentation) %}<details class="detail-toggle">
         <summary>{{ t("Technical evidence") }}</summary>
         <div class="detail-toggle__body">
           <dl class="detail-list">
@@ -245,7 +245,7 @@
             <dt>{{ t("Evidence fingerprint") }}</dt><dd class="cell-mono wrap-anywhere">{{ item.evidence.preview_fingerprint or "-" }}</dd>
           </dl>
         </div>
-      </details>
+      </details>{% endcall %}
     </div>
     <footer class="identity-drawer__footer">
       <span>{{ t("Suggested action") }}: {{ t(workbench.suggested_action) }}</span>

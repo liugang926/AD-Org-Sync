@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
 {% import "components/sync_policy.html" as policy with context %}
+{% import "components/mode.html" as mode_ui %}
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Sync Scope"), t("Define the organization boundary separately from explicit identity selection."), eyebrow=t("Sync Policies"), badge_text=(t("Snapshot #{id}", id=snapshot.id) if snapshot else t("No snapshot")), badge_level=("success" if snapshot and not snapshot_expired else "warning")) %}
@@ -9,6 +10,7 @@
 
   {{ policy.tabs('scope') }}
   {{ policy.status(has_unpublished_changes, latest_snapshot_title, (t('A successful source snapshot is required.') if not snapshot else (t('The source snapshot is stale.') if snapshot_expired else '')), t('Save this section, then run and review a new Dry Run'), policy_version, policy_last_modified_by, estimated_affected_users, dry_run_invalidated, latest_policy_dry_run) }}
+  {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t("Choose the business boundary by department, save it, then run a new Dry Run. Use Advanced mode only for connector roots or explicit user selection."), t("Open next step"), "/jobs?context=sync-scope#dry-run") }}
 
   {% if not snapshot %}
   <div class="callout callout--warning" role="status"><strong>{{ t("A successful source snapshot is required.") }}</strong><span>{{ t("Refresh Source Directory before defining a synchronization scope.") }}</span><a href="/data-sources/source-directory">{{ t("Open Source Directory") }}</a></div>
@@ -48,10 +50,13 @@
           </select>
         </label>
         {% if selected_connector %}
+        {% call mode_ui.advanced(ui_presentation) %}
         <label>{{ t("Connector Root Department IDs") }}
           <input type="text" name="root_department_ids" value="{{ selected_connector.root_department_ids|join(', ') }}" placeholder="2, 8">
-          <span class="form-help">{{ t("Connector scope") }} · {{ selected_connector.name }}{% if ui_mode == "advanced" %} ({{ selected_connector.connector_id }}){% endif %}</span>
+          <span class="form-help">{{ t("Connector scope") }} · {{ selected_connector.name }}{% if ui_presentation.show_provider_connector_details %} ({{ selected_connector.connector_id }}){% endif %}</span>
         </label>
+        {% endcall %}
+        {% if ui_presentation.is_basic %}<input type="hidden" name="root_department_ids" value="{{ selected_connector.root_department_ids|join(', ') }}">{% endif %}
         <input type="hidden" name="connector_id" value="{{ selected_connector.connector_id }}">
         {% endif %}
       </div>
@@ -65,7 +70,7 @@
           {% set department_path = department.path_names|join(" / ") %}
           <label class="department-tree-node department-tree-node--depth-{{ [department.path_ids|length - 1, 8]|min }}" role="treeitem" data-department-tree-node data-department-search-text="{{ (department_path ~ ' ' ~ department.source_department_id)|lower }}">
             <input type="checkbox" name="selected_department_ids" value="{{ department.source_department_id }}" {% if scope and department.source_department_id in scope.selected_department_ids %}checked{% endif %}>
-            <span><strong>{{ department.name }}</strong><small>{{ department_path }}{% if ui_mode == "advanced" %} · {{ department.source_department_id }}{% endif %}</small></span>
+            <span><strong>{{ department.name }}</strong><small>{{ department_path }}{% if ui_presentation.show_internal_identifiers %} · {{ department.source_department_id }}{% endif %}</small></span>
           </label>
           {% else %}
           <div class="empty-state">{{ t("No departments are available in the current snapshot") }}</div>
@@ -74,7 +79,7 @@
         <p class="form-help">{{ t("Selecting a department includes its descendants. The tree is searchable and preserves the existing department-scope semantics.") }}</p>
       </div>
 
-      <details class="detail-toggle" {% if excluded_departments or ui_mode == "advanced" %}open{% endif %}>
+      <details class="detail-toggle" {% if excluded_departments or ui_presentation.is_advanced %}open{% endif %}>
         <summary><strong>{{ t("Exclusion Scope") }}</strong></summary>
         <div class="form-grid">
           <label>{{ t("Excluded AD Departments / OUs") }}
@@ -92,12 +97,13 @@
     {% endcall %}
   </form>
 
+  {% call mode_ui.advanced(ui_presentation) %}
   {% call ui.panel(t("Connector Scope Overview"), description=t("Choose a connector to edit its root scope without exposing connection credentials.")) %}
     <form method="get" action="/sync-policies/scope" class="filter-bar">
-      <label>{{ t("Connector") }}<select name="connector_id"><option value="">{{ t("No connector override") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}" {% if selected_connector and selected_connector.connector_id == connector.connector_id %}selected{% endif %}>{{ connector.name }}{% if ui_mode == "advanced" %} · {{ connector.connector_id }}{% endif %}</option>{% endfor %}</select></label>
+      <label>{{ t("Connector") }}<select name="connector_id"><option value="">{{ t("No connector override") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}" {% if selected_connector and selected_connector.connector_id == connector.connector_id %}selected{% endif %}>{{ connector.name }}{% if ui_presentation.show_provider_connector_details %} · {{ connector.connector_id }}{% endif %}</option>{% endfor %}</select></label>
       {{ ui.button(t("Review Connector Scope"), type="submit", variant="secondary", icon="list-filter") }}
     </form>
-    <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Connector root scopes') }}"><table data-policy-table><thead><tr><th>{{ t("Scope") }}</th><th>{{ t("Connector") }}</th><th>{{ t("Status") }}</th><th>{{ t("Root Departments") }}</th><th>{{ t("Estimated Users") }}</th><th>{{ t("Updated") }}</th></tr></thead><tbody>{% for connector in connectors %}<tr><td>{{ t("Organization") }} / {{ t("Connector") }}</td><td><strong>{{ connector.name }}</strong>{% if ui_mode == "advanced" %}<div class="muted">{{ connector.connector_id }}</div>{% endif %}</td><td>{{ t("Enabled") if connector.is_enabled else t("Disabled") }}</td><td>{{ connector.root_department_ids|join(', ') or t("All available roots") }}</td><td>{{ estimated_affected_users }}</td><td>{{ ui.local_time(connector.updated_at) }}</td></tr>{% else %}<tr><td colspan="6" class="empty-state">{{ t("No target connectors are configured") }}</td></tr>{% endfor %}</tbody></table></div>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Connector root scopes') }}"><table data-policy-table><thead><tr><th>{{ t("Scope") }}</th><th>{{ t("Connector") }}</th><th>{{ t("Status") }}</th><th>{{ t("Root Departments") }}</th><th>{{ t("Estimated Users") }}</th><th>{{ t("Updated") }}</th></tr></thead><tbody>{% for connector in connectors %}<tr><td>{{ t("Organization") }} / {{ t("Connector") }}</td><td><strong>{{ connector.name }}</strong>{% if ui_presentation.show_provider_connector_details %}<div class="muted">{{ connector.connector_id }}</div>{% endif %}</td><td>{{ t("Enabled") if connector.is_enabled else t("Disabled") }}</td><td>{{ connector.root_department_ids|join(', ') or t("All available roots") }}</td><td>{{ estimated_affected_users }}</td><td>{{ ui.local_time(connector.updated_at) }}</td></tr>{% else %}<tr><td colspan="6" class="empty-state">{{ t("No target connectors are configured") }}</td></tr>{% endfor %}</tbody></table></div>
   {% endcall %}
 
   {% call ui.panel(t("Find Source Identities"), description=t("Filtering is read-only. Saving checked users happens only in the separate form that follows.")) %}
@@ -155,6 +161,7 @@
       {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Identity Selection"), type="submit", variant="secondary", icon="users-round") }}</div>{% endif %}
     {% endcall %}
   </form>
+  {% endcall %}
 
   {% call ui.helper_block(t("Next step"), t("Every saved change invalidates older Dry Runs. Run and review a fresh Dry Run before Apply."), "warning") %}
     <div class="actions">{{ ui.button(t("Open Account Naming"), href="/sync-policies/account-naming", variant="ghost", icon="badge-check") }}{{ ui.button(t("Run a new Dry Run"), href="/jobs?context=sync-scope#dry-run", variant="secondary", icon="play-circle") }}</div>

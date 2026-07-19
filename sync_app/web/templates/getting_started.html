@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
+{% import "components/mode.html" as mode_ui %}
 
 {% block content %}
 <div class="page-stack">
@@ -75,9 +76,7 @@
       {{ ui.button(t("Open Organization Config"), href="/config", variant="secondary") }}
       {% endif %}
       {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
-      {% if ui_mode == "advanced" %}
-      {{ ui.button(t("Open Sync Policies"), href="/sync-policies", variant="ghost") }}
-      {% endif %}
+      {% call mode_ui.advanced_inline(ui_presentation) %}{{ ui.button(t("Open Sync Policies"), href="/sync-policies", variant="ghost") }}{% endcall %}
     </div>
   {% endcall %}
 </div>

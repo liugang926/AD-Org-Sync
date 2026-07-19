@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
+{% import "components/mode.html" as mode_ui %}
 {% block content %}
 <div class="page-stack source-directory-page">
   {% call ui.page_header(t("Source Directory"), t("Browse source users, departments, and immutable refresh snapshots. Identity governance and synchronization policy are managed on their owning pages."), eyebrow=t("Data Sources"), badge_text=(t("Refreshing") if refresh_in_progress else (t("No snapshot") if not snapshot else (t("Historical") if viewing_historical_snapshot else (t("Stale") if snapshot_expired else t("Current"))))), badge_level=("warning" if refresh_in_progress or snapshot_expired or viewing_historical_snapshot or not snapshot else "success")) %}
-    {{ ui.button(t("Open Sync Scope"), href="/sync-policies/scope", variant="secondary", icon="list-filter") }}
+    {% call mode_ui.advanced_inline(ui_presentation) %}{{ ui.button(t("Open Sync Scope"), href="/sync-policies/scope", variant="secondary", icon="list-filter") }}{% endcall %}
     {% if can("config.write") %}
     <form method="post" action="/source-directory/refresh" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -11,6 +12,7 @@
     </form>
     {% endif %}
   {% endcall %}
+  {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t("Refresh the directory when source data changes, then review identities that need attention."), t("Review identity matches"), "/identity-governance/identity-matching") }}
 
   <nav class="source-directory-tabs" aria-label="{{ t('Source Directory views') }}">
     {% set snapshot_query = ("&snapshot_id=" ~ snapshot.id) if viewing_historical_snapshot and snapshot else "" %}
@@ -144,7 +146,7 @@
     <form method="get" action="/data-sources/source-directory" class="filter-bar">
       <input type="hidden" name="view" value="users">
       {% if viewing_historical_snapshot and snapshot %}<input type="hidden" name="snapshot_id" value="{{ snapshot.id }}">{% endif %}
-      <label>{{ t("Search") }}<input type="search" name="search" value="{{ search }}" placeholder="{{ t('Name, platform user ID, employee ID, email') }}"></label>
+      <label>{{ t("Search") }}<input type="search" name="search" value="{{ search }}" placeholder="{{ t(ui_presentation.choose('Name, employee ID, or email', 'Name, platform user ID, employee ID, email')) }}"></label>
       <label>{{ t("Department") }}
         <select name="department_id">
           <option value="">{{ t("All departments") }}</option>
@@ -176,7 +178,7 @@
           <tr>
             <th>{{ t("Name") }}</th>
             <th>{{ t("Employee ID") }}</th>
-            <th>{{ t("Platform User ID") }}</th>
+            {{ mode_ui.advanced_header(ui_presentation, t("Platform User ID")) }}
             <th>{{ t("Department") }}</th>
             <th>{{ t("Status") }}</th>
             <th>{{ t("Email") }}</th>
@@ -193,19 +195,19 @@
                 <dl class="detail-grid">
                   <div class="detail-item"><dt class="label">{{ t("Position") }}</dt><dd class="value">{{ item.position or "-" }}</dd></div>
                   <div class="detail-item"><dt class="label">{{ t("Mobile") }}</dt><dd class="value">{{ item.mobile_masked or "-" }}</dd></div>
-                  <div class="detail-item"><dt class="label">{{ t("Primary Department ID") }}</dt><dd class="value cell-mono">{{ item.primary_department_id or "-" }}</dd></div>
+                  {% call mode_ui.advanced(ui_presentation) %}<div class="detail-item"><dt class="label">{{ t("Primary Department ID") }}</dt><dd class="value cell-mono">{{ item.primary_department_id or "-" }}</dd></div>{% endcall %}
                 </dl>
               </details>
             </td>
             <td class="cell-mono">{{ item.employee_id or "-" }}</td>
-            <td class="cell-mono">{{ item.source_user_id }}</td>
+            {% call mode_ui.advanced_cell(ui_presentation, 'class="cell-mono"') %}{{ item.source_user_id }}{% endcall %}
             <td>{{ item.department_names|join(" / ") or "-" }}</td>
             <td>{{ ui.badge(t("Active") if item.is_active else t("Inactive"), "success" if item.is_active else "warning") }}</td>
             <td>{{ item.email or "-" }}</td>
             <td><a href="/identity-governance/binding-reconciliation?search={{ item.source_user_id|urlencode }}">{{ t("View identity details") }}</a></td>
           </tr>
           {% else %}
-          <tr><td colspan="7" class="table-empty">{{ t("No cached users match the current filters.") if snapshot else t("No successful source snapshot is available. Refresh the directory to load users.") }}</td></tr>
+          <tr><td colspan="{{ ui_presentation.choose(6, 7) }}" class="table-empty">{{ t("No cached users match the current filters.") if snapshot else t("No successful source snapshot is available. Refresh the directory to load users.") }}</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -233,7 +235,7 @@
             <td>
               <div class="department-tree-node department-tree-node--depth-{{ department.depth }}">
                 <i data-lucide="{{ 'folder-tree' if department.depth == 0 else 'corner-down-right' }}" class="icon icon-sm" aria-hidden="true"></i>
-                <span><strong>{{ department.name or department.source_department_id }}</strong><small class="cell-mono">{{ department.source_department_id }}</small></span>
+                <span><strong>{{ department.name or t("Unnamed department") }}</strong>{% call mode_ui.advanced_inline(ui_presentation, "cell-mono") %}{{ department.source_department_id }}{% endcall %}</span>
               </div>
             </td>
             <td>{{ department.user_count }}</td>

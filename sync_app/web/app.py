@@ -85,7 +85,10 @@ from sync_app.web.security import (
     rotate_csrf_token,
     verify_password,
 )
-from sync_app.web.navigation import PHASE7_LEGACY_GET_REDIRECTS
+from sync_app.web.navigation import (
+    ADVANCED_MODE_PAGE_GATES,
+    PHASE7_LEGACY_GET_REDIRECTS,
+)
 
 LOGGER = logging.getLogger(__name__)
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
@@ -112,22 +115,6 @@ ATTRIBUTE_MAPPING_DIRECTION_LABELS = {
     "ad_to_source": "AD -> Source",
     "wecom_to_ad": "Source -> AD",
     "ad_to_wecom": "AD -> Source",
-}
-ADVANCED_NAV_PAGES = {
-    "advanced-sync",
-    "automation-center",
-    "data-quality",
-    "integrations",
-    "lifecycle",
-    "organizations",
-    "mappings",
-    "exceptions",
-    "database",
-    "employee-self-service",
-    "branding",
-    "deployment",
-    "users",
-    "audit",
 }
 SESSION_FILTER_PREFIX = "_page_filters"
 CONFIG_PREVIEW_SESSION_KEY = "_config_preview"
@@ -295,7 +282,7 @@ def create_app(
         environment_label=app.state.environment_label,
         supported_ui_modes=SUPPORTED_UI_MODES,
         placement_strategies=PLACEMENT_STRATEGIES,
-        advanced_nav_pages=ADVANCED_NAV_PAGES,
+        mode_gated_pages=ADVANCED_MODE_PAGE_GATES,
         session_filter_prefix=SESSION_FILTER_PREFIX,
     )
     resolve_remembered_filters = partial(
@@ -441,7 +428,6 @@ def create_app(
 
     register_dashboard_routes(
         app,
-        advanced_nav_pages=ADVANCED_NAV_PAGES,
         build_dashboard_data=dashboard_support.build_dashboard_data,
         build_getting_started_view_state=build_getting_started_view_state,
         build_preflight_snapshot=dashboard_support.build_preflight_snapshot,

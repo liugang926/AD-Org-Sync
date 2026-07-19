@@ -183,7 +183,7 @@
         {{ ui.button(t("Export CSV"), href=exceptions_base_path ~ "/export?q=" ~ (exception_query or '') ~ "&rule_type=" ~ (exception_rule_type or 'all') ~ "&status=" ~ (exception_status or 'all'), variant="secondary") }}
         {{ ui.button(t("Open Conflict Queue"), href="/identity-governance/conflicts", variant="ghost") }}
         {{ ui.button(t("Open Dry Run"), href="/jobs?context=exceptions#dry-run", variant="ghost") }}
-        {% if show_advanced_navigation %}
+        {% if ui_presentation.is_advanced %}
         {{ ui.button(t("Open Sync Policies"), href="/sync-policies", variant="ghost") }}
         {% endif %}
       </div>

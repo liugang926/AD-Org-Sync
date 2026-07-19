@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Collection, Optional
 from urllib.parse import urlencode
 
 from fastapi import Request
@@ -21,6 +21,7 @@ from sync_app.web.i18n import (
 )
 from sync_app.web.navigation import build_navigation_groups
 from sync_app.web.security import ensure_csrf_token, validate_admin_password_strength, validate_csrf_token
+from sync_app.web.ui_mode import get_ui_mode_presentation, normalize_ui_mode
 
 
 class RequestSupport:
@@ -35,7 +36,7 @@ class RequestSupport:
         environment_label: str,
         supported_ui_modes: dict[str, str],
         placement_strategies: dict[str, str],
-        advanced_nav_pages: set[str],
+        mode_gated_pages: Collection[str],
         session_filter_prefix: str,
     ) -> None:
         self.templates = templates
@@ -47,7 +48,7 @@ class RequestSupport:
         self.environment_label = environment_label
         self.supported_ui_modes = supported_ui_modes
         self.placement_strategies = placement_strategies
-        self.advanced_nav_pages = advanced_nav_pages
+        self.mode_gated_pages = frozenset(mode_gated_pages)
         self.session_filter_prefix = session_filter_prefix
 
     @staticmethod
@@ -87,8 +88,7 @@ class RequestSupport:
         return detect_browser_ui_language(request.headers.get("accept-language"))
 
     def normalize_ui_mode(self, value: Any) -> str:
-        normalized = str(value or "").strip().lower()
-        return normalized if normalized in self.supported_ui_modes else "basic"
+        return normalize_ui_mode(value)
 
     def get_ui_mode(self, request: Request) -> str:
         return self.normalize_ui_mode(request.session.get("ui_mode"))
@@ -247,6 +247,7 @@ class RequestSupport:
         current_role = current_user.role if current_user else None
         ui_language = self.get_ui_language(request)
         ui_mode = self.get_ui_mode(request)
+        ui_presentation = get_ui_mode_presentation(ui_mode)
         brand_display_name_raw = repositories.settings_repo.get_value(
             "brand_display_name",
             self.default_brand_display_name,
@@ -312,17 +313,19 @@ class RequestSupport:
         context.setdefault("language_urls", language_urls)
         context.setdefault("current_path", current_path)
         context.setdefault("ui_mode", ui_mode)
+        context.setdefault("ui_presentation", ui_presentation)
         context.setdefault("ui_mode_options", self.supported_ui_modes)
         context.setdefault(
             "show_advanced_navigation",
-            ui_mode == "advanced" or current_page in self.advanced_nav_pages,
+            ui_presentation.is_advanced,
         )
-        context.setdefault("is_advanced_page", current_page in self.advanced_nav_pages)
+        context.setdefault("is_advanced_page", current_page in self.mode_gated_pages)
         context.setdefault(
             "navigation_groups",
             build_navigation_groups(
                 current_role,
                 show_advanced_navigation=bool(context["show_advanced_navigation"]),
+                current_page=current_page,
             ),
         )
         context.setdefault("t", lambda text, **params: self.translate_text(ui_language, str(text or ""), **params))

@@ -1,4 +1,5 @@
 {% import "components/ui.html" as ui %}
+{% import "components/mode.html" as mode_ui %}
 {% set is_lightweight_shell = lightweight_shell|default(False) %}
 {% set load_tom_select_assets = (not is_lightweight_shell) and page in ['advanced-sync', 'sync-account-naming', 'mappings'] %}
 {% set load_advanced_sync_page_script = (not is_lightweight_shell) and page in ['advanced-sync', 'sync-account-naming'] %}
@@ -18,7 +19,7 @@
   <link href="/static/vendor/tom-select.default.min.css?v={{ static_asset_version }}" rel="stylesheet">
   {% endif %}
 </head>
-<body class="{% if not current_user or is_lightweight_shell %}login-page{% endif %}" data-confirm-message="{{ t('Are you sure you want to perform this action?') }}" data-clear-all-label="{{ t('Clear all') }}" data-remove-item-label="{{ t('Remove item') }}" data-table-scroll-label="{{ t('Scrollable data table. Use arrow keys to review hidden columns.') }}">
+<body class="{% if not current_user or is_lightweight_shell %}login-page{% endif %}" data-ui-mode="{{ ui_presentation.name if ui_presentation is defined else 'basic' }}" data-ui-density="{{ ui_presentation.density if ui_presentation is defined else 'business' }}" data-max-primary-columns="{{ ui_presentation.max_primary_columns if ui_presentation is defined else 8 }}" data-confirm-message="{{ t('Are you sure you want to perform this action?') }}" data-clear-all-label="{{ t('Clear all') }}" data-remove-item-label="{{ t('Remove item') }}" data-table-scroll-label="{{ t('Scrollable data table. Use arrow keys to review hidden columns.') }}">
   {% if current_user and not is_lightweight_shell %}
   <div class="mobile-nav-backdrop" data-mobile-nav-close></div>
   <aside id="app-sidebar" data-app-sidebar aria-label="{{ t('Primary navigation') }}">
@@ -61,7 +62,7 @@
         current_path,
         "ui_mode",
         [("basic", t("Basic")), ("advanced", t("Advanced"))],
-        (ui_mode if ui_mode == "advanced" else "basic"),
+        ui_presentation.name,
         class_name="sidebar-mode-switcher"
       ) }}
       {{ ui.topbar_segmented_links(
@@ -117,7 +118,7 @@
             current_path,
             "ui_mode",
             [("basic", t("Basic")), ("advanced", t("Advanced"))],
-            (ui_mode if ui_mode == "advanced" else "basic"),
+            ui_presentation.name,
             class_name="mode-switcher"
           ) }}
 
@@ -162,12 +163,16 @@
       </div>
       {% endif %}
       
+      {% if current_user and is_advanced_page and ui_presentation.is_basic %}
+      {{ mode_ui.advanced_page_gate(ui_presentation, title, current_path, csrf_token, t, ui) }}
+      {% else %}
       {% block content %}{% endblock %}
+      {% endif %}
     </div>
   </main>
 
   {% if current_user and not is_lightweight_shell %}
-  <div class="confirm-dialog" data-confirm-dialog hidden>
+  <div class="confirm-dialog" data-confirm-dialog data-confirm-flow="{{ ui_presentation.high_risk_interaction }}" data-confirm-step="review" hidden>
     <div class="confirm-dialog__backdrop" data-confirm-cancel></div>
     <section class="confirm-dialog__panel" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message" tabindex="-1">
       <div class="confirm-dialog__icon">
@@ -176,6 +181,12 @@
       <div class="confirm-dialog__body">
         <div class="confirm-dialog__eyebrow">{{ t("Safety Check") }}</div>
         <h2 id="confirm-dialog-title" data-confirm-title-target data-default-title="{{ t('Confirm High-Risk Action') }}">{{ t("Confirm High-Risk Action") }}</h2>
+        {% if ui_presentation.high_risk_interaction == "wizard" %}
+        <ol class="confirm-dialog__wizard-steps" aria-label="{{ t('High-risk action steps') }}">
+          <li data-confirm-wizard-step="review" aria-current="step"><span>1</span>{{ t("Review impact") }}</li>
+          <li data-confirm-wizard-step="confirm"><span>2</span>{{ t("Confirm action") }}</li>
+        </ol>
+        {% endif %}
         <p id="confirm-dialog-message" data-confirm-message-target>{{ t("Are you sure you want to perform this action?") }}</p>
         <dl class="confirm-dialog__details" data-confirm-details hidden></dl>
         <div class="confirm-dialog__verification" data-confirm-verification hidden>
@@ -186,6 +197,8 @@
       </div>
       <div class="confirm-dialog__actions">
         {{ ui.button(t("Cancel"), type="button", variant="ghost", attrs='data-confirm-cancel') }}
+        {{ ui.button(t("Back"), type="button", variant="ghost", attrs='data-confirm-back hidden') }}
+        {{ ui.button(t("Review and continue"), type="button", variant="secondary", attrs='data-confirm-next hidden') }}
         {{ ui.button(t("Continue"), type="button", variant="danger", attrs='data-confirm-approve') }}
       </div>
     </section>

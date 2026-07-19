@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from sync_app.web.ui_mode import get_ui_mode_presentation
+
 
 def summarize_check_status(checks: list[dict[str, Any]]) -> str:
     if any(str(item.get("status") or "") == "error" for item in checks):
@@ -52,6 +54,7 @@ def build_getting_started_data(
     source_provider_name: str,
     ui_mode: str,
 ) -> dict[str, Any]:
+    presentation = get_ui_mode_presentation(ui_mode)
     check_index = {
         str(item.get("key") or ""): item for item in list(preflight_snapshot.get("checks") or []) if isinstance(item, dict)
     }
@@ -90,10 +93,9 @@ def build_getting_started_data(
         },
         {
             "title": "Review sync scope",
-            "detail": (
-                "Basic mode keeps the default single-organization flow. Switch to Advanced mode only if you need routing, write-back, or lifecycle controls."
-                if ui_mode == "basic"
-                else "Review connectors, mappings, and lifecycle policies before the first rollout."
+            "detail": presentation.choose(
+                "Basic mode keeps the default single-organization flow. Switch to Advanced mode only if you need routing, write-back, or lifecycle controls.",
+                "Review connectors, mappings, and lifecycle policies before the first rollout.",
             ),
             "href": "/sync-policies/scope",
             "action_label": "Review Scope",

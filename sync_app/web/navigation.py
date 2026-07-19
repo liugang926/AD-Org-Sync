@@ -347,11 +347,27 @@ NAVIGATION_GROUPS = (
     ),
 )
 
+# A compact navigation item and a mode-gated workspace are different concepts.
+# Basic mode keeps secondary destinations out of the daily navigation, while
+# only implementation-level workspaces are replaced by the explanatory gate.
+ADVANCED_MODE_PAGE_GATES = frozenset(
+    {
+        "audit",
+        "binding-reconciliation",
+        "exceptions",
+        "mappings",
+        "sync-attribute-mappings",
+        "sync-department-ou-routing",
+        "sync-policy-releases",
+    }
+)
+
 
 def build_navigation_groups(
     role: str | None,
     *,
     show_advanced_navigation: bool,
+    current_page: str = "",
 ) -> tuple[NavigationGroup, ...]:
     capabilities = role_capabilities(role)
     visible_groups: list[NavigationGroup] = []
@@ -363,6 +379,7 @@ def build_navigation_groups(
             and (
                 not item.advanced_only
                 or show_advanced_navigation
+                or item.page == current_page
                 or role in item.basic_roles
             )
         )

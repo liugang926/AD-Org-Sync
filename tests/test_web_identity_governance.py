@@ -73,6 +73,7 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
 
     def test_identity_matching_is_read_only_eight_column_evidence_with_shared_timeline(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self._seed_identity_snapshot()
         self.app.state.user_binding_repo.upsert_binding(
             "alice",
@@ -115,6 +116,7 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
 
     def test_canonical_manual_overrides_show_only_manual_records_and_keep_legacy_page(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self._seed_identity_snapshot()
         self.app.state.user_binding_repo.upsert_binding(
             "bob",
@@ -155,6 +157,7 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
 
     def test_canonical_exception_write_keeps_csrf_rbac_audit_and_legacy_visibility(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         canonical_path = "/identity-governance/exception-rules"
 
         blocked = self._route(canonical_path, "POST")(
@@ -222,6 +225,7 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
 
     def test_canonical_conflict_queue_keeps_filters_and_decision_links_canonical(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.job_repo.create_job(
             "phase4-conflict-job",
             trigger_type="unit_test",

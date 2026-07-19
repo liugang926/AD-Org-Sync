@@ -1,12 +1,14 @@
 {% extends "base.html" %}
 {% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
+{% import "components/mode.html" as mode_ui %}
 
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Conflict Queue"), t("Work this page from top to bottom: review the recommendation, apply a manual binding if the target is clear, otherwise whitelist or dismiss with a reason."), eyebrow=t("Decisions"), badge_text=t(conflict_status|capitalize), badge_level=("warning" if conflict_status == "open" else "info")) %}
     {% if conflicts %}{{ ui.button(t("Process Next Conflict"), href=conflicts_base_path ~ "/" ~ conflicts[0].id ~ "/decision-guide?return_query=" ~ ((conflict_query or '')|urlencode) ~ "&return_status=" ~ ((conflict_status or 'open')|urlencode) ~ "&return_job_id=" ~ ((conflict_job_id or conflicts[0].job_id)|urlencode), variant="primary", icon="route") }}{% endif %}
   {% endcall %}
+  {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t("Process the first open conflict with the decision guide. Use the recommended action unless the business evidence says otherwise."), t("Process next conflict"), (conflicts_base_path ~ "/" ~ conflicts[0].id ~ "/decision-guide") if conflicts else conflicts_base_path) }}
 
   <section class="conflict-command-center">
     <div class="conflict-command-center__copy">
@@ -35,7 +37,7 @@
       <div class="form-grid">
         {{ forms.input("q", t("Keyword"), conflict_query or '', placeholder=t('userid, ad account, message')) }}
         {{ forms.select("status", t("Status"), [("open", t("Open")), ("resolved", t("Resolved")), ("dismissed", t("Dismissed")), ("all", t("All"))], selected_value=(conflict_status or 'open')) }}
-        {{ forms.input("job_id", t("Job ID"), conflict_job_id or '', placeholder=t('optional job id')) }}
+        {% call mode_ui.advanced(ui_presentation) %}{{ forms.input("job_id", t("Job ID"), conflict_job_id or '', placeholder=t('optional job id')) }}{% endcall %}
       </div>
       {% if filters_are_remembered %}
       <p class="section-subtitle">{{ t("Filters are remembered for this browser session.") }}</p>
@@ -44,7 +46,7 @@
         {{ ui.button(t("Search"), type="submit", variant="secondary") }}
         {{ ui.button(t("Reset"), href=conflicts_base_path ~ "?clear_filters=1", variant="secondary") }}
         {{ ui.button(t("Open Dry Run"), href="/jobs?context=conflicts#dry-run", variant="ghost") }}
-        {% if show_advanced_navigation %}
+        {% if ui_presentation.is_advanced %}
         {{ ui.button(t("Open Manual Overrides"), href="/identity-governance/manual-overrides", variant="ghost") }}
         {% endif %}
       </div>
@@ -60,7 +62,7 @@
   {% endcall %}
 
   <div class="conflict-queue-shell" {% if can("mappings.write") %}data-selection-scope{% endif %}>
-    {% if can("mappings.write") %}
+    {% if can("mappings.write") and ui_presentation.show_bulk_tools %}
     <form id="bulk-conflicts-form" class="bulk-action-bar" method="post" action="{{ conflicts_base_path }}/bulk">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="return_query" value="{{ conflict_query or '' }}">
@@ -88,6 +90,8 @@
               <div class="conflict-card__eyebrow">{{ t("Conflict") }} #{{ item.id }}</div>
               <h2>{{ t(item.conflict_type) }}</h2>
               <p>
+                {% call mode_ui.basic(ui_presentation) %}{{ t("The system could not safely decide this identity. Review the recommendation and supporting business details.") }}{% endcall %}
+                {% call mode_ui.advanced(ui_presentation) %}
                 {% if item.details and item.details.message_code %}
                 {{ t(item.details.message_code, **(item.details.message_params or {})) }}
                 {% elif ui_language == "zh-CN" and item.conflict_type in ["multiple_ad_candidates", "shared_ad_account", "existing_ad_identity_claim_review"] %}
@@ -98,11 +102,12 @@
                 {% else %}
                 {{ item.message }}
                 {% endif %}
+                {% endcall %}
               </p>
             </div>
             <div class="conflict-card__badges">
               {{ ui.badge(t(item.status|capitalize), 'warning' if item.status == 'open' else ('success' if item.status == 'resolved' else 'info')) }}
-              {% if can("mappings.write") %}
+              {% if can("mappings.write") and ui_presentation.show_bulk_tools %}
               <label class="inline-checkbox conflict-card__select">
                 <input form="bulk-conflicts-form" type="checkbox" name="conflict_ids" value="{{ item.id }}">
                 {{ t("Select") }}
@@ -112,10 +117,12 @@
           </div>
 
           <div class="dense-meta">
-            <div>{{ t("Job ID") }}: <a href="/execution-center/jobs/{{ item.job_id }}">{{ item.job_id }}</a></div>
             <div>{{ t("Created At") }}: <strong>{{ ui.local_time(item.created_at) }}</strong></div>
+            {% call mode_ui.advanced(ui_presentation) %}
+            <div>{{ t("Job ID") }}: <a href="/execution-center/jobs/{{ item.job_id }}">{{ item.job_id }}</a></div>
             <div>{{ t("Source") }}: <strong class="cell-mono">{{ item.source_id or "-" }}</strong></div>
             <div>{{ t("Target") }}: <strong class="cell-mono">{{ item.target_key or "-" }}</strong></div>
+            {% endcall %}
           </div>
 
           {% if item.resolution_hint %}
@@ -192,7 +199,7 @@
           {% if item.conflict_type in ["multiple_ad_candidates", "shared_ad_account", "existing_ad_identity_claim_review"] %}
           {{ ui.button(t("Open Decision Guide"), href=conflicts_base_path ~ "/" ~ item.id ~ "/decision-guide?return_query=" ~ ((conflict_query or '')|urlencode) ~ "&return_status=" ~ ((conflict_status or 'open')|urlencode) ~ "&return_job_id=" ~ ((conflict_job_id or item.job_id)|urlencode), variant="secondary", size="small", icon="route") }}
           {% endif %}
-          {% if item.source_id and show_advanced_navigation %}
+          {% if item.source_id and ui_presentation.show_internal_identifiers %}
           {{ ui.button(t("Open Manual Overrides"), href="/identity-governance/manual-overrides?q=" ~ item.source_id, variant="ghost", size="small") }}
           {% endif %}
         </div>
@@ -282,7 +289,7 @@
       {% call ui.panel("") %}
         {% call ui.empty_state(t("No conflicts matched the current filter."), t("This usually means the latest synchronization run is healthy or the current search is too narrow."), "success") %}
           {{ ui.button(t("Open Dry Run"), href="/jobs?context=conflicts#dry-run", variant="secondary") }}
-          {% if show_advanced_navigation %}
+          {% if ui_presentation.is_advanced %}
           {{ ui.button(t("Open Manual Overrides"), href="/identity-governance/manual-overrides", variant="ghost") }}
           {% endif %}
         {% endcall %}

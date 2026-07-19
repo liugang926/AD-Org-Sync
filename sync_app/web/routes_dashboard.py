@@ -13,7 +13,6 @@ from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 def register_dashboard_routes(
     app: FastAPI,
     *,
-    advanced_nav_pages: set[str],
     build_dashboard_data: Callable[[Request], dict[str, Any]],
     build_getting_started_view_state: Callable[..., Any],
     build_preflight_snapshot: Callable[..., dict[str, Any]],
@@ -30,16 +29,6 @@ def register_dashboard_routes(
     safe_redirect_target: Callable[[str | None, str], str],
     source_provider_label: Callable[[str], str],
 ) -> None:
-    def _advanced_page_from_url(url: str) -> str:
-        path = str(url or "").split("?", 1)[0].strip("/")
-        return path.split("/", 1)[0].strip()
-
-    def _basic_mode_return_url(url: str) -> str:
-        page = _advanced_page_from_url(url)
-        if page not in advanced_nav_pages:
-            return url
-        return "/config" if page == "advanced-sync" else "/dashboard"
-
     @app.get(CANONICAL_ROUTE_PATHS["dashboard"], response_class=HTMLResponse)
     @app.get("/dashboard", response_class=HTMLResponse)
     def dashboard(request: Request):
@@ -154,6 +143,4 @@ def register_dashboard_routes(
             return csrf_error
         next_ui_mode = normalize_ui_mode(ui_mode)
         request.session["ui_mode"] = next_ui_mode
-        if next_ui_mode == "basic":
-            fallback_url = _basic_mode_return_url(fallback_url)
         return RedirectResponse(url=fallback_url, status_code=303)

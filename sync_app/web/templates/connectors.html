@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
 {% import "components/forms.html" as forms %}
+{% import "components/mode.html" as mode_ui %}
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Connectors"), t("Configure the upstream people directory and target AD connections for the current organization. Synchronization scope, naming, routing, and lifecycle rules live in Sync Policies."), eyebrow=t("Data Sources"), badge_text=t("Organization Scope"), badge_level="info") %}
@@ -62,6 +63,9 @@
     </div>
   </form>
 
+  {{ mode_ui.basic_guidance(ui_presentation, t("Next step"), t("Test the saved base connections, then refresh Source Directory. Switch to Advanced mode only when this organization needs more than one target AD connection."), t("Open Source Directory"), "/data-sources/source-directory") }}
+
+  {% call mode_ui.advanced(ui_presentation) %}
   {% call ui.panel(t("Additional Target AD Connectors"), description=t("Use additional connectors only when one organization routes users to more than one AD domain or connection. Naming and routing rules remain in Sync Policies.")) %}
     <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Additional target AD connectors') }}">
       <table>
@@ -142,6 +146,7 @@
       <div class="form-actions field-span-full">{{ ui.button(t("Add Target Connector"), type="submit", variant="secondary", icon="plus") }}</div>
     </form>
     {% endcall %}
+  {% endcall %}
   {% endcall %}
 
   {% call ui.helper_block(t("Next step"), t("After the saved connections pass validation, refresh Source Directory. Configure scope, naming, routing, groups, lifecycle, and safety rules in Sync Policies."), "info") %}

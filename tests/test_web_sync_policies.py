@@ -73,6 +73,7 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
 
     def test_canonical_policy_pages_are_task_focused_and_legacy_page_redirects(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self._seed_policy_fixture()
         paths = (
             "/sync-policies/scope",
@@ -129,6 +130,7 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
 
     def test_legacy_entry_redirects_and_scope_forms_are_separated(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self._seed_policy_fixture()
 
         legacy = self._route("/advanced-sync", "GET")(
@@ -201,6 +203,7 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
 
     def test_policy_save_forms_include_old_new_scope_and_impact_review(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self._seed_policy_fixture()
         for path in (
             "/sync-policies/scope",

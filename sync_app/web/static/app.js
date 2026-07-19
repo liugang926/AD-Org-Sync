@@ -47,6 +47,18 @@
     });
   }
 
+  function initModeSwitchContext() {
+    document.querySelectorAll("form[action='/ui-mode']").forEach((form) => {
+      form.addEventListener("submit", () => {
+        const returnUrl = form.querySelector("input[name='return_url']");
+        if (!(returnUrl instanceof HTMLInputElement) || !window.location.hash) {
+          return;
+        }
+        returnUrl.value = `${returnUrl.value.split("#", 1)[0]}${window.location.hash}`;
+      });
+    });
+  }
+
   function initCopyButtons() {
     const status = document.querySelector("[data-copy-status]");
     document.querySelectorAll("[data-copy-value]").forEach((button) => {
@@ -87,11 +99,46 @@
     const inputHelp = dialog?.querySelector("[data-confirm-input-help]");
     const confirmInput = dialog?.querySelector("[data-confirm-input]");
     const approveButton = dialog?.querySelector("[data-confirm-approve]");
+    const nextButton = dialog?.querySelector("[data-confirm-next]");
+    const backButton = dialog?.querySelector("[data-confirm-back]");
+    const wizardSteps = dialog
+      ? Array.from(dialog.querySelectorAll("[data-confirm-wizard-step]"))
+      : [];
     const approveLabel = approveButton?.querySelector("span");
     const defaultApproveLabel = approveLabel?.textContent || "Continue";
     const cancelButtons = dialog ? Array.from(dialog.querySelectorAll("[data-confirm-cancel]")) : [];
     let pendingElement = null;
+    let pendingRequiredText = "";
     let restoreFocusTo = null;
+
+    const setConfirmationStep = (step) => {
+      if (!(dialog instanceof HTMLElement)) {
+        return;
+      }
+      const usesWizard = dialog.dataset.confirmFlow === "wizard";
+      const resolvedStep = usesWizard ? step : "confirm";
+      dialog.dataset.confirmStep = resolvedStep;
+      if (nextButton instanceof HTMLElement) {
+        nextButton.hidden = !usesWizard || resolvedStep !== "review";
+      }
+      if (backButton instanceof HTMLElement) {
+        backButton.hidden = !usesWizard || resolvedStep !== "confirm";
+      }
+      if (approveButton instanceof HTMLElement) {
+        approveButton.hidden = usesWizard && resolvedStep === "review";
+      }
+      if (verification instanceof HTMLElement) {
+        verification.hidden = resolvedStep !== "confirm" || !pendingRequiredText;
+      }
+      wizardSteps.forEach((item) => {
+        if (!(item instanceof HTMLElement)) return;
+        if (item.dataset.confirmWizardStep === resolvedStep) {
+          item.setAttribute("aria-current", "step");
+        } else {
+          item.removeAttribute("aria-current");
+        }
+      });
+    };
 
     const policyFormDiff = (element) => {
       const form = element.closest("form[data-policy-change-form]");
@@ -209,6 +256,7 @@
       dialog.hidden = true;
       document.body?.classList.remove("confirm-dialog-open");
       pendingElement = null;
+      pendingRequiredText = "";
       if (confirmInput instanceof HTMLInputElement) {
         confirmInput.value = "";
       }
@@ -248,6 +296,24 @@
 
     if (approveButton instanceof HTMLElement) {
       approveButton.addEventListener("click", runConfirmedAction);
+    }
+    if (nextButton instanceof HTMLElement) {
+      nextButton.addEventListener("click", () => {
+        setConfirmationStep("confirm");
+        if (pendingRequiredText && confirmInput instanceof HTMLInputElement) {
+          confirmInput.focus();
+        } else if (approveButton instanceof HTMLElement) {
+          approveButton.focus();
+        }
+      });
+    }
+    if (backButton instanceof HTMLElement) {
+      backButton.addEventListener("click", () => {
+        setConfirmationStep("review");
+        if (nextButton instanceof HTMLElement) {
+          nextButton.focus();
+        }
+      });
     }
     cancelButtons.forEach((button) => {
       button.addEventListener("click", closeDialog);
@@ -295,6 +361,7 @@
           event.preventDefault();
           event.stopImmediatePropagation();
           pendingElement = element;
+          pendingRequiredText = requiredText;
           restoreFocusTo = element;
           messageTarget.textContent = message;
           if (titleTarget instanceof HTMLElement) {
@@ -319,7 +386,6 @@
             detailsTarget.hidden = detailsTarget.childElementCount === 0;
           }
           if (verification instanceof HTMLElement && confirmInput instanceof HTMLInputElement) {
-            verification.hidden = !requiredText;
             confirmInput.value = "";
             if (inputHelp instanceof HTMLElement) {
               const template = source?.getAttribute("data-confirm-input-help") || "Type {value} to confirm.";
@@ -343,11 +409,14 @@
             approveLabel.textContent = element.textContent?.trim() || defaultApproveLabel;
           }
           dialog.hidden = false;
+          setConfirmationStep("review");
           document.body?.classList.add("confirm-dialog-open");
           if (window.lucide) {
             window.lucide.createIcons();
           }
-          if (requiredText && confirmInput instanceof HTMLInputElement) {
+          if (dialog.dataset.confirmFlow === "wizard" && nextButton instanceof HTMLElement) {
+            nextButton.focus();
+          } else if (requiredText && confirmInput instanceof HTMLInputElement) {
             confirmInput.focus();
           } else if (cancelButtons[0] instanceof HTMLElement) {
             cancelButtons[0].focus();
@@ -966,6 +1035,7 @@
   function boot() {
     initIcons();
     initAutoSubmit();
+    initModeSwitchContext();
     initCopyButtons();
     initConfirmationPrompts();
     initIdentityDrawers();

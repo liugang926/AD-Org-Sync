@@ -1,5 +1,6 @@
 {% import "components/ui.html" as ui %}
-{% macro timeline(item, compact=True, full=False, workbench={}) %}
+{% import "components/mode.html" as mode_ui %}
+{% macro timeline(item, compact=True, full=False, workbench={}, presentation=none) %}
 <div class="timeline-list{% if compact %} timeline-list--compact{% endif %}" data-identity-timeline-list>
   <div class="timeline-item" data-identity-timeline-step>
     <span class="timeline-item__dot"></span>
@@ -25,12 +26,12 @@
   <div class="timeline-item {{ 'timeline-item--success' if item.planned_after_state.job_id and not item.planned_after_state.is_stale else 'timeline-item--warning' }}" data-identity-timeline-step>
     <span class="timeline-item__dot"></span>
     <span class="timeline-item__body"><strong>{{ t("Planned: Latest Dry Run") if full else t("Latest Dry Run") }}</strong><span>{{ t(item.planned_after_state.operation) if item.planned_after_state.operation else t("Not run") }}{% if item.planned_after_state.is_stale %} · {{ t("Stale evidence") }}{% endif %}</span></span>
-    <span class="timeline-item__meta cell-mono">{% if full and item.planned_after_state.job_id %}<a href="/execution-center/jobs/{{ item.planned_after_state.job_id }}">{{ item.planned_after_state.job_id }}</a>{% else %}{{ item.planned_after_state.job_id or "-" }}{% endif %}</span>
+    <span class="timeline-item__meta cell-mono">{% if item.planned_after_state.job_id and presentation %}{{ mode_ui.technical_identifier(presentation, item.planned_after_state.job_id, "/execution-center/jobs/" ~ item.planned_after_state.job_id, t("View Dry Run")) }}{% elif full and item.planned_after_state.job_id %}<a href="/execution-center/jobs/{{ item.planned_after_state.job_id }}">{{ item.planned_after_state.job_id }}</a>{% else %}{{ item.planned_after_state.job_id or "-" }}{% endif %}</span>
   </div>
   <div class="timeline-item {{ 'timeline-item--success' if item.applied_after_state.result == 'succeeded' else ('timeline-item--error' if item.applied_after_state.result == 'failed' else 'timeline-item--warning') }}" data-identity-timeline-step>
     <span class="timeline-item__dot"></span>
     <span class="timeline-item__body"><strong>{{ t("Applied: Latest Apply") if full else t("Latest Apply") }}</strong><span>{{ t(item.applied_after_state.result) }}</span></span>
-    <span class="timeline-item__meta">{% if full and item.applied_after_state.job_id %}<a class="cell-mono" href="/execution-center/jobs/{{ item.applied_after_state.job_id }}">{{ item.applied_after_state.job_id }}</a>{% else %}{{ ui.local_time(item.applied_after_state.applied_at) if item.applied_after_state.applied_at else "-" }}{% endif %}</span>
+    <span class="timeline-item__meta">{% if item.applied_after_state.job_id and presentation %}{{ mode_ui.technical_identifier(presentation, item.applied_after_state.job_id, "/execution-center/jobs/" ~ item.applied_after_state.job_id, t("View Apply"), "cell-mono") }}{% elif full and item.applied_after_state.job_id %}<a class="cell-mono" href="/execution-center/jobs/{{ item.applied_after_state.job_id }}">{{ item.applied_after_state.job_id }}</a>{% else %}{{ ui.local_time(item.applied_after_state.applied_at) if item.applied_after_state.applied_at else "-" }}{% endif %}</span>
   </div>
   {% set current_ad_state = workbench.ad_state if workbench and workbench.ad_state else item.before_state.ad_account_state %}
   <div class="timeline-item {{ 'timeline-item--success' if current_ad_state.status in ['exists', 'enabled'] else ('timeline-item--error' if current_ad_state.status == 'unavailable' else 'timeline-item--warning') }}" data-identity-timeline-step>
@@ -42,13 +43,13 @@
   <div class="timeline-item {{ 'timeline-item--error' if item.risks or item.evidence.conflict_records else 'timeline-item--success' }}" data-identity-timeline-step>
     <span class="timeline-item__dot"></span>
     <span class="timeline-item__body">
-      <strong>{{ t("Risks, conflicts, and audit records") }}</strong>
-      {% if item.risks %}<span>{{ item.risks|map("string")|join(", ") }}</span>{% else %}<span>{{ t("No current risk code") }}</span>{% endif %}
+      <strong>{{ t(presentation.choose("Risks and conflicts", "Risks, conflicts, and audit records") if presentation else "Risks, conflicts, and audit records") }}</strong>
+      {% if item.risks %}<span>{{ item.risks|map("string")|join(", ") }}</span>{% else %}<span>{{ t(presentation.choose("No current risk", "No current risk code") if presentation else "No current risk code") }}</span>{% endif %}
       {% for conflict in item.evidence.conflict_records or [] %}<small><a href="/identity-governance/conflicts?q={{ item.source_user_id|urlencode }}">{{ t(conflict.type) }}</a>: {{ conflict.message }}</small>{% endfor %}
-      {% for audit in item.evidence.audit_records or [] %}<small>{{ ui.local_time(audit.created_at) }} · {{ t(audit.action) }} · {{ t(audit.result) }} · {{ audit.message }}</small>{% endfor %}
-      {% if not item.evidence.conflict_records and not item.evidence.audit_records %}<small>{{ t("No related conflict or audit record was found in the recent evidence window.") }}</small>{% endif %}
+      {% if not presentation or presentation.show_audit_evidence %}{% for audit in item.evidence.audit_records or [] %}<small>{{ ui.local_time(audit.created_at) }} · {{ t(audit.action) }} · {{ t(audit.result) }} · {{ audit.message }}</small>{% endfor %}{% endif %}
+      {% if not item.evidence.conflict_records and (not item.evidence.audit_records or (presentation and not presentation.show_audit_evidence)) %}<small>{{ t("No related conflict requires action.") }}</small>{% endif %}
     </span>
-    <span class="timeline-item__meta">{{ (item.evidence.conflict_records or [])|length }} / {{ (item.evidence.audit_records or [])|length }}</span>
+    <span class="timeline-item__meta">{{ (item.evidence.conflict_records or [])|length }}{% if not presentation or presentation.show_audit_evidence %} / {{ (item.evidence.audit_records or [])|length }}{% endif %}</span>
   </div>
   {% endif %}
 </div>

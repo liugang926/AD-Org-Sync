@@ -133,6 +133,7 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
 
     def test_preflight_audit_is_included_in_unified_task_history(self) -> None:
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.audit_repo.add_log(
             org_id="default",
             actor_username="superadmin",

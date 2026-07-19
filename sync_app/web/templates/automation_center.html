@@ -89,7 +89,7 @@
         <div class="panel-note success">{{ t("No blocking reason is active right now.") }}</div>
         {% endif %}
         {% if scheduled_apply_guard.latest_successful_dry_run %}
-        <a href="/execution-center/jobs/{{ scheduled_apply_guard.latest_successful_dry_run.job_id }}">{{ t("Open latest successful Dry Run") }}: {{ scheduled_apply_guard.latest_successful_dry_run.job_id }}</a>
+        <a href="/execution-center/jobs/{{ scheduled_apply_guard.latest_successful_dry_run.job_id }}">{{ t("Open latest successful Dry Run") }}{% if ui_presentation.show_internal_identifiers %}: {{ scheduled_apply_guard.latest_successful_dry_run.job_id }}{% endif %}</a>
         {% else %}
         <a href="/jobs?context=automation#dry-run">{{ t("Next step: run a Dry Run") }}</a>
         {% endif %}

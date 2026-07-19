@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
+{% import "components/mode.html" as mode_ui %}
 
 {% block content %}
 <div class="page-stack">
@@ -83,14 +84,14 @@
             {{ t("Select") }}
           </label>
           <div class="queue-card__title">
-            <strong class="cell-mono">{{ row.record.source_user_id or "-" }}</strong>
+            <strong class="cell-mono">{{ ui_presentation.choose(row.record.ad_username or t("Scheduled account"), row.record.source_user_id or row.record.ad_username or "-") }}</strong>
             {{ ui.badge(t(row.state.label), row.state.level) }}
           </div>
           <div class="dense-meta">
             <div>{{ t("AD Username") }}: <strong class="cell-mono">{{ row.record.ad_username or "-" }}</strong></div>
             <div>{{ t("Effective At") }}: <strong>{{ ui.local_time(row.record.effective_at) }}</strong></div>
-            <div>{{ t("Sponsor") }}: <strong>{{ row.record.sponsor_userid or "-" }}</strong></div>
-            <div>{{ t("Managers") }}: <strong>{{ row.record.manager_userids|join(", ") if row.record.manager_userids else "-" }}</strong></div>
+            {% call mode_ui.advanced(ui_presentation) %}<div>{{ t("Sponsor") }}: <strong>{{ row.record.sponsor_userid or "-" }}</strong></div>{% endcall %}
+            <div>{{ t("Managers") }}: <strong>{{ ui_presentation.choose(t("{count} assigned", count=row.record.manager_userids|length), row.record.manager_userids|join(", ") if row.record.manager_userids else "-") }}</strong></div>
           </div>
           {% if row.manual_hold %}
           <div class="panel-note warning">
@@ -135,14 +136,14 @@
             {{ t("Select") }}
           </label>
           <div class="queue-card__title">
-            <strong class="cell-mono">{{ row.record.source_user_id or "-" }}</strong>
+            <strong class="cell-mono">{{ ui_presentation.choose(row.record.ad_username or t("Contractor account"), row.record.source_user_id or row.record.ad_username or "-") }}</strong>
             {{ ui.badge(t(row.state.label), row.state.level) }}
           </div>
           <div class="dense-meta">
             <div>{{ t("AD Username") }}: <strong class="cell-mono">{{ row.record.ad_username or "-" }}</strong></div>
             <div>{{ t("Effective At") }}: <strong>{{ ui.local_time(row.record.effective_at) }}</strong></div>
             <div>{{ t("Employment Type") }}: <strong>{{ row.record.employment_type or "-" }}</strong></div>
-            <div>{{ t("Sponsor") }}: <strong>{{ row.record.sponsor_userid or "-" }}</strong></div>
+            {% call mode_ui.advanced(ui_presentation) %}<div>{{ t("Sponsor") }}: <strong>{{ row.record.sponsor_userid or "-" }}</strong></div>{% endcall %}
           </div>
           {% if row.manual_hold %}
           <div class="panel-note warning">
@@ -186,13 +187,13 @@
             {{ t("Select") }}
           </label>
           <div class="queue-card__title">
-            <strong class="cell-mono">{{ row.record.source_user_id or row.record.ad_username or "-" }}</strong>
+            <strong class="cell-mono">{{ ui_presentation.choose(row.record.ad_username or t("Departing account"), row.record.source_user_id or row.record.ad_username or "-") }}</strong>
             {{ ui.badge(t(row.state.label), row.state.level) }}
           </div>
           <div class="dense-meta">
             <div>{{ t("AD Username") }}: <strong class="cell-mono">{{ row.record.ad_username or "-" }}</strong></div>
             <div>{{ t("Due At") }}: <strong>{{ ui.local_time(row.record.due_at) }}</strong></div>
-            <div>{{ t("Managers") }}: <strong>{{ row.record.manager_userids|join(", ") if row.record.manager_userids else "-" }}</strong></div>
+            <div>{{ t("Managers") }}: <strong>{{ ui_presentation.choose(t("{count} assigned", count=row.record.manager_userids|length), row.record.manager_userids|join(", ") if row.record.manager_userids else "-") }}</strong></div>
           </div>
           {% if row.manual_hold %}
           <div class="panel-note warning">
@@ -236,7 +237,7 @@
           <div class="dense-meta">
             <div>{{ t("Mode") }}: <strong>{{ row.record.execution_mode or "-" }}</strong></div>
             <div>{{ t("Scope") }}: <strong>{{ row.record.target_scope or "-" }}</strong></div>
-            <div>{{ t("Target") }}: <strong class="cell-mono">{{ row.record.target_id or "-" }}</strong></div>
+            {% call mode_ui.advanced(ui_presentation) %}<div>{{ t("Target") }}: <strong class="cell-mono">{{ row.record.target_id or "-" }}</strong></div>{% endcall %}
             <div>{{ t("Requested By") }}: <strong>{{ row.record.requested_by or "-" }}</strong></div>
             <div>{{ t("Created At") }}: <strong>{{ ui.local_time(row.record.created_at) }}</strong></div>
           </div>

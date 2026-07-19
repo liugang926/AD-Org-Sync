@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
+{% import "components/mode.html" as mode_ui %}
 
 {% block content %}
 {% set next_action_is_config = job_center_summary.next_action_url.startswith("/config") or job_center_summary.next_action_url.startswith("/sync-policies") or job_center_summary.next_action_url.startswith("/data-sources") %}
@@ -7,6 +8,7 @@
 {% set visible_next_action_label = job_center_summary.next_action_label_code if (not next_action_is_config or can("config.read")) else "Open Jobs Execution Center" %}
 <div class="page-stack">
   {{ ui.page_header(t("Control Tower"), t("Summary, blockers, and the single next action for the current organization. All execution happens in Jobs."), eyebrow=t("Overview")) }}
+  {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t(visible_next_action_label), t("Open next step"), visible_next_action_url) }}
 
   <section class="control-tower control-tower--{{ job_center_summary.overall_status }}">
     <div class="control-tower__layout">
@@ -41,7 +43,7 @@
         <span>{{ t("Latest Successful Dry Run") }}</span>
         <strong>
           {% if job_center_summary.latest_successful_dry_run %}
-          {{ ui.identifier(job_center_summary.latest_successful_dry_run.job_id, t("Copy Dry Run ID"), t("Dry Run ID copied"), "/execution-center/jobs/" ~ job_center_summary.latest_successful_dry_run.job_id) }}
+          {{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_successful_dry_run.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_successful_dry_run.job_id, t("View latest Dry Run")) }}
           {% else %}-{% endif %}
         </strong>
       </div>
@@ -49,7 +51,7 @@
         <span>{{ t("Latest Apply") }}</span>
         <strong>
           {% if job_center_summary.latest_apply %}
-          {{ ui.identifier(job_center_summary.latest_apply.job_id, t("Copy Job ID"), t("Job ID copied"), "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id) }}
+          {{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_apply.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id, t("View latest Apply")) }}
           {% else %}-{% endif %}
         </strong>
       </div>

@@ -1076,7 +1076,7 @@ def register_job_routes(
             request,
             "job_detail.html",
             page="execution-jobs",
-            title=translate_text(get_ui_language(request), "Job Detail {job_id}", job_id=job_id),
+            title=translate_text(get_ui_language(request), "Job Detail"),
             job=job,
             current_org=current_org,
             job_comparison_sections=services.jobs.build_job_comparison_sections(

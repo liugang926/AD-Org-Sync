@@ -276,8 +276,8 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertIn("No successful source directory snapshot is available yet", body)
         self.assertIn("Employee ID", body)
         self.assertIn("Open Connectors", body)
-        self.assertEqual(body.count("<th>"), 7)
-        self.assertIn("Platform User ID", body)
+        self.assertEqual(body.count("<th>"), 6)
+        self.assertNotIn("Platform User ID", body)
         self.assertIn("Identity Details", body)
         self.assertNotIn("verify_ad=true", body)
 
@@ -335,7 +335,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertEqual(blocked.headers["location"], "/dashboard")
         self.assertEqual(len(blocked_tasks.tasks), 0)
 
-    def test_overview_metrics_link_to_quality_filters_and_user_view_is_seven_columns(self):
+    def test_overview_metrics_link_to_quality_filters_and_user_view_is_basic_six_columns(self):
         self._login("superadmin")
         snapshot_id = self._seed_source_views()
 
@@ -364,7 +364,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
             quality="duplicate_employee_id",
         )
         duplicate_body = self._text(duplicate_users)
-        self.assertEqual(duplicate_body.count("<th>"), 7)
+        self.assertEqual(duplicate_body.count("<th>"), 6)
         self.assertIn("2 matching users", duplicate_body)
         self.assertIn("Alice", duplicate_body)
         self.assertIn("Bob", duplicate_body)
@@ -508,6 +508,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
 
     def test_account_source_options_show_dynamic_business_and_actual_field_names(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.session["ui_language"] = "zh-CN"
         snapshot_id = self.app.state.source_directory_repo.start_refresh(
             org_id="default", provider_id="wecom", created_by="superadmin"
@@ -566,6 +567,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
 
     def test_relationship_page_and_api_separate_candidate_from_actual_binding(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         snapshot_id = self.app.state.source_directory_repo.start_refresh(
             org_id="default", provider_id="wecom", created_by="superadmin"
         )
@@ -713,6 +715,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
 
     def test_live_verification_cleans_only_confirmed_missing_saved_binding(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self._seed_creation_candidates()
 
         page = self._route("/identity-governance/binding-reconciliation", "GET")(
@@ -926,6 +929,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
 
     def test_concurrent_binding_revision_is_visible_and_never_deleted(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self._seed_creation_candidates()
         with patch(
             "sync_app.web.app.build_target_provider",

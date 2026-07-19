@@ -88,6 +88,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_auditor_sees_readonly_mappings_and_cannot_run_jobs(self):
         self._login("auditor1")
+        self.session["ui_mode"] = "advanced"
 
         with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = []
@@ -107,6 +108,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_operator_can_view_exceptions_but_cannot_modify_them(self):
         self._login("operator1")
+        self.session["ui_mode"] = "advanced"
 
         with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = []
@@ -1532,6 +1534,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_job_detail_shows_failure_diagnostics_and_structured_log_payloads(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         job_id = "job-diagnostics-001"
         self.app.state.job_repo.create_job(
             job_id,
@@ -1621,6 +1624,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_page_uses_search_selectors_for_source_and_target_objects(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
 
         response = self._route("/mappings", "GET")(self._request("/mappings"))
         self.assertEqual(response.status_code, 200)
@@ -1848,6 +1852,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_and_advanced_sync_pages_use_generic_source_wording(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
 
         mappings_response = self._route("/mappings", "GET")(self._request("/mappings"))
         self.assertEqual(mappings_response.status_code, 200)
@@ -2031,6 +2036,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_super_admin_can_resolve_conflict_with_manual_binding(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.job_repo.create_job(
             "job-conflict-001",
             trigger_type="unit_test",
@@ -2570,6 +2576,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_conflicts_page_uses_database_pagination(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.job_repo.create_job(
             "job-conflict-paged",
             trigger_type="unit_test",
@@ -2598,6 +2605,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_conflicts_page_remembers_filters_for_current_session(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.job_repo.create_job(
             "job-conflict-remembered",
             trigger_type="unit_test",
@@ -2643,6 +2651,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_job_detail_supports_independent_pagination(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         job_id = "job-detail-paged"
         self.app.state.job_repo.create_job(
             job_id,
@@ -2833,6 +2842,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_audit_page_supports_search_and_pagination(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         for index in range(55):
             self.app.state.audit_repo.add_log(
                 actor_username="superadmin",
@@ -2870,6 +2880,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_audit_page_remembers_filters_for_current_session(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.audit_repo.add_log(
             actor_username="superadmin",
             action_type="job.run",
@@ -2898,6 +2909,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_audit_page_scopes_logs_to_selected_organization_with_global_entries(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
@@ -2954,6 +2966,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_page_supports_database_pagination(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         for index in range(25):
             userid = f"user-{index:02d}"
             self.app.state.user_binding_repo.upsert_binding(
@@ -2987,6 +3000,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_page_shows_rule_governance_summary(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         stale_iso = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat(
             timespec="seconds"
         )
@@ -3054,6 +3068,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_page_remembers_filters_for_current_session(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.user_binding_repo.upsert_binding(
             "alice",
             "alice.ad",
@@ -3087,6 +3102,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_exceptions_page_supports_database_pagination(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         for index in range(30):
             self.app.state.exception_rule_repo.upsert_rule(
                 rule_type="skip_user_disable",
@@ -3107,6 +3123,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_exceptions_page_shows_rule_governance_summary(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         stale_iso = (datetime.now(timezone.utc) - timedelta(days=140)).isoformat(
             timespec="seconds"
         )
@@ -3174,6 +3191,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_exceptions_page_remembers_filters_for_current_session(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.exception_rule_repo.upsert_rule(
             rule_type="skip_user_disable",
             match_value="alice",
@@ -4576,6 +4594,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_page_scopes_bindings_and_overrides_to_selected_organization(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
@@ -4629,6 +4648,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_exceptions_page_scopes_rules_to_selected_organization(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
@@ -4916,7 +4936,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             return_url="/advanced-sync",
         )
         self.assertEqual(back_to_basic.status_code, 303)
-        self.assertEqual(back_to_basic.headers["location"], "/config")
+        self.assertEqual(back_to_basic.headers["location"], "/advanced-sync")
         self.assertEqual(self.session.get("ui_mode"), "basic")
 
         basic_config = self._route("/config", "GET")(self._request("/config"))
