@@ -22,7 +22,13 @@ class GroupExclusionRuleRepository(BaseRepository):
             self.ensure_defaults_for_org(org_id)
 
     def ensure_defaults_for_org(self, org_id: Optional[str] = None) -> None:
-        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        normalized_org_id = (
+            self._resolve_org_id(
+                org_id,
+                default=self.default_org_id or "default",
+            )
+            or "default"
+        )
         now = utcnow_iso()
         with self.db.transaction() as conn:
             for group_name in DEFAULT_HARD_PROTECTED_GROUPS:

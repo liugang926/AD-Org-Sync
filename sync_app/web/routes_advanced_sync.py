@@ -222,6 +222,26 @@ def register_advanced_sync_routes(
     to_bool: Callable[[Optional[str], bool], bool],
     translate_text: Callable[..., str],
 ) -> None:
+    def current_policy_config_fingerprint(
+        request: Request,
+        current_org: Any,
+    ) -> str:
+        repositories = get_web_repositories(request)
+        try:
+            return resolve_runtime_config_fingerprint(
+                db_manager=repositories.db_manager,
+                org_id=current_org.org_id,
+                config_path=(
+                    str(getattr(current_org, "config_path", "") or "")
+                    or get_web_runtime_state(request).config_path
+                ),
+            )
+        except Exception:
+            # Keep policy and legacy jump pages available while connection
+            # configuration is incomplete. An empty fingerprint intentionally
+            # invalidates any historical Dry Run instead of treating it as safe.
+            return ""
+
     def policy_release_context(request: Request, current_org: Any) -> dict[str, Any]:
         release = get_web_services(request).config.build_release_center_context(
             current_org=current_org,
@@ -265,11 +285,9 @@ def register_advanced_sync_routes(
                 provider_id=config.source_provider,
                 snapshot=source_snapshot,
                 scope=source_scope,
-                current_config_fingerprint=resolve_runtime_config_fingerprint(
-                    db_manager=repositories.db_manager,
-                    org_id=current_org.org_id,
-                    config_path=current_org.config_path
-                    or runtime_state.config_path,
+                current_config_fingerprint=current_policy_config_fingerprint(
+                    request,
+                    current_org,
                 ),
                 release=release,
             )
