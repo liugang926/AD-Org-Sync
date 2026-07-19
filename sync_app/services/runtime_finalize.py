@@ -83,7 +83,7 @@ def _build_failure_guidance(
             "error_category_label": "Configuration",
             "diagnostic_summary": "The failure looks like a configuration or required-field problem.",
             "diagnostic_actions": [
-                "Review the organization config and advanced sync settings for missing or invalid values.",
+                "Review the connector configuration and Sync Policies for missing or invalid values.",
                 "Run preflight again after saving config changes to confirm the environment is ready.",
             ],
         }
@@ -93,8 +93,8 @@ def _build_failure_guidance(
             "error_category_label": "Routing / Naming",
             "diagnostic_summary": "The failure looks related to connector routing, naming policy, or identity conflict handling.",
             "diagnostic_actions": [
-                "Use the Advanced Sync username previewer and identity route explainer to verify connector scope and account naming.",
-                "Review the conflict queue and advanced routing rules before rerunning apply.",
+                "Use the Sync Policies naming preview and routing details to verify connector scope and account naming.",
+                "Review the conflict queue and synchronization routing rules before rerunning apply.",
             ],
         }
     return {

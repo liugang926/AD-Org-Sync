@@ -2877,6 +2877,37 @@ body.identity-drawer-open {
   overflow-wrap: anywhere;
 }
 
+.policy-department-tree {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.policy-department-tree__list {
+  display: grid;
+  gap: 4px;
+  max-height: 360px;
+  padding: var(--space-3);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.policy-department-tree__list .department-tree-node {
+  padding-block: 7px;
+  padding-inline-end: 8px;
+  border-radius: var(--radius-sm);
+}
+
+.policy-department-tree__list .department-tree-node:hover {
+  background: var(--surface-raised);
+}
+
+.policy-department-tree__list .department-tree-node[hidden] {
+  display: none;
+}
+
 @media (max-width: 900px) {
   .policy-status-grid {
     grid-template-columns: 1fr;

@@ -5,7 +5,9 @@
   const pageCheckbox = document.querySelector("[data-select-page-checkbox]");
   const modeInput = document.querySelector("[data-selection-mode]");
   const status = document.querySelector("[data-source-selection-status]");
-  const scopeSelect = document.querySelector('select[name="scope_type"]');
+  const scopeSelect = document.querySelector(
+    '#sync-scope-selection-form select[name="scope_type"]',
+  );
   const createCandidateButtons = Array.from(
     document.querySelectorAll("[data-select-create-candidate]"),
   );
@@ -110,5 +112,6 @@
     if (scopeSelect instanceof HTMLSelectElement) scopeSelect.value = "selected_users";
     updateStatus();
   }));
+
   updateStatus();
 })();

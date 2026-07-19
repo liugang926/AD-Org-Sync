@@ -93,6 +93,90 @@
     let pendingElement = null;
     let restoreFocusTo = null;
 
+    const policyFormDiff = (element) => {
+      const form = element.closest("form[data-policy-change-form]");
+      if (!(form instanceof HTMLFormElement)) {
+        return { oldValues: "", newValues: "" };
+      }
+      const ignoredNames = new Set([
+        "csrf_token",
+        "submission_kind",
+        "selection_mode",
+        "selection_search",
+        "selection_department_id",
+        "selection_status",
+        "selection_employee_id_state",
+      ]);
+      const currentByName = new Map();
+      const initialByName = new Map();
+      const choiceNames = new Set();
+      const addValue = (target, name, value) => {
+        const values = target.get(name) || [];
+        values.push(String(value || "").trim() || "—");
+        target.set(name, values);
+      };
+      Array.from(form.elements).forEach((control) => {
+        if (
+          !(
+            control instanceof HTMLInputElement
+            || control instanceof HTMLSelectElement
+            || control instanceof HTMLTextAreaElement
+          )
+          || !control.name
+          || control.disabled
+          || ignoredNames.has(control.name)
+          || (control instanceof HTMLInputElement && ["hidden", "submit", "button"].includes(control.type))
+        ) {
+          return;
+        }
+        if (control instanceof HTMLInputElement && ["checkbox", "radio"].includes(control.type)) {
+          choiceNames.add(control.name);
+          if (control.checked) addValue(currentByName, control.name, control.value || "On");
+          if (control.defaultChecked) addValue(initialByName, control.name, control.value || "On");
+          return;
+        }
+        if (control instanceof HTMLSelectElement) {
+          Array.from(control.options).forEach((option) => {
+            if (option.selected) addValue(currentByName, control.name, option.textContent || option.value);
+            if (option.defaultSelected) addValue(initialByName, control.name, option.textContent || option.value);
+          });
+          return;
+        }
+        addValue(currentByName, control.name, control.value);
+        addValue(initialByName, control.name, control.defaultValue);
+      });
+      choiceNames.forEach((name) => {
+        if (!currentByName.has(name)) currentByName.set(name, ["Off"]);
+        if (!initialByName.has(name)) initialByName.set(name, ["Off"]);
+      });
+      const label = (name) =>
+        name.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
+      const changedNames = Array.from(
+        new Set([...currentByName.keys(), ...initialByName.keys()]),
+      ).filter(
+        (name) =>
+          JSON.stringify(currentByName.get(name) || []) !==
+          JSON.stringify(initialByName.get(name) || []),
+      );
+      if (!changedNames.length) {
+        return {
+          oldValues: "No value changes detected",
+          newValues: "No value changes detected",
+        };
+      }
+      const summarize = (source) => {
+        const rows = changedNames.slice(0, 8).map(
+          (name) => `${label(name)}: ${(source.get(name) || ["—"]).join(", ")}`,
+        );
+        if (changedNames.length > 8) rows.push(`+${changedNames.length - 8} more`);
+        return rows.join(" · ");
+      };
+      return {
+        oldValues: summarize(initialByName),
+        newValues: summarize(currentByName),
+      };
+    };
+
     const resolveConfirmationValue = (template, element) => {
       const selectionScope = element.closest("[data-selection-scope]") || element.closest("form");
       const form = element.closest("form");
@@ -102,9 +186,20 @@
         actionSelect instanceof HTMLSelectElement
           ? actionSelect.selectedOptions[0]?.textContent?.trim() || actionSelect.value
           : "";
+      const policyDiff = policyFormDiff(element);
       return String(template)
         .replaceAll("{selected_count}", String(selectedCount))
-        .replaceAll("{selected_action}", selectedAction);
+        .replaceAll("{selected_action}", selectedAction)
+        .replaceAll("{policy_old_values}", policyDiff.oldValues)
+        .replaceAll("{policy_new_values}", policyDiff.newValues)
+        .replaceAll(
+          "{policy_impact}",
+          form?.dataset.policyImpact || element.dataset.policyImpact || "0",
+        )
+        .replaceAll(
+          "{policy_scope}",
+          form?.dataset.policyScope || element.dataset.policyScope || "",
+        );
     };
 
     const closeDialog = ({ restoreFocus = true } = {}) => {
@@ -839,6 +934,35 @@
     });
   }
 
+  function initDepartmentTrees() {
+    document.querySelectorAll("[data-department-tree]").forEach((tree) => {
+      const search = tree.querySelector("[data-department-tree-search]");
+      const nodes = Array.from(tree.querySelectorAll("[data-department-tree-node]"));
+      if (search instanceof HTMLInputElement) {
+        search.addEventListener("input", () => {
+          const query = search.value.trim().toLocaleLowerCase();
+          nodes.forEach((node) => {
+            const searchText = node.getAttribute("data-department-search-text") || "";
+            node.hidden = Boolean(query) && !searchText.includes(query);
+          });
+        });
+      }
+      nodes.forEach((node) => {
+        const selector = node.querySelector("[data-department-name]");
+        if (!(selector instanceof HTMLInputElement)) {
+          return;
+        }
+        selector.addEventListener("change", () => {
+          const form = selector.closest("form");
+          const target = form?.querySelector("[data-selected-department-name]");
+          if (selector.checked && target instanceof HTMLInputElement) {
+            target.value = selector.getAttribute("data-department-name") || "";
+          }
+        });
+      });
+    });
+  }
+
   function boot() {
     initIcons();
     initAutoSubmit();
@@ -855,6 +979,7 @@
     initLocalizedTimes();
     initMobileNav();
     initSharedTomSelectFields();
+    initDepartmentTrees();
     ADOrgSync.initAdvancedSyncPage?.();
     ADOrgSync.initConfigPage?.();
     ADOrgSync.initMappingsPage?.();

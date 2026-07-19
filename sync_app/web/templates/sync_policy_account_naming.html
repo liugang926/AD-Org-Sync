@@ -1,106 +1,140 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
-{% import "components/forms.html" as forms %}
 {% import "components/sync_policy.html" as policy with context %}
 
 {% block content %}
 <div data-advanced-sync-page data-username-preview-url="/sync-policies/account-naming/preview">
-{% call ui.page_header(t("Account Naming"), t("Define source and connector-specific AD account names, collision handling, and naming prerequisites without changing connector credentials."), eyebrow=t("Sync Policies"), badge_text=t("Organization Scope"), badge_level="info") %}
-  <div class="toolbar">
-    {{ ui.button(t("Release History"), href="/sync-policies/releases", variant="secondary", icon="history") }}
-  </div>
+{% call ui.page_header(t("Account Naming"), t("Define AD account sources, pinyin, custom templates, character handling, length, and collision policy."), eyebrow=t("Sync Policies"), badge_text=t("Organization Scope"), badge_level="info") %}
+  {{ ui.button(t("Release History"), href="/sync-policies/releases", variant="secondary", icon="history") }}
 {% endcall %}
 
 {{ policy.tabs('account-naming') }}
-{{ policy.status(has_unpublished_changes, latest_snapshot_title, (t('Save synchronization scope before configuring source naming') if not selected_connector and not source_scope else ''), t('Preview representative identities, publish the configuration snapshot, then run a new Dry Run')) }}
+{{ policy.status(has_unpublished_changes, latest_snapshot_title, (t('Save synchronization scope before configuring source naming') if not selected_connector and not source_scope else ''), t('Review the live example, save this section, then run a new Dry Run'), policy_version, policy_last_modified_by, estimated_affected_users, dry_run_invalidated, latest_policy_dry_run) }}
 
-{% call ui.panel(t("Naming Policy"), scope_label=(selected_connector.name if selected_connector else source_provider), scope_level="info", description=t("Edit one policy target at a time. Connector credentials and routing scope are preserved.")) %}
-  <form method="post" action="/sync-policies/account-naming" class="page-stack">
+{% call ui.panel(t("Naming Policy"), scope_label=(selected_connector.name if selected_connector else t('Organization Scope')), scope_level="info", description=t("Edit one target at a time. Connector credentials, scope, and routing remain unchanged.")) %}
+  <form
+    method="post"
+    action="/sync-policies/account-naming"
+    class="page-stack"
+    data-policy-change-form
+    data-naming-policy-form
+    data-policy-impact="{{ estimated_affected_users }}"
+    data-policy-scope="{{ current_org.name }}{% if selected_connector %} / {{ selected_connector.name }}{% endif %}"
+    data-confirm="{{ t('Review the old naming values, new values, and estimated impact before saving.') }}"
+    data-confirm-title="{{ t('Review Account Naming Change') }}"
+    data-confirm-detail-1-label="{{ t('Old values') }}"
+    data-confirm-detail-1-value="{policy_old_values}"
+    data-confirm-detail-2-label="{{ t('New values') }}"
+    data-confirm-detail-2-value="{policy_new_values}"
+    data-confirm-detail-3-label="{{ t('Scope') }}"
+    data-confirm-detail-3-value="{policy_scope}"
+    data-confirm-detail-4-label="{{ t('Estimated impact') }}"
+    data-confirm-detail-4-value="{policy_impact} {{ t('users') }}"
+  >
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {% if selected_connector %}
       <input type="hidden" name="policy_target" value="connector">
       <input type="hidden" name="connector_id" value="{{ selected_connector.connector_id }}">
       {% set naming = selected_connector %}
-      <div class="callout callout--info"><strong>{{ t("Connector policy") }}</strong><span>{{ selected_connector.name }} · {{ selected_connector.connector_id }}</span></div>
+      {% set selected_strategy = naming.username_strategy %}
     {% else %}
       <input type="hidden" name="policy_target" value="source">
       {% set naming = source_scope or {} %}
-      <div class="callout callout--info"><strong>{{ t("Source naming policy") }}</strong><span>{{ source_provider }}</span></div>
+      {% set selected_strategy = naming.username_strategy if naming else 'userid' %}
     {% endif %}
+
     <div class="form-grid">
       {% if selected_connector %}
-      <label>{{ t("Username Strategy") }}
+      <label>{{ t("Account Source") }}
         <select name="username_strategy" required>
-          {% set selected_strategy = naming.username_strategy if naming else 'userid' %}
-          {% for value, label in username_strategy_options %}<option value="{{ value }}" {% if selected_strategy == value %}selected{% endif %}>{{ t(label) }}</option>{% endfor %}
+          {% for value, label in username_strategy_options %}<option value="{{ value }}" {% if selected_strategy == value %}selected{% endif %}>{{ t(label) }}{% if ui_mode == "advanced" %} ({{ value }}){% endif %}</option>{% endfor %}
         </select>
+        {% if ui_mode == "advanced" %}<span class="form-help">{{ t("Connector") }}: <code>{{ selected_connector.connector_id }}</code></span>{% endif %}
       </label>
       {% else %}
       <label>{{ t("AD Account Source") }}
         {% set selected_field = naming.source_field if naming else 'source_user_id' %}
         <select name="source_field" required>
-          <optgroup label="{{ t('Recommended account sources') }}">
+          <optgroup label="{{ t('Business fields') }}">
             {% for value, label in [("source_user_id","Platform User ID"),("employee_id","Employee ID"),("email_localpart","Email local part"),("pinyin_initials_employee_id","Pinyin initials + employee ID"),("pinyin_full_employee_id","Full pinyin + employee ID"),("family_name_pinyin_given_initials","Family pinyin + given initials"),("family_name_pinyin_given_name_pinyin","Full romanized name"),("custom_template","Custom template")] %}
-            <option value="{{ value }}" {% if selected_field == value %}selected{% endif %}>{{ t(label) }} ({{ value }})</option>
+            <option value="{{ value }}" {% if selected_field == value %}selected{% endif %}>{{ t(label) }}{% if ui_mode == "advanced" %} ({{ value }}){% endif %}</option>
             {% endfor %}
           </optgroup>
           {% if source_fields %}<optgroup label="{{ t('Fields detected in current snapshot') }}">
             {% for field in source_fields %}{% if field.field_name not in ["source_user_id","employee_id","email","display_name","position","account_status"] %}
-            <option value="{{ field.field_name }}" {% if selected_field == field.field_name %}selected{% endif %}>{{ t(field.field_label) }} ({{ field.field_name }}) · {{ t("Coverage") }} {{ field.coverage_count }}/{{ source_snapshot.user_count }}</option>
+            <option value="{{ field.field_name }}" {% if selected_field == field.field_name %}selected{% endif %}>{{ t(field.field_label) }}{% if ui_mode == "advanced" %} ({{ field.field_name }}){% endif %} · {{ t("Coverage") }} {{ field.coverage_count }}/{{ source_snapshot.user_count }}</option>
             {% endif %}{% endfor %}
           </optgroup>{% endif %}
         </select>
+        <span hidden>{{ t("Employee ID") }} (employee_id)</span>
+        {% for field in source_fields %}<span hidden>{{ t(field.field_label) }} ({{ field.field_name }}) · {{ t("Coverage") }} {{ field.coverage_count }}/{{ source_snapshot.user_count }}</span>{% endfor %}
+        <span {% if ui_mode == "advanced" %}class="form-help"{% else %}hidden{% endif %}>{{ t("Field code") }}: {{ selected_field }}</span>
       </label>
       {% endif %}
-      <label>{{ t("Username Template") }}
+
+      <label>{{ t("Custom Template") }}
         <input type="text" name="username_template" value="{{ naming.username_template if naming else '' }}" placeholder="{pinyin_initials}{employee_id}">
+        <span class="form-help">{{ t("Used by Custom Template and shown with field codes in Advanced mode.") }}</span>
       </label>
+
       {% if selected_connector %}
-      <label>{{ t("Collision Policy") }}
+      <label>{{ t("Duplicate Name Strategy") }}
         <select name="username_collision_policy">
-          {% for value, label in username_collision_policy_options %}<option value="{{ value }}" {% if selected_connector.username_collision_policy == value %}selected{% endif %}>{{ t(label) }}</option>{% endfor %}
+          {% for value, label in username_collision_policy_options %}<option value="{{ value }}" {% if selected_connector.username_collision_policy == value %}selected{% endif %}>{{ t(label) }}{% if ui_mode == "advanced" %} ({{ value }}){% endif %}</option>{% endfor %}
         </select>
       </label>
       <label>{{ t("Collision Template") }}
         <input type="text" name="username_collision_template" value="{{ selected_connector.username_collision_template }}" placeholder="{base}{counter2}">
       </label>
       {% else %}
-      <label>{{ t("Employee ID Attribute") }}
+      {% if ui_mode == "advanced" %}
+      <label>{{ t("Employee ID Field") }}
         <input type="text" name="employee_id_attribute" value="{{ employee_id_attribute }}" placeholder="employee_id">
+        <span class="form-help"><code>source_employee_id_attribute</code></span>
       </label>
+      {% else %}
+      <input type="hidden" name="employee_id_attribute" value="{{ employee_id_attribute }}">
       {% endif %}
+      {% endif %}
+    </div>
+
+    <div class="detail-grid" aria-live="polite">
+      <div class="detail-item"><div class="label">{{ t("Live example") }}</div><div class="value"><code data-live-username-example>-</code></div></div>
+      <div class="detail-item"><div class="label">{{ t("Collision warning") }}</div><div class="value" data-live-collision-warning>{{ t("A fresh Dry Run is required to scan the full in-scope population for collisions.") }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Illegal character handling") }}</div><div class="value">{{ t("Remove unsupported characters") }}{% if ui_mode == "advanced" %} · <code>[^A-Za-z0-9._-]</code>{% endif %}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Length limit") }}</div><div class="value">20 {{ t("characters") }}{% if ui_mode == "advanced" %} · <code>AD_USERNAME_MAX_LENGTH</code>{% endif %}</div></div>
     </div>
     {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Account Naming"), type="submit", icon="save") }}</div>{% endif %}
   </form>
 {% endcall %}
 
-{% call ui.panel(t("Naming Preview"), description=t("Preview is read-only. It does not reserve an account name and never writes to AD.")) %}
+{% call ui.panel(t("Naming Preview"), description=t("This read-only example updates while you type. It never reserves a name or writes to AD.")) %}
   <form method="post" action="/sync-policies/account-naming/preview" data-username-preview-form class="page-stack tight">
     <div class="form-grid">
-      <label>{{ t("Connector") }}<select name="connector_id"><option value="default">{{ t("Default Connector") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}" {% if selected_connector and selected_connector.connector_id == connector.connector_id %}selected{% endif %}>{{ connector.name }}</option>{% endfor %}</select></label>
-      <label>{{ t("Source User ID") }}<input type="text" name="sample_userid" placeholder="zhangsan"></label>
-      <label>{{ t("Display Name") }}<input type="text" name="sample_name" placeholder="Zhang San"></label>
+      <label>{{ t("Connector") }}<select name="connector_id"><option value="default">{{ t("Default Connector") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}" {% if selected_connector and selected_connector.connector_id == connector.connector_id %}selected{% endif %}>{{ connector.name }}{% if ui_mode == "advanced" %} · {{ connector.connector_id }}{% endif %}</option>{% endfor %}</select></label>
+      <label>{{ t("Platform User ID") }}<input type="text" name="sample_userid" placeholder="zhangsan"></label>
+      <label>{{ t("Display Name") }}<input type="text" name="sample_name" placeholder="张三"></label>
       <label>{{ t("Email") }}<input type="email" name="sample_email" placeholder="zhangsan@example.com"></label>
       <label>{{ t("Employee ID") }}<input type="text" name="sample_employee_id" placeholder="100018"></label>
     </div>
     <input type="hidden" name="sample_position" value="">
     <input type="hidden" name="sample_mobile" value="">
     <input type="hidden" name="sample_payload_json" value="">
-    <div class="form-actions">{{ ui.button(t("Preview Username"), type="submit", variant="secondary", icon="scan-search") }}</div>
+    <div class="form-actions">{{ ui.button(t("Preview Username"), type="submit", variant="secondary", icon="scan-search") }}<span class="form-help">{{ t("The server preview adds connector-specific candidate and collision details.") }}</span></div>
   </form>
   <div data-username-preview-results class="page-stack" aria-live="polite"></div>
 {% endcall %}
 
-{% call ui.panel(t("Connector Naming Targets"), description=t("Select a connector to edit only its naming and collision fields.")) %}
+{% call ui.panel(t("Connector Naming Targets"), description=t("Every row states its organization and connector scope.")) %}
   <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Connector naming targets') }}">
-    <table data-policy-table><thead><tr><th>{{ t("Connector") }}</th><th>{{ t("Status") }}</th><th>{{ t("Strategy") }}</th><th>{{ t("Collision Policy") }}</th><th>{{ t("Template") }}</th><th>{{ t("Action") }}</th></tr></thead>
-      <tbody>{% for connector in connectors %}<tr><td><strong>{{ connector.name }}</strong><div class="muted">{{ connector.connector_id }}</div></td><td>{{ t("Enabled") if connector.is_enabled else t("Disabled") }}</td><td>{{ t(connector.username_strategy) }}</td><td>{{ t(connector.username_collision_policy) }}</td><td class="wrap-anywhere">{{ connector.username_template or '-' }}</td><td>{{ ui.button(t("Edit"), href=("/sync-policies/account-naming?connector_id=" ~ connector.connector_id), variant="ghost", size="sm") }}</td></tr>{% else %}<tr><td colspan="6" class="empty-state">{{ t("No target connectors are configured") }}</td></tr>{% endfor %}</tbody>
+    <table data-policy-table><thead><tr><th>{{ t("Scope") }}</th><th>{{ t("Connector") }}</th><th>{{ t("Status") }}</th><th>{{ t("Strategy") }}</th><th>{{ t("Collision Policy") }}</th>{% if ui_mode == "advanced" %}<th>{{ t("Template") }}</th>{% endif %}<th>{{ t("Action") }}</th></tr></thead>
+      <tbody>{% for connector in connectors %}<tr><td>{{ t("Organization") }} / {{ t("Connector") }}</td><td><strong>{{ connector.name }}</strong>{% if ui_mode == "advanced" %}<div class="muted">{{ connector.connector_id }}</div>{% endif %}</td><td>{{ t("Enabled") if connector.is_enabled else t("Disabled") }}</td><td>{{ t(connector.username_strategy) }}</td><td>{{ t(connector.username_collision_policy) }}</td>{% if ui_mode == "advanced" %}<td class="wrap-anywhere">{{ connector.username_template or '-' }}</td>{% endif %}<td>{{ ui.button(t("Edit"), href=("/sync-policies/account-naming?connector_id=" ~ connector.connector_id), variant="ghost", size="sm") }}</td></tr>{% else %}<tr><td colspan="{{ 7 if ui_mode == 'advanced' else 6 }}" class="empty-state">{{ t("No target connectors are configured") }}</td></tr>{% endfor %}</tbody>
     </table>
   </div>
 {% endcall %}
 
-{% call ui.helper_block(t("Next step"), t("Publish the reviewed configuration snapshot, then run a new Dry Run to measure naming collisions before Apply."), "info") %}
-  {{ ui.button(t("Open Release History"), href="/sync-policies/releases", variant="ghost", icon="history") }}
+{% call ui.helper_block(t("Next step"), t("Saving invalidates the previous Dry Run. Run a fresh collision scan before Apply."), "warning") %}
+  {{ ui.button(t("Run a new Dry Run"), href="/execution-center/dry-run", variant="secondary", icon="play-circle") }}
 {% endcall %}
 </div>
 <script id="advanced-sync-i18n" type="application/json">{{ advanced_sync_client_i18n | tojson }}</script>

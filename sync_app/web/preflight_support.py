@@ -152,7 +152,7 @@ class DashboardSupport:
                 "status": "success",
                 "detail": connector_detail,
                 "detail_params": {"count": connector_count} if connector_count else {},
-                "action_url": "/advanced-sync",
+                "action_url": "/sync-policies/department-ou-routing",
             }
         )
 
@@ -171,7 +171,7 @@ class DashboardSupport:
                     if breaker_enabled
                     else "Disable-user circuit breaker is still off. Enable it before unattended production runs."
                 ),
-                "action_url": "/advanced-sync",
+                "action_url": "/sync-policies/lifecycle#security",
             }
         )
 

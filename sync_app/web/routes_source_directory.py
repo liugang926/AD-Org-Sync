@@ -37,6 +37,7 @@ from sync_app.services.runtime_bootstrap import build_runtime_config_fingerprint
 from sync_app.services.source_directory import SourceDirectoryService
 from sync_app.services.sync_policy_center import (
     USERNAME_STRATEGY_BY_SOURCE_FIELD,
+    build_policy_governance_context,
     build_connector_policy_upsert,
 )
 from sync_app.web.app_state import (
@@ -1746,6 +1747,25 @@ def register_source_directory_routes(
         release = get_web_services(request).config.build_release_center_context(
             current_org=current_org,
         )
+        config = page_data["config"]
+        governance = build_policy_governance_context(
+            repositories=repositories,
+            current_org=current_org,
+            provider_id=page_data["provider_id"],
+            snapshot=page_data["snapshot"],
+            scope=page_data["scope"],
+            current_config_fingerprint=build_runtime_config_fingerprint(
+                config=config,
+                organization=current_org,
+                settings_repo=repositories.settings_repo,
+                exclusion_repo=repositories.exclusion_repo,
+                exception_rule_repo=repositories.exception_rule_repo,
+                mapping_rule_repo=repositories.attribute_mapping_repo,
+                department_ou_mapping_repo=repositories.department_ou_mapping_repo,
+                connector_repo=repositories.connector_repo,
+            ),
+            release=release,
+        )
         return render(
             request,
             "sync_scope.html",
@@ -1771,12 +1791,16 @@ def register_source_directory_routes(
             selected_connector=selected_connector,
             has_unpublished_changes=bool(release.get("has_unpublished_changes")),
             latest_snapshot_title=str(release.get("latest_snapshot_title") or ""),
+            latest_snapshot=release.get("latest_snapshot"),
             employee_id_attribute=repositories.settings_repo.get_value(
                 "source_employee_id_attribute",
                 "",
                 org_id=current_org.org_id,
             )
             or "",
+            excluded_departments=list(config.exclude_departments),
+            protected_accounts=list(config.exclude_accounts),
+            **governance,
         )
 
     @app.post("/identity-governance/binding-reconciliation/scan")
@@ -2193,6 +2217,7 @@ def register_source_directory_routes(
     def save_source_directory_scope(
         request: Request,
         csrf_token: str = Form(""),
+        submission_kind: str = Form("legacy"),
         scope_type: str = Form("full"),
         selected_department_ids: list[str] = Form(default=[]),
         selected_source_user_ids: list[str] = Form(default=[]),
@@ -2206,6 +2231,8 @@ def register_source_directory_routes(
         selection_department_id: str = Form(""),
         selection_status: str = Form(""),
         selection_employee_id_state: str = Form(""),
+        excluded_department_names: str | None = Form(None),
+        protected_account_names: str | None = Form(None),
     ):
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
@@ -2228,6 +2255,33 @@ def register_source_directory_routes(
             org_id=current_org.org_id,
             provider_id=config.source_provider,
         )
+        normalized_submission_kind = str(
+            submission_kind if isinstance(submission_kind, str) else "legacy"
+        ).strip().lower()
+        if normalized_submission_kind not in {"legacy", "boundary", "user_selection"}:
+            flash(request, "error", "Unsupported synchronization scope submission")
+            return RedirectResponse(
+                url=CANONICAL_ROUTE_PATHS["sync-scope"],
+                status_code=303,
+            )
+        if normalized_submission_kind == "user_selection":
+            if scope_type not in {"selected_users", "source_user"}:
+                flash(
+                    request,
+                    "error",
+                    "Identity selection may only save checked-user or single-user replay scope.",
+                )
+                return RedirectResponse(
+                    url=CANONICAL_ROUTE_PATHS["sync-scope"],
+                    status_code=303,
+                )
+            selected_department_ids = list(
+                (existing_scope or {}).get("selected_department_ids") or []
+            )
+        elif normalized_submission_kind == "boundary":
+            selected_source_user_ids = list(
+                (existing_scope or {}).get("selected_source_user_ids") or []
+            )
         submitted_source_field = source_field if isinstance(source_field, str) else ""
         normalized_source_field = str(submitted_source_field or "").strip() or str(
             (existing_scope or {}).get("source_field") or "source_user_id"
@@ -2282,7 +2336,11 @@ def register_source_directory_routes(
                     status_code=303,
                 )
         try:
-            if selection_mode == "all_filtered" and scope_type == "selected_users":
+            if (
+                normalized_submission_kind in {"legacy", "user_selection"}
+                and selection_mode == "all_filtered"
+                and scope_type == "selected_users"
+            ):
                 snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
                     org_id=current_org.org_id,
                     provider_id=config.source_provider,
@@ -2333,6 +2391,32 @@ def register_source_directory_routes(
                         {"root_department_ids": normalized_root_department_ids},
                     )
                 )
+            if normalized_submission_kind == "boundary":
+                current_org_values = repositories.org_config_repo.get_raw_config(
+                    current_org.org_id,
+                    config_path=current_org.config_path or runtime_state.config_path,
+                )
+                if isinstance(excluded_department_names, str):
+                    current_org_values["exclude_departments"] = [
+                        value.strip()
+                        for value in str(excluded_department_names or "")
+                        .replace(",", "\n")
+                        .splitlines()
+                        if value.strip()
+                    ]
+                if isinstance(protected_account_names, str):
+                    current_org_values["exclude_accounts"] = [
+                        value.strip()
+                        for value in str(protected_account_names or "")
+                        .replace(",", "\n")
+                        .splitlines()
+                        if value.strip()
+                    ]
+                repositories.org_config_repo.save_config(
+                    current_org.org_id,
+                    current_org_values,
+                    config_path=current_org.config_path or runtime_state.config_path,
+                )
         except ValueError as exc:
             flash(request, "error", str(exc))
             return RedirectResponse(
@@ -2342,7 +2426,11 @@ def register_source_directory_routes(
         repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
-            action_type="source_directory.scope.update",
+            action_type=(
+                "sync_policy.scope.identity_selection.update"
+                if normalized_submission_kind == "user_selection"
+                else "sync_policy.scope.update"
+            ),
             target_type="sync_scope",
             target_id=config.source_provider,
             result="success",
@@ -2354,9 +2442,14 @@ def register_source_directory_routes(
                 "connector_id": normalized_connector_id,
                 "connector_root_department_count": len(normalized_root_department_ids),
                 "selection_fingerprint": selection["selection_fingerprint"],
+                "submission_kind": normalized_submission_kind,
             },
         )
-        flash(request, "success", "Sync scope saved. Run a new Dry Run before Apply.")
+        flash(
+            request,
+            "success",
+            "Sync scope saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
         return RedirectResponse(
             url=CANONICAL_ROUTE_PATHS["sync-scope"],
             status_code=303,

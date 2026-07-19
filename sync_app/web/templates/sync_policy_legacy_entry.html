@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+{% import "components/sync_policy.html" as policy with context %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Advanced Sync"), t("This legacy entry now forwards policy work to the unified Sync Policies area."), eyebrow=t("Legacy Entry"), badge_text=t("Moved"), badge_level="warning") %}
+    {{ ui.button(t("Open Sync Policies"), href="/sync-policies", icon="waypoints") }}
+  {% endcall %}
+
+  {{ policy.status(has_unpublished_changes, latest_snapshot_title, '', t('Open the matching policy section, save the reviewed change, then run a new Dry Run'), policy_version, policy_last_modified_by, estimated_affected_users, dry_run_invalidated, latest_policy_dry_run) }}
+
+  <div class="callout callout--info" role="status">
+    <strong>{{ t("Persistent policy forms have moved.") }}</strong>
+    <span>{{ t("The old Advanced Sync forms were removed to prevent the same rule from being edited in two places.") }}</span>
+  </div>
+
+  <div class="grid cols-2">
+    {% for title, description, href in [
+      ("Sync Scope", "All active users, department subtrees, explicit users, single-user replay, and exclusions.", "/sync-policies/scope"),
+      ("Account Naming", "Source identity, pinyin, custom templates, character handling, length, and collision rules.", "/sync-policies/account-naming"),
+      ("Attribute Mappings", "Source fields, AD attributes, transformations, and empty-value behavior.", "/sync-policies/attribute-mappings"),
+      ("Department & OU Routing", "Default OU, department mappings, connector routing, and disabled-user OU.", "/sync-policies/department-ou-routing"),
+      ("Group Rules", "Managed groups, nested groups, cleanup, exclusions, and protected groups.", "/sync-policies/group-rules"),
+      ("Lifecycle & Security", "Joiners, contract expiry, offboarding, protected accounts, and maximum-change gates.", "/sync-policies/lifecycle")
+    ] %}
+      {% call ui.panel(t(title), description=t(description)) %}
+        {{ ui.button(t("Open"), href=href, variant="secondary", icon="arrow-right") }}
+      {% endcall %}
+    {% endfor %}
+  </div>
+
+  <div class="callout callout--warning">
+    <strong>{{ t("Pending Lifecycle Queue") }}</strong>
+    <span>{{ t("Operational lifecycle records remain in the Lifecycle Queue; policy definitions live here.") }}</span>
+    <a href="/operations-center/lifecycle-queue">{{ t("Open Lifecycle Queue") }}</a>
+  </div>
+</div>
+{% endblock %}
