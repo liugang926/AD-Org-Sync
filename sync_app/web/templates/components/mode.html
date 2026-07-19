@@ -1,3 +1,5 @@
+{% import "components/ui.html" as ui %}
+
 {% macro advanced(presentation, class_name='') -%}
 {% if presentation.is_advanced %}<div{% if class_name %} class="{{ class_name }}"{% endif %} data-mode-content="advanced">{{ caller() }}</div>{% endif %}
 {%- endmacro %}
@@ -10,16 +12,9 @@
 {% if presentation.is_advanced %}<span{% if class_name %} class="{{ class_name }}"{% endif %} data-mode-content="advanced">{{ caller() }}</span>{% endif %}
 {%- endmacro %}
 
-{% macro technical_identifier(presentation, value, href='', basic_label='View details', class_name='', copy_label='', copied_label='') -%}
-{% if presentation.show_internal_identifiers %}
-  {% if copy_label %}
-  <span class="identifier{% if class_name %} {{ class_name }}{% endif %}">
-    {% if href %}<a class="identifier__link" href="{{ href }}">{% endif %}<code class="identifier__value" title="{{ value }}">{{ value }}</code>{% if href %}</a>{% endif %}
-    <button class="button ghost sm identifier__copy" type="button" data-copy-value="{{ value }}" data-copied-label="{{ copied_label }}" aria-label="{{ copy_label }}">
-      <i data-lucide="copy" class="icon icon-xs" aria-hidden="true"></i>
-    </button>
-  </span>
-  {% elif href %}<a href="{{ href }}"{% if class_name %} class="{{ class_name }}"{% endif %}><code>{{ value }}</code></a>{% else %}<code{% if class_name %} class="{{ class_name }}"{% endif %}>{{ value }}</code>{% endif %}
+{% macro technical_identifier(presentation, value, href='', basic_label='View details', class_name='', copy_label='Copy identifier', copied_label='Identifier copied') -%}
+{% if presentation.show_internal_identifiers and value %}
+  {% if class_name %}<span class="{{ class_name }}">{% endif %}{{ ui.identifier(value, copy_label, copied_label, href) }}{% if class_name %}</span>{% endif %}
 {% elif href %}
   <a href="{{ href }}"{% if class_name %} class="{{ class_name }}"{% endif %}>{{ basic_label }}</a>
 {% else %}

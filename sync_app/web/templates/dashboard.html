@@ -51,7 +51,7 @@
         <span>{{ t("Latest Apply") }}</span>
         <strong>
           {% if job_center_summary.latest_apply %}
-          {{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_apply.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id, t("View latest Apply"), "", t("Copy Job ID"), t("Job ID copied")) }}
+          {{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_apply.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id, t("View latest Apply"), "", t("Copy Apply ID"), t("Apply ID copied")) }}
           {% else %}-{% endif %}
         </strong>
       </div>
@@ -89,7 +89,7 @@
           {{ t("Open Jobs to review the current execution evidence.") }}
           {% endif %}
         </p>
-        {{ ui.button(t(visible_next_action_label), href=visible_next_action_url) }}
+        {{ ui.button(t(visible_next_action_label), href=visible_next_action_url, variant="secondary") }}
       </div>
     {% endcall %}
   </div>

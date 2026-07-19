@@ -115,7 +115,7 @@
         <form method="post" action="/jobs/run">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="mode" value="dry_run">
-          {{ ui.button(t("Run New Dry Run"), type="submit", icon="play-circle", disabled=(dry_run_blocker_code != "")) }}
+          {{ ui.button(t("Run New Dry Run"), type="submit", variant="secondary", icon="play-circle", disabled=(dry_run_blocker_code != "")) }}
         </form>
         {% endif %}
       </div>
@@ -147,7 +147,7 @@
         <form method="post" action="/execution-center/plan-review/{{ selected_review.job_id }}/approve">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="review_notes" value="{{ t('Approved in Jobs Execution Center') }}">
-          {{ ui.button(t("Approve selected plan"), type="submit", icon="clipboard-check", confirm_text=t("Approve this exact Dry Run plan for the current organization, environment, snapshot, policy, and scope?"), confirm_title=t("Confirm plan approval")) }}
+          {{ ui.button(t("Approve selected plan"), type="submit", variant="secondary", icon="clipboard-check", confirm_text=t("Approve this exact Dry Run plan for the current organization, environment, snapshot, policy, and scope?"), confirm_title=t("Confirm plan approval")) }}
         </form>
         {% elif selected_review %}
         {{ ui.badge(t(selected_review.status|capitalize), "success" if selected_review.status == "approved" else "warning") }}
@@ -209,10 +209,10 @@
         <form method="post" action="/execution-center/apply/run">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           {{ high_risk.confirmation_fields(apply_context) }}
-          {{ ui.button(t("Apply {count} Changes", count=apply_context.impact_count), type="submit", icon="shield-check", confirm_text=t("You are about to apply the reviewed plan. Verify the impact before continuing."), confirm_title=t("Confirm Apply"), confirm_details=apply_confirm_details) }}
+          {{ ui.button(t("Apply {count} Changes", count=apply_context.impact_count), type="submit", variant="danger", icon="shield-check", confirm_text=t("You are about to apply the reviewed plan. Verify the impact before continuing."), confirm_title=t("Confirm Apply"), confirm_details=apply_confirm_details) }}
         </form>
         {% else %}
-        {{ ui.button(t("Apply Blocked"), type="button", disabled=True, icon="shield-alert") }}
+        {{ ui.button(t("Apply Blocked"), type="button", variant="danger", disabled=True, icon="shield-alert") }}
         {% endif %}
       </div>
 

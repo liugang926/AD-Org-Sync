@@ -337,7 +337,7 @@
         {{ ui.badge(t("Unsaved changes"), "warning") }}
       </div>
       <div class="actions flush-top">
-        {{ ui.button(t("Save Draft"), type="submit", icon="save") }}
+        {{ ui.button(t("Save Draft"), type="submit", variant=("secondary" if config_change_preview else "primary"), icon="save") }}
         {{ ui.button(t("Preview Changes"), type="submit", variant="secondary", icon="file-search", attrs='formaction="/config/preview"') }}
         {{ ui.button(t("Publish"), href="/config/releases", variant="secondary", icon="send") }}
       </div>

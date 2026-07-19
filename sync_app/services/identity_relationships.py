@@ -141,6 +141,90 @@ IDENTITY_WORKBENCH_QUEUES = (
     "all",
 )
 
+BUSINESS_IDENTITY_STATUSES = {
+    "pending": {
+        "label_code": "business_status.pending",
+        "level": "warning",
+    },
+    "bound": {
+        "label_code": "business_status.bound",
+        "level": "success",
+    },
+    "unbound": {
+        "label_code": "business_status.unbound",
+        "level": "info",
+    },
+    "creatable": {
+        "label_code": "business_status.creatable",
+        "level": "success",
+    },
+    "conflict": {
+        "label_code": "business_status.conflict",
+        "level": "danger",
+    },
+    "validation_unknown": {
+        "label_code": "business_status.validation_unknown",
+        "level": "unchecked",
+    },
+    "planned": {
+        "label_code": "business_status.planned",
+        "level": "planned",
+    },
+    "applied": {
+        "label_code": "business_status.applied",
+        "level": "success",
+    },
+    "apply_failed": {
+        "label_code": "business_status.apply_failed",
+        "level": "danger",
+    },
+}
+
+
+def resolve_identity_business_status(
+    item: IdentityRelationshipPreview,
+    *,
+    relationship_code: str,
+    ad_status: str,
+) -> dict[str, str]:
+    """Resolve the single shared business status shown across identity surfaces."""
+
+    applied_result = str(item.applied_after_state.get("result") or "").strip().lower()
+    has_current_plan = bool(item.planned_after_state.get("job_id")) and not bool(
+        item.planned_after_state.get("is_stale")
+    )
+    if applied_result == "failed":
+        status = "apply_failed"
+    elif applied_result == "succeeded":
+        status = "applied"
+    elif has_current_plan:
+        status = "planned"
+    elif relationship_code in {
+        "multiple_user_candidate_conflict",
+        "connector_unavailable",
+        "saved_binding_expired",
+    }:
+        status = (
+            "validation_unknown"
+            if relationship_code == "connector_unavailable"
+            else ("conflict" if relationship_code == "multiple_user_candidate_conflict" else "pending")
+        )
+    elif ad_status == "unknown":
+        status = "validation_unknown"
+    elif relationship_code == "bound_account_exists":
+        status = "bound"
+    elif relationship_code == "creatable":
+        status = "creatable"
+    elif relationship_code in {
+        "unbound_candidate_exists",
+        "unbound_candidate_missing",
+        "candidate_unavailable",
+    }:
+        status = "unbound"
+    else:
+        status = "pending"
+    return {"status": status, **BUSINESS_IDENTITY_STATUSES[status]}
+
 
 def classify_identity_relationship(
     item: IdentityRelationshipPreview,
@@ -284,10 +368,18 @@ def classify_identity_relationship(
     if code != "bound_account_exists" and not deferred:
         queues.add("pending")
 
+    business_status = resolve_identity_business_status(
+        item,
+        relationship_code=code,
+        ad_status=ad_status,
+    )
     return {
         "code": code,
         "conclusion": conclusion,
         "level": level,
+        "business_status": business_status["status"],
+        "business_status_label_code": business_status["label_code"],
+        "business_status_level": business_status["level"],
         "suggested_action": suggested_action,
         "action_code": action_code,
         "queues": sorted(queues),

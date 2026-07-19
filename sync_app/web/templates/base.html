@@ -19,7 +19,7 @@
   <link href="/static/vendor/tom-select.default.min.css?v={{ static_asset_version }}" rel="stylesheet">
   {% endif %}
 </head>
-<body class="{% if not current_user or is_lightweight_shell %}login-page{% endif %}" data-ui-mode="{{ ui_presentation.name if ui_presentation is defined else 'basic' }}" data-ui-density="{{ ui_presentation.density if ui_presentation is defined else 'business' }}" data-max-primary-columns="{{ ui_presentation.max_primary_columns if ui_presentation is defined else 8 }}" data-confirm-message="{{ t('Are you sure you want to perform this action?') }}" data-clear-all-label="{{ t('Clear all') }}" data-remove-item-label="{{ t('Remove item') }}" data-table-scroll-label="{{ t('Scrollable data table. Use arrow keys to review hidden columns.') }}">
+<body class="{% if not current_user or is_lightweight_shell %}login-page{% endif %}" data-ui-mode="{{ ui_presentation.name if ui_presentation is defined else 'basic' }}" data-ui-density="{{ ui_presentation.density if ui_presentation is defined else 'business' }}" data-max-primary-columns="{{ ui_presentation.max_primary_columns if ui_presentation is defined else 8 }}" data-confirm-message="{{ t('Are you sure you want to perform this action?') }}" data-clear-all-label="{{ t('Clear all') }}" data-remove-item-label="{{ t('Remove item') }}" data-table-scroll-label="{{ t('Scrollable data table. Use arrow keys to review hidden columns.') }}" data-table-keyboard-help="{{ t('Use Left and Right to scroll columns, Up and Down to move rows, and Enter to open the first row action.') }}" data-loading-label="{{ t('Loading...') }}">
   {% if current_user and not is_lightweight_shell %}
   <div class="mobile-nav-backdrop" data-mobile-nav-close></div>
   <aside id="app-sidebar" data-app-sidebar aria-label="{{ t('Primary navigation') }}">
@@ -107,7 +107,7 @@
           {% endif %}
         {% endcall %}
         {% endif %}
-        {% call ui.topbar_chip(t(environment_label), icon="server", class_name="topbar-environment-chip") %}{% endcall %}
+        <div class="topbar-environment-chip">{{ ui.environment_badge(t(environment_label), compact=True) }}</div>
       </div>
       
       <div class="header-trailing">
@@ -148,6 +148,7 @@
 
     <div class="{% if current_user and not is_lightweight_shell %}content-wrapper{% else %}login-shell{% endif %}">
       <div class="sr-only" role="status" aria-live="polite" aria-atomic="true" data-copy-status></div>
+      <div class="sr-only" role="status" aria-live="polite" aria-atomic="true" data-app-status></div>
       {% if flash %}
       <div class="flash {{ flash.level }}" id="global-flash" role="{% if flash.level == 'error' %}alert{% else %}status{% endif %}" aria-live="{% if flash.level == 'error' %}assertive{% else %}polite{% endif %}" aria-atomic="true">
         <div class="flash__icon-shell flash__icon-shell--{{ flash.level }}">
@@ -172,7 +173,7 @@
   </main>
 
   {% if current_user and not is_lightweight_shell %}
-  <div class="confirm-dialog" data-confirm-dialog data-confirm-flow="{{ ui_presentation.high_risk_interaction }}" data-confirm-step="review" hidden>
+  <div class="confirm-dialog" data-confirm-dialog data-component="confirmation-dialog" data-confirm-flow="{{ ui_presentation.high_risk_interaction }}" data-confirm-step="review" hidden>
     <div class="confirm-dialog__backdrop" data-confirm-cancel></div>
     <section class="confirm-dialog__panel" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message" tabindex="-1">
       <div class="confirm-dialog__icon">

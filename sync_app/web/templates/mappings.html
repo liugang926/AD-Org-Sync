@@ -167,7 +167,7 @@
           {{ forms.input("notes", t("Notes"), class_name="field-span-full", id="override_notes") }}
         </div>
         <div class="actions">
-          {{ ui.button(t("Save Override"), type="submit") }}
+          {{ ui.button(t("Save Override"), type="submit", variant="secondary") }}
         </div>
       </form>
     {% endcall %}
@@ -207,7 +207,7 @@
       <p class="section-subtitle">{{ t("Filters are remembered for this browser session.") }}</p>
       {% endif %}
       <div class="actions">
-        {{ ui.button(t("Search"), type="submit") }}
+        {{ ui.button(t("Search"), type="submit", variant="secondary") }}
         {{ ui.button(t("Reset"), href="/mappings?clear_filters=1", variant="secondary") }}
         {{ ui.button(t("Export CSV"), href="/mappings/export?q=" ~ (mapping_query or '') ~ "&status=" ~ (mapping_status or 'all'), variant="secondary") }}
         {% if can("config.read") %}

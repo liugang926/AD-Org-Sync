@@ -2727,6 +2727,137 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self._capture("phase7-oidc-callback-390.png")
         self.page.unroute("**/static/oidc-callback.js*")
 
+    def test_z_unified_admin_visual_matrix_uses_exact_target_viewports(self):
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        source_repo = SourceDirectoryRepository(manager)
+        snapshot_id = source_repo.start_refresh(
+            org_id="default",
+            provider_id="wecom",
+            created_by="visual-matrix",
+        )
+        source_repo.replace_snapshot(
+            snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "visual-dept",
+                    "name": "Visual QA",
+                    "parent_department_id": "0",
+                    "path_ids": ["visual-dept"],
+                    "path_names": ["Visual QA"],
+                }
+            ],
+            users=[
+                {
+                    "source_user_id": "visual-user-001",
+                    "display_name": "Visual Queue User",
+                    "employee_id": "VQA001",
+                    "department_ids": ["visual-dept"],
+                    "department_names": ["Visual QA"],
+                    "email": "visual.user@example.test",
+                    "is_active": True,
+                    "account_status": "active",
+                    "raw_payload": {
+                        "userid": "visual-user-001",
+                        "employee_id": "VQA001",
+                    },
+                    "search_text": "Visual Queue User VQA001",
+                }
+            ],
+            fields=[
+                {
+                    "name": "employee_id",
+                    "label": "Employee ID",
+                    "coverage": 1,
+                    "samples": ["VQA001"],
+                }
+            ],
+            fingerprint=f"visual-matrix-{snapshot_id}",
+        )
+        source_repo.save_scope_selection(
+            org_id="default",
+            provider_id="wecom",
+            scope_type="full",
+            username_strategy="employee_id",
+            source_field="employee_id",
+            snapshot_id=snapshot_id,
+            requested_by="visual-matrix",
+        )
+
+        self._login()
+        target_viewports = (
+            (1920, 1080),
+            (1440, 900),
+            (1280, 800),
+            (768, 900),
+            (390, 844),
+        )
+        for width, height in target_viewports:
+            with self.subTest(width=width, height=height):
+                self.page.set_viewport_size({"width": width, "height": height})
+                self.page.goto(
+                    f"{self.base_url}/identity-governance/identity-matching?lang=zh-CN",
+                    wait_until="networkidle",
+                )
+                self.assertTrue(
+                    self.page.locator("[data-component='page-header']").is_visible()
+                )
+                self.assertTrue(
+                    self.page.locator("[data-component='filter-bar']").is_visible()
+                )
+                self.assertTrue(
+                    self.page.locator("[data-component='work-queue-table']").is_visible()
+                )
+                self.assertEqual(
+                    self.page.locator(
+                        "main [data-action-priority='primary']"
+                    ).count(),
+                    1,
+                )
+                self.assertGreaterEqual(
+                    self.page.locator(
+                        "[data-business-status] .badge__icon"
+                    ).count(),
+                    1,
+                )
+                self.assertGreaterEqual(
+                    self.page.locator(
+                        "[data-business-status] .badge__label"
+                    ).count(),
+                    1,
+                )
+                self._assert_page_has_no_horizontal_overflow()
+
+                queue = self.page.locator("[data-table-region]").first
+                queue.focus()
+                self.page.keyboard.press("ArrowDown")
+                self.assertEqual(
+                    self.page.evaluate("document.activeElement?.tagName"),
+                    "TR",
+                )
+                self.page.keyboard.press("Enter")
+                self.assertIn(
+                    self.page.evaluate("document.activeElement?.tagName"),
+                    {"INPUT", "A", "BUTTON", "SUMMARY", "SELECT"},
+                )
+                self.page.evaluate(
+                    """() => {
+                        document.activeElement?.blur();
+                        document.querySelectorAll('[data-keyboard-row]').forEach(
+                            element => element.removeAttribute('data-keyboard-row')
+                        );
+                        window.scrollTo(0, 0);
+                    }"""
+                )
+
+                target = (
+                    ARTIFACT_DIR
+                    / f"visual-identity-workbench-{width}x{height}.png"
+                )
+                self.page.screenshot(path=str(target), full_page=False)
+                self.assertTrue(target.exists())
+                self.assertGreater(target.stat().st_size, 0)
+
     def test_mappings_page_uses_search_selectors_instead_of_manual_ids(self):
         self._login(ui_mode="advanced")
 

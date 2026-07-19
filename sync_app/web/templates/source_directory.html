@@ -3,7 +3,13 @@
 {% import "components/mode.html" as mode_ui %}
 {% block content %}
 <div class="page-stack source-directory-page">
-  {% call ui.page_header(t("Source Directory"), t("Browse source users, departments, and immutable refresh snapshots. Identity governance and synchronization policy are managed on their owning pages."), eyebrow=t("Data Sources"), badge_text=(t("Refreshing") if refresh_in_progress else (t("No snapshot") if not snapshot else (t("Historical") if viewing_historical_snapshot else (t("Stale") if snapshot_expired else t("Current"))))), badge_level=("warning" if refresh_in_progress or snapshot_expired or viewing_historical_snapshot or not snapshot else "success")) %}
+  {% call ui.page_header(t("Source Directory"), t("Browse source users, departments, and immutable refresh snapshots. Identity governance and synchronization policy are managed on their owning pages."), eyebrow=t("Data Sources")) %}
+    {{ ui.snapshot_status(
+      t("Refreshing") if refresh_in_progress else (t("No snapshot") if not snapshot else (t("Historical") if viewing_historical_snapshot else (t("Stale") if snapshot_expired else t("Current")))),
+      "warning" if refresh_in_progress or snapshot_expired or viewing_historical_snapshot or not snapshot else "success",
+      snapshot.id if snapshot else "",
+      snapshot.completed_at if snapshot else ""
+    ) }}
     {% call mode_ui.advanced_inline(ui_presentation) %}{{ ui.button(t("Open Sync Scope"), href="/sync-policies/scope", variant="secondary", icon="list-filter") }}{% endcall %}
     {% if can("config.write") %}
     <form method="post" action="/source-directory/refresh" class="inline">
@@ -23,28 +29,20 @@
   </nav>
 
   {% if latest_refresh and latest_refresh.status == "failed" %}
-  <div class="callout callout--danger" role="alert">
-    <strong>{{ t("The latest refresh failed.") }}</strong>
-    <span>{{ latest_refresh.error_summary or t("No failure reason was recorded.") }}</span>
+  {% call ui.error_state(t("The latest refresh failed."), latest_refresh.error_summary or t("No failure reason was recorded."), "source-refresh-banner") %}
     {% if snapshot %}
     <span>{{ t("The previous successful snapshot remains available.") }} {{ t("Snapshot") }} #{{ snapshot.id }} · {{ ui.local_time(snapshot.completed_at) }}</span>
     <span>{{ t("High-risk actions that require a newer snapshot remain blocked until refresh succeeds.") }}</span>
     {% endif %}
     <a href="/data-sources/source-directory?view=history&snapshot_id={{ latest_refresh.id }}">{{ t("View refresh task") }}</a>
-  </div>
+  {% endcall %}
   {% elif refresh_in_progress %}
-  <div
-    class="callout callout--info source-refresh-banner"
-    role="status"
-    aria-live="polite"
-    data-source-refresh-poll
-    data-status-url="/api/source-directory/status"
-    data-refreshing-text="{{ t('Directory refresh is in progress. The previous successful snapshot remains available.') }}"
-    data-long-running-text="{{ t('Directory refresh is taking longer than expected, but the previous snapshot remains available.') }}"
-    data-succeeded-text="{{ t('Directory refresh completed. Loading the new snapshot.') }}"
-    data-failed-text="{{ t('Directory refresh failed. Loading the failure details while keeping the previous snapshot.') }}"
-  >
-    <strong>{{ t("Directory refresh is in progress.") }}</strong>
+  {% call ui.loading_state(
+    t("Directory refresh is in progress."),
+    "",
+    "source-refresh-banner",
+    'data-source-refresh-poll data-status-url="/api/source-directory/status" data-refreshing-text="' ~ t("Directory refresh is in progress. The previous successful snapshot remains available.") ~ '" data-long-running-text="' ~ t("Directory refresh is taking longer than expected, but the previous snapshot remains available.") ~ '" data-succeeded-text="' ~ t("Directory refresh completed. Loading the new snapshot.") ~ '" data-failed-text="' ~ t("Directory refresh failed. Loading the failure details while keeping the previous snapshot.") ~ '"'
+  ) %}
     <span data-source-refresh-message>{{ t("Directory refresh is in progress. The previous successful snapshot remains available.") }}</span>
     {% if snapshot %}
     <span>{{ t("Currently browsing snapshot") }} #{{ snapshot.id }} · {{ ui.local_time(snapshot.completed_at) }}</span>
@@ -53,7 +51,7 @@
     {% endif %}
     <span>{{ t("High-risk actions that require the new snapshot remain blocked until refresh succeeds.") }}</span>
     <a href="/data-sources/source-directory?view=history&snapshot_id={{ latest_refresh.id }}">{{ t("View refresh task") }}</a>
-  </div>
+  {% endcall %}
   {% elif not snapshot %}
   <div class="callout callout--warning" role="status">
     <strong>{{ t("No successful source directory snapshot is available yet.") }}</strong>
@@ -143,7 +141,7 @@
 
   {% elif active_view == "users" %}
   {% call ui.panel(t("Users"), description=t("This read-only list is paged on the server and keeps mobile numbers masked inside source details.")) %}
-    <form method="get" action="/data-sources/source-directory" class="filter-bar">
+    {% call ui.filter_bar("/data-sources/source-directory", result_count=total_users, result_label=t("{count} matching users", count=total_users)) %}
       <input type="hidden" name="view" value="users">
       {% if viewing_historical_snapshot and snapshot %}<input type="hidden" name="snapshot_id" value="{{ snapshot.id }}">{% endif %}
       <label>{{ t("Search") }}<input type="search" name="search" value="{{ search }}" placeholder="{{ t(ui_presentation.choose('Name, employee ID, or email', 'Name, platform user ID, employee ID, email')) }}"></label>
@@ -170,9 +168,9 @@
         </select>
       </label>
       {{ ui.button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
-    </form>
+    {% endcall %}
 
-    <div class="table-scroll source-directory-business-table" tabindex="0" role="region" aria-label="{{ t('Source directory users') }}">
+    {% call ui.work_queue_table(t("Source directory users"), t("{count} matching users", count=total_users), "source-directory-business-table") %}
       <table>
         <thead>
           <tr>
@@ -211,7 +209,7 @@
           {% endfor %}
         </tbody>
       </table>
-    </div>
+    {% endcall %}
 
     <div class="pagination-bar">
       <span>{{ t("{count} matching users", count=total_users) }}</span>
@@ -226,7 +224,7 @@
 
   {% elif active_view == "departments" %}
   {% call ui.panel(t("Departments"), description=t("Browse the snapshot department tree, direct membership counts, parent departments, and the current read-only scope status.")) %}
-    <div class="table-scroll source-department-tree" tabindex="0" role="region" aria-label="{{ t('Source department tree') }}">
+    {% call ui.work_queue_table(t("Source department tree"), t("{count} results", count=department_rows|length), "source-department-tree") %}
       <table>
         <thead><tr><th>{{ t("Department Tree") }}</th><th>{{ t("Users") }}</th><th>{{ t("Parent Department") }}</th><th>{{ t("Sync Scope Status") }}</th></tr></thead>
         <tbody>
@@ -247,12 +245,12 @@
           {% endfor %}
         </tbody>
       </table>
-    </div>
+    {% endcall %}
   {% endcall %}
 
   {% elif active_view == "history" %}
   {% call ui.panel(t("Snapshot History"), description=t("Review immutable refresh attempts, source-data quality changes, duration, and redacted failure reasons.")) %}
-    <form method="get" action="/data-sources/source-directory" class="filter-bar source-history-filters">
+    {% call ui.filter_bar("/data-sources/source-directory", result_count=total_snapshots, result_label=t("{count} snapshots", count=total_snapshots), class_name="source-history-filters") %}
       <input type="hidden" name="view" value="history">
       <label>{{ t("Status") }}
         <select name="snapshot_status">
@@ -263,9 +261,9 @@
         </select>
       </label>
       {{ ui.button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
-    </form>
+    {% endcall %}
 
-    <div class="table-scroll source-snapshot-history" tabindex="0" role="region" aria-label="{{ t('Source snapshot history') }}">
+    {% call ui.work_queue_table(t("Source snapshot history"), t("{count} snapshots", count=total_snapshots), "source-snapshot-history") %}
       <table>
         <thead>
           <tr>
@@ -303,7 +301,7 @@
           {% endfor %}
         </tbody>
       </table>
-    </div>
+    {% endcall %}
 
     <div class="pagination-bar">
       <span>{{ t("{count} snapshots", count=total_snapshots) }}</span>

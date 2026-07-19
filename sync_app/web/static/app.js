@@ -14,13 +14,26 @@
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#39;"));
 
+  function announce(message) {
+    const status = document.querySelector("[data-app-status]");
+    if (!(status instanceof HTMLElement) || !message) {
+      return;
+    }
+    status.textContent = "";
+    window.requestAnimationFrame(() => {
+      status.textContent = String(message);
+    });
+  }
+
   function setLoading(button) {
     if (!(button instanceof HTMLElement) || button.classList.contains("btn-loading")) {
       return;
     }
     button.classList.add("btn-loading");
+    button.setAttribute("aria-busy", "true");
     const width = button.offsetWidth;
     button.style.width = `${width}px`;
+    announce(document.body?.dataset.loadingLabel || "Loading...");
   }
 
   function dismissFlash(element) {
@@ -438,7 +451,9 @@
   }
 
   function initIdentityDrawers() {
-    const drawers = Array.from(document.querySelectorAll("[data-identity-drawer]"));
+    const drawers = Array.from(
+      document.querySelectorAll("[data-detail-drawer], [data-identity-drawer]")
+    );
     if (!drawers.length) {
       return;
     }
@@ -463,7 +478,7 @@
         return;
       }
       activeDrawer.hidden = true;
-      document.body?.classList.remove("identity-drawer-open");
+      document.body?.classList.remove("identity-drawer-open", "detail-drawer-open");
       activeDrawer = null;
       if (restoreFocus && restoreFocusTo instanceof HTMLElement) {
         restoreFocusTo.focus();
@@ -483,11 +498,13 @@
       activeDrawer = drawer;
       restoreFocusTo = opener;
       drawer.hidden = false;
-      document.body?.classList.add("identity-drawer-open");
+      document.body?.classList.add("identity-drawer-open", "detail-drawer-open");
       const preferred = drawer.querySelector(
         ".identity-drawer__header [data-identity-drawer-close]"
       );
-      const panel = drawer.querySelector(".identity-drawer__panel");
+      const panel = drawer.querySelector(
+        ".detail-drawer__panel, .identity-drawer__panel"
+      );
       if (preferred instanceof HTMLElement) {
         preferred.focus();
       } else if (panel instanceof HTMLElement) {
@@ -516,7 +533,9 @@
         return;
       }
       const focusable = focusableElements(activeDrawer);
-      const panel = activeDrawer.querySelector(".identity-drawer__panel");
+      const panel = activeDrawer.querySelector(
+        ".detail-drawer__panel, .identity-drawer__panel"
+      );
       if (!focusable.length) {
         event.preventDefault();
         panel?.focus();
@@ -536,6 +555,7 @@
 
   function initSelectionSummaries() {
     document.querySelectorAll("[data-selection-scope]").forEach((scope) => {
+      let previousCheckedCount = null;
       const update = () => {
         const checkedCount = scope.querySelectorAll("input[type='checkbox']:checked").length;
         scope.querySelectorAll("[data-selection-count]").forEach((target) => {
@@ -550,6 +570,10 @@
             target.setAttribute("aria-disabled", String(checkedCount === 0));
           }
         });
+        if (previousCheckedCount !== null && previousCheckedCount !== checkedCount) {
+          announce(`${checkedCount} selected`);
+        }
+        previousCheckedCount = checkedCount;
       };
       scope.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
         checkbox.addEventListener("change", update);
@@ -794,21 +818,127 @@
   }
 
   function initTableScrollContainers() {
-    const containers = Array.from(document.querySelectorAll(".table-shell"));
+    const containers = Array.from(
+      new Set(
+        Array.from(
+          document.querySelectorAll(".table-shell, .table-scroll, [data-table-region]")
+        )
+      )
+    );
     if (!containers.length) {
       return;
     }
     const label =
       document.body?.dataset.tableScrollLabel ||
       "Scrollable data table. Use arrow keys to review hidden columns.";
+    const keyboardHelp =
+      document.body?.dataset.tableKeyboardHelp ||
+      "Use Left and Right to scroll columns, Up and Down to move rows, and Enter to open the first row action.";
     const update = () => {
       containers.forEach((container) => {
         const scrollable = container.scrollWidth > container.clientWidth + 1;
         container.dataset.scrollable = String(scrollable);
         container.setAttribute("role", "region");
-        container.setAttribute("aria-label", label);
+        if (!container.hasAttribute("aria-label")) {
+          container.setAttribute("aria-label", label);
+        }
+        if (!container.hasAttribute("tabindex")) {
+          container.setAttribute("tabindex", "0");
+        }
       });
     };
+    containers.forEach((container, containerIndex) => {
+      const helpId = `table-keyboard-help-${containerIndex + 1}`;
+      const help = document.createElement("span");
+      help.id = helpId;
+      help.className = "sr-only";
+      help.textContent = keyboardHelp;
+      container.prepend(help);
+      const describedBy = (container.getAttribute("aria-describedby") || "")
+        .split(/\s+/)
+        .filter(Boolean);
+      if (!describedBy.includes(helpId)) {
+        describedBy.push(helpId);
+        container.setAttribute("aria-describedby", describedBy.join(" "));
+      }
+
+      const rows = Array.from(container.querySelectorAll("tbody tr")).filter(
+        (row) => row.querySelector("td:not(.table-empty)")
+      );
+      rows.forEach((row) => row.setAttribute("tabindex", "-1"));
+      let activeRowIndex = -1;
+      const focusRow = (index) => {
+        if (!rows.length) {
+          return;
+        }
+        activeRowIndex = Math.max(0, Math.min(rows.length - 1, index));
+        rows.forEach((row, rowIndex) => {
+          if (rowIndex === activeRowIndex) {
+            row.setAttribute("data-keyboard-row", "true");
+          } else {
+            row.removeAttribute("data-keyboard-row");
+          }
+        });
+        rows[activeRowIndex].focus({ preventScroll: true });
+        rows[activeRowIndex].scrollIntoView({
+          block: "nearest",
+          inline: "nearest",
+        });
+      };
+
+      container.addEventListener("focusin", () => {
+        container.dataset.keyboardActive = "true";
+      });
+      container.addEventListener("focusout", (event) => {
+        if (!container.contains(event.relatedTarget)) {
+          delete container.dataset.keyboardActive;
+        }
+      });
+      container.addEventListener("keydown", (event) => {
+        const targetIsContainer = event.target === container;
+        const targetIsRow = event.target instanceof HTMLTableRowElement;
+        if (!targetIsContainer && !targetIsRow) {
+          if (event.key === "Escape") {
+            container.focus();
+          }
+          return;
+        }
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          event.preventDefault();
+          container.scrollBy({
+            left: event.key === "ArrowLeft" ? -120 : 120,
+            behavior: "smooth",
+          });
+          return;
+        }
+        if (event.key === "Home" || event.key === "End") {
+          event.preventDefault();
+          container.scrollTo({
+            left: event.key === "Home" ? 0 : container.scrollWidth,
+            behavior: "smooth",
+          });
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          const direction = event.key === "ArrowDown" ? 1 : -1;
+          const initialIndex = direction > 0 ? 0 : rows.length - 1;
+          focusRow(
+            activeRowIndex < 0 ? initialIndex : activeRowIndex + direction
+          );
+          return;
+        }
+        if (event.key === "Enter" && targetIsRow) {
+          const action = event.target.querySelector(
+            "a[href], button:not([disabled]), summary, input:not([disabled]), select:not([disabled])"
+          );
+          if (action instanceof HTMLElement) {
+            event.preventDefault();
+            action.focus();
+          }
+        }
+      });
+    });
     update();
     window.addEventListener("resize", update);
   }
@@ -841,11 +971,16 @@
       const [relativeUnit, divisor] =
         relativeUnits.find(([, seconds]) => Math.abs(deltaSeconds) >= seconds) || relativeUnits.at(-1);
       const relative = relativeFormatter.format(Math.round(deltaSeconds / divisor), relativeUnit);
-      const separator = String(locale).toLowerCase().startsWith("zh") ? "，" : ", ";
-      const display = `${formatted}${separator}${relative}`;
+      const display = `${formatted}${
+        String(locale).toLowerCase().startsWith("zh") ? " · " : ", "
+      }${relative}`;
       element.textContent = display;
       element.setAttribute("title", rawValue);
       element.setAttribute("aria-label", `${display}; ${rawValue}`);
+      const utcTarget = element.parentElement?.querySelector("[data-raw-utc]");
+      if (utcTarget instanceof HTMLElement) {
+        utcTarget.textContent = `UTC: ${parsed.toISOString()}`;
+      }
     });
   }
 
@@ -1057,6 +1192,7 @@
 
   ADOrgSync.escapeHtml = escapeHtml;
   ADOrgSync.setLoading = setLoading;
+  ADOrgSync.announce = announce;
   ADOrgSync.dismissFlash = dismissFlash;
   window.dismissFlash = dismissFlash;
 
