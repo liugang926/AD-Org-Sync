@@ -180,12 +180,18 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertGreater(target.stat().st_size, 0)
         return target
 
-    def _login(self) -> None:
+    def _login(self, *, ui_mode: str = "basic") -> None:
         self.page.goto(f"{self.base_url}/login", wait_until="networkidle")
         self.page.fill("#username", "admin")
         self.page.fill("#password", "simple888")
         self.page.click("button[type='submit']")
         self.page.wait_for_url(f"{self.base_url}/dashboard")
+        if ui_mode != "advanced":
+            return
+        with self.page.expect_navigation(wait_until="networkidle"):
+            self.page.locator(
+                ".mode-switcher button[name='ui_mode'][value='advanced']"
+            ).evaluate("button => button.click()")
 
     def _height(self, selector: str) -> float:
         return float(
@@ -761,7 +767,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             },
         )
 
-        self._login()
+        self._login(ui_mode="advanced")
         self.page.goto(f"{self.base_url}/source-directory", wait_until="networkidle")
         self.assertTrue(self.page.get_by_role("heading", name="Source Directory").is_visible())
         self.assertTrue(self.page.get_by_role("button", name="Refresh Directory").is_visible())
@@ -854,7 +860,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         opener = self.page.locator("[data-identity-drawer-open]").first
         opener.focus()
-        opener.click()
+        opener.evaluate("element => element.click()")
         drawer = self.page.locator("[data-identity-drawer]:visible")
         self.assertEqual(drawer.count(), 1)
         self.assertEqual(
@@ -1382,7 +1388,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 self.assertLessEqual(layout["scrollWidth"], layout["clientWidth"] + 1, layout)
 
     def test_sync_policy_pages_keep_one_primary_action_and_keyboard_flow(self):
-        self._login()
+        self._login(ui_mode="advanced")
         policy_pages = (
             ("/sync-policies/scope?lang=en", "Sync Scope"),
             ("/sync-policies/account-naming?lang=en", "Account Naming"),
@@ -1967,7 +1973,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertNotIn("Pending Lifecycle Queue", self.page.locator("main").inner_text())
 
     def test_config_source_picker_moves_to_searchable_sync_scope_tree(self):
-        self._login()
+        self._login(ui_mode="advanced")
         self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
         self.assertEqual(self.page.url, f"{self.base_url}/data-sources/connectors")
         self.assertEqual(
@@ -2053,7 +2059,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             },
         )
 
-        self._login()
+        self._login(ui_mode="advanced")
         self.page.goto(
             f"{self.base_url}/jobs/browser-job-detail-001", wait_until="networkidle"
         )
@@ -2080,7 +2086,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             viewport={"width": 390, "height": 900}, locale="en-US"
         )
         self.page = self.context.new_page()
-        self._login()
+        self._login(ui_mode="advanced")
         self.page.goto(f"{self.base_url}/system-management/organizations", wait_until="networkidle")
 
         delete_form = self.page.locator(
@@ -2154,7 +2160,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             },
         )
 
-        self._login()
+        self._login(ui_mode="advanced")
         self.page.goto(
             f"{self.base_url}/conflicts?job_id=browser-conflict-001",
             wait_until="networkidle",
@@ -2261,7 +2267,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 viewport={"width": 390, "height": 900}, locale="en-US"
             )
             self.page = self.context.new_page()
-            self._login()
+            self._login(ui_mode="advanced")
             self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
 
             apply_button = self.page.get_by_role(
@@ -2362,7 +2368,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             org_id="default",
         )
 
-        self._login()
+        self._login(ui_mode="advanced")
         self.page.goto(f"{self.base_url}/lifecycle", wait_until="networkidle")
         self.assertTrue(self.page.locator(".lifecycle-command-center").is_visible())
         self.assertEqual(self.page.locator(".lifecycle-lane").count(), 4)
@@ -2390,7 +2396,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             viewport={"width": 390, "height": 900}, locale="en-US"
         )
         self.page = self.context.new_page()
-        self._login()
+        self._login(ui_mode="advanced")
         self.page.goto(f"{self.base_url}/dashboard", wait_until="networkidle")
 
         identifier = self.page.locator(".control-tower .identifier").first
@@ -2411,7 +2417,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
 
     def test_z_responsive_evidence_covers_critical_operating_pages(self):
-        self._login()
+        self._login(ui_mode="advanced")
         viewports = (390, 768, 1024, 1366, 1440)
         pages = {
             "dashboard": ("/dashboard?lang=zh-CN", ".control-tower"),
@@ -2606,7 +2612,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertEqual(failed_requests, [])
 
     def test_z_phase3_operating_pages_render_shells(self):
-        self._login()
+        self._login(ui_mode="advanced")
 
         self.page.goto(
             f"{self.base_url}/data-sources/data-quality", wait_until="networkidle"
@@ -2637,7 +2643,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self._capture("integration-center-page.png")
 
     def test_z_phase7_operations_and_system_matrix(self):
-        self._login()
+        self._login(ui_mode="advanced")
         pages = {
             "lifecycle": ("/operations-center/lifecycle-queue?lang=zh-CN", ".lifecycle-command-center"),
             "automation": ("/operations-center/automation?lang=zh-CN", "form[action='/operations-center/automation/policy']"),
@@ -2722,7 +2728,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.page.unroute("**/static/oidc-callback.js*")
 
     def test_mappings_page_uses_search_selectors_instead_of_manual_ids(self):
-        self._login()
+        self._login(ui_mode="advanced")
 
         self.page.goto(f"{self.base_url}/mappings", wait_until="networkidle")
         self.assertTrue(
