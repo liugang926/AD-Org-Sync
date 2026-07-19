@@ -824,23 +824,17 @@ class WebBrowserRegressionTests(unittest.TestCase):
             f"{self.base_url}/identity-governance/binding-reconciliation?lang=en",
             wait_until="networkidle",
         )
-        relationship_table = self.page.locator(".identity-governance-table")
-        self.assertTrue(relationship_table.is_visible())
-        self.assertEqual(relationship_table.locator("thead th").count(), 8)
-        self.assertEqual(self.page.locator("[data-identity-timeline]").count(), 3)
-        self.assertEqual(self.page.locator("[data-identity-timeline-step]").count(), 15)
-        page_text = relationship_table.inner_text()
-        for expected in (
-            "Alice Zhang",
-            "TJ001",
-            "alice.manual",
-            "browser-identity-dry",
-            "browser-identity-apply",
-            "failed",
-            "carol.disabled",
-        ):
-            self.assertIn(expected.lower(), page_text.lower())
-        self._capture("identity-relationship-evidence-desktop-en.png")
+        self.assertTrue(
+            self.page.get_by_role(
+                "heading", name="Start a Binding Scan", exact=True
+            ).is_visible()
+        )
+        self.assertTrue(
+            self.page.get_by_role("button", name="Scan Bindings").is_visible()
+        )
+        self.assertIn("Scanning is read-only", self.page.locator("body").inner_text())
+        self.assertEqual(self.page.locator(".binding-reconciliation-table").count(), 0)
+        self._capture("binding-reconciliation-start-desktop-en.png")
 
         self.page.goto(
             f"{self.base_url}/identity-governance/identity-matching?lang=en",
@@ -1017,7 +1011,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             f"{self.base_url}/identity-governance/binding-reconciliation?lang=en",
             wait_until="networkidle",
         )
-        cleanup_button = self.page.get_by_role("button", name="Scan Binding Differences")
+        cleanup_button = self.page.get_by_role("button", name="Scan Bindings")
         self.assertTrue(cleanup_button.is_visible())
         with patch(
             "sync_app.web.app.build_target_provider",
@@ -1029,28 +1023,55 @@ class WebBrowserRegressionTests(unittest.TestCase):
             )
 
         self.assertTrue(
-            self.page.get_by_role("heading", name="Binding Cleanup Preview").is_visible()
+            self.page.get_by_role("heading", name="Scan Results").is_visible()
         )
         self.assertEqual(self.page.locator("[data-high-risk-step]").count(), 5)
+        self.assertEqual(
+            self.page.locator(
+                "[data-binding-reconciliation-categories] .compact-stat"
+            ).count(),
+            8,
+        )
         preview_text = self.page.locator("[data-high-risk-context]").inner_text().lower()
         self.assertIn("organization", preview_text)
         self.assertIn("environment", preview_text)
         self.assertIn("snapshot version", preview_text)
         self.assertIn("impact count", preview_text)
+        scan_context = self.page.locator(
+            "[data-binding-scan-context]"
+        ).inner_text().lower()
+        self.assertIn("scan time", scan_context)
+        self.assertIn("cleanable count", scan_context)
+        self.assertIn("skip count", scan_context)
+        relationship_table = self.page.locator(".binding-reconciliation-table")
+        self.assertTrue(relationship_table.is_visible())
+        self.assertEqual(relationship_table.locator("thead th").count(), 8)
         self.assertIn(
             "alice.manual",
-            self.page.locator("tbody tr").filter(has_text="browser-alice").inner_text(),
+            relationship_table.locator("tbody tr")
+            .filter(has_text="browser-alice")
+            .inner_text(),
         )
 
         self.page.get_by_role(
-            "button", name="Confirm and remove 2 binding(s)"
+            "button", name="Confirm Cleanup of 2 Binding(s)"
         ).click()
         cleanup_dialog = self.page.locator("[data-confirm-dialog]")
         self.assertTrue(cleanup_dialog.is_visible())
         self.assertIn(
-            "Live AD must again confirm each exact target account is missing",
+            "Every item must again return missing with exists=false",
             cleanup_dialog.inner_text(),
         )
+        for expected in (
+            "Current Organization",
+            "Current Environment",
+            "Snapshot Version",
+            "Scan Time",
+            "Cleanable Count",
+            "Skip Count",
+            "Exact Accounts To Delete",
+        ):
+            self.assertIn(expected, cleanup_dialog.inner_text())
         with patch(
             "sync_app.web.app.build_target_provider",
             return_value=_MissingAccountPreviewProvider(),
@@ -1060,14 +1081,25 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 "**/identity-governance/binding-reconciliation?**cleanup_preview=true"
             )
         self.assertIn(
-            "Removed 2 verified stale binding(s)",
+            "Binding cleanup completed: 2 removed",
             self.page.locator("body").inner_text(),
         )
-        cleaned_alice_row = self.page.locator("tbody tr").filter(has_text="browser-alice")
+        cleaned_alice_row = relationship_table.locator("tbody tr").filter(
+            has_text="browser-alice"
+        )
         current_binding_cell = cleaned_alice_row.locator("td").nth(2).inner_text()
-        self.assertNotIn("alice.manual", current_binding_cell)
+        self.assertIn("alice.manual", current_binding_cell)
+        self.assertIn("Now", current_binding_cell)
         self.assertIn("No binding", current_binding_cell)
-        self._capture("identity-relationship-stale-binding-cleanup-desktop-en.png")
+        self.assertTrue(
+            cleaned_alice_row.get_by_text("Can create", exact=True).is_visible()
+        )
+        self.assertTrue(
+            self.page.get_by_role(
+                "link", name="Go to Identity Matching Workbench"
+            ).first.is_visible()
+        )
+        self._capture("binding-reconciliation-cleanup-desktop-en.png")
 
         bindings.upsert_binding(
             "browser-alice",
@@ -1087,12 +1119,6 @@ class WebBrowserRegressionTests(unittest.TestCase):
             is_enabled=False,
         )
 
-        self.page.select_option('select[name="relationship_status"]', "manual")
-        self.page.get_by_role("button", name="Apply Filters").click()
-        self.page.wait_for_load_state("networkidle")
-        self.assertIn("1 matching users", self.page.locator(".pagination-bar").inner_text())
-        self.assertIn("Alice Zhang", relationship_table.inner_text())
-
         self.page.set_viewport_size({"width": 390, "height": 844})
         self.page.goto(
             f"{self.base_url}/identity-governance/binding-reconciliation?lang=zh-CN",
@@ -1101,7 +1127,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self._assert_page_has_no_horizontal_overflow()
         self.assertEqual(
             relationship_table.get_attribute("aria-label"),
-            "绑定对账身份证据",
+            "绑定对账明细",
         )
         self.assertTrue(self.page.get_by_role("heading", name="绑定对账").is_visible())
         self.assertEqual(relationship_table.locator("thead th").count(), 8)
@@ -2456,7 +2482,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             ),
             "binding-reconciliation": (
                 "/identity-governance/binding-reconciliation?lang=zh-CN",
-                ".identity-governance-table",
+                ".page-header",
             ),
             "identity-matching": (
                 "/identity-governance/identity-matching?lang=zh-CN",

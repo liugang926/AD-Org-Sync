@@ -51,7 +51,7 @@ as a five-step identity timeline for every user.
 | `/data-quality` | Serves the same Data Quality handler as `/data-sources/data-quality`. |
 | `/source-directory/test` | Legacy POST remains; the UI entry moves to Connectors and returns there. |
 | `/source-directory/refresh` | Legacy POST remains and returns to Source Directory. |
-| `/source-directory/reconcile-stale-bindings*` | Legacy POST remains; preview and completion return to Binding Reconciliation. |
+| `/source-directory/reconcile-stale-bindings*` | Compatibility aliases only; the UI uses the independent Binding Reconciliation scan and execute POST routes. |
 | `/source-directory/scope` | Legacy POST remains; completion returns to Sync Scope. |
 | `/source-directory/create-selection` | Legacy POST remains; failures return to Sync Scope and success proceeds to Dry Run review. |
 | `/advanced-sync/data-quality-snapshot` | Compatibility API remains, but the duplicate Advanced Sync UI entry is removed. |

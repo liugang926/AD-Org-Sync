@@ -122,6 +122,7 @@ class UserIdentityBindingRecord(MappingLikeModel):
     last_reviewed_at: str = ""
     hit_count: int = 0
     last_hit_at: str = ""
+    binding_revision: int = 1
     updated_at: str = ""
 
     @classmethod
@@ -151,6 +152,11 @@ class UserIdentityBindingRecord(MappingLikeModel):
             last_reviewed_at=str(row["last_reviewed_at"] or "") if "last_reviewed_at" in row.keys() else "",
             hit_count=int(row["hit_count"] or 0) if "hit_count" in row.keys() else 0,
             last_hit_at=str(row["last_hit_at"] or "") if "last_hit_at" in row.keys() else "",
+            binding_revision=(
+                int(row["binding_revision"] or 1)
+                if "binding_revision" in row.keys()
+                else 1
+            ),
             updated_at=str(row["updated_at"] or ""),
         )
 

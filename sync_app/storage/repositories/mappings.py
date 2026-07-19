@@ -504,6 +504,7 @@ class UserIdentityBindingRepository(BaseRepository):
                   source = excluded.source,
                   notes = excluded.notes,
                   is_enabled = excluded.is_enabled,
+                  binding_revision = user_identity_bindings.binding_revision + 1,
                   updated_at = excluded.updated_at
                 """,
                 (
@@ -585,6 +586,7 @@ class UserIdentityBindingRepository(BaseRepository):
             params.append(str(last_reviewed_at or "").strip())
         if not updates:
             return
+        updates.append("binding_revision = binding_revision + 1")
         updates.append("updated_at = ?")
         params.append(utcnow_iso())
         normalized_provider = str(source_provider or "").strip().lower()
@@ -689,6 +691,7 @@ class UserIdentityBindingRepository(BaseRepository):
             params.append(str(managed_username_base or "").strip())
         if not assignments:
             return
+        assignments.append("binding_revision = binding_revision + 1")
         assignments.append("updated_at = ?")
         params.append(utcnow_iso())
         normalized_provider = str(source_provider or "").strip().lower()
@@ -748,6 +751,7 @@ class UserIdentityBindingRepository(BaseRepository):
                     UPDATE user_identity_bindings
                     SET is_enabled = ?,
                         last_reviewed_at = ?,
+                        binding_revision = binding_revision + 1,
                         updated_at = ?
                     WHERE {" AND ".join(identity_clauses)}
                     """,
@@ -759,6 +763,7 @@ class UserIdentityBindingRepository(BaseRepository):
                     UPDATE user_identity_bindings
                     SET is_enabled = ?,
                         last_reviewed_at = ?,
+                        binding_revision = binding_revision + 1,
                         updated_at = ?
                     WHERE source_user_id = ?
                     """,
@@ -834,6 +839,7 @@ class UserIdentityBindingRepository(BaseRepository):
                       is_enabled = 1,
                       hit_count = COALESCE(user_identity_bindings.hit_count, 0) + 1,
                       last_hit_at = excluded.last_hit_at,
+                      binding_revision = user_identity_bindings.binding_revision + 1,
                       updated_at = excluded.updated_at
                     """,
                     (
@@ -861,6 +867,7 @@ class UserIdentityBindingRepository(BaseRepository):
         org_id: str,
         source_provider: str,
         connector_id: str,
+        binding_revision: int | None = None,
     ) -> bool:
         """Delete one exact binding only when its persisted target is unchanged.
 
@@ -875,6 +882,11 @@ class UserIdentityBindingRepository(BaseRepository):
         normalized_org_id = self._resolve_org_id(org_id) or "default"
         normalized_provider = str(source_provider or "").strip().lower()
         normalized_connector_id = str(connector_id or "").strip()
+        normalized_revision = (
+            max(int(binding_revision), 1)
+            if binding_revision is not None
+            else None
+        )
         if not all(
             (
                 normalized_source_user_id,
@@ -885,23 +897,30 @@ class UserIdentityBindingRepository(BaseRepository):
         ):
             return False
 
+        revision_clause = (
+            " AND binding_revision = ?" if normalized_revision is not None else ""
+        )
+        params: list[Any] = [
+            normalized_org_id,
+            normalized_provider,
+            normalized_connector_id,
+            normalized_source_user_id,
+            normalized_ad_username,
+        ]
+        if normalized_revision is not None:
+            params.append(normalized_revision)
         with self.db.transaction() as conn:
             cursor = conn.execute(
-                """
+                f"""
                 DELETE FROM user_identity_bindings
                 WHERE org_id = ?
                   AND source_provider = ?
                   AND connector_id = ?
                   AND source_user_id = ?
                   AND LOWER(ad_username) = LOWER(?)
+                  {revision_clause}
                 """,
-                (
-                    normalized_org_id,
-                    normalized_provider,
-                    normalized_connector_id,
-                    normalized_source_user_id,
-                    normalized_ad_username,
-                ),
+                tuple(params),
             )
         return cursor.rowcount == 1
 

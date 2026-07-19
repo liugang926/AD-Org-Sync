@@ -1546,4 +1546,12 @@ MIGRATIONS = [
         ON sspr_rate_limit_buckets (updated_at, locked_until);
         """,
     ),
+    (
+        33,
+        "add optimistic concurrency revisions to identity bindings",
+        """
+        ALTER TABLE user_identity_bindings
+        ADD COLUMN binding_revision INTEGER NOT NULL DEFAULT 1;
+        """,
+    ),
 ]
