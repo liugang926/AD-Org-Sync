@@ -5,7 +5,10 @@
 {% block content %}
 <div data-advanced-sync-page data-username-preview-url="/sync-policies/account-naming/preview">
 {% call ui.page_header(t("Account Naming"), t("Define AD account sources, pinyin, custom templates, character handling, length, and collision policy."), eyebrow=t("Sync Policies"), badge_text=t("Organization Scope"), badge_level="info") %}
-  {{ ui.button(t("Release History"), href="/sync-policies/releases", variant="secondary", icon="history") }}
+  <div class="toolbar">
+    {{ ui.button(t("Examples & Preview"), variant="secondary", icon="circle-help", attrs="data-identity-drawer-open=account-naming-help") }}
+    {{ ui.button(t("Release History"), href="/sync-policies/releases", variant="ghost", icon="history") }}
+  </div>
 {% endcall %}
 
 {{ policy.tabs('account-naming') }}
@@ -98,31 +101,49 @@
       {% endif %}
     </div>
 
-    <div class="detail-grid" aria-live="polite">
-      <div class="detail-item"><div class="label">{{ t("Live example") }}</div><div class="value"><code data-live-username-example>-</code></div></div>
-      <div class="detail-item"><div class="label">{{ t("Collision warning") }}</div><div class="value" data-live-collision-warning>{{ t("A fresh Dry Run is required to scan the full in-scope population for collisions.") }}</div></div>
-      <div class="detail-item"><div class="label">{{ t("Illegal character handling") }}</div><div class="value">{{ t("Remove unsupported characters") }}{% if ui_mode == "advanced" %} · <code>[^A-Za-z0-9._-]</code>{% endif %}</div></div>
-      <div class="detail-item"><div class="label">{{ t("Length limit") }}</div><div class="value">20 {{ t("characters") }}{% if ui_mode == "advanced" %} · <code>AD_USERNAME_MAX_LENGTH</code>{% endif %}</div></div>
-    </div>
     {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Account Naming"), type="submit", icon="save") }}</div>{% endif %}
   </form>
 {% endcall %}
 
-{% call ui.panel(t("Naming Preview"), description=t("This read-only example updates while you type. It never reserves a name or writes to AD.")) %}
-  <form method="post" action="/sync-policies/account-naming/preview" data-username-preview-form class="page-stack tight">
+{% set creation_policy = selected_connector if selected_connector else base_account_policy %}
+{% set creation_scope = selected_connector.name if selected_connector else t("Organization Scope") %}
+{% set default_password_is_configured = (selected_connector.default_password if selected_connector else base_account_policy.default_password_configured) %}
+{% call ui.panel(t("Account Creation Policy"), scope_label=creation_scope, scope_level="warning", description=t("This is the authoritative editor for the existing bootstrap-password, first-login reset, and password-complexity fields. Connection credentials remain in Connectors.")) %}
+  <form method="post" action="/sync-policies/account-naming/account-creation" class="page-stack"
+    data-policy-change-form
+    data-policy-impact="{{ estimated_affected_users }}"
+    data-policy-scope="{{ current_org.name }}{% if selected_connector %} / {{ selected_connector.name }}{% endif %}"
+    data-confirm="{{ t('Review the account creation policy and estimated impact before saving.') }}"
+    data-confirm-title="{{ t('Review Account Creation Policy') }}"
+    data-confirm-detail-1-label="{{ t('Old values') }}"
+    data-confirm-detail-1-value="{policy_old_values}"
+    data-confirm-detail-2-label="{{ t('New values') }}"
+    data-confirm-detail-2-value="{policy_new_values}"
+    data-confirm-detail-3-label="{{ t('Scope') }}"
+    data-confirm-detail-3-value="{policy_scope}"
+    data-confirm-detail-4-label="{{ t('Estimated impact') }}"
+    data-confirm-detail-4-value="{policy_impact} {{ t('users') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if selected_connector %}<input type="hidden" name="connector_id" value="{{ selected_connector.connector_id }}">{% endif %}
     <div class="form-grid">
-      <label>{{ t("Connector") }}<select name="connector_id"><option value="default">{{ t("Default Connector") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}" {% if selected_connector and selected_connector.connector_id == connector.connector_id %}selected{% endif %}>{{ connector.name }}{% if ui_mode == "advanced" %} · {{ connector.connector_id }}{% endif %}</option>{% endfor %}</select></label>
-      <label>{{ t("Platform User ID") }}<input type="text" name="sample_userid" placeholder="zhangsan"></label>
-      <label>{{ t("Display Name") }}<input type="text" name="sample_name" placeholder="张三"></label>
-      <label>{{ t("Email") }}<input type="email" name="sample_email" placeholder="zhangsan@example.com"></label>
-      <label>{{ t("Employee ID") }}<input type="text" name="sample_employee_id" placeholder="100018"></label>
+      <label>{{ t("Default Password") }}
+        <input type="password" name="default_password" placeholder="{{ '********' if default_password_is_configured else t('Enter default password') }}" autocomplete="new-password">
+        {% if default_password_is_configured %}<span class="form-help">{{ t("Leave blank to keep current") }}</span>{% endif %}
+      </label>
+      <label>{{ t("Force Password Change") }}
+        <select name="force_change_password">
+          <option value="true" {% if creation_policy.force_change_password %}selected{% endif %}>{{ t("Enabled") }}</option>
+          <option value="false" {% if not creation_policy.force_change_password %}selected{% endif %}>{{ t("Disabled") }}</option>
+        </select>
+      </label>
+      <label>{{ t("Password Complexity") }}
+        <select name="password_complexity">
+          {% for value in ["strong", "medium", "basic"] %}<option value="{{ value }}" {% if creation_policy.password_complexity == value %}selected{% endif %}>{{ t(value|title) }}</option>{% endfor %}
+        </select>
+      </label>
     </div>
-    <input type="hidden" name="sample_position" value="">
-    <input type="hidden" name="sample_mobile" value="">
-    <input type="hidden" name="sample_payload_json" value="">
-    <div class="form-actions">{{ ui.button(t("Preview Username"), type="submit", variant="secondary", icon="scan-search") }}<span class="form-help">{{ t("The server preview adds connector-specific candidate and collision details.") }}</span></div>
+    {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Account Creation Policy"), type="submit", variant="secondary", icon="key-round") }}</div>{% endif %}
   </form>
-  <div data-username-preview-results class="page-stack" aria-live="polite"></div>
 {% endcall %}
 
 {% call ui.panel(t("Connector Naming Targets"), description=t("Every row states its organization and connector scope.")) %}
@@ -136,6 +157,45 @@
 {% call ui.helper_block(t("Next step"), t("Saving invalidates the previous Dry Run. Run a fresh collision scan before Apply."), "warning") %}
   {{ ui.button(t("Run a new Dry Run"), href="/jobs?context=account-naming#dry-run", variant="secondary", icon="play-circle") }}
 {% endcall %}
+
+<div class="identity-drawer" id="account-naming-help" data-identity-drawer hidden>
+  {{ ui.button("", variant="secondary", class_name="identity-drawer__backdrop", attrs='data-identity-drawer-close aria-label="' ~ t("Close examples and preview") ~ '"') }}
+  <section class="identity-drawer__panel" role="dialog" aria-modal="true" aria-labelledby="account-naming-help-title" tabindex="-1">
+    <header class="identity-drawer__header">
+      <div>
+        <h2 id="account-naming-help-title">{{ t("Account Naming Examples & Preview") }}</h2>
+        <p>{{ t("Examples are reference-only. They never reserve a name, change policy, or write to AD.") }}</p>
+      </div>
+      {{ ui.button("", icon="x", variant="ghost", class_name="topbar-icon-button", attrs='data-identity-drawer-close aria-label="' ~ t("Close examples and preview") ~ '"') }}
+    </header>
+    <div class="identity-drawer__body">
+      <div class="detail-grid" aria-live="polite">
+        <div class="detail-item"><div class="label">{{ t("Live example") }}</div><div class="value"><code data-live-username-example>-</code></div></div>
+        <div class="detail-item"><div class="label">{{ t("Collision warning") }}</div><div class="value" data-live-collision-warning>{{ t("A fresh Dry Run is required to scan the full in-scope population for collisions.") }}</div></div>
+        <div class="detail-item"><div class="label">{{ t("Illegal character handling") }}</div><div class="value">{{ t("Remove unsupported characters") }}{% if ui_mode == "advanced" %} · <code>[^A-Za-z0-9._-]</code>{% endif %}</div></div>
+        <div class="detail-item"><div class="label">{{ t("Length limit") }}</div><div class="value">20 {{ t("characters") }}{% if ui_mode == "advanced" %} · <code>AD_USERNAME_MAX_LENGTH</code>{% endif %}</div></div>
+      </div>
+      <form method="post" action="/sync-policies/account-naming/preview" data-username-preview-form class="page-stack tight">
+        <div class="form-grid">
+          <label>{{ t("Connector") }}<select name="connector_id"><option value="default">{{ t("Default Connector") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}" {% if selected_connector and selected_connector.connector_id == connector.connector_id %}selected{% endif %}>{{ connector.name }}{% if ui_mode == "advanced" %} · {{ connector.connector_id }}{% endif %}</option>{% endfor %}</select></label>
+          <label>{{ t("Platform User ID") }}<input type="text" name="sample_userid" placeholder="zhangsan"></label>
+          <label>{{ t("Display Name") }}<input type="text" name="sample_name" placeholder="张三"></label>
+          <label>{{ t("Email") }}<input type="email" name="sample_email" placeholder="zhangsan@example.com"></label>
+          <label>{{ t("Employee ID") }}<input type="text" name="sample_employee_id" placeholder="100018"></label>
+        </div>
+        <input type="hidden" name="sample_position" value="">
+        <input type="hidden" name="sample_mobile" value="">
+        <input type="hidden" name="sample_payload_json" value="">
+        <div class="form-actions">{{ ui.button(t("Preview Username"), type="submit", variant="secondary", icon="scan-search") }}<span class="form-help">{{ t("The server preview adds connector-specific candidate and collision details.") }}</span></div>
+      </form>
+      <div data-username-preview-results class="page-stack" aria-live="polite"></div>
+    </div>
+    <footer class="identity-drawer__footer">
+      <span>{{ t("Use a fresh Dry Run to validate collisions across the full synchronization scope.") }}</span>
+      {{ ui.button(t("Close"), variant="ghost", attrs="data-identity-drawer-close") }}
+    </footer>
+  </section>
+</div>
 </div>
 <script id="advanced-sync-i18n" type="application/json">{{ advanced_sync_client_i18n | tojson }}</script>
 {% endblock %}

@@ -66,6 +66,13 @@ CONNECTOR_POLICY_SECTION_FIELDS: dict[str, frozenset[str]] = {
             "username_template",
         }
     ),
+    "account_creation": frozenset(
+        {
+            "default_password",
+            "force_change_password",
+            "password_complexity",
+        }
+    ),
     "group_rules": frozenset(
         {
             "group_type",

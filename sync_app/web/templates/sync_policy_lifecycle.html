@@ -60,15 +60,20 @@
       <label class="check-card"><input type="checkbox" name="disable_circuit_breaker_requires_approval" value="1" {% if policy_settings.disable_circuit_breaker_requires_approval %}checked{% endif %}><span><strong>{{ t("Require Approval") }}</strong><small>{{ t("High-volume disable work requires an explicitly reviewed plan.") }}</small></span></label>
       <label>{{ t("Existing Account Claim Policy") }}<select name="first_sync_identity_claim_mode">{% for value, label in first_sync_identity_claim_mode_options %}<option value="{{ value }}" {% if policy_settings.first_sync_identity_claim_mode == value %}selected{% endif %}>{{ t(label) }}{% if ui_mode == "advanced" %} ({{ value }}){% endif %}</option>{% endfor %}</select></label>
     </div>
-    {% if selected_connector and ui_mode == "advanced" %}
-    <details class="detail-toggle" open><summary><strong>{{ t("Connector password posture") }} - {{ selected_connector.name }}</strong></summary><div class="form-grid"><label>{{ t("Force Password Change") }}<select name="force_change_password"><option value="">{{ t("Keep Current") }}</option><option value="true" {% if selected_connector.force_change_password is sameas true %}selected{% endif %}>{{ t("Yes") }}</option><option value="false" {% if selected_connector.force_change_password is sameas false %}selected{% endif %}>{{ t("No") }}</option></select></label><label>{{ t("Password Complexity") }}<input type="text" name="password_complexity" value="{{ selected_connector.password_complexity }}"></label></div><p class="muted">{{ t("Password secrets remain on the connector page and are never shown here.") }}</p></details>
-    {% else %}
-    <input type="hidden" name="force_change_password" value="">
-    <input type="hidden" name="password_complexity" value="{{ selected_connector.password_complexity if selected_connector else '' }}">
-    {% endif %}
     {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Safety Gates"), type="submit", variant="secondary", icon="shield-check") }}</div>{% endif %}
   </form>
 {% endcall %}
+
+{% if selected_connector %}
+{% call ui.helper_block(t("Account creation policy"), t("Password bootstrap, first-login reset, and complexity settings are read-only here to keep one authoritative editor."), "info") %}
+  <div class="detail-grid">
+    <div class="detail-item"><div class="label">{{ t("Default Password") }}</div><div class="value">{{ t("Configured") if selected_connector.default_password else t("Not configured") }}</div></div>
+    <div class="detail-item"><div class="label">{{ t("Force Password Change") }}</div><div class="value">{{ t("Enabled") if selected_connector.force_change_password else t("Disabled") }}</div></div>
+    <div class="detail-item"><div class="label">{{ t("Password Complexity") }}</div><div class="value">{{ t(selected_connector.password_complexity or "strong") }}</div></div>
+  </div>
+  {{ ui.button(t("Open Account Creation Policy"), href="/sync-policies/account-naming?connector_id=" ~ selected_connector.connector_id, variant="secondary", icon="key-round") }}
+{% endcall %}
+{% endif %}
 
 {% call ui.panel(t("Protected Accounts"), scope_label=t("Global and Organization Scope"), scope_level="warning", description=t("These accounts are excluded from create, update, reactivation, and disable actions.")) %}
   <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Protected accounts') }}"><table><thead><tr><th>{{ t("Scope") }}</th><th>{{ t("Account") }}</th><th>{{ t("Protection") }}</th></tr></thead><tbody>{% for account in protected_accounts %}<tr><td>{{ t("Organization") }}</td><td>{{ account }}</td><td>{{ t("Always skip") }}</td></tr>{% else %}<tr><td>{{ t("Global") }}</td><td>{{ t("Built-in system accounts") }}</td><td>{{ t("Always skip") }}</td></tr>{% endfor %}</tbody></table></div>

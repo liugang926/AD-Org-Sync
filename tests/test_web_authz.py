@@ -297,7 +297,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn('href="/sync-policies/department-ou-routing"', body)
         self.assertIn('href="/sync-policies/group-rules"', body)
         self.assertIn('href="/sync-policies/lifecycle"', body)
-        self.assertIn("Pending Lifecycle Queue", body)
+        self.assertNotIn("Pending Lifecycle Queue", body)
         self.assertNotIn(
             'name="advanced_connector_routing_enabled"', body
         )

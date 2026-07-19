@@ -383,7 +383,7 @@ class WebIdentityWorkbenchTests(WebAuthzBaseTestCase):
         self.assertIn("Evidence fingerprint", body)
         self.assertNotIn("Evidence fingerprint", table)
         for href in (
-            "/execution-center/jobs",
+            "/jobs",
             "/identity-governance/manual-overrides",
             "/identity-governance/conflicts",
         ):

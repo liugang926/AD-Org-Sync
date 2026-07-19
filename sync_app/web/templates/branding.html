@@ -3,7 +3,7 @@
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Branding And Appearance"), t("Manage the global product name, short mark, and attribution shown across the administration experience."), eyebrow=t("System Management"), badge_text=t("Global Scope"), badge_level="warning") %}{% endcall %}
+  {% call ui.page_header(t("Branding And Appearance"), t("Manage the global product name, short mark, and attribution shown across the administration experience."), eyebrow=t("System Settings"), badge_text=t("Global Scope"), badge_level="warning") %}{% endcall %}
 
   <div class="panel-note warning" role="status">
     <strong>{{ t("Global setting") }}:</strong> {{ t("Changes are visible to every organization on this deployment. Review the preview, save once, then refresh another page to verify the result.") }}
@@ -11,7 +11,15 @@
 
   <div class="grid cols-2">
     {% call ui.panel(t("Appearance Settings"), t("Global Scope"), "warning", t("Keep the short mark concise so it remains readable in the sidebar and at narrow widths.")) %}
-      <form method="post" action="/system-management/branding" class="page-stack tight">
+      <form method="post" action="/system-management/branding" class="page-stack tight"
+        data-confirm="{{ t('This global change updates branding for every organization. Review the preview and confirm before saving.') }}"
+        data-confirm-title="{{ t('Confirm Global Branding Change') }}"
+        data-confirm-require="GLOBAL"
+        data-confirm-input-help="{{ t('Type {value} to confirm.') }}"
+        data-confirm-detail-1-label="{{ t('Scope') }}"
+        data-confirm-detail-1-value="{{ t('Global Scope') }}"
+        data-confirm-detail-2-label="{{ t('Environment') }}"
+        data-confirm-detail-2-value="{{ t(environment_label) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-grid">
           <div class="form-group field-span-full">

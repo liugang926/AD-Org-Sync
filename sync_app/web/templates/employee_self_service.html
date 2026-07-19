@@ -3,7 +3,7 @@
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Employee Self-Service"), t("Configure the organization-scoped employee password reset portal without mixing connector or account lifecycle settings."), eyebrow=t("System Management"), badge_text=t("Organization Scope"), badge_level="info") %}
+  {% call ui.page_header(t("Employee Self-Service"), t("Configure SSPR, DingTalk verification, callback readiness, and password policy without mixing connector or lifecycle settings."), eyebrow=t("Employee Services"), badge_text=t("Organization Scope"), badge_level="info") %}
     {{ ui.button(t("Open Employee Portal"), href="/sspr", variant="secondary", icon="external-link", attrs='target="_blank" rel="noopener"') }}
   {% endcall %}
 
@@ -12,6 +12,25 @@
     {{ ui.compact_stat(t("Enabled DingTalk to AD Bindings"), enabled_binding_count) }}
     {{ ui.compact_stat(t("Minimum Password Length"), settings.min_password_length) }}
     {{ ui.compact_stat(t("Verification Session"), settings.verification_session_ttl_seconds ~ "s") }}
+  </div>
+
+  <div class="grid cols-2">
+    {% call ui.panel(t("DingTalk Verification"), t("Organization Scope"), "info", t("The selected organization owns CorpId and SSPR behavior. DingTalk app credentials remain authoritative in Connectors.")) %}
+      <div class="detail-grid">
+        <div class="detail-item"><div class="label">{{ t("Source Provider") }}</div><div class="value">{{ t(source_provider) }}</div></div>
+        <div class="detail-item"><div class="label">{{ t("App Credentials") }}</div><div class="value">{{ t("Configured") if source_credentials_configured else t("Not configured") }}</div></div>
+        <div class="detail-item"><div class="label">{{ t("DingTalk CorpId") }}</div><div class="value">{{ settings.dingtalk_corp_id or "-" }}</div></div>
+      </div>
+      {{ ui.button(t("Open Connectors"), href="/data-sources/connectors", variant="secondary", icon="plug-zap") }}
+    {% endcall %}
+
+    {% call ui.panel(t("Callback Configuration"), t("Global Scope"), "warning", t("The callback URL is derived from the global public base URL. Edit that field only in Deployment Settings.")) %}
+      <div class="detail-grid">
+        <div class="detail-item"><div class="label">{{ t("Callback URL") }}</div><div class="value wrap-anywhere"><code>{{ callback_url }}</code></div></div>
+        <div class="detail-item"><div class="label">{{ t("Public Base URL") }}</div><div class="value">{{ t("Configured") if callback_public_base_configured else t("Not configured") }}</div></div>
+      </div>
+      {{ ui.button(t("Open Deployment Settings"), href="/system-management/deployment", variant="secondary", icon="server-cog") }}
+    {% endcall %}
   </div>
 
   {% if settings.enabled and not settings.dingtalk_corp_id %}

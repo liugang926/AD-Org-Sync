@@ -1891,8 +1891,11 @@ form.inline { display: inline-flex; margin: 0; }
 }
 
 .identifier__link {
+  display: block;
+  flex: 1 1 auto;
   min-width: 0;
   max-width: 100%;
+  overflow: hidden;
   color: var(--primary);
 }
 
@@ -2069,10 +2072,16 @@ form.inline { display: inline-flex; margin: 0; }
 .control-metric strong,
 .impact-card strong,
 .metric-item .value {
+  min-width: 0;
+  max-width: 100%;
   color: var(--text);
   font-size: 26px;
   font-weight: 900;
   letter-spacing: -0.04em;
+}
+
+.control-metric .identifier {
+  width: 100%;
 }
 
 .impact-card small {

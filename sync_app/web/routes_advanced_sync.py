@@ -470,6 +470,10 @@ def register_advanced_sync_routes(
             request,
             "sync_policy_account_naming.html",
             **context,
+            base_account_policy=repositories.org_config_repo.get_editable_config(
+                current_org.org_id,
+                config_path=current_org.config_path or runtime_state.config_path,
+            ),
             source_provider=config.source_provider,
             source_fields=(
                 repositories.source_directory_repo.list_field_catalog(
@@ -794,6 +798,99 @@ def register_advanced_sync_routes(
             request,
             "success",
             "Account naming policy saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
+        return RedirectResponse(url=redirect_url, status_code=303)
+
+    @app.post(CANONICAL_ROUTE_PATHS["sync-account-naming"] + "/account-creation")
+    def sync_account_creation_submit(
+        request: Request,
+        csrf_token: str = Form(""),
+        connector_id: str = Form(""),
+        default_password: str = Form(""),
+        force_change_password: str = Form("true"),
+        password_complexity: str = Form("strong"),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        normalized_connector_id = (
+            str(connector_id or "").strip()
+            if isinstance(connector_id, str)
+            else ""
+        )
+        redirect_url = CANONICAL_ROUTE_PATHS["sync-account-naming"]
+        if normalized_connector_id:
+            redirect_url = f"{redirect_url}?connector_id={normalized_connector_id}"
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
+        if csrf_error:
+            return csrf_error
+
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        password_was_updated = bool(str(default_password or "").strip())
+        normalized_force_change = to_bool(force_change_password, True)
+        normalized_complexity = str(password_complexity or "strong").strip() or "strong"
+        try:
+            if normalized_connector_id:
+                connector_values: dict[str, Any] = {
+                    "force_change_password": normalized_force_change,
+                    "password_complexity": normalized_complexity,
+                }
+                if password_was_updated:
+                    connector_values["default_password"] = str(default_password).strip()
+                persist_connector_policy(
+                    request,
+                    connector_id=normalized_connector_id,
+                    section="account_creation",
+                    values=connector_values,
+                )
+            else:
+                runtime_state = get_web_runtime_state(request)
+                config_path = current_org.config_path or runtime_state.config_path
+                current_values = repositories.org_config_repo.get_raw_config(
+                    current_org.org_id,
+                    config_path=config_path,
+                )
+                repositories.org_config_repo.save_config(
+                    current_org.org_id,
+                    {
+                        **current_values,
+                        "default_password": (
+                            str(default_password).strip()
+                            if password_was_updated
+                            else current_values.get("default_password", "")
+                        ),
+                        "force_change_password": normalized_force_change,
+                        "password_complexity": normalized_complexity,
+                    },
+                    config_path=config_path,
+                )
+        except (TypeError, ValueError) as exc:
+            flash_t(
+                request,
+                "error",
+                "Failed to save account creation policy: {error}",
+                error=str(exc),
+            )
+            return RedirectResponse(url=redirect_url, status_code=303)
+
+        audit_policy_change(
+            request,
+            user=user,
+            section="account_creation",
+            target_type="connector" if normalized_connector_id else "settings",
+            target_id=normalized_connector_id or "organization_default",
+            payload={
+                "connector_id": normalized_connector_id,
+                "default_password_updated": password_was_updated,
+                "force_change_password": normalized_force_change,
+                "password_complexity": normalized_complexity,
+            },
+        )
+        flash(
+            request,
+            "success",
+            "Account creation policy saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
         )
         return RedirectResponse(url=redirect_url, status_code=303)
 

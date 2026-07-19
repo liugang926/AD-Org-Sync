@@ -1,6 +1,10 @@
 import re
 
-from sync_app.web.navigation import CANONICAL_ROUTE_PATHS, NAVIGATION_GROUPS
+from sync_app.web.navigation import (
+    CANONICAL_ROUTE_PATHS,
+    NAVIGATION_GROUPS,
+    PHASE7_LEGACY_GET_REDIRECTS,
+)
 from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
 
@@ -46,13 +50,17 @@ class WebNavigationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         navigation = self._navigation_markup(self._text(response))
         for label in (
+            "Connectors",
             "Data Sources",
             "Identity Governance",
             "Sync Policies",
             "Execution Center",
+            "Lifecycle Workbench",
+            "Automation",
             "Operations Center",
-            "System Management",
-            "Administrators &amp; Permissions",
+            "Employee Services",
+            "System Settings",
+            "Platform Accounts",
         ):
             with self.subTest(label=label):
                 self.assertIn(label, navigation)
@@ -110,7 +118,7 @@ class WebNavigationTests(WebAuthzBaseTestCase):
             with self.subTest(page=page):
                 self.assertTrue(callable(self._route(CANONICAL_ROUTE_PATHS[page], "GET")))
 
-    def test_connector_center_is_dedicated_while_legacy_config_remains_available(self):
+    def test_connector_center_is_dedicated_while_legacy_config_is_redirected_by_middleware(self):
         self._login("superadmin")
         self.session["ui_mode"] = "advanced"
 
@@ -123,10 +131,11 @@ class WebNavigationTests(WebAuthzBaseTestCase):
         self.assertIn("Save Connection Settings", connector_body)
         self.assertIn("Test Saved Connections", connector_body)
         self.assertNotIn("Web Deployment", connector_body)
-        legacy_body = self._text(legacy_page)
-        self.assertIn("Global settings moved", legacy_body)
-        self.assertIn("Open Deployment Settings", legacy_body)
-        self.assertIn("Open Branding And Appearance", legacy_body)
+        self.assertEqual(legacy_page.status_code, 200)
+        self.assertEqual(
+            PHASE7_LEGACY_GET_REDIRECTS["/config"],
+            CANONICAL_ROUTE_PATHS["config"],
+        )
 
     def test_canonical_routes_keep_existing_permission_checks(self):
         self._login("operator1")

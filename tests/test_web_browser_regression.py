@@ -1275,7 +1275,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self._login()
         for width in (390, 768, 1024, 1366, 1440):
             self.page.set_viewport_size({"width": width, "height": 900})
-            for path in ("/dashboard", "/config", "/audit"):
+            for path in ("/dashboard", "/data-sources/connectors", "/audit"):
                 with self.subTest(width=width, path=path):
                     self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
                     self._assert_page_has_no_horizontal_overflow()
@@ -1300,26 +1300,27 @@ class WebBrowserRegressionTests(unittest.TestCase):
                         )
                         self.assertGreaterEqual(int(shell.get_attribute("tabindex") or -1), 0)
 
-    def test_config_mobile_summary_fields_and_action_bar_remain_usable(self):
+    def test_connectors_mobile_summary_and_connection_form_remain_usable(self):
         self.context.close()
         self.context = self.browser.new_context(
             viewport={"width": 390, "height": 900}, locale="en-US"
         )
         self.page = self.context.new_page()
         self._login()
-        self.page.goto(f"{self.base_url}/config?lang=zh-CN", wait_until="networkidle")
+        self.page.goto(
+            f"{self.base_url}/data-sources/connectors?lang=zh-CN",
+            wait_until="networkidle",
+        )
 
         metrics = self.page.evaluate(
             """() => {
                 const root = document.documentElement;
-                const brief = document.querySelector('.config-brief__main')?.getBoundingClientRect();
-                const actionCopy = document.querySelector('.config-action-row__copy')?.getBoundingClientRect();
+                const header = document.querySelector('.page-header')?.getBoundingClientRect();
+                const stats = document.querySelector('.stat-grid')?.getBoundingClientRect();
                 const firstField = document.querySelector(
-                    '#config-section-source input:not([type="hidden"]), #config-section-source select, #config-section-source textarea'
+                    'form[data-connector-base-form] input:not([type="hidden"]), form[data-connector-base-form] select, form[data-connector-base-form] textarea'
                 )?.getBoundingClientRect();
-                const bar = document.querySelector('.sticky-submit-bar');
-                const barRect = bar?.getBoundingClientRect();
-                const form = document.querySelector('form[data-config-form]');
+                const form = document.querySelector('form[data-connector-base-form]');
                 const zeroTextContainers = Array.from(document.querySelectorAll('main *'))
                     .filter((element) => {
                         const style = getComputedStyle(element);
@@ -1336,29 +1337,27 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 return {
                     clientWidth: root.clientWidth,
                     scrollWidth: root.scrollWidth,
-                    briefWidth: brief?.width || 0,
-                    actionCopyWidth: actionCopy?.width || 0,
+                    headerWidth: header?.width || 0,
+                    statsWidth: stats?.width || 0,
                     firstFieldY: firstField?.y ?? Number.MAX_SAFE_INTEGER,
-                    barPosition: bar ? getComputedStyle(bar).position : '',
-                    barHeight: barRect?.height || 0,
-                    formPaddingBottom: form ? parseFloat(getComputedStyle(form).paddingBottom || '0') : 0,
+                    formWidth: form?.getBoundingClientRect().width || 0,
                     zeroTextContainers,
                 };
             }"""
         )
 
         self.assertLessEqual(metrics["scrollWidth"], metrics["clientWidth"] + 1, metrics)
-        self.assertGreater(metrics["briefWidth"], 200, metrics)
-        self.assertGreater(metrics["actionCopyWidth"], 200, metrics)
-        self.assertLess(metrics["firstFieldY"], 1350, metrics)
-        self.assertEqual(metrics["barPosition"], "fixed", metrics)
-        self.assertGreaterEqual(metrics["formPaddingBottom"], metrics["barHeight"], metrics)
+        self.assertGreater(metrics["headerWidth"], 200, metrics)
+        self.assertGreater(metrics["statsWidth"], 200, metrics)
+        self.assertGreater(metrics["formWidth"], 200, metrics)
+        self.assertLess(metrics["firstFieldY"], 2200, metrics)
         self.assertEqual(metrics["zeroTextContainers"], [], metrics)
-        self._capture("config-page-390.png")
+        self._capture("connectors-page-390.png")
 
         self.page.set_viewport_size({"width": 1024, "height": 900})
         self.page.reload(wait_until="networkidle")
-        self.assertEqual(self._style(".sticky-submit-bar", "position"), "sticky")
+        self._assert_page_has_no_horizontal_overflow()
+        self.assertTrue(self.page.locator("form[data-connector-base-form]").is_visible())
 
     def test_high_risk_flow_uses_five_three_two_and_one_column_layouts(self):
         self._login()
@@ -1431,6 +1430,8 @@ class WebBrowserRegressionTests(unittest.TestCase):
             f"{self.base_url}/sync-policies/account-naming?lang=en",
             wait_until="networkidle",
         )
+        self.page.get_by_role("button", name="Examples & Preview").click()
+        self.page.locator("#account-naming-help:not([hidden])").wait_for(state="visible")
         self.page.fill('input[name="sample_userid"]', "browser-policy-user")
         self.page.fill('input[name="sample_name"]', "Browser Policy User")
         self.page.get_by_role("button", name="Preview Username").click()
@@ -1873,16 +1874,19 @@ class WebBrowserRegressionTests(unittest.TestCase):
         reduced_transition = self._style("aside", "transition-duration")
         self.assertTrue(reduced_transition.endswith("s"))
         self.assertLessEqual(float(reduced_transition.removesuffix("s")), 0.001)
-        self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
+        self.page.goto(
+            f"{self.base_url}/data-sources/connectors",
+            wait_until="networkidle",
+        )
         self.page.evaluate(
             "document.documentElement.style.webkitTextSizeAdjust = '200%'"
         )
         self._assert_page_has_no_horizontal_overflow()
         first_field = self.page.locator(
-            "#config-section-source input:not([type='hidden']), #config-section-source select, #config-section-source textarea"
+            "form[data-connector-base-form] input:not([type='hidden']), form[data-connector-base-form] select, form[data-connector-base-form] textarea"
         ).first
         self.assertGreater(float(first_field.bounding_box()["width"]), 0)
-        self._capture("config-text-scale-200.png")
+        self._capture("connectors-text-scale-200.png")
 
     def test_chinese_operating_pages_do_not_leak_known_dynamic_english_messages(self):
         self._login()
@@ -1895,28 +1899,21 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 self.assertNotIn("Failed to load configuration", page_text)
                 self.assertNotIn("jobs.blocker.", page_text)
 
-    def test_config_page_renders_multi_provider_schema_controls(self):
+    def test_connectors_page_renders_multi_provider_connection_controls(self):
         self._login()
-        self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
-        self.assertIn(
-            "WeCom Connector Configuration", self.page.locator("body").inner_text()
-        )
-        self.assertIn(
-            "Shared Page, Provider-Specific Fields",
-            self.page.locator("body").inner_text(),
+        self.page.goto(
+            f"{self.base_url}/data-sources/connectors",
+            wait_until="networkidle",
         )
         self.assertTrue(
-            self.page.get_by_role(
-                "button", name="Source System Provider and credentials"
-            ).is_visible()
+            self.page.get_by_role("heading", name="Connectors", level=1).is_visible()
         )
-        self.assertTrue(
-            self.page.get_by_role(
-                "button", name="Target AD LDAP and OU roots"
-            ).is_visible()
+        self.assertIn(
+            "ORGANIZATION SCOPE",
+            self.page.locator("main").inner_text().upper(),
         )
-        self.assertTrue(self.page.locator("#config-section-source").is_visible())
-        self.assertFalse(self.page.locator("#config-section-target").is_visible())
+        self.assertTrue(self.page.locator("form[data-connector-base-form]").is_visible())
+
         option_text = self.page.locator("#source_provider option").all_inner_texts()
         self.assertTrue(any("WeCom" in item for item in option_text))
         self.assertTrue(any("DingTalk" in item for item in option_text))
@@ -1924,15 +1921,10 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(self.page.locator("#group-corpid").is_visible())
         self.assertTrue(self.page.locator("#group-corpsecret").is_visible())
         self.assertEqual(self.page.locator("#group-webhook_url").count(), 0)
-        self.assertTrue(
-            self.page.get_by_role("link", name="Open Notifications").is_visible()
-        )
+
         self.page.select_option("#source_provider", "dingtalk")
         self.page.wait_for_function(
-            "() => document.querySelector('[data-config-provider-card-title]')?.textContent.includes('DingTalk Source Connector')"
-        )
-        self.assertIn(
-            "DingTalk Source Connector", self.page.locator("body").inner_text()
+            "() => document.querySelector('[data-config-provider-current]')?.textContent.includes('DingTalk')"
         )
         self.assertIn(
             "AppKey / Client ID", self.page.locator("#group-corpid label").inner_text()
@@ -1944,93 +1936,45 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "The DingTalk application key or client ID.",
             self.page.locator("#group-corpid").inner_text(),
         )
-        self.assertEqual(self.page.locator("#group-webhook_url").count(), 0)
-        self.assertTrue(self.page.get_by_text("Source Scope").first.is_visible())
-        browse_source_button = self.page.get_by_role(
-            "button", name="Browse Source Unit Tree"
-        )
-        self.assertEqual(browse_source_button.count(), 0)
-        self.assertTrue(
-            self.page.get_by_role("link", name="Open Sync Scope").is_visible()
-        )
-        self.assertTrue(self.page.get_by_role("button", name="Save Draft").is_visible())
-        self.assertTrue(
-            self.page.get_by_role("button", name="Preview Changes").is_visible()
-        )
-        self.assertTrue(self.page.get_by_role("link", name="Publish").is_visible())
-        supporting_help = self.page.locator(".config-supporting-help")
-        self.assertTrue(supporting_help.is_visible())
-        self.assertFalse(
-            self.page.get_by_role(
-                "link", name="Open Account Naming"
-            ).is_visible()
-        )
-        supporting_help.locator("summary").click()
         self.assertTrue(
             self.page.get_by_role(
-                "link", name="Open Account Naming"
+                "button", name="Save Connection Settings"
             ).is_visible()
         )
         self.assertTrue(
-            self.page.get_by_role("link", name="Open Department Routing").is_visible()
-        )
-        self.page.get_by_role("button", name="Target AD LDAP and OU roots").click()
-        self.page.locator("#config-section-target").wait_for(state="visible")
-        self.assertTrue(
-            self.page.get_by_text("OU Filter And Root Mapping").first.is_visible()
-        )
-        self.assertTrue(
             self.page.get_by_role(
-                "link", name="Open Department And OU Routing"
+                "button", name="Test Saved Connections"
             ).is_visible()
         )
-        self.assertEqual(
-            self.page.get_by_role("button", name="Select Target Root OU").count(), 0
+        self.assertTrue(self.page.locator("#ldap_server").is_visible())
+        self.assertTrue(self.page.locator("#ldap_password").is_visible())
+        self.assertTrue(
+            self.page.get_by_role("link", name="Open Sync Policies").is_visible()
         )
-        self.assertEqual(
-            self.page.get_by_role("button", name="Select Disabled Users OU").count(),
-            0,
-        )
-        self.assertEqual(
-            self.page.get_by_role("button", name="Select Custom Group OU").count(), 0
-        )
-        self._capture("config-page.png")
+        self._capture("connectors-page.png")
 
-    def test_advanced_sync_page_is_jump_only_after_policy_migration(
-        self,
-    ):
+    def test_advanced_sync_redirects_to_sync_policy_authority(self):
         self._login()
         self.page.goto(f"{self.base_url}/advanced-sync", wait_until="networkidle")
+        self.assertEqual(self.page.url, f"{self.base_url}/sync-policies/scope")
         self.assertTrue(
-            self.page.get_by_role("heading", name="Advanced Sync", level=1).is_visible()
+            self.page.get_by_role("heading", name="Sync Scope", level=1).is_visible()
         )
         self.assertEqual(self.page.locator("#account-creation-rules").count(), 0)
-        self.assertEqual(self.page.locator("main [data-policy-change-form]").count(), 0)
         self.assertEqual(
             self.page.locator("main form[action^='/advanced-sync']").count(), 0
         )
-        self.assertIn(
-            "Persistent policy forms have moved.",
-            self.page.locator("body").inner_text(),
-        )
-        self.assertTrue(
-            self.page.locator(
-                "main a[href='/sync-policies/account-naming']"
-            ).is_visible()
-        )
+        self.assertNotIn("Pending Lifecycle Queue", self.page.locator("main").inner_text())
 
     def test_config_source_picker_moves_to_searchable_sync_scope_tree(self):
         self._login()
         self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
-        self.assertEqual(self.page.locator("#group-source_root_unit_ids").count(), 0)
+        self.assertEqual(self.page.url, f"{self.base_url}/data-sources/connectors")
         self.assertEqual(
-            self.page.locator(
-                'form[data-config-form] input[type="hidden"][name="source_root_unit_ids"]'
-            ).count(),
-            1,
+            self.page.locator("[name='source_root_unit_ids']").count(),
+            0,
         )
-        self.page.get_by_role("link", name="Open Sync Scope").click()
-        self.page.wait_for_url(f"{self.base_url}/sync-policies/scope")
+        self.page.goto(f"{self.base_url}/sync-policies/scope", wait_until="networkidle")
         self.assertTrue(
             self.page.get_by_role("heading", name="Sync Scope", level=1).is_visible()
         )
@@ -2447,15 +2391,15 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.page = self.context.new_page()
         self._login()
-        self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
+        self.page.goto(f"{self.base_url}/dashboard", wait_until="networkidle")
 
-        identifier = self.page.locator(".config-brief .identifier")
+        identifier = self.page.locator(".control-tower .identifier").first
         self.assertTrue(identifier.is_visible())
         value = identifier.locator(".identifier__value")
         self.assertEqual(value.get_attribute("title"), long_job_id)
         self.assertLessEqual(
             float(identifier.bounding_box()["width"]),
-            float(self.page.locator(".config-brief__status").bounding_box()["width"]),
+            float(self.page.locator(".control-metric").first.bounding_box()["width"]),
         )
         identifier.locator("[data-copy-value]").click()
         self.page.wait_for_function(
@@ -2471,10 +2415,6 @@ class WebBrowserRegressionTests(unittest.TestCase):
         viewports = (390, 768, 1024, 1366, 1440)
         pages = {
             "dashboard": ("/dashboard?lang=zh-CN", ".control-tower"),
-            "config": (
-                "/config?lang=zh-CN",
-                "#config-section-source input:not([type='hidden']), #config-section-source select, #config-section-source textarea",
-            ),
             "jobs": ("/jobs?lang=zh-CN", ".execution-flow"),
             "audit": ("/audit?lang=zh-CN", ".table-shell"),
             "organizations": ("/organizations?lang=zh-CN", ".table-shell"),

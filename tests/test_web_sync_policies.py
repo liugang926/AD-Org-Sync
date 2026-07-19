@@ -2,6 +2,7 @@ import re
 from unittest.mock import patch
 
 from sync_app.services.typed_settings import AdvancedSyncPolicySettings, DirectoryUiSettings
+from sync_app.web.navigation import PHASE7_LEGACY_GET_REDIRECTS
 from tests.helpers.execution_plans import create_eligible_execution_plan
 from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
@@ -70,7 +71,7 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
         )
         return snapshot_id
 
-    def test_canonical_policy_pages_are_task_focused_and_legacy_page_remains(self):
+    def test_canonical_policy_pages_are_task_focused_and_legacy_page_redirects(self):
         self._login("superadmin")
         self._seed_policy_fixture()
         paths = (
@@ -104,8 +105,11 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
             self._request("/advanced-sync")
         )
         self.assertEqual(legacy.status_code, 200)
-        self.assertIn("Advanced Sync", self._text(legacy))
-        self.assertIn("Pending Lifecycle Queue", self._text(legacy))
+        self.assertNotIn("Pending Lifecycle Queue", self._text(legacy))
+        self.assertEqual(
+            PHASE7_LEGACY_GET_REDIRECTS["/advanced-sync"],
+            "/sync-policies/scope",
+        )
 
     def test_sync_scope_never_invokes_ad_verification_from_legacy_query(self):
         self._login("superadmin")
@@ -123,24 +127,18 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         build_target_provider.assert_not_called()
 
-    def test_legacy_entry_has_jumps_only_and_scope_forms_are_separated(self):
+    def test_legacy_entry_redirects_and_scope_forms_are_separated(self):
         self._login("superadmin")
         self._seed_policy_fixture()
 
-        legacy = self._text(
-            self._route("/advanced-sync", "GET")(self._request("/advanced-sync"))
+        legacy = self._route("/advanced-sync", "GET")(
+            self._request("/advanced-sync")
         )
-        self.assertNotIn('action="/advanced-sync/policies"', legacy)
-        self.assertNotIn('action="/advanced-sync/mappings"', legacy)
-        for path in (
-            "/sync-policies/scope",
-            "/sync-policies/account-naming",
-            "/sync-policies/attribute-mappings",
-            "/sync-policies/department-ou-routing",
-            "/sync-policies/group-rules",
-            "/sync-policies/lifecycle",
-        ):
-            self.assertIn(f'href="{path}"', legacy)
+        self.assertEqual(legacy.status_code, 200)
+        legacy_text = self._text(legacy)
+        self.assertNotIn('action="/advanced-sync/policies"', legacy_text)
+        self.assertNotIn('action="/advanced-sync/mappings"', legacy_text)
+        self.assertNotIn("Pending Lifecycle Queue", legacy_text)
 
         scope = self._text(
             self._route("/sync-policies/scope", "GET")(
@@ -173,20 +171,26 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
         self.assertNotIn('action="/sync-policies/security"', security)
         self.assertIn('href="/sync-policies/lifecycle#security"', security)
 
-        legacy_config = self._text(
-            self._route("/config", "GET")(self._request("/config"))
+        legacy_config = self._route("/config", "GET")(
+            self._request("/config")
         )
-        self.assertIn("Source scope moved", legacy_config)
-        self.assertIn("OU Filter And Root Mapping moved", legacy_config)
-        self.assertIn("Persistent runtime rules moved", legacy_config)
-        self.assertRegex(
-            legacy_config,
-            r'<input type="hidden" name="directory_root_ou_path"',
+        self.assertEqual(legacy_config.status_code, 200)
+        self.assertEqual(
+            PHASE7_LEGACY_GET_REDIRECTS["/config"],
+            "/data-sources/connectors",
         )
-        self.assertNotRegex(
-            legacy_config,
-            r'<(?:textarea|select)[^>]+name="soft_excluded_groups"',
+        routing = self._text(
+            self._route("/sync-policies/department-ou-routing", "GET")(
+                self._request("/sync-policies/department-ou-routing")
+            )
         )
+        groups = self._text(
+            self._route("/sync-policies/group-rules", "GET")(
+                self._request("/sync-policies/group-rules")
+            )
+        )
+        self.assertIn('name="directory_root_ou_path"', routing)
+        self.assertIn('name="soft_excluded_groups"', groups)
         source_directory = self._text(
             self._route("/data-sources/source-directory", "GET")(
                 self._request("/data-sources/source-directory")
