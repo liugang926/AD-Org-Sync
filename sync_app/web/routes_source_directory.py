@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import secrets
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode
@@ -17,6 +16,12 @@ from sync_app.services.identity_relationships import (
     classify_identity_relationship,
     filter_identity_workbench_rows,
     summarize_identity_workbench_rows,
+)
+from sync_app.services.binding_reconciliation import (
+    BINDING_RECONCILIATION_CATEGORIES,
+    BindingReconciliationReport,
+    BindingReconciliationScanStore,
+    BindingReconciliationService,
 )
 from sync_app.services.high_risk_operations import (
     HighRiskOperationContext,
@@ -42,7 +47,7 @@ from sync_app.web.app_state import (
 
 
 LOGGER = logging.getLogger(__name__)
-BINDING_CLEANUP_PREVIEW_SESSION_KEY = "_binding_cleanup_preview"
+BINDING_CLEANUP_PREVIEW_SESSION_KEY = "_binding_reconciliation_scan"
 BINDING_CLEANUP_PREVIEW_MAX_AGE_SECONDS = 900
 IDENTITY_WORKBENCH_DEFERRED_SESSION_KEY = "_identity_workbench_deferred"
 SOURCE_DIRECTORY_VIEWS = {"overview", "users", "departments", "history"}
@@ -106,6 +111,11 @@ def register_source_directory_routes(
     require_capability: Callable[[Request, str], Any],
     build_target_provider_for_connector: Callable[[Request, str], Any] | None = None,
 ) -> None:
+    if not hasattr(app.state, "binding_reconciliation_scan_store"):
+        app.state.binding_reconciliation_scan_store = BindingReconciliationScanStore(
+            max_age_seconds=BINDING_CLEANUP_PREVIEW_MAX_AGE_SECONDS
+        )
+
     def current_environment_label(request: Request) -> str:
         return str(
             getattr(
@@ -120,44 +130,25 @@ def register_source_directory_routes(
         request: Request,
         *,
         current_org: Any,
-        snapshot: Any,
-        impact_count: int,
-        preview_id: str,
+        report: BindingReconciliationReport,
     ) -> HighRiskOperationContext:
-        snapshot_id = int(snapshot["id"] or 0) if snapshot is not None else 0
         return HighRiskOperationContext.create(
             operation_code="binding.cleanup",
             organization_id=current_org.org_id,
             organization_name=current_org.name,
             environment_label=current_environment_label(request),
-            snapshot_version=f"#{snapshot_id}" if snapshot_id else "Not available",
-            impact_count=impact_count,
-            preview_id=preview_id,
+            snapshot_version=report.snapshot_version,
+            impact_count=report.cleanup_count,
+            preview_id=report.scan_id,
         )
 
-    def context_from_preview(
-        request: Request,
-        *,
-        current_org: Any,
-        preview: dict[str, Any],
-    ) -> HighRiskOperationContext:
-        stored = dict(preview.get("context") or {})
-        return HighRiskOperationContext.create(
-            operation_code="binding.cleanup",
-            organization_id=current_org.org_id,
-            organization_name=current_org.name,
-            environment_label=current_environment_label(request),
-            snapshot_version=stored.get("snapshot_version") or "Not available",
-            impact_count=int(stored.get("impact_count") or 0),
-            preview_id=str(stored.get("preview_id") or ""),
-        )
-
-    def cleanup_workflow(preview: dict[str, Any] | None) -> list[dict[str, str]]:
-        if not preview:
+    def cleanup_workflow(
+        report: BindingReconciliationReport | None,
+    ) -> list[dict[str, str]]:
+        if not report:
             return HighRiskOperationPolicy.workflow(scan_state="current")
-        status = str(preview.get("status") or "").strip().lower()
-        blocked_stage = str(preview.get("blocked_stage") or "").strip().lower()
-        if status == "completed":
+        status = str(report.status or "").strip().lower()
+        if status in {"completed", "completed_with_skips"}:
             return HighRiskOperationPolicy.workflow(
                 scan_state="complete",
                 preview_state="complete",
@@ -167,42 +158,55 @@ def register_source_directory_routes(
             )
         if status == "blocked":
             return HighRiskOperationPolicy.workflow(
-                scan_state="blocked" if blocked_stage == "scan" else "complete",
-                preview_state="blocked" if blocked_stage == "preview" else "pending",
-                confirm_state="blocked" if blocked_stage == "confirm" else "pending",
-                execute_state="blocked" if blocked_stage == "execute" else "pending",
-                audit_state="complete" if preview.get("audit_recorded") else "pending",
+                scan_state="complete",
+                preview_state="complete",
+                confirm_state="complete",
+                execute_state="blocked",
+                audit_state="complete",
             )
-        context = dict(preview.get("context") or {})
-        confirmation_allowed = bool(context.get("environment_marked")) and int(
-            context.get("impact_count") or 0
-        ) > 0
         return HighRiskOperationPolicy.workflow(
             scan_state="complete",
             preview_state="complete",
-            confirm_state="current" if confirmation_allowed else "blocked",
+            confirm_state="current",
         )
 
-    def stored_cleanup_preview(
+    def stored_cleanup_report(
         request: Request,
         *,
         current_org: Any,
         provider_id: str,
-    ) -> dict[str, Any] | None:
+        refresh_concurrency: bool = True,
+    ) -> BindingReconciliationReport | None:
         stored = dict(request.session.get(BINDING_CLEANUP_PREVIEW_SESSION_KEY) or {})
         if (
             str(stored.get("organization_id") or "") != current_org.org_id
             or str(stored.get("provider_id") or "") != provider_id
         ):
             return None
-        context = context_from_preview(
-            request,
-            current_org=current_org,
-            preview=stored,
+        scan_store: BindingReconciliationScanStore = (
+            request.app.state.binding_reconciliation_scan_store
         )
-        stored["context"] = context.to_dict()
-        stored["gate"] = HighRiskOperationPolicy.evaluate(context).to_dict()
-        return stored
+        report = scan_store.get(str(stored.get("scan_id") or ""))
+        if report is None:
+            return None
+        if (
+            report.organization_id != current_org.org_id
+            or report.source_provider != provider_id
+        ):
+            return None
+        if refresh_concurrency:
+            return BindingReconciliationService(
+                user_binding_repo=get_web_repositories(request).user_binding_repo
+            ).refresh_concurrency(report)
+        return report
+
+    def is_production_environment(environment_label: str) -> bool:
+        normalized = str(environment_label or "").strip().casefold()
+        if any(marker in normalized for marker in ("non-production", "nonproduction")):
+            return False
+        return normalized in {"prod", "production", "生产", "生产环境"} or normalized.startswith(
+            "production "
+        )
 
     def provider_for_current_config(request: Request, provider_type: str = ""):
         repositories = get_web_repositories(request)
@@ -413,7 +417,7 @@ def register_source_directory_routes(
             org_id=current_org.org_id,
             provider_id=provider_id,
         ) or {}
-        mapping_quality = {
+        mapping_quality: dict[str, Any] = {
             "mapping_coverage_percent": 0.0,
             "normalized_username_collision_count": 0,
             "issues_by_user": {},
@@ -451,6 +455,7 @@ def register_source_directory_routes(
             effective_employee_id_state = "missing"
         elif normalized_quality_filter == "duplicate_employee_id":
             effective_employee_id_state = "duplicate"
+        result: dict[str, Any]
         if not include_users:
             result = {
                 "items": [],
@@ -598,6 +603,7 @@ def register_source_directory_routes(
         relationship_status: str,
         verify_ad: bool,
         source_user_ids: list[str] | None = None,
+        fetch_all: bool = False,
         workbench_queue: str = "",
         identity_status: str = "",
         ad_status: str = "",
@@ -698,7 +704,7 @@ def register_source_directory_routes(
             )
             base_users = result["items"]
             total = int(result["total"])
-        elif requires_full_relationship_set:
+        elif fetch_all or requires_full_relationship_set:
             base_users = []
             source_offset = 0
             total = 0
@@ -763,14 +769,17 @@ def register_source_directory_routes(
                         usernames_by_connector.setdefault(item.connector_id, set()).add(
                             username
                         )
-                for username in (
+                for raw_username in (
                     item.before_state.get("bound_ad_username"),
                     item.candidate_mapping.get("ad_username"),
                     item.planned_after_state.get("ad_username"),
                 ):
-                    if str(username or "").strip() and item.connector_id != "__conflict__":
+                    if (
+                        str(raw_username or "").strip()
+                        and item.connector_id != "__conflict__"
+                    ):
                         usernames_by_connector.setdefault(item.connector_id, set()).add(
-                            str(username).strip()
+                            str(raw_username).strip()
                         )
             protected_by_connector = {
                 connector_id: list(
@@ -1637,11 +1646,31 @@ def register_source_directory_routes(
             relationship_status=relationship_status,
             verify_ad=verify_ad,
         )
-        preview = stored_cleanup_preview(
+        report = stored_cleanup_report(
             request,
             current_org=current_org,
             provider_id=page_data["provider_id"],
         )
+        cleanup_context_value = (
+            cleanup_context(
+                request,
+                current_org=current_org,
+                report=report,
+            )
+            if report
+            else None
+        )
+        cleanup_gate = (
+            HighRiskOperationPolicy.evaluate(cleanup_context_value).to_dict()
+            if cleanup_context_value
+            else None
+        )
+        if cleanup_gate and report and report.has_concurrent_changes:
+            cleanup_gate = {
+                "allowed": False,
+                "reason_code": "binding_reconciliation.reason.binding_changed",
+                "next_action_code": "high_risk.action.scan_again",
+            }
         return render(
             request,
             "binding_reconciliation.html",
@@ -1659,8 +1688,20 @@ def register_source_directory_routes(
             search=search,
             selected_relationship_status=relationship_status,
             ad_verified=page_data["ad_verified"],
-            binding_cleanup_preview=preview,
-            binding_cleanup_workflow=cleanup_workflow(preview),
+            binding_reconciliation_report=report,
+            binding_reconciliation_categories=BINDING_RECONCILIATION_CATEGORIES,
+            binding_cleanup_context=(
+                cleanup_context_value.to_dict()
+                if cleanup_context_value is not None
+                else None
+            ),
+            binding_cleanup_gate=cleanup_gate,
+            binding_cleanup_workflow=cleanup_workflow(report),
+            production_cleanup=(
+                is_production_environment(cleanup_context_value.environment_label)
+                if cleanup_context_value is not None
+                else False
+            ),
         )
 
     @app.get(CANONICAL_ROUTE_PATHS["sync-scope"], response_class=HTMLResponse)
@@ -1738,18 +1779,13 @@ def register_source_directory_routes(
             or "",
         )
 
+    @app.post("/identity-governance/binding-reconciliation/scan")
     @app.post("/source-directory/reconcile-stale-bindings")
     def reconcile_source_directory_stale_bindings(
         request: Request,
         csrf_token: str = Form(""),
-        page_number: int = Form(1),
-        search: str = Form(""),
-        department_id: str = Form(""),
-        status: str = Form(""),
-        employee_id_state: str = Form(""),
-        relationship_status: str = Form("all"),
     ):
-        user = require_capability(request, "mappings.write")
+        user = require_capability(request, "mappings.read")
         if isinstance(user, RedirectResponse):
             return user
         csrf_error = reject_invalid_csrf(
@@ -1762,159 +1798,65 @@ def register_source_directory_routes(
 
         repositories = get_web_repositories(request)
         current_org = get_current_org(request)
-        normalized_page_number = max(int(page_number or 1), 1)
-        filters = {
-            "page_number": normalized_page_number,
-            "search": search,
-            "department_id": department_id,
-            "status": status,
-            "employee_id_state": employee_id_state,
-            "relationship_status": relationship_status or "all",
-        }
-        redirect_url = CANONICAL_ROUTE_PATHS["binding-reconciliation"] + "?" + urlencode(
-            {
-                **filters,
-                "verify_ad": "true",
-                "cleanup_preview": "true",
-            }
+        redirect_url = (
+            CANONICAL_ROUTE_PATHS["binding-reconciliation"]
+            + "?cleanup_preview=true"
         )
+        scan_started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         page_data = build_relationship_page(
             request,
-            page_number=normalized_page_number,
-            page_size=50,
-            search=search,
-            department_id=department_id,
-            status=status,
-            employee_id_state=employee_id_state,
-            relationship_status=relationship_status,
+            page_number=1,
+            page_size=200,
+            search="",
+            department_id="",
+            status="",
+            employee_id_state="",
+            relationship_status="all",
             verify_ad=True,
+            fetch_all=True,
         )
         snapshot = page_data["snapshot"]
-        preview_id = secrets.token_urlsafe(18)
-        if not page_data["snapshot"] or not page_data["ad_verified"]:
-            context = cleanup_context(
-                request,
-                current_org=current_org,
-                snapshot=snapshot,
-                impact_count=0,
-                preview_id=preview_id,
-            )
-            request.session[BINDING_CLEANUP_PREVIEW_SESSION_KEY] = {
-                "status": "blocked",
-                "blocked_stage": "scan",
-                "reason_code": "high_risk.blocker.ad_verification_unavailable",
-                "audit_recorded": True,
-                "organization_id": current_org.org_id,
-                "provider_id": page_data["provider_id"],
-                "snapshot_id": int(snapshot["id"] or 0) if snapshot else 0,
-                "snapshot_fingerprint": str(snapshot["snapshot_fingerprint"] or "")
-                if snapshot
-                else "",
-                "filters": filters,
-                "context": context.to_dict(),
-                "scanned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            }
-            repositories.audit_repo.add_log(
-                org_id=current_org.org_id,
-                actor_username=user.username,
-                action_type="high_risk.binding_cleanup.scan",
-                target_type="source_directory_snapshot",
-                target_id=str(int(snapshot["id"] or 0) if snapshot else 0),
-                result="blocked",
-                message="Binding cleanup scan could not verify live AD state; no bindings were removed",
-                payload=high_risk_audit_payload(
-                    context,
-                    reason_code="high_risk.blocker.ad_verification_unavailable",
-                ),
-            )
+        if not snapshot:
             flash_t(
                 request,
                 "error",
-                "Live AD verification is unavailable. No saved bindings were removed.",
+                "No source snapshot is available for reconciliation.",
             )
             return RedirectResponse(url=redirect_url, status_code=303)
 
-        targets = [
-            target
-            for item in page_data["relationships"]
-            if (
-                target
-                := IdentityRelationshipPreviewService.verified_stale_binding_cleanup_target(
-                    item
-                )
-            )
-        ]
-        unverified_binding_count = sum(
-            1
-            for item in page_data["relationships"]
-            if item.before_state.get("bound_ad_username")
-            and str(
-                item.before_state.get("ad_account_state", {}).get("status") or ""
-            )
-            in {"", "not_checked", "unavailable"}
+        service = BindingReconciliationService(
+            user_binding_repo=repositories.user_binding_repo,
+            audit_repo=repositories.audit_repo,
         )
-        context = cleanup_context(
-            request,
-            current_org=current_org,
-            snapshot=snapshot,
-            impact_count=len(targets),
-            preview_id=preview_id,
+        report = service.scan(
+            page_data["relationships"],
+            organization_id=current_org.org_id,
+            organization_name=current_org.name,
+            environment_label=current_environment_label(request),
+            source_provider=page_data["provider_id"],
+            snapshot_id=int(snapshot["id"] or 0),
+            snapshot_fingerprint=str(snapshot["snapshot_fingerprint"] or ""),
+            scan_started_at=scan_started_at,
         )
-        gate = HighRiskOperationPolicy.evaluate(context)
-        target_fingerprint = HighRiskOperationPolicy.target_fingerprint(targets)
-        verification_blocked = bool(unverified_binding_count and not targets)
-        reason_code = (
-            "high_risk.blocker.ad_verification_unavailable"
-            if verification_blocked
-            else gate.reason_code
+        scan_store: BindingReconciliationScanStore = (
+            request.app.state.binding_reconciliation_scan_store
         )
+        scan_store.put(report)
         request.session[BINDING_CLEANUP_PREVIEW_SESSION_KEY] = {
-            "status": "blocked" if verification_blocked else "preview",
-            "blocked_stage": "scan" if verification_blocked else "",
-            "reason_code": reason_code,
-            "audit_recorded": True,
+            "scan_id": report.scan_id,
             "organization_id": current_org.org_id,
             "provider_id": page_data["provider_id"],
-            "snapshot_id": int(snapshot["id"] or 0),
-            "snapshot_fingerprint": str(snapshot["snapshot_fingerprint"] or ""),
-            "target_fingerprint": target_fingerprint,
-            "unverified_binding_count": unverified_binding_count,
-            "filters": filters,
-            "context": context.to_dict(),
-            "gate": gate.to_dict(),
-            "scanned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
-        repositories.audit_repo.add_log(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            action_type="high_risk.binding_cleanup.scan",
-            target_type="source_directory_snapshot",
-            target_id=str(snapshot["id"]),
-            result="blocked" if verification_blocked else "success",
-            message="Scanned live AD state and prepared a binding cleanup preview without deleting bindings",
-            payload=high_risk_audit_payload(
-                context,
-                target_fingerprint=target_fingerprint,
-                unverified_binding_count=unverified_binding_count,
-                gate_allowed=gate.allowed and not verification_blocked,
-                gate_reason_code=reason_code,
-            ),
-        )
-        if verification_blocked:
-            flash_t(
-                request,
-                "error",
-                "Live AD verification is unavailable. No saved bindings were removed.",
-            )
-            return RedirectResponse(url=redirect_url, status_code=303)
         flash_t(
             request,
-            "success" if targets else "warning",
-            "Cleanup scan completed. Review {impact_count} verified stale binding(s) before confirming execution.",
-            impact_count=len(targets),
+            "success" if report.cleanup_count else "warning",
+            "Binding scan completed. Review {cleanup_count} cleanable and {skip_count} skipped item(s).",
+            cleanup_count=report.cleanup_count,
+            skip_count=report.skip_count,
         )
         return RedirectResponse(url=redirect_url, status_code=303)
 
+    @app.post("/identity-governance/binding-reconciliation/execute")
     @app.post("/source-directory/reconcile-stale-bindings/confirm")
     def confirm_source_directory_stale_binding_cleanup(
         request: Request,
@@ -1925,6 +1867,7 @@ def register_source_directory_routes(
         snapshot_version: str = Form(""),
         impact_count: str = Form(""),
         preview_id: str = Form(""),
+        production_confirmation: str = Form(""),
     ):
         user = require_capability(request, "mappings.write")
         if isinstance(user, RedirectResponse):
@@ -1939,58 +1882,102 @@ def register_source_directory_routes(
 
         repositories = get_web_repositories(request)
         current_org = get_current_org(request)
-        preview = dict(request.session.get(BINDING_CLEANUP_PREVIEW_SESSION_KEY) or {})
-        filters = dict(preview.get("filters") or {})
-        redirect_url = CANONICAL_ROUTE_PATHS["binding-reconciliation"]
-        if filters:
-            redirect_url += "?" + urlencode(
-                {
-                    **filters,
-                    "verify_ad": "true",
-                    "cleanup_preview": "true",
-                }
-            )
-        context = context_from_preview(
+        redirect_url = (
+            CANONICAL_ROUTE_PATHS["binding-reconciliation"]
+            + "?cleanup_preview=true"
+        )
+        stored = dict(
+            request.session.get(BINDING_CLEANUP_PREVIEW_SESSION_KEY) or {}
+        )
+        scan_store: BindingReconciliationScanStore = (
+            request.app.state.binding_reconciliation_scan_store
+        )
+        report = scan_store.get(str(stored.get("scan_id") or ""))
+        if report is None:
+            flash_t(request, "error", "high_risk.blocker.preview_missing")
+            return RedirectResponse(url=redirect_url, status_code=303)
+
+        service = BindingReconciliationService(
+            user_binding_repo=repositories.user_binding_repo,
+            audit_repo=repositories.audit_repo,
+        )
+        context = cleanup_context(
             request,
             current_org=current_org,
-            preview=preview,
+            report=report,
+        )
+        target_fingerprint = HighRiskOperationPolicy.target_fingerprint(
+            report.cleanup_targets
         )
 
-        def block_execution(reason_code: str, message: str, *, stage: str = "confirm"):
-            blocked_preview = {
-                **preview,
-                "status": "blocked",
-                "blocked_stage": stage,
-                "reason_code": reason_code,
-                "audit_recorded": True,
-                "context": context.to_dict(),
-            }
-            request.session[BINDING_CLEANUP_PREVIEW_SESSION_KEY] = blocked_preview
+        def audit_summary(
+            *,
+            result: str,
+            message: str,
+            reason_code: str = "",
+            removed_count: int = 0,
+            skipped_count: int = 0,
+        ) -> None:
             repositories.audit_repo.add_log(
                 org_id=current_org.org_id,
                 actor_username=user.username,
                 action_type="high_risk.binding_cleanup.execute",
                 target_type="source_directory_snapshot",
-                target_id=str(preview.get("snapshot_id") or 0),
-                result="blocked",
+                target_id=str(report.snapshot_id),
+                result=result,
                 message=message,
                 payload=high_risk_audit_payload(
                     context,
                     reason_code=reason_code,
-                    target_fingerprint=str(preview.get("target_fingerprint") or ""),
+                    target_fingerprint=target_fingerprint,
+                    scanned_at=report.scanned_at,
+                    cleanup_count=report.cleanup_count,
+                    skip_count=report.skip_count,
+                    exact_account_summary=report.exact_account_summary,
+                    removed_count=removed_count,
+                    execution_skipped_count=skipped_count,
                 ),
+            )
+
+        def block_execution(reason_code: str, message: str):
+            blocked_report = service.block_execution(
+                report,
+                actor_username=user.username,
+                audit_context=high_risk_audit_payload(
+                    context,
+                    target_fingerprint=target_fingerprint,
+                    scanned_at=report.scanned_at,
+                ),
+                reason_code=reason_code,
+            )
+            scan_store.replace(blocked_report)
+            audit_summary(
+                result="blocked",
+                message=message,
+                reason_code=reason_code,
+                skipped_count=len(report.items),
             )
             flash_t(request, "error", reason_code)
             return RedirectResponse(url=redirect_url, status_code=303)
 
         if (
-            not preview
-            or str(preview.get("organization_id") or "") != current_org.org_id
-            or str(preview.get("status") or "") != "preview"
+            report.organization_id != current_org.org_id
+            or str(stored.get("organization_id") or "") != current_org.org_id
+            or report.status != "scanned"
         ):
             return block_execution(
-                "high_risk.blocker.preview_missing",
-                "Binding cleanup confirmation was rejected because no current organization preview exists",
+                "binding_reconciliation.reason.organization_changed",
+                "Binding reconciliation organization changed after the scan",
+            )
+        if report.source_provider != str(stored.get("provider_id") or ""):
+            return block_execution(
+                "binding_reconciliation.reason.provider_changed",
+                "Binding reconciliation provider changed after the scan",
+            )
+        if report.environment_label != current_environment_label(request):
+            return block_execution(
+                "binding_reconciliation.reason.environment_changed",
+                "Binding reconciliation environment changed after the scan",
             )
 
         confirmation = HighRiskOperationPolicy.validate_confirmation(
@@ -2010,7 +1997,7 @@ def register_source_directory_routes(
                 "Binding cleanup confirmation no longer matches the current high-risk context",
             )
         if HighRiskOperationPolicy.preview_expired(
-            str(preview.get("scanned_at") or ""),
+            report.scanned_at,
             max_age_seconds=BINDING_CLEANUP_PREVIEW_MAX_AGE_SECONDS,
         ):
             return block_execution(
@@ -2023,163 +2010,100 @@ def register_source_directory_routes(
                 "Binding cleanup execution was rejected because the preview contains no targets",
             )
 
+        gate = HighRiskOperationPolicy.evaluate(context)
+        if not gate.allowed:
+            return block_execution(
+                gate.reason_code,
+                "Binding reconciliation environment gate rejected cleanup",
+            )
+        if is_production_environment(context.environment_label):
+            expected_production_confirmation = f"CLEAN {current_org.org_id}"
+            if production_confirmation.strip() != expected_production_confirmation:
+                return block_execution(
+                    "binding_reconciliation.reason.production_confirmation_required",
+                    "Production binding cleanup requires an explicit second confirmation",
+                )
+
+        execution_scan_started_at = datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        )
         page_data = build_relationship_page(
             request,
-            page_number=max(int(filters.get("page_number") or 1), 1),
-            page_size=50,
-            search=str(filters.get("search") or ""),
-            department_id=str(filters.get("department_id") or ""),
-            status=str(filters.get("status") or ""),
-            employee_id_state=str(filters.get("employee_id_state") or ""),
-            relationship_status=str(filters.get("relationship_status") or "all"),
+            page_number=1,
+            page_size=200,
+            search="",
+            department_id="",
+            status="",
+            employee_id_state="",
+            relationship_status="all",
             verify_ad=True,
+            fetch_all=True,
         )
         snapshot = page_data["snapshot"]
+        if page_data["provider_id"] != report.source_provider:
+            return block_execution(
+                "binding_reconciliation.reason.provider_changed",
+                "Source provider changed after the binding reconciliation scan",
+            )
         if not snapshot or not page_data["ad_verified"]:
             return block_execution(
-                "high_risk.blocker.ad_verification_unavailable",
-                "Binding cleanup execution could not reverify live AD state; no bindings were removed",
-                stage="execute",
+                "binding_reconciliation.reason.verification_unknown",
+                "Binding cleanup could not obtain fresh live AD evidence",
             )
         if (
-            int(snapshot["id"] or 0) != int(preview.get("snapshot_id") or 0)
+            int(snapshot["id"] or 0) != report.snapshot_id
             or str(snapshot["snapshot_fingerprint"] or "")
-            != str(preview.get("snapshot_fingerprint") or "")
+            != report.snapshot_fingerprint
         ):
             return block_execution(
                 "high_risk.blocker.preview_changed",
-                "Source directory snapshot changed after the binding cleanup preview",
-                stage="execute",
+                "Source directory snapshot changed after the binding reconciliation scan",
             )
 
-        targets = [
-            target
-            for item in page_data["relationships"]
-            if (
-                target
-                := IdentityRelationshipPreviewService.verified_stale_binding_cleanup_target(
-                    item
-                )
-            )
-        ]
-        current_target_fingerprint = HighRiskOperationPolicy.target_fingerprint(targets)
-        if (
-            len(targets) != context.impact_count
-            or current_target_fingerprint
-            != str(preview.get("target_fingerprint") or "")
-        ):
-            return block_execution(
-                "high_risk.blocker.preview_changed",
-                "Verified binding cleanup targets changed after preview; no bindings were removed",
-                stage="execute",
-            )
-
-        unverified_binding_count = sum(
-            1
-            for item in page_data["relationships"]
-            if item.before_state.get("bound_ad_username")
-            and str(
-                item.before_state.get("ad_account_state", {}).get("status") or ""
-            )
-            in {"", "not_checked", "unavailable"}
+        current_report = service.scan(
+            page_data["relationships"],
+            organization_id=current_org.org_id,
+            organization_name=current_org.name,
+            environment_label=current_environment_label(request),
+            source_provider=page_data["provider_id"],
+            snapshot_id=int(snapshot["id"] or 0),
+            snapshot_fingerprint=str(snapshot["snapshot_fingerprint"] or ""),
+            scan_started_at=execution_scan_started_at,
         )
-        removed_count = 0
-        changed_count = 0
-        for target in targets:
-            removed = repositories.user_binding_repo.delete_binding_if_target_matches(
-                target["source_user_id"],
-                target["ad_username"],
-                org_id=current_org.org_id,
-                source_provider=target["source_provider"],
-                connector_id=target["connector_id"],
-            )
-            if not removed:
-                changed_count += 1
-                continue
-            removed_count += 1
-            repositories.audit_repo.add_log(
-                org_id=current_org.org_id,
-                actor_username=user.username,
-                action_type="mapping.binding_stale_cleanup",
-                target_type="user_identity_binding",
-                target_id=target["source_user_id"],
-                result="success",
-                message="Removed saved binding after live AD verification confirmed the target was missing",
-                payload={
-                    **high_risk_audit_payload(context),
-                    "source_provider": target["source_provider"],
-                    "connector_id": target["connector_id"],
-                    "source_user_id": target["source_user_id"],
-                    "source_display_name": target["source_display_name"],
-                    "removed_ad_username": target["ad_username"],
-                    "binding_source": target["binding_source"],
-                    "candidate_ad_username": target["candidate_ad_username"],
-                    "verified_at": target["verified_at"],
-                },
-            )
-
-        execution_result = "success" if not changed_count else "partial"
-        repositories.audit_repo.add_log(
-            org_id=current_org.org_id,
+        executed_report = service.execute(
+            report,
+            current_report,
             actor_username=user.username,
-            action_type="high_risk.binding_cleanup.execute",
-            target_type="source_directory_snapshot",
-            target_id=str(snapshot["id"]),
-            result=execution_result,
-            message="Executed the confirmed binding cleanup preview after live AD reverification",
-            payload=high_risk_audit_payload(
+            audit_context=high_risk_audit_payload(
                 context,
-                removed_count=removed_count,
-                changed_count=changed_count,
-                unverified_binding_count=unverified_binding_count,
-                target_fingerprint=current_target_fingerprint,
+                target_fingerprint=target_fingerprint,
+                scanned_at=report.scanned_at,
             ),
         )
-        request.session[BINDING_CLEANUP_PREVIEW_SESSION_KEY] = {
-            **preview,
-            "status": "completed" if not changed_count else "blocked",
-            "blocked_stage": "" if not changed_count else "execute",
-            "reason_code": "" if not changed_count else "high_risk.blocker.preview_changed",
-            "audit_recorded": True,
-            "context": context.to_dict(),
-            "removed_count": removed_count,
-            "changed_count": changed_count,
-            "unverified_binding_count": unverified_binding_count,
-            "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        }
-        if removed_count and unverified_binding_count:
+        scan_store.replace(executed_report)
+        audit_summary(
+            result=(
+                "success"
+                if executed_report.execution_deleted_count == report.cleanup_count
+                else "partial"
+            ),
+            message="Executed binding reconciliation after a second live AD verification",
+            removed_count=executed_report.execution_deleted_count,
+            skipped_count=executed_report.execution_skipped_count,
+        )
+        if executed_report.execution_deleted_count:
             flash_t(
                 request,
                 "success",
-                "Removed {removed_count} verified stale binding(s). {unverified_count} binding(s) could not be verified and were left unchanged.",
-                removed_count=removed_count,
-                unverified_count=unverified_binding_count,
-            )
-        elif removed_count:
-            flash_t(
-                request,
-                "success",
-                "Removed {removed_count} verified stale binding(s). Recheck the candidates before selecting account creation.",
-                removed_count=removed_count,
-            )
-        elif changed_count:
-            flash_t(
-                request,
-                "error",
-                "The verified binding changed before cleanup, so nothing was removed. Review the current binding and try again.",
-            )
-        elif unverified_binding_count:
-            flash_t(
-                request,
-                "error",
-                "Could not verify {unverified_count} saved binding(s). Nothing was removed.",
-                unverified_count=unverified_binding_count,
+                "Binding cleanup completed: {removed_count} removed and {skipped_count} skipped.",
+                removed_count=executed_report.execution_deleted_count,
+                skipped_count=executed_report.execution_skipped_count,
             )
         else:
             flash_t(
                 request,
-                "success",
-                "No verified stale saved bindings were found. Nothing was removed.",
+                "error",
+                "No binding passed the second live verification. Nothing was removed.",
             )
         return RedirectResponse(url=redirect_url, status_code=303)
 

@@ -1,17 +1,13 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
 {% import "components/high_risk.html" as high_risk with context %}
-{% import "components/identity_timeline.html" as identity_timeline with context %}
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Binding Reconciliation"), t("Compare generated candidates, current saved bindings, the latest Dry Run and Apply evidence, and live AD state without mixing these identities into Source Directory."), eyebrow=t("Identity Governance"), badge_text=(t("Live AD verified") if ad_verified else t("Cached evidence")), badge_level=("success" if ad_verified else "warning")) %}
-    {% if snapshot and can("mappings.write") %}
-    <form method="post" action="/source-directory/reconcile-stale-bindings" class="inline">
+  {% call ui.page_header(t("Binding Reconciliation"), t("Scan saved bindings against live AD, review a fixed result set, and only then execute an exact fail-closed cleanup."), eyebrow=t("Identity Governance"), badge_text=(t("Live scan ready") if snapshot else t("Snapshot required")), badge_level=("success" if snapshot else "warning")) %}
+    {% if snapshot %}
+    <form method="post" action="/identity-governance/binding-reconciliation/scan" class="inline" data-binding-reconciliation-scan>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="page_number" value="{{ page_number }}">
-      <input type="hidden" name="search" value="{{ search }}">
-      <input type="hidden" name="relationship_status" value="{{ selected_relationship_status }}">
-      {{ ui.button(t("Scan Binding Differences"), type="submit", variant="primary", icon="scan-search") }}
+      {{ ui.button(t("Scan Bindings"), type="submit", variant="primary", icon="scan-search") }}
     </form>
     {% endif %}
   {% endcall %}
@@ -19,105 +15,157 @@
   {% if not snapshot %}
   <div class="callout callout--warning" role="status">
     <strong>{{ t("No source snapshot is available for reconciliation.") }}</strong>
-    <span>{{ t("Refresh Source Directory first; no binding cleanup can run without a fixed source snapshot.") }}</span>
+    <span>{{ t("Refresh Source Directory first. A binding scan is read-only and never changes the database or a real AD account.") }}</span>
     <a href="/data-sources/source-directory">{{ t("Open Source Directory") }}</a>
   </div>
-  {% elif snapshot_expired %}
-  <div class="callout callout--warning" role="status">
-    <strong>{{ t("The source snapshot is stale.") }}</strong>
-    <span>{{ t("Refresh Source Directory before relying on this reconciliation result.") }}</span>
-  </div>
-  {% elif not ad_verified %}
-  <div class="callout callout--info" role="status">
-    <strong>{{ t("Current AD state has not been loaded for this page.") }}</strong>
-    <span>{{ t("Scanning binding differences performs live verification. Unknown or unavailable AD state never authorizes deletion.") }}</span>
-  </div>
   {% else %}
-  <div class="callout callout--success" role="status">
-    <strong>{{ t("Current-page AD evidence is verified.") }}</strong>
-    <span>{{ t("Review risk and the next action for each identity before changing a binding.") }}</span>
+  <div class="callout callout--info" role="status">
+    <strong>{{ t("Scanning is read-only.") }}</strong>
+    <span>{{ t("The scan performs live AD reads and stores a short-lived result outside the application database. Unknown, unavailable, protected, historical, ambiguous, or changed evidence never authorizes deletion.") }}</span>
   </div>
   {% endif %}
 
-  {% if binding_cleanup_preview %}
-  {% set cleanup_context = binding_cleanup_preview.context %}
+  {{ high_risk.workflow(binding_cleanup_workflow, ui, "Binding reconciliation workflow") }}
+
+  {% if binding_reconciliation_report %}
+  {% set report = binding_reconciliation_report %}
+  {% set cleanup_context = binding_cleanup_context %}
   {% set cleanup_confirm_details = [
-    (t("Organization"), cleanup_context.organization_name ~ " (" ~ cleanup_context.organization_id ~ ")"),
-    (t("Environment"), t(cleanup_context.environment_label)),
+    (t("Current Organization"), cleanup_context.organization_name ~ " (" ~ cleanup_context.organization_id ~ ")"),
+    (t("Current Environment"), t(cleanup_context.environment_label)),
     (t("Snapshot Version"), t(cleanup_context.snapshot_version)),
-    (t("Impact Count"), cleanup_context.impact_count)
+    (t("Scan Time"), report.scanned_at),
+    (t("Cleanable Count"), report.cleanup_count),
+    (t("Skip Count"), report.skip_count),
+    (t("Exact Accounts To Delete"), report.exact_account_summary)
   ] %}
-  <section class="card stack-md" data-high-risk-cleanup-preview>
+
+  <section class="card stack-md" data-binding-reconciliation-report data-high-risk-cleanup-preview>
     <div class="panel__intro">
       <div class="panel__header">
-        <h2 class="panel__title">{{ t("Binding Cleanup Preview") }}</h2>
-        {{ ui.badge(t(binding_cleanup_preview.status|capitalize), "success" if binding_cleanup_preview.status == "completed" else ("error" if binding_cleanup_preview.status == "blocked" else "warning")) }}
+        <h2 class="panel__title">{{ t("Scan Results") }}</h2>
+        {{ ui.badge(t(report.status), "success" if report.status == "completed" else ("error" if report.status in ["blocked", "completed_with_skips"] else "warning")) }}
       </div>
-      <p class="panel__description">{{ t("Review the fixed scan context before confirming any binding deletion. A second live AD verification runs immediately before execution.") }}</p>
+      <p class="panel__description">{{ t("This fixed scan result is the only source for confirmation. Execution performs a second live AD verification and an atomic binding revision check.") }}</p>
     </div>
-    {{ high_risk.workflow(binding_cleanup_workflow, ui, "Binding cleanup workflow") }}
+
     {{ high_risk.context_details(cleanup_context) }}
-    {% if binding_cleanup_preview.reason_code %}
-    <div class="panel-note {{ 'error' if binding_cleanup_preview.status == 'blocked' else 'warning' }}" role="status"><strong>{{ t("Blocked") }}</strong><span>{{ t(binding_cleanup_preview.reason_code) }}</span></div>
+    <div class="detail-grid" data-binding-scan-context>
+      <div class="detail-item"><div class="label">{{ t("Scan Time") }}</div><div class="value">{{ ui.local_time(report.scanned_at) }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Cleanable Count") }}</div><div class="value" data-cleanable-count>{{ report.cleanup_count }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Skip Count") }}</div><div class="value" data-skip-count>{{ report.skip_count }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Provider") }}</div><div class="value cell-mono">{{ report.source_provider }}</div></div>
+    </div>
+
+    <div class="stats-grid binding-reconciliation-categories" data-binding-reconciliation-categories>
+      {% for category in binding_reconciliation_categories %}
+        {{ ui.compact_stat(t(category.label), report.category_counts.get(category.code, 0), t(category.code)) }}
+      {% endfor %}
+    </div>
+
+    <div class="panel-note info" data-exact-cleanup-accounts>
+      <strong>{{ t("Exact Accounts To Delete") }}</strong>
+      <span class="cell-mono">{{ report.exact_account_summary }}</span>
+    </div>
+
+    {% if report.has_concurrent_changes %}
+    <div class="panel-note error" role="alert">
+      <strong>{{ t("Binding changed concurrently") }}</strong>
+      <span>{{ t("At least one binding changed after the scan. Cleanup is disabled until you scan again.") }}</span>
+    </div>
     {% endif %}
-    {% if binding_cleanup_preview.status == "preview" %}
-    <div class="panel-note info">{{ t("{count} binding(s) could not be verified and will remain unchanged.", count=binding_cleanup_preview.unverified_binding_count or 0) }}</div>
-    <form method="post" action="/source-directory/reconcile-stale-bindings/confirm" class="actions">
+
+    {% if report.status == "scanned" %}
+    <form method="post" action="/identity-governance/binding-reconciliation/execute" class="stack-md" data-binding-cleanup-confirmation>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       {{ high_risk.confirmation_fields(cleanup_context) }}
-      {{ ui.button(t("Confirm and remove {count} binding(s)", count=cleanup_context.impact_count), type="submit", variant="danger", icon="trash-2", disabled=(not binding_cleanup_preview.gate.allowed or cleanup_context.impact_count <= 0), confirm_text=t("Only bindings in this reviewed preview will be considered. Live AD must again confirm each exact target account is missing."), confirm_title=t("Confirm Binding Cleanup"), confirm_details=cleanup_confirm_details) }}
-      {% if not binding_cleanup_preview.gate.allowed %}<span class="form-help">{{ t(binding_cleanup_preview.gate.reason_code) }}</span>{% elif cleanup_context.impact_count <= 0 %}<span class="form-help">{{ t("No verified stale bindings require cleanup.") }}</span>{% endif %}
+      {% if production_cleanup %}
+      <label class="field">
+        <span>{{ t("Production second confirmation") }}</span>
+        <input type="text" name="production_confirmation" required autocomplete="off" placeholder="CLEAN {{ current_org.org_id }}" aria-describedby="production-cleanup-help">
+        <small id="production-cleanup-help" class="form-help">{{ t("Type CLEAN {organization_id} here, then type it again in the confirmation dialog.", organization_id=current_org.org_id) }}</small>
+      </label>
+      {% else %}
+      <input type="hidden" name="production_confirmation" value="">
+      {% endif %}
+      <div class="actions">
+        {{ ui.button(
+          t("Confirm Cleanup of {count} Binding(s)", count=report.cleanup_count),
+          type="submit",
+          variant="danger",
+          icon="trash-2",
+          disabled=(not binding_cleanup_gate.allowed or report.cleanup_count <= 0),
+          confirm_text=t("Only the exact reviewed bindings are eligible. Every item must again return missing with exists=false before its database binding can be deleted."),
+          confirm_title=t("Confirm Binding Cleanup"),
+          confirm_require=("CLEAN " ~ current_org.org_id) if production_cleanup else "",
+          confirm_input_help=t("Type {value} again to confirm production cleanup.") if production_cleanup else "",
+          confirm_details=cleanup_confirm_details
+        ) }}
+        {% if not binding_cleanup_gate.allowed %}<span class="form-help">{{ t(binding_cleanup_gate.reason_code) }}</span>{% elif report.cleanup_count <= 0 %}<span class="form-help">{{ t("No binding is eligible for cleanup.") }}</span>{% endif %}
+      </div>
     </form>
-    {% elif binding_cleanup_preview.status == "completed" %}
-    <div class="panel-note success" role="status">{{ t("Cleanup completed: {removed_count} removed, {unchanged_count} unchanged.", removed_count=binding_cleanup_preview.removed_count or 0, unchanged_count=(binding_cleanup_preview.changed_count or 0) + (binding_cleanup_preview.unverified_binding_count or 0)) }}</div>
+    {% else %}
+    <div class="panel-note {{ 'success' if report.execution_deleted_count else 'error' }}" role="status">
+      <strong>{{ t("Execution Result") }}</strong>
+      <span>{{ t("{removed_count} binding(s) removed; {skipped_count} item(s) skipped.", removed_count=report.execution_deleted_count, skipped_count=report.execution_skipped_count) }}</span>
+    </div>
+    <div class="actions">
+      {{ ui.button(t("Scan Again"), type="submit", variant="secondary", icon="scan-search", attrs='form="binding-reconciliation-rescan"') }}
+      {{ ui.button(t("Go to Identity Matching Workbench"), href="/identity-governance/identity-matching", variant="primary", icon="users") }}
+    </div>
+    <form id="binding-reconciliation-rescan" method="post" action="/identity-governance/binding-reconciliation/scan" hidden>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    </form>
     {% endif %}
   </section>
-  {% endif %}
 
-  {% call ui.panel(t("Identity Evidence"), description=t("The daily list is limited to eight business columns. Mapping inputs, reasons, timestamps, and job identifiers remain in collapsed evidence.")) %}
-    <form method="get" action="/identity-governance/binding-reconciliation" class="filter-bar">
-      <label>{{ t("Search") }}<input type="search" name="search" value="{{ search }}" placeholder="{{ t('Name, source user ID, employee ID') }}"></label>
-      <label>{{ t("Identity relationship") }}
-        <select name="relationship_status">
-          {% for value, label in [('all','All relationships'),('bound','Bound'),('unbound','Unbound'),('candidate_only','Candidate only'),('manual','Manual binding'),('automatic','Automatic binding'),('disabled','Binding disabled'),('ad_exists','AD exists'),('ad_missing','AD missing'),('ad_unknown','AD status unknown'),('planned_change','Has planned change'),('not_applied','Not applied'),('apply_success','Apply succeeded'),('apply_failed','Apply failed'),('conflict','Conflicts')] %}
-          <option value="{{ value }}" {% if selected_relationship_status == value %}selected{% endif %}>{{ t(label) }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      {{ ui.button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
-      {% if snapshot and not ad_verified %}{{ ui.button(t("Verify Current Page"), href="?page_number=" ~ page_number ~ "&search=" ~ (search|urlencode) ~ "&relationship_status=" ~ selected_relationship_status ~ "&verify_ad=true", variant="ghost", icon="shield-check") }}{% endif %}
-    </form>
-
-    <div class="table-scroll identity-governance-table" tabindex="0" role="region" aria-label="{{ t('Binding reconciliation identity evidence') }}">
+  {% call ui.panel(t("Reconciliation Details"), description=t("Each row preserves the scanned identity boundary, live AD evidence, cleanup reason, and whether cleanup is allowed.")) %}
+    <div class="table-scroll identity-governance-table binding-reconciliation-table" tabindex="0" role="region" aria-label="{{ t('Binding reconciliation details') }}">
       <table>
-        <thead><tr><th>{{ t("Identity") }}</th><th>{{ t("Candidate") }}</th><th>{{ t("Current Binding") }}</th><th>{{ t("Current AD State") }}</th><th>{{ t("Latest Dry Run") }}</th><th>{{ t("Latest Apply") }}</th><th>{{ t("Risk") }}</th><th>{{ t("Next Step") }}</th></tr></thead>
-        <tbody>
-          {% for item in relationships %}
+        <thead>
           <tr>
-            <td>
-              <strong>{{ item.source_display_name or "-" }}</strong><div class="muted cell-mono">{{ item.source_user_id }}</div><div class="muted">{{ item.employee_id or "-" }}</div>
-              <details class="detail-toggle compact-evidence" data-identity-timeline>
-                <summary>{{ t("Identity timeline") }}</summary>
-                {{ identity_timeline.timeline(item) }}
-              </details>
-            </td>
-            <td><div class="cell-mono cell-strong">{{ item.candidate_mapping.ad_username or "-" }}</div><details class="detail-toggle compact-evidence"><summary>{{ t("Candidate evidence") }}</summary><div>{{ t("Field") }}: {{ item.mapping_input.field_label or item.mapping_input.field_name }}</div><div>{{ t("Method") }}: {{ t(item.mapping_input.method) }}</div><div>{{ t("Value") }}: <span class="cell-mono">{{ item.mapping_input.value or "-" }}</span></div></details></td>
-            <td><div class="cell-mono">{{ item.before_state.bound_ad_username or "-" }}</div><div class="muted">{{ t(item.before_state.binding_source) if item.before_state.binding_source else t("No binding") }}</div>{{ ui.badge(t("Enabled") if item.before_state.binding_enabled else t("Disabled"), "success" if item.before_state.binding_enabled else "warning") if item.before_state.bound_ad_username else "" }}</td>
-            <td>{{ ui.badge(t(item.before_state.ad_account_state.status or "not_checked"), "warning" if item.before_state.ad_account_state.status in ["missing", "unavailable"] else ("success" if item.before_state.ad_account_state.status in ["exists", "enabled"] else "info")) }}<div class="muted">{{ ui.local_time(item.before_state.verified_at) if item.before_state.verified_at else "-" }}</div></td>
-            <td><div class="cell-mono">{{ item.planned_after_state.ad_username or "-" }}</div><div>{{ t(item.planned_after_state.operation) if item.planned_after_state.operation else t("Not run") }}</div>{% if item.planned_after_state.job_id %}<a href="/execution-center/jobs/{{ item.planned_after_state.job_id }}" class="cell-mono">{{ item.planned_after_state.job_id }}</a>{% endif %}</td>
-            <td><div class="cell-mono">{{ item.applied_after_state.ad_username or "-" }}</div><div>{{ t(item.applied_after_state.result) }}</div>{% if item.applied_after_state.job_id %}<a href="/execution-center/jobs/{{ item.applied_after_state.job_id }}" class="cell-mono">{{ item.applied_after_state.job_id }}</a>{% endif %}</td>
-            <td>{% if item.risks %}{% for risk in item.risks %}{{ ui.badge(t(risk), "warning") }}{% endfor %}{% else %}{{ ui.badge(t("No identified risk"), "success") }}{% endif %}<details class="detail-toggle compact-evidence"><summary>{{ t("Resolution evidence") }}</summary><div>{{ t(item.difference.status) }}</div><div>{{ t(item.resolution_reason) }}</div></details></td>
-            <td><a href="/identity-governance/manual-overrides?q={{ item.source_user_id|urlencode }}">{{ t("Open binding") }}</a>{% if item.planned_after_state.job_id %}<br><a href="/execution-center/jobs/{{ item.planned_after_state.job_id }}">{{ t("View Dry Run") }}</a>{% endif %}{% if item.applied_after_state.job_id %}<br><a href="/execution-center/jobs/{{ item.applied_after_state.job_id }}">{{ t("View Apply") }}</a>{% endif %}</td>
+            <th>{{ t("Source User") }}</th>
+            <th>{{ t("Employee ID") }}</th>
+            <th>{{ t("Current Saved Binding") }}</th>
+            <th>{{ t("Candidate Account") }}</th>
+            <th>{{ t("AD Verification Status") }}</th>
+            <th>{{ t("Verification Time") }}</th>
+            <th>{{ t("Cleanup Reason") }}</th>
+            <th>{{ t("Cleanup Allowed") }}</th>
           </tr>
-          {% else %}<tr><td colspan="8" class="table-empty">{{ t("No identity relationships match the current filters.") }}</td></tr>{% endfor %}
+        </thead>
+        <tbody>
+          {% for item in report.items %}
+          <tr data-reconciliation-category="{{ item.category }}" data-source-user-id="{{ item.source_user_id }}">
+            <td><strong>{{ item.source_display_name or "-" }}</strong><div class="muted cell-mono">{{ item.source_user_id }}</div><div class="muted">{{ item.source_provider }} / {{ item.connector_id }}</div></td>
+            <td class="cell-mono">{{ item.employee_id or "-" }}</td>
+            <td><div class="cell-mono cell-strong">{{ item.saved_binding or "-" }}</div>{% if item.current_saved_binding != item.saved_binding %}<div class="muted">{{ t("Now") }}: <span class="cell-mono">{{ item.current_saved_binding or t("No binding") }}</span></div>{% endif %}<div class="muted">{{ t("Revision") }} {{ item.binding_revision }}</div></td>
+            <td><div class="cell-mono">{{ item.candidate_account or "-" }}</div>{% if item.can_create %}{{ ui.badge(t("Can create"), "success") }}<div><a href="/identity-governance/identity-matching?search={{ item.source_user_id|urlencode }}&verify_ad=true">{{ t("Go to Identity Matching Workbench") }}</a></div>{% endif %}</td>
+            <td>{{ ui.badge(t(item.ad_status), item.category_level) }}<div class="muted">{{ t("exists") }}={{ "false" if item.ad_exists is sameas false else ("true" if item.ad_exists is sameas true else "unknown") }}</div><div class="muted cell-mono">{{ item.checked_account or "-" }}</div></td>
+            <td>{{ ui.local_time(item.verified_at) if item.verified_at else "-" }}</td>
+            <td>{{ ui.badge(t(item.category_label), item.category_level) }}<div>{{ t(item.cleanup_reason) }}</div>{% if item.execution_reason_code %}<div class="muted">{{ t(item.execution_reason_code) }}</div>{% endif %}</td>
+            <td>{% if item.cleanup_allowed %}{{ ui.badge(t("Yes"), "success") }}{% else %}{{ ui.badge(t("No"), "warning") }}{% endif %}{% if item.execution_result %}<div class="muted">{{ t(item.execution_result) }}</div>{% endif %}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8" class="table-empty">{{ t("No identities were found in the current source snapshot.") }}</td></tr>
+          {% endfor %}
         </tbody>
       </table>
     </div>
-    <div class="pagination-bar"><span>{{ t("{count} matching users", count=total_users) }}</span><div>{% if page_number > 1 %}{{ ui.button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&search=" ~ (search|urlencode) ~ "&relationship_status=" ~ selected_relationship_status, variant="secondary") }}{% endif %}<span>{{ page_number }} / {{ total_pages }}</span>{% if page_number < total_pages %}{{ ui.button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&search=" ~ (search|urlencode) ~ "&relationship_status=" ~ selected_relationship_status, variant="secondary") }}{% endif %}</div></div>
   {% endcall %}
+  {% else %}
+  {% call ui.panel(t("Start a Binding Scan"), description=t("A scan reads all identities in the active source snapshot, verifies saved and candidate accounts against their assigned AD connectors, and does not write the database.")) %}
+    <div class="detail-grid">
+      <div class="detail-item"><div class="label">{{ t("Organization") }}</div><div class="value">{{ current_org.name }} <span class="muted">({{ current_org.org_id }})</span></div></div>
+      <div class="detail-item"><div class="label">{{ t("Provider") }}</div><div class="value">{{ provider_name }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Snapshot Version") }}</div><div class="value cell-mono">{{ "#" ~ snapshot.id if snapshot else t("Not available") }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Database Writes") }}</div><div class="value">{{ t("None") }}</div></div>
+    </div>
+  {% endcall %}
+  {% endif %}
 
-  {% call ui.helper_block(t("Next step"), t("Resolve manual identity decisions in Manual Overrides. Run a fresh Dry Run after changing any binding."), "info") %}
-    <div class="actions">{{ ui.button(t("Open Manual Overrides"), href="/identity-governance/manual-overrides", variant="secondary", icon="layers") }}{{ ui.button(t("Open Dry Run"), href="/execution-center/dry-run", variant="ghost", icon="play-circle") }}</div>
+  {% call ui.helper_block(t("Next step"), t("Use the Identity Matching Workbench for candidate review and account-creation preparation. Binding reconciliation never creates, disables, deletes, or modifies a real AD account."), "info") %}
+    <div class="actions">{{ ui.button(t("Go to Identity Matching Workbench"), href="/identity-governance/identity-matching", variant="secondary", icon="users") }}</div>
   {% endcall %}
 </div>
 {% endblock %}

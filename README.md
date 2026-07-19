@@ -22,7 +22,7 @@ The codebase has already been refactored away from a simple `WeCom -> AD` utilit
 - Full, department, selected-user, and single-user replay scopes with partial-sync offboarding protection
 - Source-field-driven AD account mapping with coverage/collision preview and snapshot-bound Dry Run approval
 - Per-user identity relationship preview that separates field candidates, before-sync bindings/AD state, Dry Run expectations, and completed Apply evidence
-- Audited current-page reconciliation that removes an exact stale binding only after live AD verification confirms its saved target is missing
+- Independent binding reconciliation with a read-only live scan, eight fail-closed result classes, reviewed exact targets, second AD verification, optimistic concurrency protection, and per-item audit
 - AD connector routing and multi-domain support
 - Department to OU synchronization
 - User provisioning, update, reactivation, and disable workflows

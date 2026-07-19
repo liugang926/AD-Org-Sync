@@ -30,37 +30,42 @@ class _UnavailableCreationPreviewTargetProvider(_CreationPreviewTargetProvider):
 
 class WebSourceDirectoryTests(WebAuthzBaseTestCase):
     def _scan_stale_bindings(self):
-        return self._route("/source-directory/reconcile-stale-bindings", "POST")(
-            self._request("/source-directory/reconcile-stale-bindings", "POST"),
+        return self._route(
+            "/identity-governance/binding-reconciliation/scan", "POST"
+        )(
+            self._request(
+                "/identity-governance/binding-reconciliation/scan", "POST"
+            ),
             csrf_token=self.session["_csrf_token"],
-            page_number=1,
-            search="",
-            department_id="",
-            status="",
-            employee_id_state="",
-            relationship_status="all",
+        )
+
+    def _binding_reconciliation_report(self):
+        stored = self.session.get("_binding_reconciliation_scan") or {}
+        return self.app.state.binding_reconciliation_scan_store.get(
+            stored.get("scan_id", "")
         )
 
     def _confirm_stale_binding_cleanup(self, *, csrf_token=None, **overrides):
-        preview = self.session.get("_binding_cleanup_preview") or {}
-        context = dict(preview.get("context") or {})
+        report = self._binding_reconciliation_report()
+        self.assertIsNotNone(report)
         submission = {
             "csrf_token": csrf_token
             if csrf_token is not None
             else self.session["_csrf_token"],
-            "operation_code": context.get("operation_code", ""),
-            "organization_id": context.get("organization_id", ""),
-            "environment_label": context.get("environment_label", ""),
-            "snapshot_version": context.get("snapshot_version", ""),
-            "impact_count": str(context.get("impact_count", "")),
-            "preview_id": context.get("preview_id", ""),
+            "operation_code": "binding.cleanup",
+            "organization_id": report.organization_id,
+            "environment_label": report.environment_label,
+            "snapshot_version": report.snapshot_version,
+            "impact_count": str(report.cleanup_count),
+            "preview_id": report.scan_id,
+            "production_confirmation": "",
         }
         submission.update(overrides)
         return self._route(
-            "/source-directory/reconcile-stale-bindings/confirm", "POST"
+            "/identity-governance/binding-reconciliation/execute", "POST"
         )(
             self._request(
-                "/source-directory/reconcile-stale-bindings/confirm", "POST"
+                "/identity-governance/binding-reconciliation/execute", "POST"
             ),
             **submission,
         )
@@ -444,7 +449,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertNotIn("unsafe-value", body)
         self.assertIn("0s", body)
 
-    def test_operator_cannot_open_or_modify_source_directory(self):
+    def test_operator_can_scan_bindings_but_cannot_modify_source_directory_or_cleanup(self):
         self._login("operator1")
         response = self._route("/source-directory", "GET")(
             self._request("/source-directory")
@@ -469,15 +474,18 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/dashboard")
         response = self._route(
-            "/source-directory/reconcile-stale-bindings", "POST"
+            "/identity-governance/binding-reconciliation/scan", "POST"
         )(
             self._request(
-                "/source-directory/reconcile-stale-bindings", "POST"
+                "/identity-governance/binding-reconciliation/scan", "POST"
             ),
             csrf_token="",
         )
         self.assertEqual(response.status_code, 303)
-        self.assertEqual(response.headers["location"], "/dashboard")
+        self.assertEqual(
+            response.headers["location"],
+            "/identity-governance/binding-reconciliation",
+        )
         response = self._route("/source-directory/scope", "POST")(
             self._request("/source-directory/scope", "POST"),
             csrf_token="",
@@ -627,17 +635,10 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
             self._request("/identity-governance/binding-reconciliation")
         )
         body = self._text(page)
-        self.assertIn("Identity Evidence", body)
-        self.assertIn("Candidate", body)
-        self.assertIn("Current Binding", body)
-        self.assertIn("Latest Dry Run", body)
-        self.assertIn("Latest Apply", body)
-        self.assertEqual(body.count("<th>"), 8)
-        self.assertEqual(body.count("data-identity-timeline>"), 2)
-        self.assertEqual(body.count("data-identity-timeline-step"), 10)
-        self.assertIn("TJ001", body)
-        self.assertIn("alice.manual", body)
-        self.assertIn("Manual binding overrides the field-generated candidate", body)
+        self.assertIn("Scan Bindings", body)
+        self.assertIn("Scanning is read-only", body)
+        self.assertIn("Start a Binding Scan", body)
+        self.assertNotIn("alice.manual", body)
         self.assertNotIn("DistinguishedName", body)
         self.assertNotIn("Password123!", body)
 
@@ -717,7 +718,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         page = self._route("/identity-governance/binding-reconciliation", "GET")(
             self._request("/identity-governance/binding-reconciliation")
         )
-        self.assertIn("Scan Binding Differences", self._text(page))
+        self.assertIn("Scan Bindings", self._text(page))
 
         with patch(
             "sync_app.web.app.build_target_provider",
@@ -726,7 +727,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
             scan_response = self._scan_stale_bindings()
 
             self.assertEqual(scan_response.status_code, 303)
-            self.assertIn("verify_ad=true", scan_response.headers["location"])
+            self.assertIn("cleanup_preview=true", scan_response.headers["location"])
             self.assertIsNotNone(
                 self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
                     "alice",
@@ -735,11 +736,17 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
                     connector_id="default",
                 )
             )
-            preview = self.session["_binding_cleanup_preview"]
-            self.assertEqual(preview["status"], "preview")
-            self.assertEqual(preview["context"]["impact_count"], 1)
-            self.assertEqual(preview["context"]["organization_id"], "default")
-            self.assertEqual(preview["context"]["environment_label"], "Local environment")
+            report = self._binding_reconciliation_report()
+            self.assertEqual(report.status, "scanned")
+            self.assertEqual(report.cleanup_count, 1)
+            self.assertEqual(report.skip_count, 1)
+            self.assertEqual(report.organization_id, "default")
+            self.assertEqual(report.environment_label, "Local environment")
+            alice = next(
+                item for item in report.items if item.source_user_id == "alice"
+            )
+            self.assertEqual(alice.category, "safe_cleanup")
+            self.assertTrue(alice.cleanup_allowed)
 
             preview_page = self._route(
                 "/identity-governance/binding-reconciliation", "GET"
@@ -747,14 +754,17 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
                 self._request("/identity-governance/binding-reconciliation")
             )
             preview_body = self._text(preview_page)
-            self.assertIn("Binding Cleanup Preview", preview_body)
+            self.assertIn("Scan Results", preview_body)
             self.assertIn("Snapshot Version", preview_body)
-            self.assertIn("Impact Count", preview_body)
+            self.assertIn("Cleanable Count", preview_body)
+            self.assertIn("Skip Count", preview_body)
+            self.assertIn("legacy.alice", preview_body)
+            self.assertIn("Exact Accounts To Delete", preview_body)
 
             response = self._confirm_stale_binding_cleanup()
 
         self.assertEqual(response.status_code, 303)
-        self.assertIn("verify_ad=true", response.headers["location"])
+        self.assertIn("cleanup_preview=true", response.headers["location"])
         self.assertIsNone(
             self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
                 "alice",
@@ -766,14 +776,15 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertEqual(
             self.session["_flash"]["message"],
             {
-                "key": "Removed {removed_count} verified stale binding(s). Recheck the candidates before selecting account creation.",
-                "params": {"removed_count": 1},
+                "key": "Binding cleanup completed: {removed_count} removed and {skipped_count} skipped.",
+                "params": {"removed_count": 1, "skipped_count": 1},
             },
         )
         cleanup_logs = [
             item
             for item in self.app.state.audit_repo.list_recent_logs(20)
-            if item.action_type == "mapping.binding_stale_cleanup"
+            if item.action_type == "mapping.binding_reconciliation.item"
+            and item.result == "success"
         ]
         self.assertEqual(len(cleanup_logs), 1)
         self.assertEqual(cleanup_logs[0].target_id, "alice")
@@ -788,6 +799,13 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertEqual(execute_logs[0].payload["environment_label"], "Local environment")
         self.assertEqual(execute_logs[0].payload["impact_count"], 1)
         self.assertTrue(execute_logs[0].payload["snapshot_version"].startswith("#"))
+        completed = self._binding_reconciliation_report()
+        self.assertEqual(completed.execution_deleted_count, 1)
+        completed_alice = next(
+            item for item in completed.items if item.source_user_id == "alice"
+        )
+        self.assertEqual(completed_alice.current_saved_binding, "")
+        self.assertTrue(completed_alice.can_create)
 
     def test_unavailable_ad_verification_never_cleans_saved_binding(self):
         self._login("superadmin")
@@ -808,12 +826,194 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
                 connector_id="default",
             )
         )
+        report = self._binding_reconciliation_report()
+        alice = next(
+            item for item in report.items if item.source_user_id == "alice"
+        )
+        self.assertEqual(alice.category, "directory_unavailable")
+        self.assertFalse(alice.cleanup_allowed)
         self.assertEqual(
             self.session["_flash"]["message"],
             {
-                "key": "Live AD verification is unavailable. No saved bindings were removed.",
-                "params": {},
+                "key": "Binding scan completed. Review {cleanup_count} cleanable and {skip_count} skipped item(s).",
+                "params": {"cleanup_count": 0, "skip_count": 2},
             },
+        )
+
+    def test_binding_scan_requires_only_read_permission_and_writes_no_database_state(self):
+        self._login("operator1")
+        self._seed_creation_candidates()
+        binding_before = (
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
+        )
+        audit_count_before = len(self.app.state.audit_repo.list_recent_logs(100))
+
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_CreationPreviewTargetProvider(),
+        ):
+            response = self._scan_stale_bindings()
+
+        self.assertEqual(response.status_code, 303)
+        report = self._binding_reconciliation_report()
+        self.assertEqual(report.cleanup_count, 1)
+        binding_after = (
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
+        )
+        self.assertEqual(binding_after.ad_username, binding_before.ad_username)
+        self.assertEqual(
+            binding_after.binding_revision,
+            binding_before.binding_revision,
+        )
+        self.assertEqual(
+            len(self.app.state.audit_repo.list_recent_logs(100)),
+            audit_count_before,
+        )
+        cleanup_response = self._route(
+            "/identity-governance/binding-reconciliation/execute", "POST"
+        )(
+            self._request(
+                "/identity-governance/binding-reconciliation/execute", "POST"
+            ),
+            csrf_token=self.session["_csrf_token"],
+        )
+        self.assertEqual(cleanup_response.status_code, 303)
+        self.assertEqual(cleanup_response.headers["location"], "/dashboard")
+
+    def test_binding_reconciliation_get_never_mutates_binding_or_audit_state(self):
+        self._login("superadmin")
+        self._seed_creation_candidates()
+        binding_before = (
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
+        )
+        audit_count_before = len(self.app.state.audit_repo.list_recent_logs(100))
+
+        response = self._route(
+            "/identity-governance/binding-reconciliation", "GET"
+        )(
+            self._request("/identity-governance/binding-reconciliation")
+        )
+
+        self.assertEqual(response.status_code, 200)
+        binding_after = (
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
+        )
+        self.assertEqual(binding_after.to_dict(), binding_before.to_dict())
+        self.assertEqual(
+            len(self.app.state.audit_repo.list_recent_logs(100)),
+            audit_count_before,
+        )
+
+    def test_concurrent_binding_revision_is_visible_and_never_deleted(self):
+        self._login("superadmin")
+        self._seed_creation_candidates()
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_CreationPreviewTargetProvider(),
+        ):
+            self._scan_stale_bindings()
+        self.app.state.user_binding_repo.upsert_binding(
+            "alice",
+            "legacy.alice",
+            org_id="default",
+            source_provider="wecom",
+            connector_id="default",
+            source="managed_generated",
+            preserve_manual=False,
+        )
+
+        page = self._route(
+            "/identity-governance/binding-reconciliation", "GET"
+        )(
+            self._request("/identity-governance/binding-reconciliation")
+        )
+        body = self._text(page)
+        self.assertIn("Binding changed concurrently", body)
+        self.assertIn("disabled aria-disabled=\"true\"", body)
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_CreationPreviewTargetProvider(),
+        ):
+            response = self._confirm_stale_binding_cleanup()
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIsNotNone(
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
+        )
+        completed = self._binding_reconciliation_report()
+        alice = next(
+            item for item in completed.items if item.source_user_id == "alice"
+        )
+        self.assertEqual(alice.category, "binding_changed")
+        self.assertEqual(completed.execution_deleted_count, 0)
+
+    def test_production_cleanup_requires_server_verified_second_confirmation(self):
+        self._login("superadmin")
+        self._seed_creation_candidates()
+        self.app.state.environment_label = "Production"
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_CreationPreviewTargetProvider(),
+        ):
+            self._scan_stale_bindings()
+            rejected = self._confirm_stale_binding_cleanup()
+
+        self.assertEqual(rejected.status_code, 303)
+        self.assertIsNotNone(
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
+        )
+        self.assertEqual(
+            self._binding_reconciliation_report().execution_reason_code,
+            "binding_reconciliation.reason.production_confirmation_required",
+        )
+
+        with patch(
+            "sync_app.web.app.build_target_provider",
+            return_value=_CreationPreviewTargetProvider(),
+        ):
+            self._scan_stale_bindings()
+            accepted = self._confirm_stale_binding_cleanup(
+                production_confirmation="CLEAN default"
+            )
+
+        self.assertEqual(accepted.status_code, 303)
+        self.assertIsNone(
+            self.app.state.user_binding_repo.get_binding_record_by_source_user_id(
+                "alice",
+                org_id="default",
+                source_provider="wecom",
+                connector_id="default",
+            )
         )
 
     def test_cleanup_confirmation_fails_closed_for_csrf_org_change_and_unlabeled_environment(self):

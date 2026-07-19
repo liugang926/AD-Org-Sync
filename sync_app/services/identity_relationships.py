@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 from sync_app.core.directory_protection import is_protected_ad_account_name
 from sync_app.core.fingerprints import fingerprint_json
@@ -430,7 +430,7 @@ def build_runtime_identity_evidence(
         }
         for item in binding_records
     ]
-    evidence = {
+    evidence: dict[str, Any] = {
         "org_id": org_id,
         "source_provider": source_provider,
         "connector_id": connector_id,
@@ -447,12 +447,12 @@ def build_runtime_identity_evidence(
         org_id=org_id,
         source_provider=source_provider,
         connector_id=connector_id,
-        source_user_id=row["source_user_id"],
-        source_snapshot_fingerprint=evidence["source_snapshot_fingerprint"],
-        selection_fingerprint=evidence["selection_fingerprint"],
-        config_fingerprint=evidence["config_fingerprint"],
-        mapping_input=evidence["mapping_input"],
-        candidate_mapping=evidence["candidate_mapping"],
+        source_user_id=str(row["source_user_id"]),
+        source_snapshot_fingerprint=str(evidence["source_snapshot_fingerprint"]),
+        selection_fingerprint=str(evidence["selection_fingerprint"]),
+        config_fingerprint=str(evidence["config_fingerprint"]),
+        mapping_input=dict(evidence["mapping_input"]),
+        candidate_mapping=dict(evidence["candidate_mapping"]),
         binding_signature=binding_signature,
         ad_state=before_ad_state,
     )
@@ -518,9 +518,9 @@ class IdentityRelationshipPreviewService:
     @staticmethod
     def load_ad_states(
         target_provider_factory: Callable[[str], Any],
-        usernames_by_connector: dict[str, Iterable[str]],
+        usernames_by_connector: Mapping[str, Iterable[str]],
         *,
-        protected_accounts_by_connector: dict[str, Iterable[str]] | None = None,
+        protected_accounts_by_connector: Mapping[str, Iterable[str]] | None = None,
         batch_size: int = 100,
     ) -> dict[tuple[str, str], dict[str, Any]]:
         """Query each connector once and never expose directory exceptions."""
@@ -768,12 +768,12 @@ class IdentityRelationshipPreviewService:
             binding = exact_bindings[0] if len(exact_bindings) == 1 and not binding_conflict else None
             before_username = str(binding.ad_username if binding else "")
             checked_username = before_username or str(preview["username"] or "")
-            before_ad_state = (
-                states.get((connector_id, checked_username.lower()))
+            before_ad_state: dict[str, Any] = dict(
+                states.get((connector_id, checked_username.lower())) or {}
                 if checked_username
-                else None
+                else {}
             )
-            if before_ad_state is None:
+            if not before_ad_state:
                 before_ad_state = {
                     "status": "not_checked",
                     "exists": None,
@@ -786,6 +786,8 @@ class IdentityRelationshipPreviewService:
                 "bound_ad_username": before_username,
                 "binding_source": str(binding.source if binding else ""),
                 "binding_enabled": bool(binding.is_enabled) if binding else False,
+                "binding_revision": int(binding.binding_revision) if binding else 0,
+                "binding_updated_at": str(binding.updated_at if binding else ""),
                 "connector_id": str(binding.connector_id if binding else connector_id),
                 "checked_ad_username": checked_username,
                 "ad_account_state": before_ad_state,
@@ -888,7 +890,7 @@ class IdentityRelationshipPreviewService:
                     "locked": None,
                     "protected": False,
                 }
-            applied_after_state = {
+            applied_after_state: dict[str, Any] = {
                 "ad_username": str(apply_operation.get("target_id") or "") if apply_succeeded else "",
                 "binding_source": str((apply_operation.get("details") or {}).get("binding_resolution", {}).get("source") or "") if apply_succeeded else "",
                 "operation": str(apply_operation.get("operation_type") or "") if apply_succeeded else "",
@@ -932,8 +934,9 @@ class IdentityRelationshipPreviewService:
                 risks.append("protected_account")
             if safe_existing_match and not planned_username:
                 matched_username = str(safe_existing_match.get("username") or "")
-                matched_state = states.get(
-                    (connector_id, matched_username.lower()), before_ad_state
+                matched_state = dict(
+                    states.get((connector_id, matched_username.lower()))
+                    or before_ad_state
                 )
                 before_ad_state = matched_state
                 before_state["checked_ad_username"] = matched_username
@@ -1024,7 +1027,9 @@ class IdentityRelationshipPreviewService:
             elif binding and binding.source == "manual" and candidate_username.lower() != before_username.lower():
                 difference_status = "manual_binding_overrides_candidate"
             elif applied_after_state["result"] == "succeeded":
-                difference_status = "applied_" + (applied_after_state["operation"] or "success")
+                difference_status = "applied_" + str(
+                    applied_after_state["operation"] or "success"
+                )
             elif applied_after_state["result"] == "failed":
                 difference_status = "apply_failed"
             elif (
@@ -1245,55 +1250,6 @@ class IdentityRelationshipPreviewService:
             "The candidate AD account was verified as missing and can be prepared for Dry Run.",
             eligible=True,
         )
-
-    @staticmethod
-    def verified_stale_binding_cleanup_target(
-        item: IdentityRelationshipPreview,
-    ) -> dict[str, str] | None:
-        """Return an exact deletion target for a freshly verified stale binding.
-
-        A persisted binding is eligible only when this relationship contains
-        one unambiguous provider/connector identity and the live target lookup
-        explicitly reports the bound username as missing. Unknown, unavailable,
-        protected, or historically cached states fail closed.
-        """
-
-        before = dict(item.before_state or {})
-        bound_username = str(before.get("bound_ad_username") or "").strip()
-        state = dict(before.get("ad_account_state") or {})
-        checked_username = str(before.get("checked_ad_username") or "").strip()
-        verified_at = str(before.get("verified_at") or "").strip()
-        if (
-            not bound_username
-            or item.connector_id == "__conflict__"
-            or item.effective_resolution_source == "conflict"
-            or any(
-                risk in {"multiple_bindings", "connector_migration_required"}
-                for risk in item.risks
-            )
-        ):
-            return None
-        if checked_username.lower() != bound_username.lower() or not verified_at:
-            return None
-        if (
-            str(state.get("status") or "") != "missing"
-            or state.get("exists") is not False
-            or bool(state.get("protected"))
-        ):
-            return None
-        return {
-            "org_id": item.org_id,
-            "source_provider": item.source_provider,
-            "connector_id": item.connector_id,
-            "source_user_id": item.source_user_id,
-            "source_display_name": item.source_display_name,
-            "ad_username": bound_username,
-            "binding_source": str(before.get("binding_source") or ""),
-            "candidate_ad_username": str(
-                item.candidate_mapping.get("ad_username") or ""
-            ).strip(),
-            "verified_at": verified_at,
-        }
 
     @staticmethod
     def matches_filter(item: IdentityRelationshipPreview, status: str) -> bool:

@@ -447,14 +447,6 @@ class IdentityRelationshipTests(unittest.TestCase):
             mismatched_binding.creation_eligibility["status"],
             "binding_review_required",
         )
-        cleanup_target = self.service.verified_stale_binding_cleanup_target(
-            mismatched_binding
-        )
-        self.assertIsNotNone(cleanup_target)
-        self.assertEqual(cleanup_target["source_user_id"], "ding-001")
-        self.assertEqual(cleanup_target["ad_username"], "legacy.alice")
-        self.assertEqual(cleanup_target["candidate_ad_username"], "TJ001")
-
         unavailable = missing | {
             "status": "unavailable",
             "exists": None,
@@ -472,10 +464,9 @@ class IdentityRelationshipTests(unittest.TestCase):
                 ("default", "legacy.alice"): unavailable,
             },
         )[0]
-        self.assertIsNone(
-            self.service.verified_stale_binding_cleanup_target(
-                unavailable_binding
-            )
+        self.assertEqual(
+            unavailable_binding.before_state["ad_account_state"]["status"],
+            "unavailable",
         )
 
     def test_connector_boundaries_never_reuse_another_connector_binding(self):
