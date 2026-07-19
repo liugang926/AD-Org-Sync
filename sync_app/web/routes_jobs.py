@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any, Callable
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -141,21 +143,17 @@ def register_job_routes(
 
     def execution_next_action_url(action_code: str) -> str:
         return {
-            "execution.action.run_dry_run": CANONICAL_ROUTE_PATHS[
-                "execution-dry-run"
-            ],
-            "execution.action.select_dry_run": CANONICAL_ROUTE_PATHS[
-                "execution-dry-run"
-            ],
-            "execution.action.review_plan": CANONICAL_ROUTE_PATHS[
-                "execution-plan-review"
-            ],
+            "execution.action.run_dry_run": "/jobs#dry-run",
+            "execution.action.select_dry_run": "/jobs#dry-run",
+            "execution.action.review_plan": "/jobs#plan-review",
+            "execution.action.open_apply": "/jobs#apply",
+            "execution.action.view_job_history": "/jobs#history",
             "execution.action.save_scope": CANONICAL_ROUTE_PATHS["sync-scope"],
             "execution.action.refresh_source": CANONICAL_ROUTE_PATHS[
                 "source-directory"
             ],
             "high_risk.action.label_environment": "/config",
-        }.get(action_code, CANONICAL_ROUTE_PATHS["execution-dry-run"])
+        }.get(action_code, "/jobs#dry-run")
 
     def build_preflight_summary(request: Request, current_org: Any) -> dict[str, Any]:
         return merge_saved_preflight_snapshot_data(
@@ -177,99 +175,361 @@ def register_job_routes(
             or "Unlabeled environment"
         )
 
-    @app.get(CANONICAL_ROUTE_PATHS["jobs"], response_class=HTMLResponse)
-    @app.get("/jobs", response_class=HTMLResponse)
-    def jobs_page(request: Request):
-        user = require_capability(request, "jobs.read")
-        if isinstance(user, RedirectResponse):
-            return user
-        services = get_web_services(request)
-        runtime_state = get_web_runtime_state(request)
-        current_org = get_current_org(request)
-        job_center_summary, _high_risk_context = build_job_center_state(
-            request,
-            current_org,
-        )
-        return render(
-            request,
-            "jobs.html",
-            page="execution-dry-run",
-            title="Job Center",
-            jobs=services.jobs.list_recent_jobs(org_id=current_org.org_id, limit=30),
-            job_center_summary=job_center_summary,
-            active_job=services.jobs.get_active_job(org_id=current_org.org_id),
-            sync_runner_error=runtime_state.sync_runner.last_error,
-            current_org=current_org,
-        )
-
-    @app.get(
-        CANONICAL_ROUTE_PATHS["execution-dry-run"],
-        response_class=HTMLResponse,
-    )
-    def execution_dry_run_page(request: Request):
-        user = require_capability(request, "jobs.read")
-        if isinstance(user, RedirectResponse):
-            return user
-        services = get_web_services(request)
+    def build_task_history(
+        request: Request,
+        current_org: Any,
+        jobs: list[Any],
+    ) -> list[dict[str, Any]]:
         repositories = get_web_repositories(request)
-        runtime_state = get_web_runtime_state(request)
-        current_org = get_current_org(request)
-        preflight_summary = build_preflight_summary(request, current_org)
-        active_job = services.jobs.get_active_job(org_id=current_org.org_id)
+        items = [
+            {
+                "task_id": str(getattr(job, "job_id", "") or ""),
+                "task_type": (
+                    "Dry Run"
+                    if str(getattr(job, "execution_mode", "") or "").lower()
+                    == "dry_run"
+                    else "Apply"
+                ),
+                "status": str(getattr(job, "status", "") or ""),
+                "change_count": int(
+                    getattr(job, "planned_operation_count", 0) or 0
+                ),
+                "error_count": int(getattr(job, "error_count", 0) or 0),
+                "actor": str(getattr(job, "requested_by", "") or "-"),
+                "occurred_at": str(
+                    getattr(job, "started_at", "")
+                    or getattr(job, "ended_at", "")
+                    or ""
+                ),
+                "href": (
+                    f"/execution-center/jobs/"
+                    f"{quote(str(getattr(job, 'job_id', '') or ''))}"
+                ),
+            }
+            for job in jobs
+        ]
+        audit_records, _total = repositories.audit_repo.list_recent_logs_page(
+            limit=100,
+            offset=0,
+            org_id=current_org.org_id,
+            include_global=False,
+        )
+        for record in audit_records:
+            if str(getattr(record, "action_type", "") or "") != "preflight.run":
+                continue
+            payload = dict(getattr(record, "payload", {}) or {})
+            status_counts = dict(payload.get("status_counts") or {})
+            items.append(
+                {
+                    "task_id": f"preflight-{getattr(record, 'id', '')}",
+                    "task_type": "Preflight",
+                    "status": str(
+                        payload.get("overall_status")
+                        or getattr(record, "result", "")
+                        or ""
+                    ),
+                    "change_count": 0,
+                    "error_count": int(status_counts.get("error") or 0),
+                    "actor": str(
+                        getattr(record, "actor_username", "") or "-"
+                    ),
+                    "occurred_at": str(
+                        getattr(record, "created_at", "") or ""
+                    ),
+                    "href": "",
+                }
+            )
+        items.sort(
+            key=lambda item: str(item.get("occurred_at") or ""),
+            reverse=True,
+        )
+        return items[:50]
+
+    def build_execution_context(
+        request: Request,
+        current_org: Any,
+        *,
+        selected_job: Any | None,
+    ) -> dict[str, Any]:
+        repositories = get_web_repositories(request)
+        services = get_web_services(request)
         scopes = repositories.source_directory_repo.list_scope_selections(
             org_id=current_org.org_id
         )
-        blocker_code = ""
-        next_action_url = CANONICAL_ROUTE_PATHS["execution-plan-review"]
-        next_action_code = "execution.action.review_plan"
-        if active_job:
-            blocker_code = "execution.blocker.job_active"
-            next_action_url = CANONICAL_ROUTE_PATHS["execution-jobs"]
-            next_action_code = "execution.action.view_job_history"
-        elif str(preflight_summary.get("overall_status") or "") == "error":
-            blocker_code = "jobs.blocker.config_or_connectivity"
-            next_action_url = CANONICAL_ROUTE_PATHS["config"]
-            next_action_code = "jobs.action.fix_configuration"
-        elif not scopes:
-            blocker_code = "execution.blocker.scope_missing"
-            next_action_url = CANONICAL_ROUTE_PATHS["sync-scope"]
-            next_action_code = "execution.action.save_scope"
-        return render(
-            request,
-            "execution_dry_run.html",
-            page="execution-dry-run",
-            title="Dry Run",
-            current_org=current_org,
-            environment_label=current_environment_label(request),
-            preflight_summary=preflight_summary,
-            active_job=active_job,
-            scopes=scopes,
-            blocker_code=blocker_code,
-            next_action_url=next_action_url,
-            next_action_code=next_action_code,
-            recent_dry_runs=services.jobs.list_jobs_by_mode(
-                org_id=current_org.org_id,
-                execution_mode="dry_run",
-                limit=12,
+        snapshots = repositories.source_directory_repo.list_snapshots(
+            org_id=current_org.org_id,
+            limit=20,
+        )["items"]
+        latest_source_snapshot = next(
+            (
+                snapshot
+                for snapshot in snapshots
+                if str(snapshot.get("status") or "").lower() == "succeeded"
             ),
-            sync_runner_error=runtime_state.sync_runner.last_error,
+            snapshots[0] if snapshots else None,
+        )
+        scope_snapshot_ids = sorted(
+            {
+                int(scope.get("snapshot_id") or 0)
+                for scope in scopes
+                if int(scope.get("snapshot_id") or 0) > 0
+            }
+        )
+        current_snapshot_ids = (
+            [int(latest_source_snapshot.get("id") or 0)]
+            if latest_source_snapshot is not None
+            else scope_snapshot_ids
         )
 
-    @app.get(
-        CANONICAL_ROUTE_PATHS["execution-plan-review"],
-        response_class=HTMLResponse,
-    )
-    def execution_plan_review_page(request: Request, plan_id: str = ""):
-        user = require_capability(request, "jobs.read")
-        if isinstance(user, RedirectResponse):
-            return user
+        release = services.config.build_release_center_context(
+            current_org=current_org,
+        )
+        latest_policy_snapshot = release.get("latest_snapshot")
+        policy_version = (
+            f"v{getattr(latest_policy_snapshot, 'id', 0)}"
+            if latest_policy_snapshot is not None
+            else "Draft v0"
+        )
+        if latest_policy_snapshot is not None and bool(
+            release.get("has_unpublished_changes")
+        ):
+            policy_version = f"{policy_version} + draft"
+        config_fingerprint = current_config_fingerprint(request, current_org)
+        selected_config_fingerprint = str(
+            getattr(selected_job, "config_snapshot_hash", "") or ""
+        )
+        used_policy_version = "-"
+        if selected_config_fingerprint:
+            if (
+                config_fingerprint
+                and selected_config_fingerprint == config_fingerprint
+            ):
+                used_policy_version = policy_version
+            else:
+                used_policy_version = f"{selected_config_fingerprint[:18]}..."
+        selected_summary = dict(
+            getattr(selected_job, "summary", {}) or {}
+        )
+        selected_snapshot_id = int(
+            selected_summary.get("source_snapshot_id") or 0
+        )
+        return {
+            "scopes": scopes,
+            "latest_source_snapshot": latest_source_snapshot,
+            "current_snapshot_version": (
+                ", ".join(f"#{snapshot_id}" for snapshot_id in current_snapshot_ids)
+                if current_snapshot_ids
+                else "Not available"
+            ),
+            "scope_snapshot_version": (
+                ", ".join(f"#{snapshot_id}" for snapshot_id in scope_snapshot_ids)
+                if scope_snapshot_ids
+                else "Not available"
+            ),
+            "current_policy_version": policy_version,
+            "current_policy_fingerprint": config_fingerprint or "",
+            "used_snapshot_version": (
+                f"#{selected_snapshot_id}"
+                if selected_snapshot_id
+                else "Not available"
+            ),
+            "used_policy_version": used_policy_version,
+        }
+
+    def dry_run_scope_blocker(
+        request: Request,
+        current_org: Any,
+        *,
+        scopes: list[dict[str, Any]] | None = None,
+    ) -> str:
+        repositories = get_web_repositories(request)
+        saved_scopes = (
+            scopes
+            if scopes is not None
+            else repositories.source_directory_repo.list_scope_selections(
+                org_id=current_org.org_id
+            )
+        )
+        if not saved_scopes:
+            return "execution.blocker.scope_missing"
+
+        now = datetime.now(timezone.utc)
+        for scope in saved_scopes:
+            snapshot_id = int(scope.get("snapshot_id") or 0)
+            snapshot = repositories.source_directory_repo.get_snapshot(
+                snapshot_id,
+                org_id=current_org.org_id,
+            )
+            if (
+                snapshot is None
+                or str(snapshot["status"] or "").lower() != "succeeded"
+                or str(snapshot["snapshot_fingerprint"] or "")
+                != str(scope.get("source_snapshot_fingerprint") or "")
+            ):
+                return "execution.blocker.snapshot_unavailable"
+
+            latest_snapshot = (
+                repositories.source_directory_repo.get_latest_successful_snapshot(
+                    org_id=current_org.org_id,
+                    provider_id=str(scope.get("provider_id") or ""),
+                    connector_id=str(scope.get("connector_id") or "default"),
+                )
+            )
+            if (
+                latest_snapshot is None
+                or int(latest_snapshot["id"] or 0) != snapshot_id
+                or str(latest_snapshot["snapshot_fingerprint"] or "")
+                != str(scope.get("source_snapshot_fingerprint") or "")
+            ):
+                return "execution.blocker.snapshot_superseded"
+
+            expires_at_raw = str(snapshot["expires_at"] or "").strip()
+            try:
+                expires_at = datetime.fromisoformat(
+                    expires_at_raw.replace("Z", "+00:00")
+                )
+            except ValueError:
+                return "execution.blocker.snapshot_expired"
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at.astimezone(timezone.utc) < now:
+                return "execution.blocker.snapshot_expired"
+        return ""
+
+    def build_execution_recommendations(
+        *,
+        preflight_summary: dict[str, Any],
+        execution_context: dict[str, Any],
+        job_center_summary: dict[str, Any],
+        selected_item: dict[str, Any] | None,
+        apply_state: dict[str, Any],
+        dry_run_blocker_code: str,
+    ) -> list[dict[str, Any]]:
+        selected_job_id = str(
+            getattr(apply_state["evaluation"].job, "job_id", "") or ""
+        )
+        selected_review = (
+            selected_item.get("review") if selected_item is not None else None
+        )
+        preflight_status = str(
+            preflight_summary.get("overall_status") or ""
+        ).lower()
+        open_conflicts = int(
+            preflight_summary.get("open_conflict_count") or 0
+        )
+        no_snapshot = (
+            execution_context.get("latest_source_snapshot") is None
+        )
+        source_blocked = dry_run_blocker_code in {
+            "execution.blocker.snapshot_expired",
+            "execution.blocker.snapshot_superseded",
+            "execution.blocker.snapshot_unavailable",
+        }
+        no_successful_dry_run = (
+            job_center_summary.get("latest_successful_dry_run") is None
+        )
+        review_pending = bool(
+            selected_review
+            and str(getattr(selected_review, "status", "") or "").lower()
+            != "approved"
+        )
+        apply_ready = not apply_state["blockers"]
+        return [
+            {
+                "label": "Refresh Source Directory",
+                "href": (
+                    "/data-sources/source-directory"
+                    "?context=execution-center&return_to=/jobs%23dry-run"
+                ),
+                "state": (
+                    "current"
+                    if no_snapshot or source_blocked
+                    else "available"
+                ),
+            },
+            {
+                "label": "Fix Configuration",
+                "href": (
+                    "/data-sources/connectors"
+                    "?context=execution-center&return_to=/jobs%23dry-run"
+                ),
+                "state": (
+                    "current" if preflight_status == "error" else "available"
+                ),
+            },
+            {
+                "label": "Handle Data Quality",
+                "href": (
+                    "/data-sources/data-quality"
+                    "?context=execution-center&return_to=/jobs%23dry-run"
+                ),
+                "state": (
+                    "current" if preflight_status == "warning" else "available"
+                ),
+            },
+            {
+                "label": "Resolve Conflicts",
+                "href": (
+                    "/identity-governance/conflicts"
+                    "?context=execution-center&return_to=/jobs%23plan-review"
+                ),
+                "state": "current" if open_conflicts else "available",
+            },
+            {
+                "label": "Rerun Dry Run",
+                "href": "/jobs?context=recommendation#dry-run",
+                "state": (
+                    "blocked"
+                    if dry_run_blocker_code
+                    else (
+                        "current"
+                        if no_successful_dry_run
+                        else "available"
+                    )
+                ),
+            },
+            {
+                "label": "Review Plan",
+                "href": (
+                    f"/jobs?plan_id={quote(selected_job_id)}#plan-review"
+                    if selected_job_id
+                    else "/jobs#plan-review"
+                ),
+                "state": "current" if review_pending else "available",
+            },
+            {
+                "label": "Execute Apply",
+                "href": (
+                    f"/jobs?plan_id={quote(selected_job_id)}#apply"
+                    if selected_job_id
+                    else "/jobs#apply"
+                ),
+                "state": "current" if apply_ready else "blocked",
+            },
+        ]
+
+    def build_unified_execution_state(
+        request: Request,
+        current_org: Any,
+        *,
+        plan_id: str = "",
+    ) -> dict[str, Any]:
         services = get_web_services(request)
-        current_org = get_current_org(request)
-        environment_label = current_environment_label(request)
+        runtime_state = get_web_runtime_state(request)
+        preflight_summary = build_preflight_summary(request, current_org)
+        active_job = services.jobs.get_active_job(org_id=current_org.org_id)
+        jobs = services.jobs.list_recent_jobs(
+            org_id=current_org.org_id,
+            limit=50,
+        )
+        job_center_summary, _context = build_job_center_state(
+            request,
+            current_org,
+        )
         review_items = services.jobs.list_review_items(
             org_id=current_org.org_id,
             organization_name=current_org.name,
-            environment_label=environment_label,
+            environment_label=current_environment_label(request),
             current_config_fingerprint=current_config_fingerprint(
                 request,
                 current_org,
@@ -286,55 +546,133 @@ def register_job_routes(
             None,
         )
         if selected_item is None:
+            preferred_plan_id = str(
+                job_center_summary["impact_preview"].get("job_id") or ""
+            )
             selected_item = next(
                 (
                     item
                     for item in review_items
-                    if str(item["review"].status or "").lower() == "pending"
+                    if str(item["review"].job_id or "")
+                    == preferred_plan_id
                 ),
                 review_items[0] if review_items else None,
             )
-        selected_evaluation = (
-            selected_item["evaluation"] if selected_item is not None else None
-        )
-        selected_review = selected_item["review"] if selected_item else None
-        can_approve = bool(
-            selected_review
-            and str(selected_review.status or "").lower() == "pending"
-            and selected_evaluation
-            and selected_evaluation.allowed
-        )
-        blocker_code = ""
-        next_action_url = CANONICAL_ROUTE_PATHS["execution-apply"]
-        next_action_code = "execution.action.open_apply"
-        if selected_item is None:
-            blocker_code = "execution.blocker.review_queue_empty"
-            next_action_url = CANONICAL_ROUTE_PATHS["execution-dry-run"]
-            next_action_code = "execution.action.run_dry_run"
-        elif selected_evaluation and not selected_evaluation.allowed:
-            blocker_code = selected_evaluation.reason_code
-            next_action_url = execution_next_action_url(
-                selected_evaluation.next_action_code
+        selected_plan_id = str(
+            (
+                selected_item["review"].job_id
+                if selected_item is not None
+                else requested_plan_id
             )
-            next_action_code = selected_evaluation.next_action_code
-        elif selected_review and str(selected_review.status or "").lower() == "approved":
-            next_action_url = (
-                CANONICAL_ROUTE_PATHS["execution-apply"]
-                + f"?plan_id={selected_review.job_id}"
+            or ""
+        )
+        apply_state = build_apply_page_state(
+            request,
+            current_org,
+            plan_id=selected_plan_id,
+        )
+        selected_job = apply_state["evaluation"].job
+        execution_context = build_execution_context(
+            request,
+            current_org,
+            selected_job=selected_job,
+        )
+        dry_run_blocker_code = ""
+        if active_job:
+            dry_run_blocker_code = "execution.blocker.job_active"
+        elif str(preflight_summary.get("overall_status") or "") == "error":
+            dry_run_blocker_code = "jobs.blocker.config_or_connectivity"
+        else:
+            dry_run_blocker_code = dry_run_scope_blocker(
+                request,
+                current_org,
+                scopes=execution_context["scopes"],
             )
+        return {
+            "jobs": jobs,
+            "task_history": build_task_history(
+                request,
+                current_org,
+                jobs,
+            ),
+            "active_job": active_job,
+            "preflight_summary": preflight_summary,
+            "job_center_summary": job_center_summary,
+            "review_items": review_items,
+            "selected_item": selected_item,
+            "selected_plan_id": selected_plan_id,
+            "plan_review_summary": services.jobs.build_plan_review_summary(
+                selected_job
+            ),
+            "apply_state": apply_state,
+            "execution_context": execution_context,
+            "dry_run_blocker_code": dry_run_blocker_code,
+            "recommendations": build_execution_recommendations(
+                preflight_summary=preflight_summary,
+                execution_context=execution_context,
+                job_center_summary=job_center_summary,
+                selected_item=selected_item,
+                apply_state=apply_state,
+                dry_run_blocker_code=dry_run_blocker_code,
+            ),
+            "sync_runner_error": runtime_state.sync_runner.last_error,
+        }
+
+    @app.get(CANONICAL_ROUTE_PATHS["jobs"], response_class=HTMLResponse)
+    @app.get("/execution-center/run-review", response_class=HTMLResponse)
+    def jobs_page(
+        request: Request,
+        plan_id: str = "",
+        context: str = "",
+    ):
+        user = require_capability(request, "jobs.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        requested_plan_id = str(
+            plan_id or request.query_params.get("plan_id") or ""
+        ).strip()
+        incoming_context = str(
+            context or request.query_params.get("context") or ""
+        ).strip()
+        execution_state = build_unified_execution_state(
+            request,
+            current_org,
+            plan_id=requested_plan_id,
+        )
         return render(
             request,
-            "execution_plan_review.html",
-            page="execution-plan-review",
-            title="Plan Review",
+            "jobs.html",
+            page="jobs",
+            title="Jobs - Execution Center",
             current_org=current_org,
-            environment_label=environment_label,
-            review_items=review_items,
-            selected_item=selected_item,
-            can_approve=can_approve,
-            blocker_code=blocker_code,
-            next_action_url=next_action_url,
-            next_action_code=next_action_code,
+            incoming_context=incoming_context,
+            environment_label=current_environment_label(request),
+            **execution_state,
+        )
+
+    @app.get(
+        CANONICAL_ROUTE_PATHS["execution-dry-run"],
+        response_class=HTMLResponse,
+    )
+    def execution_dry_run_page(request: Request):
+        user = require_capability(request, "jobs.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        return jobs_page(request, context="dry-run")
+
+    @app.get(
+        CANONICAL_ROUTE_PATHS["execution-plan-review"],
+        response_class=HTMLResponse,
+    )
+    def execution_plan_review_page(request: Request, plan_id: str = ""):
+        user = require_capability(request, "jobs.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        return jobs_page(
+            request,
+            plan_id=str(plan_id or "").strip(),
+            context="plan-review",
         )
 
     def build_apply_page_state(
@@ -396,7 +734,7 @@ def register_job_routes(
                     "message_code": "execution.blocker.job_active",
                     "params": {"job_id": active_job.job_id},
                     "next_action_code": "execution.action.view_job_history",
-                    "next_action_url": CANONICAL_ROUTE_PATHS["execution-jobs"],
+                    "next_action_url": "/jobs#history",
                 }
             )
         selected_apply = services.jobs.get_apply_job_for_plan(
@@ -444,20 +782,10 @@ def register_job_routes(
         user = require_capability(request, "jobs.read")
         if isinstance(user, RedirectResponse):
             return user
-        current_org = get_current_org(request)
-        state = build_apply_page_state(
+        return jobs_page(
             request,
-            current_org,
-            plan_id=plan_id,
-        )
-        return render(
-            request,
-            "execution_apply.html",
-            page="execution-apply",
-            title="Apply",
-            current_org=current_org,
-            environment_label=current_environment_label(request),
-            **state,
+            plan_id=str(plan_id or "").strip(),
+            context="apply",
         )
 
     @app.get(
@@ -468,20 +796,7 @@ def register_job_routes(
         user = require_capability(request, "jobs.read")
         if isinstance(user, RedirectResponse):
             return user
-        services = get_web_services(request)
-        current_org = get_current_org(request)
-        jobs = services.jobs.list_recent_jobs(org_id=current_org.org_id, limit=50)
-        return render(
-            request,
-            "execution_job_history.html",
-            page="execution-jobs",
-            title="Job History",
-            current_org=current_org,
-            environment_label=current_environment_label(request),
-            jobs=jobs,
-            latest_job=jobs[0] if jobs else None,
-            active_job=services.jobs.get_active_job(org_id=current_org.org_id),
-        )
+        return jobs_page(request, context="history")
 
     @app.post(
         CANONICAL_ROUTE_PATHS["execution-plan-review"]
@@ -501,8 +816,7 @@ def register_job_routes(
             CANONICAL_ROUTE_PATHS["execution-plan-review"]
         )
         return_url = (
-            CANONICAL_ROUTE_PATHS["execution-plan-review"]
-            + f"?plan_id={job_id}"
+            f"/jobs?plan_id={quote(job_id)}#plan-review"
             if canonical_request
             else f"/jobs/{job_id}"
         )
@@ -580,11 +894,15 @@ def register_job_routes(
             CANONICAL_ROUTE_PATHS["execution-apply"]
         )
         return_url = (
-            CANONICAL_ROUTE_PATHS["execution-dry-run"]
+            "/jobs#dry-run"
             if canonical_dry_run
             else (
-                CANONICAL_ROUTE_PATHS["execution-apply"]
-                + (f"?plan_id={preview_id}" if preview_id else "")
+                "/jobs"
+                + (
+                    f"?plan_id={quote(preview_id)}#apply"
+                    if preview_id
+                    else "#apply"
+                )
                 if canonical_apply
                 else "/jobs"
             )
@@ -610,6 +928,44 @@ def register_job_routes(
         high_risk_context: HighRiskOperationContext | None = None
         selected_plan_job_id = ""
         repositories = get_web_repositories(request)
+        if normalized_mode == "dry_run":
+            preflight_summary = build_preflight_summary(
+                request,
+                current_org,
+            )
+            active_job = get_web_services(request).jobs.get_active_job(
+                org_id=current_org.org_id
+            )
+            blocker_code = ""
+            if active_job:
+                blocker_code = "execution.blocker.job_active"
+            elif str(
+                preflight_summary.get("overall_status") or ""
+            ).lower() == "error":
+                blocker_code = "jobs.blocker.config_or_connectivity"
+            else:
+                blocker_code = dry_run_scope_blocker(
+                    request,
+                    current_org,
+                )
+            if blocker_code:
+                repositories.audit_repo.add_log(
+                    org_id=current_org.org_id,
+                    actor_username=user.username,
+                    action_type="job.dry_run.blocked",
+                    target_type="sync_job",
+                    target_id=current_org.org_id,
+                    result="blocked",
+                    message="Dry Run request was blocked by the execution gate",
+                    payload={
+                        "reason_code": blocker_code,
+                        "active_job_id": str(
+                            getattr(active_job, "job_id", "") or ""
+                        ),
+                    },
+                )
+                flash_t(request, "error", blocker_code)
+                return RedirectResponse(url=return_url, status_code=303)
         if normalized_mode == "apply":
             apply_state = build_apply_page_state(
                 request,

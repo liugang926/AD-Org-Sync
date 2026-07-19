@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Automation And Schedules"), t("Configure when synchronization is requested and the safety gate that blocks unattended Apply."), eyebrow=t("Operations Center"), badge_text=t("Organization Scope"), badge_level="info") %}
-    {{ ui.button(t("Open Job History"), href="/execution-center/jobs", variant="secondary", icon="history") }}
+    {{ ui.button(t("Open Jobs"), href="/jobs?context=automation#history", variant="secondary", icon="history") }}
   {% endcall %}
 
   {% if scheduled_apply_guard.mode == "apply" and not scheduled_apply_guard.allowed %}
@@ -91,7 +91,7 @@
         {% if scheduled_apply_guard.latest_successful_dry_run %}
         <a href="/execution-center/jobs/{{ scheduled_apply_guard.latest_successful_dry_run.job_id }}">{{ t("Open latest successful Dry Run") }}: {{ scheduled_apply_guard.latest_successful_dry_run.job_id }}</a>
         {% else %}
-        <a href="/execution-center/dry-run">{{ t("Next step: run a Dry Run") }}</a>
+        <a href="/jobs?context=automation#dry-run">{{ t("Next step: run a Dry Run") }}</a>
         {% endif %}
       </div>
     {% endcall %}

@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-stack">
 {% call ui.page_header(t("Notifications"), t("Choose operational signals, verify delivery readiness, and manage organization-scoped notification channels."), eyebrow=t("Operations Center"), badge_text=t("Organization Scope"), badge_level="info") %}
-  {{ ui.button(t("Open Job History"), href="/execution-center/jobs", variant="ghost", icon="refresh-cw") }}
+  {{ ui.button(t("Open Jobs"), href="/jobs?context=notifications#history", variant="ghost", icon="refresh-cw") }}
   {{ ui.button(t("Open Conflicts"), href="/conflicts", variant="ghost", icon="shield-alert") }}
   {{ ui.button(t("Open Sync Policies"), href="/sync-policies", variant="ghost", icon="waypoints") }}
 {% endcall %}

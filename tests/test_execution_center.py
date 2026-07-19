@@ -166,6 +166,39 @@ class ExecutionCenterServiceTests(unittest.TestCase):
             "execution.blocker.snapshot_expired",
         )
 
+    def test_newer_successful_source_snapshot_supersedes_the_plan(self) -> None:
+        created = create_eligible_execution_plan(
+            self.db_manager,
+            job_id="plan-superseded",
+            approved=True,
+        )
+        replacement_id = self.source_repo.start_refresh(
+            org_id="default",
+            provider_id=created["selection"]["provider_id"],
+            connector_id=created["selection"]["connector_id"],
+            created_by="test",
+        )
+        self.source_repo.replace_snapshot(
+            replacement_id,
+            departments=[],
+            users=[],
+            fields=[],
+            fingerprint="sha256:v2:snapshot:replacement",
+            ttl_minutes=240,
+        )
+
+        evaluation = self._evaluate("plan-superseded")
+
+        self.assertFalse(evaluation.allowed)
+        self.assertEqual(
+            evaluation.reason_code,
+            "execution.blocker.snapshot_superseded",
+        )
+        self.assertEqual(
+            evaluation.next_action_code,
+            "execution.action.save_scope",
+        )
+
     def test_expired_or_consumed_plan_requires_a_new_dry_run(self) -> None:
         create_eligible_execution_plan(
             self.db_manager,

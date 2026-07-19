@@ -43,7 +43,7 @@
       <div class="actions">
         {{ ui.button(t("Search"), type="submit", variant="secondary") }}
         {{ ui.button(t("Reset"), href=conflicts_base_path ~ "?clear_filters=1", variant="secondary") }}
-        {{ ui.button(t("Open Dry Run"), href="/execution-center/dry-run", variant="ghost") }}
+        {{ ui.button(t("Open Dry Run"), href="/jobs?context=conflicts#dry-run", variant="ghost") }}
         {% if show_advanced_navigation %}
         {{ ui.button(t("Open Manual Overrides"), href="/identity-governance/manual-overrides", variant="ghost") }}
         {% endif %}
@@ -281,7 +281,7 @@
       {% else %}
       {% call ui.panel("") %}
         {% call ui.empty_state(t("No conflicts matched the current filter."), t("This usually means the latest synchronization run is healthy or the current search is too narrow."), "success") %}
-          {{ ui.button(t("Open Dry Run"), href="/execution-center/dry-run", variant="secondary") }}
+          {{ ui.button(t("Open Dry Run"), href="/jobs?context=conflicts#dry-run", variant="secondary") }}
           {% if show_advanced_navigation %}
           {{ ui.button(t("Open Manual Overrides"), href="/identity-governance/manual-overrides", variant="ghost") }}
           {% endif %}

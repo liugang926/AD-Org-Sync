@@ -157,7 +157,7 @@
   </form>
 
   {% call ui.helper_block(t("Next step"), t("Every saved change invalidates older Dry Runs. Run and review a fresh Dry Run before Apply."), "warning") %}
-    <div class="actions">{{ ui.button(t("Open Account Naming"), href="/sync-policies/account-naming", variant="ghost", icon="badge-check") }}{{ ui.button(t("Run a new Dry Run"), href="/execution-center/dry-run", variant="secondary", icon="play-circle") }}</div>
+    <div class="actions">{{ ui.button(t("Open Account Naming"), href="/sync-policies/account-naming", variant="ghost", icon="badge-check") }}{{ ui.button(t("Run a new Dry Run"), href="/jobs?context=sync-scope#dry-run", variant="secondary", icon="play-circle") }}</div>
   {% endcall %}
 </div>
 {% endblock %}

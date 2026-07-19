@@ -2593,7 +2593,7 @@ def register_source_directory_routes(
             "Verified missing accounts are selected. Start a Dry Run to review the create operations; no AD changes have been made.",
         )
         return RedirectResponse(
-            url="/execution-center/dry-run",
+            url="/jobs?context=source-directory#dry-run",
             status_code=303,
         )
 

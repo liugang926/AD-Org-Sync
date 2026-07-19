@@ -1415,56 +1415,29 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_jobs_page_shows_execution_readiness_and_impact_preview(self):
         self._login("superadmin")
-        self.app.state.job_repo.create_job(
-            "job-dryrun-001",
-            trigger_type="manual",
-            execution_mode="dry_run",
-            status="COMPLETED",
-            org_id="default",
-        )
-        self.app.state.job_repo.update_job(
-            "job-dryrun-001",
+        create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="job-dryrun-001",
+            environment_label=self.app.state.environment_label,
             planned_operation_count=12,
-            error_count=0,
-            summary={
-                "planned_operation_count": 12,
-                "high_risk_operation_count": 2,
-                "conflict_count": 1,
-                "review_required": True,
-            },
-        )
-        self.app.state.review_repo.upsert_review_request(
-            job_id="job-dryrun-001",
-            plan_fingerprint="plan-001",
-            config_snapshot_hash="cfg-001",
             high_risk_operation_count=2,
-        )
-        self.app.state.conflict_repo.add_conflict(
-            job_id="job-dryrun-001",
-            conflict_type="duplicate_user",
-            source_id="asmith",
-            message="duplicate identity",
-            severity="warning",
         )
 
         response = self._route("/jobs", "GET")(self._request("/jobs"))
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
-        self.assertIn("Execution Readiness And Impact Preview", body)
+        self.assertIn("Current Execution Status", body)
         self.assertIn("job-dryrun-001", body)
-        self.assertIn("Open Conflicts", body)
+        self.assertIn("Plan Review", body)
         self.assertIn("Planned Changes", body)
-        self.assertIn("Apply 12 Changes", body)
-        self.assertIn('data-confirm-detail-2-label="Environment"', body)
-        self.assertIn('data-confirm-detail-3-label="Snapshot Version"', body)
-        self.assertIn('data-confirm-detail-4-label="Impact Count"', body)
-        self.assertIn('data-confirm-detail-5-label="User Role"', body)
-        self.assertIn('data-confirm-detail-15-label="Reversible"', body)
+        self.assertIn("Apply Blocked", body)
+        self.assertIn("Approve selected plan", body)
+        self.assertIn("Group Relationship Changes", body)
         self.assertEqual(body.count("data-high-risk-step="), 5)
         for step in ("scan", "preview", "confirm", "execute", "audit"):
             self.assertIn(f'data-high-risk-step="{step}"', body)
         self.assertIn(
-            "Latest high-risk dry run still needs review approval before apply can continue.",
+            "Approve the selected plan before Apply.",
             body,
         )
 
@@ -2053,7 +2026,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         body = self._text(response)
         self.assertIn("Next Step: Run The First Dry Run", body)
         self.assertIn("Open Dry Run", body)
-        self.assertIn('href="/execution-center/dry-run"', body)
+        self.assertIn('href="/jobs?context=config#dry-run"', body)
         self.assertNotIn('action="/jobs/run"', body)
 
     def test_super_admin_can_resolve_conflict_with_manual_binding(self):
@@ -3661,7 +3634,8 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
         self.assertNotIn("Webhook is not configured", text)
-        self.assertIn("Required WeCom and LDAP settings are complete.", text)
+        self.assertIn("Deployment Preflight", text)
+        self.assertIn("All execution happens in Jobs.", text)
 
     def test_config_page_surfaces_selected_provider_context_for_dingtalk(self):
         current_org = self.app.state.organization_repo.get_default_organization_record()
@@ -4748,6 +4722,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             is_enabled=True,
         )
         self.session["selected_org_id"] = "asia"
+        create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="job-asia-prior-dry-run",
+            org_id="asia",
+            environment_label=self.app.state.environment_label,
+        )
 
         jobs_page = self._route("/jobs", "GET")(self._request("/jobs"))
         self.assertEqual(jobs_page.status_code, 200)
@@ -4814,9 +4794,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(dashboard_response.status_code, 200)
         dashboard_text = self._text(dashboard_response)
-        self.assertIn("Scope Guide", dashboard_text)
-        self.assertIn("Global Scope", dashboard_text)
-        self.assertIn("Organization Scope", dashboard_text)
+        self.assertNotIn("Scope Guide", dashboard_text)
+        self.assertIn("Current Organization", dashboard_text)
+        self.assertIn("Open Jobs Execution Center", dashboard_text)
 
         config_response = self._route("/config", "GET")(self._request("/config"))
         self.assertEqual(config_response.status_code, 200)
@@ -4864,9 +4844,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             "Identity Governance",
             "Execution Center",
             "Control Tower",
-            "Plan Review",
-            "Job History",
-            "Configuration Validation",
+            "Jobs",
+            "Current Organization",
+            "Deployment Preflight",
             "AD Org Sync",
         ):
             with self.subTest(key=key):
@@ -5073,9 +5053,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         response = self._route("/jobs", "GET")(self._request("/jobs"))
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
-        self.assertIn("Run Your First Dry Run", text)
-        self.assertIn("Open Guided Setup", text)
-        self.assertIn("Review Config", text)
+        self.assertIn("Current Execution Status", text)
+        self.assertIn("Run New Dry Run", text)
+        self.assertIn("Save a synchronization scope", text)
+        self.assertIn("Task History", text)
 
     def test_login_page_defaults_to_browser_language_when_chinese_is_preferred(self):
         response = self._route("/login", "GET")(

@@ -1494,22 +1494,25 @@ class WebBrowserRegressionTests(unittest.TestCase):
 
         self._login()
         pages = (
-            ("/execution-center/dry-run?lang=en", "Dry Run"),
+            "/jobs?plan_id=browser-execution-plan&lang=en",
+            "/execution-center/dry-run?lang=en",
             (
-                "/execution-center/plan-review?plan_id=browser-execution-plan&lang=en",
-                "Plan Review",
+                "/execution-center/plan-review"
+                "?plan_id=browser-execution-plan&lang=en"
             ),
             (
-                "/execution-center/apply?plan_id=browser-execution-plan&lang=en",
-                "Apply",
+                "/execution-center/apply"
+                "?plan_id=browser-execution-plan&lang=en"
             ),
-            ("/execution-center/jobs?lang=en", "Job History"),
+            "/execution-center/jobs?lang=en",
         )
-        for path, heading in pages:
+        for path in pages:
             with self.subTest(path=path):
                 self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
                 self.assertTrue(
-                    self.page.get_by_role("heading", name=heading, level=1).is_visible()
+                    self.page.get_by_role(
+                        "heading", name="Jobs", level=1, exact=True
+                    ).is_visible()
                 )
                 self.assertEqual(
                     self.page.locator(".page-header__actions .button").count(),
@@ -1519,11 +1522,24 @@ class WebBrowserRegressionTests(unittest.TestCase):
                     self.page.locator(".execution-tabs a[aria-current='page']").count(),
                     1,
                 )
+                for section_id in (
+                    "current-status",
+                    "dry-run",
+                    "plan-review",
+                    "apply",
+                    "history",
+                ):
+                    self.assertEqual(
+                        self.page.locator(f"section#{section_id}").count(),
+                        1,
+                    )
                 main_text = self.page.locator("main").inner_text().lower()
                 self.assertIn("organization", main_text)
                 self.assertIn("environment", main_text)
-                self.assertIn("snapshot version", main_text)
-                self.assertIn("impact count", main_text)
+                self.assertIn("current source snapshot", main_text)
+                self.assertIn("current sync policy version", main_text)
+                self.assertIn("selected dry run id", main_text)
+                self.assertIn("task history", main_text)
                 for index in range(self.page.locator("main table").count()):
                     self.assertLessEqual(
                         self.page.locator("main table")
@@ -1534,7 +1550,10 @@ class WebBrowserRegressionTests(unittest.TestCase):
                     )
 
         self.page.goto(
-            f"{self.base_url}/execution-center/plan-review?plan_id=browser-execution-plan&lang=en",
+            (
+                f"{self.base_url}/jobs"
+                "?plan_id=browser-execution-plan&lang=en#plan-review"
+            ),
             wait_until="networkidle",
         )
         current_tab = self.page.locator(
@@ -1545,9 +1564,9 @@ class WebBrowserRegressionTests(unittest.TestCase):
             current_tab.evaluate("element => document.activeElement === element")
         )
         self.page.keyboard.press("Tab")
-        self.assertIn(
-            "/execution-center/apply",
+        self.assertEqual(
             self.page.evaluate("document.activeElement?.getAttribute('href') || ''"),
+            "#dry-run",
         )
 
         self.page.get_by_role("button", name="Approve selected plan").click()
@@ -1558,7 +1577,10 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertIn("approved", self.page.locator("main").inner_text().lower())
 
         self.page.goto(
-            f"{self.base_url}/execution-center/apply?plan_id=browser-execution-plan&lang=en",
+            (
+                f"{self.base_url}/jobs"
+                "?plan_id=browser-execution-plan&lang=en#apply"
+            ),
             wait_until="networkidle",
         )
         self.assertIn(f"#{created['snapshot_id']}", self.page.locator("main").inner_text())
@@ -1583,10 +1605,6 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "browser-execution-plan",
         )
 
-        self.page.goto(
-            f"{self.base_url}/execution-center/jobs?lang=en",
-            wait_until="networkidle",
-        )
         local_time = self.page.locator("time[data-local-time]").first
         self.assertTrue(local_time.is_visible())
         self.assertTrue(local_time.get_attribute("datetime"))
@@ -1594,16 +1612,24 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self._capture_viewport("execution-center-desktop-en.png")
 
         self.page.goto(
-            f"{self.base_url}/execution-center/plan-review?plan_id=browser-execution-plan&lang=zh-CN",
+            (
+                f"{self.base_url}/jobs"
+                "?plan_id=browser-execution-plan&lang=zh-CN#plan-review"
+            ),
             wait_until="networkidle",
         )
         self.assertTrue(
-            self.page.get_by_role("heading", name="计划审核", level=1).is_visible()
+            self.page.get_by_role(
+                "heading", name="\u4efb\u52a1", level=1, exact=True
+            ).is_visible()
         )
 
         self.page.set_viewport_size({"width": 390, "height": 900})
         self.page.goto(
-            f"{self.base_url}/execution-center/jobs?lang=zh-CN",
+            (
+                f"{self.base_url}/jobs"
+                "?plan_id=browser-execution-plan&lang=zh-CN#history"
+            ),
             wait_until="networkidle",
         )
         self._assert_page_has_no_horizontal_overflow()
@@ -1616,7 +1642,57 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.assertIn(tabs["overflowX"], {"auto", "scroll"}, tabs)
         self.assertGreaterEqual(tabs["scrollWidth"], tabs["clientWidth"], tabs)
+        history_section = self.page.locator("section#history")
+        self.assertTrue(history_section.is_visible())
+        history_section.scroll_into_view_if_needed()
+        history_box = history_section.bounding_box()
+        self.assertIsNotNone(history_box)
+        self.assertLess(float(history_box["y"]), 900)
         self._capture_viewport("execution-center-narrow-zh.png")
+
+    def test_jobs_is_the_only_browser_apply_surface(self):
+        self._login()
+        self.page.goto(f"{self.base_url}/jobs?lang=en", wait_until="networkidle")
+        self.assertEqual(
+            self.page.locator("aside a[href='/jobs']").count(),
+            1,
+        )
+        self.assertEqual(
+            self.page.locator(
+                "aside a[href^='/execution-center/']"
+            ).count(),
+            0,
+        )
+
+        non_execution_pages = (
+            "/dashboard?lang=en",
+            "/data-sources/connectors?lang=en",
+            "/data-sources/source-directory?lang=en",
+            "/sync-policies?lang=en",
+            "/operations/automation?lang=en",
+        )
+        for path in non_execution_pages:
+            with self.subTest(path=path):
+                self.page.goto(
+                    f"{self.base_url}{path}",
+                    wait_until="networkidle",
+                )
+                self.assertEqual(
+                    self.page.locator(
+                        "form[action='/execution-center/apply/run'], "
+                        "form:has(input[name='mode'][value='apply'])"
+                    ).count(),
+                    0,
+                )
+
+        self.page.goto(
+            f"{self.base_url}/dashboard?lang=en",
+            wait_until="networkidle",
+        )
+        self.assertEqual(
+            self.page.locator("form[action='/jobs/run']").count(),
+            0,
+        )
 
     def test_login_page_loads_styles_and_primary_action(self):
         self.page.goto(f"{self.base_url}/login", wait_until="networkidle")
@@ -1698,7 +1774,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.assertEqual(recent_links.count(), 1)
         self.assertEqual(
-            recent_links.first.get_attribute("href"), "/execution-center/dry-run"
+            recent_links.first.get_attribute("href"), "/jobs"
         )
         self.assertEqual(
             self.page.locator("[data-sidebar-recent-link].active").count(), 0
@@ -1729,7 +1805,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertEqual(current_links.count(), 1)
         self.assertEqual(
             current_links.first.get_attribute("href"),
-            "/execution-center/jobs",
+            "/jobs",
         )
 
     def test_mobile_navigation_traps_focus_and_restores_the_menu_button(self):
@@ -1967,7 +2043,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertEqual(self.page.locator("#sync-scope-policy-form").count(), 1)
         self.assertEqual(self.page.locator("#sync-scope-selection-form").count(), 1)
 
-    def test_legacy_jobs_actions_remain_visually_consistent_when_blocked(self):
+    def test_jobs_execution_actions_remain_visually_consistent_when_blocked(self):
         manager = DatabaseManager(db_path=str(self.db_path))
         manager.initialize(create_startup_snapshot=False, verify_integrity=True)
         job_repo = SyncJobRepository(manager)
@@ -1985,25 +2061,22 @@ class WebBrowserRegressionTests(unittest.TestCase):
             self.assertEqual(self.page.locator("[data-high-risk-step]").count(), 5)
             self.assertTrue(self.page.locator("[data-high-risk-context]").is_visible())
             self.assertIn(
-                "execution readiness and impact preview",
+                "current execution status",
                 self.page.locator(".run-review").inner_text().lower(),
             )
-            dry_run_button = self.page.locator("button:has-text('Run Dry Run')").first
-            apply_button = self.page.locator(
-                "form:has(input[name='mode'][value='apply']) button[type='submit']"
+            dry_run_button = self.page.get_by_role(
+                "button", name="Run New Dry Run", exact=True
             )
+            apply_button = self.page.get_by_role(
+                "button", name="Apply Blocked", exact=True
+            )
+            self.assertTrue(dry_run_button.is_disabled())
             self.assertTrue(apply_button.is_disabled())
-            dry_run_box = dry_run_button.bounding_box()
-            apply_box = apply_button.bounding_box()
-            self.assertIsNotNone(dry_run_box)
-            self.assertIsNotNone(apply_box)
-            self.assertLessEqual(
-                abs(float(dry_run_box["y"]) - float(apply_box["y"])),
-                8.0,
+            self.assertTrue(
+                self.page.locator("section#dry-run").is_visible()
             )
-            self.assertGreater(
-                float(apply_box["x"]) - float(dry_run_box["x"]),
-                20.0,
+            self.assertTrue(
+                self.page.locator("section#apply").is_visible()
             )
             self._capture("jobs-page.png")
         finally:

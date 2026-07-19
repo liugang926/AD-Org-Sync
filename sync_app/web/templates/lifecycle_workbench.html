@@ -11,7 +11,7 @@
     </div>
     {{ ui.button(t("Open Lifecycle Policy"), href="/sync-policies/lifecycle", variant="ghost", icon="waypoints") }}
     {{ ui.button(t("Open Exceptions"), href="/exceptions", variant="secondary", icon="ban") }}
-    {{ ui.button(t("Open Job History"), href="/execution-center/jobs", variant="ghost", icon="refresh-cw") }}
+    {{ ui.button(t("Open Jobs"), href="/jobs?context=lifecycle#history", variant="ghost", icon="refresh-cw") }}
   {% endcall %}
 
   <section class="lifecycle-command-center">

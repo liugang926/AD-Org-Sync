@@ -107,7 +107,7 @@ def build_getting_started_data(
                 if dry_run_ready
                 else "Preview planned changes before applying them to AD."
             ),
-            "href": "/execution-center/dry-run",
+            "href": "/jobs?context=dashboard#dry-run",
             "action_label": "Open Dry Run",
             "capability": "jobs.read",
             "done": dry_run_ready,
@@ -126,7 +126,7 @@ def build_getting_started_data(
             "href": (
                 "/identity-governance/conflicts"
                 if dry_run_ready and not conflicts_ready
-                else "/execution-center/apply"
+                else "/jobs?context=dashboard#apply"
             ),
             "action_label": "Resolve Conflicts" if dry_run_ready and not conflicts_ready else "Run Apply",
             "capability": "conflicts.read" if dry_run_ready and not conflicts_ready else "jobs.read",

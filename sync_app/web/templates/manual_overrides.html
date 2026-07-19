@@ -92,6 +92,6 @@
     </tbody></table>{% endcall %}
   {% endcall %}
 
-  {% call ui.helper_block(t("Next step"), t("After an override changes, review Identity Matching and run a fresh Dry Run. Apply remains gated in Execution Center."), "info") %}<div class="actions">{{ ui.button(t("Open Identity Matching"), href="/identity-governance/identity-matching", variant="secondary") }}{{ ui.button(t("Open Dry Run"), href="/execution-center/dry-run", variant="ghost") }}</div>{% endcall %}
+  {% call ui.helper_block(t("Next step"), t("After an override changes, review Identity Matching and run a fresh Dry Run. Apply remains gated in Execution Center."), "info") %}<div class="actions">{{ ui.button(t("Open Identity Matching"), href="/identity-governance/identity-matching", variant="secondary") }}{{ ui.button(t("Open Dry Run"), href="/jobs?context=manual-overrides#dry-run", variant="ghost") }}</div>{% endcall %}
 </div>
 {% endblock %}

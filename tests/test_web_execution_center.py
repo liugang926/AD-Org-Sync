@@ -57,6 +57,197 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
             before_count,
         )
 
+    def test_jobs_is_the_single_execution_surface_with_all_required_sections(
+        self,
+    ) -> None:
+        self._login("superadmin")
+
+        response = self._route("/jobs", "GET")(
+            self._request("/jobs", query={"context": "data-quality"})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        for section_id in (
+            "current-status",
+            "dry-run",
+            "plan-review",
+            "apply",
+            "history",
+        ):
+            self.assertIn(f'id="{section_id}"', body)
+        for label in (
+            "Current Source Snapshot",
+            "Current Sync Policy Version",
+            "Next Step Recommendations",
+            "Group Relationship Changes",
+            "Selected Dry Run ID",
+            "Task History",
+        ):
+            self.assertIn(label, body)
+        self.assertIn("Execution context received from data-quality.", body)
+
+    def test_plan_review_summary_groups_business_change_categories(self) -> None:
+        self._login("superadmin")
+        create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="web-plan-categories",
+            environment_label=self.app.state.environment_label,
+            planned_operation_count=5,
+        )
+        for object_type, operation_type in (
+            ("user", "create_user"),
+            ("user", "update_user"),
+            ("user", "enable_user"),
+            ("user", "disable_user"),
+            ("group_membership", "add_group_to_group"),
+        ):
+            self.app.state.planned_operation_repo.add_operation(
+                "web-plan-categories",
+                object_type,
+                operation_type,
+            )
+
+        response = self._route("/jobs", "GET")(
+            self._request(
+                "/jobs",
+                query={"plan_id": "web-plan-categories"},
+            ),
+            plan_id="web-plan-categories",
+        )
+        body = self._text(response)
+
+        self.assertEqual(response.status_code, 200)
+        for label in (
+            "Create",
+            "Update",
+            "Enable",
+            "Disable",
+            "Group Relationship Changes",
+            "Conflicts",
+            "Errors",
+            "Risk",
+        ):
+            self.assertIn(label, body)
+        self.assertGreaterEqual(body.count("<strong>1</strong>"), 5)
+
+    def test_preflight_audit_is_included_in_unified_task_history(self) -> None:
+        self._login("superadmin")
+        self.app.state.audit_repo.add_log(
+            org_id="default",
+            actor_username="superadmin",
+            action_type="preflight.run",
+            target_type="organization",
+            target_id="default",
+            result="warning",
+            message="Completed live execution preflight",
+            payload={
+                "overall_status": "warning",
+                "status_counts": {"success": 4, "warning": 1, "error": 2},
+            },
+        )
+
+        response = self._route("/jobs", "GET")(self._request("/jobs"))
+        body = self._text(response)
+
+        self.assertIn("Preflight", body)
+        self.assertIn("preflight-", body)
+        self.assertIn("superadmin", body)
+
+    def test_auditor_sees_no_execution_or_approval_post_forms(self) -> None:
+        self._login("auditor1")
+
+        response = self._route("/jobs", "GET")(self._request("/jobs"))
+        body = self._text(response)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('action="/jobs/run"', body)
+        self.assertNotIn('action="/execution-center/apply/run"', body)
+        self.assertNotRegex(
+            body,
+            r'action="/execution-center/plan-review/[^"]+/approve"',
+        )
+
+    def test_dry_run_post_rechecks_scope_gate_server_side(self) -> None:
+        self._login("superadmin")
+        jobs_page = self._route("/jobs", "GET")(self._request("/jobs"))
+        csrf_token = self._csrf_token(self._text(jobs_page))
+
+        with patch.object(self.app.state.sync_runner, "launch") as launch:
+            response = self._route("/jobs/run", "POST")(
+                self._request("/jobs/run", "POST"),
+                csrf_token=csrf_token,
+                mode="dry_run",
+            )
+
+        self.assertEqual(response.status_code, 303)
+        launch.assert_not_called()
+        blocked = next(
+            item
+            for item in WebAuditLogRepository(
+                self.app.state.db_manager
+            ).list_recent_logs(20)
+            if item.action_type == "job.dry_run.blocked"
+        )
+        self.assertEqual(blocked.result, "blocked")
+        self.assertEqual(
+            blocked.payload["reason_code"],
+            "execution.blocker.scope_missing",
+        )
+
+    def test_dry_run_rejects_a_scope_bound_to_a_superseded_snapshot(
+        self,
+    ) -> None:
+        self._login("superadmin")
+        created = create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="web-dry-run-superseded",
+            environment_label=self.app.state.environment_label,
+        )
+        source_repo = self.app.state.source_directory_repo
+        newer_snapshot_id = source_repo.start_refresh(
+            org_id="default",
+            provider_id="test-provider",
+            created_by="test",
+        )
+        source_repo.replace_snapshot(
+            newer_snapshot_id,
+            departments=[],
+            users=[],
+            fields=[],
+            fingerprint="sha256:v2:snapshot:newer-web-dry-run",
+            ttl_minutes=240,
+        )
+        self.assertNotEqual(newer_snapshot_id, created["snapshot_id"])
+
+        jobs_page = self._route("/jobs", "GET")(self._request("/jobs"))
+        jobs_body = self._text(jobs_page)
+        self.assertIn(
+            "A newer successful source snapshot exists.",
+            jobs_body,
+        )
+
+        with patch.object(self.app.state.sync_runner, "launch") as launch:
+            response = self._route("/jobs/run", "POST")(
+                self._request("/jobs/run", "POST"),
+                csrf_token=self._csrf_token(jobs_body),
+                mode="dry_run",
+            )
+
+        self.assertEqual(response.status_code, 303)
+        launch.assert_not_called()
+        blocked = next(
+            item
+            for item in WebAuditLogRepository(
+                self.app.state.db_manager
+            ).list_recent_logs(20)
+            if item.action_type == "job.dry_run.blocked"
+        )
+        self.assertEqual(
+            blocked.payload["reason_code"],
+            "execution.blocker.snapshot_superseded",
+        )
+
     def test_review_then_apply_binds_the_exact_plan_and_writes_audit(self) -> None:
         self._login("superadmin")
         created = create_eligible_execution_plan(
