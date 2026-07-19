@@ -849,6 +849,15 @@ class WebBrowserRegressionTests(unittest.TestCase):
         matching_table = self.page.locator("[data-identity-matching-table]")
         self.assertTrue(matching_table.is_visible())
         self.assertEqual(matching_table.locator("thead th").count(), 8)
+        self.assertEqual(self.page.locator("[data-identity-queue]").count(), 6)
+        self.assertEqual(
+            self._style("[data-identity-matching-table] th:nth-child(1)", "position"),
+            "sticky",
+        )
+        self.assertEqual(
+            self._style("[data-identity-matching-table] th:nth-child(8)", "position"),
+            "sticky",
+        )
         opener = self.page.locator("[data-identity-drawer-open]").first
         opener.focus()
         opener.click()
@@ -861,7 +870,29 @@ class WebBrowserRegressionTests(unittest.TestCase):
             ),
             "rgba(15, 23, 42, 0.56)",
         )
-        self.assertEqual(drawer.locator("[data-identity-timeline-step]").count(), 5)
+        self.assertEqual(drawer.locator("[data-identity-timeline-step]").count(), 7)
+        for stage in (
+            "Source fields and Candidate calculation",
+            "Before: Saved binding",
+            "Latest verified AD status",
+            "Planned: Latest Dry Run",
+            "Applied: Latest Apply",
+            "Current AD actual state",
+            "Risks, conflicts, and audit records",
+        ):
+            self.assertTrue(drawer.get_by_text(stage, exact=True).is_visible())
+        self.assertEqual(
+            drawer.locator(
+                'a[href="/execution-center/jobs/browser-identity-dry"]'
+            ).count(),
+            2,
+        )
+        self.assertEqual(
+            drawer.locator(
+                'a[href="/execution-center/jobs/browser-identity-apply"]'
+            ).count(),
+            2,
+        )
         self.assertTrue(
             drawer.evaluate("element => element.contains(document.activeElement)")
         )
@@ -873,6 +904,24 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.page.keyboard.press("Escape")
         self.assertEqual(self.page.locator("[data-identity-drawer]:visible").count(), 0)
         self.assertTrue(opener.evaluate("element => document.activeElement === element"))
+
+        self.page.goto(
+            (
+                f"{self.base_url}/identity-governance/identity-matching"
+                "?lang=en&queue=all&search=Bob&employee_status=active"
+                "&identity_status=ad_status_unknown&ad_status=unknown"
+            ),
+            wait_until="networkidle",
+        )
+        self.assertEqual(self.page.locator("[data-active-filter]").count(), 4)
+        self.assertEqual(
+            self.page.locator("[data-identity-matching-table] tbody tr").count(),
+            1,
+        )
+        self.assertIn(
+            "Bob Li",
+            self.page.locator("[data-identity-matching-table]").inner_text(),
+        )
 
         self.page.set_viewport_size({"width": 480, "height": 900})
         self.page.goto(
@@ -907,16 +956,19 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 wait_until="networkidle",
             )
         self.assertTrue(
-            self.page.get_by_role("heading", name="Identity Matching", level=1).is_visible()
+            self.page.get_by_role(
+                "heading", name="Identity Matching Workbench", level=1
+            ).is_visible()
         )
         matching_table = self.page.locator("[data-identity-matching-table]")
         self.assertEqual(matching_table.locator("thead th").count(), 8)
         alice_row = self.page.locator("tbody tr").filter(has_text="browser-alice")
         self.assertTrue(
-            alice_row.get_by_text("Review Manual Override", exact=True).is_visible()
+            alice_row.get_by_text("Saved binding has expired", exact=True).is_visible()
         )
         self.assertEqual(
-            alice_row.locator('input[name="selected_source_user_ids"]').count(), 0
+            alice_row.locator('input[name="selected_source_user_ids"]:disabled').count(),
+            1,
         )
         bob_row = self.page.locator("tbody tr").filter(has_text="browser-bob")
         bob_row.locator('input[name="selected_source_user_ids"]').check()
@@ -925,8 +977,27 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.assertTrue(
             self.page.get_by_role(
-                "button", name="Prepare selected accounts for Dry Run"
+                "button", name="Prepare account creation"
             ).is_enabled()
+        )
+        batch_bar = self.page.locator("[data-identity-batch-bar]")
+        self.assertTrue(batch_bar.is_visible())
+        self.assertEqual(
+            batch_bar.evaluate("element => getComputedStyle(element).position"),
+            "fixed",
+        )
+        self.assertIn("1 users selected", batch_bar.inner_text())
+        self.assertIn("for preparing account creation", batch_bar.inner_text())
+        self.page.select_option("[data-identity-batch-mode]", "defer")
+        self.assertFalse(
+            bob_row.locator('input[name="selected_source_user_ids"]').is_checked()
+        )
+        self.assertNotIn("is-active", batch_bar.get_attribute("class"))
+        self.assertEqual(batch_bar.locator("[data-selection-count]").inner_text(), "0")
+        self.assertTrue(
+            self.page.get_by_role(
+                "button", name="Temporarily defer selected"
+            ).is_disabled()
         )
         self._capture("identity-relationship-create-selection-desktop-en.png")
 

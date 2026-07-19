@@ -95,10 +95,11 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
         self.assertEqual(len(re.findall(r'class="button"(?:\s|>)', body)), 1)
         self.assertIn("Review Next Candidate", body)
         self.assertIn("data-identity-drawer", body)
-        self.assertEqual(body.count("data-identity-timeline-step"), 10)
+        self.assertEqual(body.count("data-identity-timeline-step"), 14)
         self.assertIn("alice.reviewed", body)
         self.assertIn("Manual binding overrides the field-generated candidate", body)
-        self.assertIn("Not applicable", body)
+        self.assertIn("Candidate AD account differs from saved binding", body)
+        self.assertIn("Complete evidence timeline", body)
         self.assertNotIn("other-org.secret", body)
         self.assertNotIn("Password123!", body)
 

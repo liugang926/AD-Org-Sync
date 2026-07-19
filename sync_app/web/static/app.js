@@ -394,6 +394,95 @@
     });
   }
 
+  function initIdentityWorkbenchBatch() {
+    document.querySelectorAll("[data-identity-batch-form]").forEach((form) => {
+      const modeSelect = form.querySelector("[data-identity-batch-mode]");
+      const batchBar = form.querySelector("[data-identity-batch-bar]");
+      const purposeTarget = form.querySelector("[data-identity-selection-purpose]");
+      const submitButton = form.querySelector("[data-identity-batch-submit]");
+      const submitLabel = submitButton?.querySelector("span");
+      const checkboxes = Array.from(form.querySelectorAll("[data-identity-select]"));
+      if (!(modeSelect instanceof HTMLSelectElement) || !(batchBar instanceof HTMLElement)) {
+        return;
+      }
+
+      const selectedOption = () => modeSelect.selectedOptions[0];
+      const update = () => {
+        const checkedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
+        form.querySelectorAll("[data-selection-count]").forEach((target) => {
+          target.textContent = String(checkedCount);
+        });
+        batchBar.classList.toggle("is-active", checkedCount > 0);
+        if (submitButton instanceof HTMLButtonElement) {
+          submitButton.disabled = checkedCount === 0;
+          submitButton.setAttribute("aria-disabled", String(checkedCount === 0));
+        }
+      };
+
+      const applyMode = ({ clear = true } = {}) => {
+        const option = selectedOption();
+        const mode = modeSelect.value;
+        if (clear) {
+          checkboxes.forEach((checkbox) => {
+            checkbox.checked = false;
+          });
+        }
+        checkboxes.forEach((checkbox) => {
+          const supportedModes = String(checkbox.getAttribute("data-supported-modes") || "")
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean);
+          checkbox.disabled = !supportedModes.includes(mode);
+          if (checkbox.disabled) {
+            checkbox.checked = false;
+          }
+        });
+        const action = option?.getAttribute("data-action") || "";
+        if (action) {
+          form.setAttribute("action", action);
+        }
+        if (purposeTarget instanceof HTMLElement) {
+          purposeTarget.textContent = option?.getAttribute("data-purpose") || "";
+        }
+        if (submitLabel instanceof HTMLElement) {
+          submitLabel.textContent =
+            option?.getAttribute("data-submit-label") || submitLabel.textContent;
+        }
+        update();
+      };
+
+      modeSelect.addEventListener("change", () => applyMode({ clear: true }));
+      checkboxes.forEach((checkbox) => checkbox.addEventListener("change", update));
+      form.querySelectorAll("[data-identity-row-select]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const requestedMode = button.getAttribute("data-mode") || "";
+          if (
+            requestedMode &&
+            Array.from(modeSelect.options).some((option) => option.value === requestedMode)
+          ) {
+            const changedMode = modeSelect.value !== requestedMode;
+            modeSelect.value = requestedMode;
+            applyMode({ clear: changedMode });
+          }
+          const row = button.closest("[data-identity-row]");
+          const checkbox = row?.querySelector("[data-identity-select]");
+          if (checkbox instanceof HTMLInputElement && !checkbox.disabled) {
+            checkbox.checked = true;
+          }
+          button.closest("details")?.removeAttribute("open");
+          update();
+        });
+      });
+      form.querySelector("[data-identity-clear-selection]")?.addEventListener("click", () => {
+        checkboxes.forEach((checkbox) => {
+          checkbox.checked = false;
+        });
+        update();
+      });
+      applyMode({ clear: false });
+    });
+  }
+
   function initFormLoading() {
     document.querySelectorAll("form").forEach((form) => {
       form.addEventListener("submit", (event) => {
@@ -757,6 +846,7 @@
     initConfirmationPrompts();
     initIdentityDrawers();
     initSelectionSummaries();
+    initIdentityWorkbenchBatch();
     initFormLoading();
     initFlashMessages();
     initSidebarActiveState();
