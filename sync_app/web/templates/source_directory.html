@@ -3,6 +3,7 @@
 {% block content %}
 <div class="page-stack source-directory-page">
   {% call ui.page_header(t("Source Directory"), t("Browse source users, departments, and immutable refresh snapshots. Identity governance and synchronization policy are managed on their owning pages."), eyebrow=t("Data Sources"), badge_text=(t("Refreshing") if refresh_in_progress else (t("No snapshot") if not snapshot else (t("Historical") if viewing_historical_snapshot else (t("Stale") if snapshot_expired else t("Current"))))), badge_level=("warning" if refresh_in_progress or snapshot_expired or viewing_historical_snapshot or not snapshot else "success")) %}
+    {{ ui.button(t("Open Sync Scope"), href="/sync-policies/scope", variant="secondary", icon="list-filter") }}
     {% if can("config.write") %}
     <form method="post" action="/source-directory/refresh" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

@@ -95,7 +95,7 @@ def build_getting_started_data(
                 if ui_mode == "basic"
                 else "Review connectors, mappings, and lifecycle policies before the first rollout."
             ),
-            "href": "/config" if ui_mode == "basic" else "/advanced-sync",
+            "href": "/sync-policies/scope",
             "action_label": "Review Scope",
             "capability": "config.read",
             "done": config_ready,

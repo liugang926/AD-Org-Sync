@@ -1,7 +1,8 @@
 import re
 from unittest.mock import patch
 
-from sync_app.services.typed_settings import AdvancedSyncPolicySettings
+from sync_app.services.typed_settings import AdvancedSyncPolicySettings, DirectoryUiSettings
+from tests.helpers.execution_plans import create_eligible_execution_plan
 from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
 
@@ -121,6 +122,242 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
 
         self.assertEqual(response.status_code, 200)
         build_target_provider.assert_not_called()
+
+    def test_legacy_entry_has_jumps_only_and_scope_forms_are_separated(self):
+        self._login("superadmin")
+        self._seed_policy_fixture()
+
+        legacy = self._text(
+            self._route("/advanced-sync", "GET")(self._request("/advanced-sync"))
+        )
+        self.assertNotIn('action="/advanced-sync/policies"', legacy)
+        self.assertNotIn('action="/advanced-sync/mappings"', legacy)
+        for path in (
+            "/sync-policies/scope",
+            "/sync-policies/account-naming",
+            "/sync-policies/attribute-mappings",
+            "/sync-policies/department-ou-routing",
+            "/sync-policies/group-rules",
+            "/sync-policies/lifecycle",
+        ):
+            self.assertIn(f'href="{path}"', legacy)
+
+        scope = self._text(
+            self._route("/sync-policies/scope", "GET")(
+                self._request("/sync-policies/scope")
+            )
+        )
+        policy_form = re.search(
+            r'<form[^>]+id="sync-scope-policy-form".*?</form>',
+            scope,
+            re.S,
+        )
+        selection_form = re.search(
+            r'<form[^>]+id="sync-scope-selection-form".*?</form>',
+            scope,
+            re.S,
+        )
+        self.assertIsNotNone(policy_form)
+        self.assertIsNotNone(selection_form)
+        self.assertNotIn("selected_source_user_ids", policy_form.group(0))
+        self.assertIn("selected_source_user_ids", selection_form.group(0))
+        self.assertIn('data-policy-change-form', policy_form.group(0))
+        self.assertIn('{policy_old_values}', policy_form.group(0))
+        self.assertIn('{policy_new_values}', policy_form.group(0))
+
+        security = self._text(
+            self._route("/sync-policies/security", "GET")(
+                self._request("/sync-policies/security")
+            )
+        )
+        self.assertNotIn('action="/sync-policies/security"', security)
+        self.assertIn('href="/sync-policies/lifecycle#security"', security)
+
+        legacy_config = self._text(
+            self._route("/config", "GET")(self._request("/config"))
+        )
+        self.assertIn("Source scope moved", legacy_config)
+        self.assertIn("OU Filter And Root Mapping moved", legacy_config)
+        self.assertIn("Persistent runtime rules moved", legacy_config)
+        self.assertRegex(
+            legacy_config,
+            r'<input type="hidden" name="directory_root_ou_path"',
+        )
+        self.assertNotRegex(
+            legacy_config,
+            r'<(?:textarea|select)[^>]+name="soft_excluded_groups"',
+        )
+        source_directory = self._text(
+            self._route("/data-sources/source-directory", "GET")(
+                self._request("/data-sources/source-directory")
+            )
+        )
+        self.assertIn('href="/sync-policies/scope"', source_directory)
+        self.assertNotIn('action="/source-directory/scope"', source_directory)
+
+    def test_policy_save_forms_include_old_new_scope_and_impact_review(self):
+        self._login("superadmin")
+        self._seed_policy_fixture()
+        for path in (
+            "/sync-policies/scope",
+            "/sync-policies/account-naming",
+            "/sync-policies/attribute-mappings",
+            "/sync-policies/department-ou-routing",
+            "/sync-policies/group-rules",
+            "/sync-policies/lifecycle",
+        ):
+            with self.subTest(path=path):
+                body = self._text(self._route(path, "GET")(self._request(path)))
+                forms = re.findall(
+                    r"<form[^>]+data-policy-change-form.*?</form>",
+                    body,
+                    re.S,
+                )
+                self.assertTrue(forms)
+                for form in forms:
+                    self.assertIn("{policy_old_values}", form)
+                    self.assertIn("{policy_new_values}", form)
+                    self.assertIn("{policy_scope}", form)
+                    self.assertIn("{policy_impact}", form)
+                self.assertIn("Configuration version", body)
+                self.assertIn("Last modified by", body)
+                self.assertIn("Estimated impact", body)
+
+    def test_routing_and_group_pages_persist_existing_settings_keys(self):
+        self._login("superadmin")
+        self._seed_policy_fixture()
+        DirectoryUiSettings(
+            custom_group_ou_path="Groups/Keep",
+            group_display_separator="_",
+        ).persist(self.app.state.settings_repo, org_id="default")
+
+        routing_path = "/sync-policies/department-ou-routing/defaults"
+        routed = self._route(routing_path, "POST")(
+            self._request(routing_path, "POST"),
+            csrf_token=self.session["_csrf_token"],
+            advanced_connector_routing_enabled="1",
+            user_ou_placement_strategy="shortest_path",
+            source_root_unit_ids="2,8",
+            source_root_unit_display_text="Asia / Europe",
+            directory_root_ou_path="Managed Users/Regional",
+            disabled_users_ou_path="Disabled/Regional",
+        )
+        self.assertEqual(routed.status_code, 303)
+        directory = DirectoryUiSettings.load(
+            self.app.state.settings_repo,
+            org_id="default",
+        )
+        self.assertEqual(directory.directory_root_ou_path, "Managed Users/Regional")
+        self.assertEqual(directory.disabled_users_ou_path, "Disabled/Regional")
+        self.assertEqual(directory.source_root_unit_ids, "2,8")
+        self.assertEqual(directory.custom_group_ou_path, "Groups/Keep")
+        self.assertEqual(directory.group_display_separator, "_")
+
+        group_path = "/sync-policies/group-rules"
+        grouped = self._route(group_path, "POST")(
+            self._request(group_path, "POST"),
+            csrf_token=self.session["_csrf_token"],
+            custom_group_sync_enabled="1",
+            managed_group_type="security",
+            managed_group_mail_domain="groups.example.com",
+            custom_group_ou_path="Managed Groups/New",
+            connector_id="",
+            connector_group_type="security",
+            connector_group_mail_domain="",
+            connector_custom_group_ou_path="",
+            managed_tag_ids="",
+            managed_external_chat_ids="",
+            group_display_separator="-",
+            group_recursive_enabled="",
+            managed_relation_cleanup_enabled="true",
+            soft_excluded_groups="Legacy Ignore\nTemporary Ignore",
+        )
+        self.assertEqual(grouped.status_code, 303)
+        directory = DirectoryUiSettings.load(
+            self.app.state.settings_repo,
+            org_id="default",
+        )
+        self.assertFalse(directory.group_recursive_enabled)
+        self.assertTrue(directory.managed_relation_cleanup_enabled)
+        self.assertEqual(directory.custom_group_ou_path, "Managed Groups/New")
+        exclusions = [
+            record
+            for record in self.app.state.exclusion_repo.list_enabled_rule_records(
+                org_id="default",
+            )
+            if record.rule_type == "exclude"
+            and record.protection_level == "soft"
+        ]
+        self.assertEqual(
+            {record.match_value for record in exclusions},
+            {"Legacy Ignore", "Temporary Ignore"},
+        )
+
+    def test_policy_change_invalidates_dry_run_and_blocks_apply(self):
+        self._login("superadmin")
+        created = create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="policy-before-change",
+            environment_label=self.app.state.environment_label,
+            approved=True,
+        )
+        security_path = "/sync-policies/security"
+        saved = self._route(security_path, "POST")(
+            self._request(security_path, "POST"),
+            csrf_token=self.session["_csrf_token"],
+            advanced_connector_routing_enabled="",
+            disable_circuit_breaker_enabled="1",
+            disable_circuit_breaker_percent=3.0,
+            disable_circuit_breaker_min_count=2,
+            disable_circuit_breaker_requires_approval="1",
+            first_sync_identity_claim_mode="review",
+            connector_id="",
+            force_change_password="",
+            password_complexity="",
+            return_to="lifecycle",
+        )
+        self.assertEqual(saved.headers["location"], "/sync-policies/lifecycle#security")
+
+        lifecycle = self._text(
+            self._route("/sync-policies/lifecycle", "GET")(
+                self._request("/sync-policies/lifecycle")
+            )
+        )
+        self.assertIn("The previous Dry Run is invalid.", lifecycle)
+        self.assertIn("Apply is blocked", lifecycle)
+
+        apply_page = self._text(
+            self._route("/execution-center/apply", "GET")(
+                self._request(
+                    "/execution-center/apply",
+                    query={"plan_id": created["job"].job_id},
+                ),
+                plan_id=created["job"].job_id,
+            )
+        )
+        self.assertNotIn("Apply 1 Changes", apply_page)
+        self.assertIn("Run a new Dry Run", apply_page)
+
+    def test_new_policy_write_requires_config_write_permission(self):
+        self._login("operator1")
+        path = "/sync-policies/department-ou-routing/defaults"
+        response = self._route(path, "POST")(
+            self._request(path, "POST"),
+            csrf_token=self.session["_csrf_token"],
+            advanced_connector_routing_enabled="1",
+            user_ou_placement_strategy="shortest_path",
+            source_root_unit_ids="2",
+            source_root_unit_display_text="Asia",
+            directory_root_ou_path="Managed Users/Denied",
+            disabled_users_ou_path="Disabled/Denied",
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/dashboard")
+        settings = DirectoryUiSettings.load(
+            self.app.state.settings_repo,
+            org_id="default",
+        )
+        self.assertNotEqual(settings.directory_root_ou_path, "Managed Users/Denied")
 
     def test_attribute_section_update_preserves_lifecycle_and_is_audited(self):
         self._login("superadmin")

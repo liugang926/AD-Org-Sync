@@ -3,44 +3,67 @@
 {% import "components/sync_policy.html" as policy with context %}
 
 {% block content %}
-{% call ui.page_header(t("Attribute Mappings"), t("Define field direction, transformation, replacement behavior, and controlled source write-back for the current organization."), eyebrow=t("Sync Policies"), badge_text=t("Organization Scope"), badge_level="info") %}
+{% call ui.page_header(t("Attribute Mappings"), t("Map source business fields to AD attributes with transformations and explicit empty-value behavior."), eyebrow=t("Sync Policies"), badge_text=t("Organization Scope"), badge_level="info") %}
   {{ ui.button(t("Release History"), href="/sync-policies/releases", variant="secondary", icon="history") }}
 {% endcall %}
 {{ policy.tabs('attribute-mappings') }}
-{{ policy.status(has_unpublished_changes, latest_snapshot_title, '', t('Review field direction and write-back risk, publish, then run a new Dry Run')) }}
+{{ policy.status(has_unpublished_changes, latest_snapshot_title, '', t('Save this section, then verify field differences in a new Dry Run'), policy_version, policy_last_modified_by, estimated_affected_users, dry_run_invalidated, latest_policy_dry_run) }}
 
-{% call ui.panel(t("Attribute Mapping Policy"), description=t("Enable the capability and optionally add one mapping rule. Leaving both field names blank updates only the capability switches.")) %}
-  <form method="post" action="/sync-policies/attribute-mappings" class="page-stack">
+{% call ui.panel(t("Attribute Mapping Policy"), scope_label=t("Organization Scope"), scope_level="info", description=t("Enable mapping and optionally add one rule. Leaving both field names blank updates only the organization switches.")) %}
+  <form
+    method="post"
+    action="/sync-policies/attribute-mappings"
+    class="page-stack"
+    data-policy-change-form
+    data-policy-impact="{{ estimated_affected_users }}"
+    data-policy-scope="{{ current_org.name }}"
+    data-confirm="{{ t('Review old values, new values, rule scope, and estimated impact before saving this mapping section.') }}"
+    data-confirm-title="{{ t('Review Attribute Mapping Change') }}"
+    data-confirm-detail-1-label="{{ t('Old values') }}"
+    data-confirm-detail-1-value="{policy_old_values}"
+    data-confirm-detail-2-label="{{ t('New values') }}"
+    data-confirm-detail-2-value="{policy_new_values}"
+    data-confirm-detail-3-label="{{ t('Scope') }}"
+    data-confirm-detail-3-value="{policy_scope}"
+    data-confirm-detail-4-label="{{ t('Estimated impact') }}"
+    data-confirm-detail-4-value="{policy_impact} {{ t('users') }}"
+  >
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-grid">
-      <label class="check-card"><input type="checkbox" name="attribute_mapping_enabled" value="1" {% if policy_settings.attribute_mapping_enabled %}checked{% endif %}><span><strong>{{ t("Enable Attribute Mapping") }}</strong><small>{{ t("Apply explicit field mapping rules during planning.") }}</small></span></label>
-      <label class="check-card"><input type="checkbox" name="write_back_enabled" value="1" {% if policy_settings.write_back_enabled %}checked{% endif %}><span><strong>{{ t("Enable Source Write-Back") }}</strong><small>{{ t("Only ad_to_source rules may write back, and Apply gates still apply.") }}</small></span></label>
+      <label class="check-card"><input type="checkbox" name="attribute_mapping_enabled" value="1" {% if policy_settings.attribute_mapping_enabled %}checked{% endif %}><span><strong>{{ t("Enable Attribute Mapping") }}</strong><small>{{ t("Apply explicit field rules during planning.") }}</small></span></label>
+      <label class="check-card"><input type="checkbox" name="write_back_enabled" value="1" {% if policy_settings.write_back_enabled %}checked{% endif %}><span><strong>{{ t("Enable Source Write-Back") }}</strong><small>{{ t("Only AD-to-source rules may write back; Apply gates still apply.") }}</small></span></label>
     </div>
     <details class="detail-toggle" open>
       <summary><strong>{{ t("Add or update one mapping rule") }}</strong></summary>
       <div class="form-grid">
-        <label>{{ t("Connector") }}<select name="connector_id"><option value="">{{ t("Global") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}">{{ connector.name }}</option>{% endfor %}</select></label>
-        <label>{{ t("Direction") }}<select name="direction">{% for value, label in mapping_direction_options %}<option value="{{ value }}">{{ t(label) }}</option>{% endfor %}</select></label>
-        <label>{{ t("Source Field") }}<input type="text" name="source_field" placeholder="position"></label>
-        <label>{{ t("Target Field") }}<input type="text" name="target_field" placeholder="title"></label>
+        <label>{{ t("Rule Scope") }}<select name="connector_id"><option value="">{{ t("Organization default") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}">{{ connector.name }}{% if ui_mode == "advanced" %} · {{ connector.connector_id }}{% endif %}</option>{% endfor %}</select></label>
+        <label>{{ t("Direction") }}<select name="direction">{% for value, label in mapping_direction_options %}<option value="{{ value }}">{{ t(label) }}{% if ui_mode == "advanced" %} · {{ value }}{% endif %}</option>{% endfor %}</select></label>
+        {% if ui_mode == "advanced" %}
+        <label>{{ t("Source Field Code") }}<input type="text" name="source_field" placeholder="position"></label>
+        <label>{{ t("AD Attribute Code") }}<input type="text" name="target_field" placeholder="title"></label>
         <label>{{ t("Transform Template") }}<input type="text" name="transform_template" placeholder="{value}"></label>
-        <label>{{ t("Sync Mode") }}<select name="sync_mode">{% for value, label in mapping_mode_options %}<option value="{{ value }}">{{ t(label) }}</option>{% endfor %}</select></label>
+        {% else %}
+        <label>{{ t("Source Field") }}<select name="source_field"><option value="">{{ t("No new rule") }}</option><option value="display_name">{{ t("Display Name") }}</option><option value="employee_id">{{ t("Employee ID") }}</option><option value="email">{{ t("Email") }}</option><option value="mobile">{{ t("Mobile") }}</option><option value="position">{{ t("Position") }}</option></select></label>
+        <label>{{ t("AD Attribute") }}<select name="target_field"><option value="">{{ t("No new rule") }}</option><option value="displayName">{{ t("Display Name") }}</option><option value="employeeID">{{ t("Employee ID") }}</option><option value="mail">{{ t("Email") }}</option><option value="mobile">{{ t("Mobile") }}</option><option value="title">{{ t("Job Title") }}</option></select></label>
+        <input type="hidden" name="transform_template" value="">
+        {% endif %}
+        <label>{{ t("Empty Value Behavior") }}<select name="sync_mode">{% for value, label in mapping_mode_options %}<option value="{{ value }}">{{ t(label) }}{% if ui_mode == "advanced" %} · {{ value }}{% endif %}</option>{% endfor %}</select><span class="form-help">{{ t("Empty source values are skipped. Fill-if-empty and preserve protect existing target values.") }}</span></label>
       </div>
-      <label>{{ t("Notes") }}<textarea name="notes" placeholder="{{ t('Explain the business owner and expected transformation.') }}"></textarea></label>
+      <label>{{ t("Business Notes") }}<textarea name="notes" placeholder="{{ t('Explain the owner, transformation, and intended empty-value behavior.') }}"></textarea></label>
       <label class="checkbox-row"><input type="checkbox" name="is_enabled" value="1" checked><span>{{ t("Rule Enabled") }}</span></label>
     </details>
     {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Attribute Mapping"), type="submit", icon="save") }}</div>{% endif %}
   </form>
 {% endcall %}
 
-{% call ui.panel(t("Attribute Mapping Rules"), description=t("The daily list keeps seven business columns; transformation evidence stays in Notes and the release diff.")) %}
-  <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Attribute mapping rules') }}"><table data-policy-table><thead><tr><th>{{ t("Connector") }}</th><th>{{ t("Direction") }}</th><th>{{ t("Source Field") }}</th><th>{{ t("Target Field") }}</th><th>{{ t("Mode") }}</th><th>{{ t("Status") }}</th><th>{{ t("Action") }}</th></tr></thead><tbody>
-    {% for rule in attribute_mappings %}<tr><td>{{ rule.connector_id or t("Global") }}</td><td>{{ t(mapping_direction_labels.get(rule.direction, rule.direction)) }}</td><td>{{ rule.source_field }}</td><td>{{ rule.target_field }}</td><td>{{ t(rule.sync_mode) }}</td><td>{{ t("Enabled") if rule.is_enabled else t("Disabled") }}</td><td>{% if can("config.write") %}<form method="post" action="/sync-policies/attribute-mappings/{{ rule.id }}/delete" class="inline" data-confirm="{{ t('Deleting this attribute mapping stops the transformation on future runs.') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ ui.button(t("Delete"), type="submit", variant="danger", size="sm") }}</form>{% endif %}</td></tr>
-    {% else %}<tr><td colspan="7" class="empty-state">{{ t("No attribute mapping rules are configured") }}</td></tr>{% endfor %}
+{% call ui.panel(t("Attribute Mapping Rules"), description=t("Basic mode shows business fields; Advanced mode adds field codes, templates, and connector details.")) %}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Attribute mapping rules') }}"><table data-policy-table><thead><tr><th>{{ t("Scope") }}</th><th>{{ t("Direction") }}</th><th>{{ t("Source Field") }}</th><th>{{ t("AD Attribute") }}</th><th>{{ t("Empty Value Behavior") }}</th>{% if ui_mode == "advanced" %}<th>{{ t("Transform") }}</th>{% endif %}<th>{{ t("Status") }}</th><th>{{ t("Action") }}</th></tr></thead><tbody>
+    {% for rule in attribute_mappings %}<tr><td>{{ t("Organization") }}{% if rule.connector_id %} / {{ rule.connector_id }}{% endif %}</td><td>{{ t(mapping_direction_labels.get(rule.direction, rule.direction)) }}</td><td>{{ rule.source_field }}</td><td>{{ rule.target_field }}</td><td>{{ t(rule.sync_mode) }}</td>{% if ui_mode == "advanced" %}<td><code>{{ rule.transform_template or '-' }}</code></td>{% endif %}<td>{{ t("Enabled") if rule.is_enabled else t("Disabled") }}</td><td>{% if can("config.write") %}<form method="post" action="/sync-policies/attribute-mappings/{{ rule.id }}/delete" class="inline" data-confirm="{{ t('Deleting this mapping invalidates the previous Dry Run and stops the transformation on future runs.') }}" data-confirm-title="{{ t('Review Attribute Mapping Deletion') }}" data-confirm-detail-1-label="{{ t('Old value') }}" data-confirm-detail-1-value="{{ rule.source_field }} → {{ rule.target_field }}" data-confirm-detail-2-label="{{ t('New value') }}" data-confirm-detail-2-value="{{ t('Not configured') }}" data-confirm-detail-3-label="{{ t('Scope') }}" data-confirm-detail-3-value="{{ t('Organization') }}{% if rule.connector_id %} / {{ rule.connector_id }}{% endif %}" data-confirm-detail-4-label="{{ t('Estimated impact') }}" data-confirm-detail-4-value="{{ estimated_affected_users }} {{ t('users') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ ui.button(t("Delete"), type="submit", variant="danger", size="sm") }}</form>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="{{ 8 if ui_mode == 'advanced' else 7 }}" class="empty-state">{{ t("No attribute mapping rules are configured") }}</td></tr>{% endfor %}
   </tbody></table></div>
 {% endcall %}
 
-{% call ui.helper_block(t("Next step"), t("Publish the reviewed configuration snapshot and inspect the Dry Run field differences before Apply."), "info") %}
-  {{ ui.button(t("Open Release History"), href="/sync-policies/releases", variant="ghost", icon="history") }}
+{% call ui.helper_block(t("Next step"), t("Saving invalidates the previous Dry Run. Inspect field-level differences in a fresh plan before Apply."), "warning") %}
+  {{ ui.button(t("Run a new Dry Run"), href="/execution-center/dry-run", variant="secondary", icon="play-circle") }}
 {% endcall %}
 {% endblock %}

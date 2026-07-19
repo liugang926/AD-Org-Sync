@@ -289,21 +289,17 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
         self.assertIn("Advanced Sync", body)
-        self.assertIn('href="/automation-center"', body)
-        self.assertIn('href="/data-sources/data-quality"', body)
-        self.assertIn('href="/integrations"', body)
-        self.assertIn('href="/lifecycle"', body)
-        self.assertIn("All advanced capabilities are opt-in.", body)
+        self.assertIn("Persistent policy forms have moved.", body)
+        self.assertIn('href="/sync-policies"', body)
+        self.assertIn('href="/sync-policies/scope"', body)
+        self.assertIn('href="/sync-policies/account-naming"', body)
+        self.assertIn('href="/sync-policies/attribute-mappings"', body)
+        self.assertIn('href="/sync-policies/department-ou-routing"', body)
+        self.assertIn('href="/sync-policies/group-rules"', body)
+        self.assertIn('href="/sync-policies/lifecycle"', body)
         self.assertIn("Pending Lifecycle Queue", body)
-        self.assertIn("Pending Replay Requests", body)
-        self.assertNotIn("Source Data Quality Snapshot", body)
-        self.assertIn("Username Strategy Previewer", body)
-        self.assertIn("Identity Route Explainer", body)
-        self.assertIn("First Sync Identity Claim", body)
-        self.assertIn("Department To AD OU Mapping", body)
-        self.assertIn("Same-Name Collision Policy", body)
         self.assertNotIn(
-            'name="advanced_connector_routing_enabled" value="1" checked', body
+            'name="advanced_connector_routing_enabled"', body
         )
         match = re.search(r'name="csrf_token" value="([^"]+)"', body)
         self.assertIsNotNone(match)
@@ -1893,12 +1889,17 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(advanced_response.status_code, 200)
         advanced_text = self._text(advanced_response)
-        self.assertIn("Account Creation Rules And Connector Routing", advanced_text)
-        self.assertIn("Configure Account Creation Rule", advanced_text)
-        self.assertIn("Account Creation And Duplicate Handling", advanced_text)
-        self.assertIn("Enable source -&gt; AD attribute mapping", advanced_text)
-        self.assertIn("Enable AD -&gt; source write-back", advanced_text)
-        self.assertIn("Source Root Unit IDs", advanced_text)
+        self.assertIn("Persistent policy forms have moved.", advanced_text)
+        self.assertIn(
+            "All active users, department subtrees, explicit users, single-user replay, and exclusions.",
+            advanced_text,
+        )
+        self.assertIn(
+            "Source identity, pinyin, custom templates, character handling, length, and collision rules.",
+            advanced_text,
+        )
+        self.assertIn('href="/sync-policies/account-naming"', advanced_text)
+        self.assertIn('href="/sync-policies/attribute-mappings"', advanced_text)
         self.assertNotIn("Enable WeCom -&gt; AD attribute mapping", advanced_text)
         self.assertNotIn("Enable AD -&gt; WeCom write-back", advanced_text)
         self.assertNotIn("WeCom Root Department IDs", advanced_text)
@@ -2039,9 +2040,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         body = self._text(response)
         self.assertIn("Need Manual Identity Binding Or Per-User Placement?", body)
         self.assertIn('href="/mappings#mapping-create"', body)
-        self.assertIn("Need Account Creation Rules Or Department Routing?", body)
-        self.assertIn('href="/advanced-sync#account-creation-rules"', body)
-        self.assertIn('href="/advanced-sync#department-ou-routing"', body)
+        self.assertIn("Need Account Naming Or Department Routing?", body)
+        self.assertIn('href="/sync-policies/account-naming"', body)
+        self.assertIn('href="/sync-policies/department-ou-routing"', body)
+        self.assertNotIn('href="/advanced-sync#account-creation-rules"', body)
 
     def test_config_page_surfaces_first_dry_run_launchpad(self):
         self._login("superadmin")
@@ -4563,7 +4565,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertGreater(len(asia_protected), 0)
 
-    def test_advanced_sync_page_scopes_connectors_to_selected_organization(self):
+    def test_sync_policy_page_scopes_connectors_to_selected_organization(self):
         self._login("superadmin")
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
@@ -4590,7 +4592,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.session["selected_org_id"] = "asia"
 
-        response = self._route("/advanced-sync", "GET")(self._request("/advanced-sync"))
+        response = self._route("/sync-policies/account-naming", "GET")(
+            self._request("/sync-policies/account-naming?connector_id=asia")
+        )
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
         self.assertIn("Asia Connector", text)

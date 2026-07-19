@@ -206,16 +206,8 @@ NAVIGATION_GROUPS = (
             ),
             NavigationItem(
                 page="sync-lifecycle-policy",
-                label="Lifecycle Policy",
+                label="Lifecycle & Security",
                 icon="refresh-cw",
-                capability="config.read",
-                legacy_paths=(),
-                advanced_only=True,
-            ),
-            NavigationItem(
-                page="sync-security-policy",
-                label="Security Policy",
-                icon="shield-check",
                 capability="config.read",
                 legacy_paths=(),
                 advanced_only=True,

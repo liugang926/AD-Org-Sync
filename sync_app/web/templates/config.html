@@ -164,6 +164,18 @@
     data-message-target-loaded="{{ t('Choose an OU row. The selected target field updates immediately.') }}"
   >
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {# Persistent sync policy values are preserved here for backward-compatible
+       connector submissions. Their interactive controls live only in Sync Policies. #}
+    <input type="hidden" name="source_root_unit_ids" value="{{ editable.source_root_unit_ids }}">
+    <input type="hidden" name="source_root_unit_display_text" value="{{ editable.source_root_unit_display_text }}">
+    <input type="hidden" name="directory_root_ou_path" value="{{ editable.directory_root_ou_path }}">
+    <input type="hidden" name="disabled_users_ou_path" value="{{ editable.disabled_users_ou_path }}">
+    <input type="hidden" name="custom_group_ou_path" value="{{ editable.custom_group_ou_path }}">
+    <input type="hidden" name="user_ou_placement_strategy" value="{{ editable.user_ou_placement_strategy }}">
+    <input type="hidden" name="group_display_separator" value="{{ editable.group_display_separator }}">
+    <input type="hidden" name="group_recursive_enabled" value="{{ editable.group_recursive_enabled|lower }}">
+    <input type="hidden" name="managed_relation_cleanup_enabled" value="{{ editable.managed_relation_cleanup_enabled|lower }}">
+    <input type="hidden" name="soft_excluded_groups" value="{{ editable.soft_excluded_groups }}">
     <div class="form-error-summary" role="alert" aria-live="assertive" tabindex="-1" data-config-error-summary hidden>
       <strong>{{ t("Fix the highlighted fields before saving.") }}</strong>
       <ul data-config-error-list></ul>
@@ -216,55 +228,9 @@
             {% endcall %}
             {% endif %}
 
-            <section class="subcard stack-tight">
-              <div class="section-header">
-                <div class="section-header__copy">
-                  <h3 class="section-header__title">{{ t("Source Scope") }}</h3>
-                  <p class="section-header__description">{{ t("Limit the base flow to one or more source roots, or leave it empty to include every department.") }}</p>
-                </div>
-              </div>
-              <div class="form-grid">
-                {% set source_toggle_attrs = 'data-config-open-source-browser data-open-label="' ~ t("Browse Source Unit Tree") ~ '" data-close-label="' ~ t("Hide Source Unit Tree") ~ '"' %}
-                {% set source_refresh_attrs = 'data-config-load-source-units aria-label="' ~ t("Refresh Source Unit Tree") ~ '" title="' ~ t("Refresh Source Unit Tree") ~ '"' %}
-                {% set source_close_attrs = 'data-config-close-source-browser aria-label="' ~ t("Close Picker") ~ '" title="' ~ t("Close Picker") ~ '"' %}
-                {% call forms.picker("source_root_unit_ids", t("Source Root Unit IDs Filter"), editable.source_root_unit_ids, display_value=(editable.source_root_unit_display_text or editable.source_root_unit_ids or t("No source root units selected yet.")), placeholder=t("No source root units selected yet."), help_text=t("Select one or more source roots. Leave empty to keep the base flow open to every department."), class_name="field-span-full") %}
-                  <input type="hidden" name="source_root_unit_display_text" id="source_root_unit_display_text" value="{{ editable.source_root_unit_display_text or '' }}">
-                  <div class="picker-inline-frame">
-                    <div class="picker-field__control-row">
-                      <div class="picker-field__control-copy">
-                        <span class="picker-field__eyebrow">{{ t("Multi-select") }}</span>
-                        <span class="picker-field__hint">{{ t("Limit the base flow to one or more source roots.") }}</span>
-                      </div>
-                      <div class="picker-field__actions">
-                        {{ ui.button(t("Browse Source Unit Tree"), type="button", variant="secondary", size="sm", icon="search", class_name="picker-trigger-button", attrs=source_toggle_attrs) }}
-                        {{ ui.button(t("Clear Selection"), type="button", variant="ghost", size="sm", class_name="picker-clear-button", attrs='data-picker-clear data-picker-clear-field="source_root_unit_ids" hidden') }}
-                      </div>
-                    </div>
-                    <section class="picker-inline-panel" data-config-source-browser hidden>
-                      <div class="picker-toolbar">
-                        <div class="picker-toolbar__copy">
-                          <div class="picker-toolbar__title">{{ t("Source Unit Tree Preview") }}</div>
-                          <div class="picker-toolbar__description">{{ t("Choose source root unit IDs such as WeCom root department IDs or DingTalk root department IDs from the tree below. Leave empty to sync every department.") }}</div>
-                        </div>
-                        <div class="picker-toolbar__actions">
-                          <label class="picker-browser-search">
-                            <i class="picker-browser-search__icon icon icon-xs" data-lucide="search"></i>
-                            <input type="search" placeholder="{{ t('Search by name, ID, or path') }}" data-config-source-filter>
-                          </label>
-                          {{ ui.button("", type="button", variant="ghost", size="sm", icon="refresh-cw", class_name="picker-icon-action", attrs=source_refresh_attrs) }}
-                          {{ ui.button("", type="button", variant="ghost", size="sm", icon="x", class_name="picker-icon-action", attrs=source_close_attrs) }}
-                        </div>
-                      </div>
-                      <div class="picker-browser-meta">
-                        <p class="config-browser__status muted" data-config-source-status>{{ t("After filling the source connector fields, click to load the source department tree with names and IDs.") }}</p>
-                        <div class="picker-browser-results" data-config-source-results></div>
-                      </div>
-                      <div class="config-browser__list" data-config-source-list></div>
-                    </section>
-                  </div>
-                {% endcall %}
-              </div>
-            </section>
+            {% call ui.helper_block(t("Source scope moved"), t("Source root selection and synchronization boundaries now have one canonical editor in Sync Policies. Existing values are preserved when this connector form is saved."), "info") %}
+              {{ ui.button(t("Open Sync Scope"), href="/sync-policies/scope", variant="secondary", icon="list-filter") }}
+            {% endcall %}
           {% endcall %}
         </section>
 
@@ -300,19 +266,9 @@
               </div>
             </section>
 
-            <section class="subcard stack-tight">
-              <div class="section-header">
-                <div class="section-header__copy">
-                  <h3 class="section-header__title">{{ t("OU Filter And Root Mapping") }}</h3>
-                  <p class="section-header__description">{{ t("Use these defaults to keep the single-organization sync inside the expected target AD OU roots.") }}</p>
-                </div>
-              </div>
-              <div class="form-grid">
-                {{ target_ou_picker("directory_root_ou_path", "Target AD Root OU Path / DN", editable.directory_root_ou_path, "No target root OU selected yet.", "Choose the target AD root OU path or DN from the AD OU tree below. Example: Managed Users/China or OU=China,OU=Managed Users,DC=example,DC=com", "Select Target Root OU", "Target AD Root OU Path / DN", "Choose the target AD root OU path or DN from the AD OU tree below. Example: Managed Users/China or OU=China,OU=Managed Users,DC=example,DC=com", "field-span-full") }}
-                {{ target_ou_picker("disabled_users_ou_path", "Disabled Users OU Path / DN", editable.disabled_users_ou_path, "No disabled users OU selected yet.", "Choose the target OU used for disabled users. Nested OU path or DN is supported.", "Select Disabled Users OU", "Disabled Users OU Path / DN", "Choose the target OU used for disabled users. Nested OU path or DN is supported.") }}
-                {{ target_ou_picker("custom_group_ou_path", "Custom Group OU Path / DN", editable.custom_group_ou_path, "No custom group OU selected yet.", "Choose the target OU used for managed custom groups. Nested OU path or DN is supported.", "Select Custom Group OU", "Custom Group OU Path / DN", "Choose the target OU used for managed custom groups. Nested OU path or DN is supported.") }}
-              </div>
-            </section>
+            {% call ui.helper_block(t("OU Filter And Root Mapping moved"), t("Default OU, disabled-user OU, managed-group OU, and department routing now have one canonical editor in Sync Policies. Existing values remain database-compatible."), "info") %}
+              {{ ui.button(t("Open Department And OU Routing"), href="/sync-policies/department-ou-routing", variant="secondary", icon="route") }}
+            {% endcall %}
           {% endcall %}
         </section>
 
@@ -335,54 +291,20 @@
               {{ ui.button(t("Open Employee Self-Service"), href="/system-management/employee-self-service", variant="secondary", icon="key-round") }}
             {% endcall %}
 
-            {% call ui.panel(t("Directory Safety"), t("Organization Scope"), "warning", t("System-protected accounts are always skipped for binding, create, update, reactivation, and disable actions.")) %}
-              <div class="form-group">
-                <label for="protected_accounts_display">{{ t("Protected Accounts (Read-only)") }}</label>
-                <textarea id="protected_accounts_display" rows="5" readonly>{{ editable.protected_accounts|join('\n') }}</textarea>
-                <div class="help-text">{{ t("These built-in and explicitly excluded AD accounts are never managed by synchronization.") }}</div>
-              </div>
+            {% call ui.helper_block(t("Lifecycle safety moved"), t("Protected accounts and maximum-change gates are reviewed in Lifecycle & Security."), "warning") %}
+              {{ ui.button(t("Open Lifecycle And Security"), href="/sync-policies/lifecycle#security", variant="secondary", icon="shield-check") }}
             {% endcall %}
           </div>
         </section>
 
         <section id="config-section-runtime" class="config-section-panel" data-config-section-panel="runtime" hidden>
           <div class="page-stack tight">
-            {% call ui.panel(t("Runtime Policy"), t("Organization Scope"), "info", t("Set scheduled execution, placement strategy, and managed relation cleanup.")) %}
-              <div class="form-grid">
-                <input type="hidden" name="schedule_time" value="{{ editable.schedule_time }}">
-                <input type="hidden" name="retry_interval" value="{{ editable.retry_interval }}">
-                <input type="hidden" name="max_retries" value="{{ editable.max_retries }}">
-                <input type="hidden" name="schedule_execution_mode" value="{{ editable.schedule_execution_mode }}">
-                {{ forms.select("user_ou_placement_strategy", t("OU Placement Strategy"), translated_placement_strategy_options.items(), selected_value=editable.user_ou_placement_strategy) }}
-                {{ forms.select("group_display_separator", t("Group Separator"), [("-", "-"), ("_", "_"), (" ", t("Space"))], selected_value=editable.group_display_separator) }}
-                {{ forms.select("group_recursive_enabled", t("Recursive Group Sync"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.group_recursive_enabled|lower) }}
-                {{ forms.select("managed_relation_cleanup_enabled", t("Relation Cleanup"), [("false", t("Disabled")), ("true", t("Enabled"))], selected_value=editable.managed_relation_cleanup_enabled|lower) }}
-              </div>
-              <div class="panel-note info">{{ t("Schedule timing, retry behavior, and unattended Apply gating are managed in Automation And Schedules.") }} <a href="/operations-center/automation">{{ t("Open Automation And Schedules") }}</a></div>
-            {% endcall %}
-
-            {% call ui.panel(t("Group Rules"), t("Organization Scope"), "info") %}
-              <div class="page-stack tight">
-                {{ forms.textarea("soft_excluded_groups", t("Soft Excluded Groups"), editable.soft_excluded_groups, help_text=t("One group per line. Use this only when a managed group should be ignored."), rows=6) }}
-                {% call ui.table_shell() %}
-                  <table>
-                    <thead>
-                      <tr><th>{{ t("Protected Group") }}</th><th>{{ t("Match") }}</th><th>{{ t("Source") }}</th></tr>
-                    </thead>
-                    <tbody>
-                      {% for rule in protected_rules %}
-                      <tr>
-                        <td>{{ rule.display_name or rule.match_value }}</td>
-                        <td>{{ ui.badge(t(rule.match_type), 'info') }}</td>
-                        <td>{{ rule.source }}</td>
-                      </tr>
-                      {% else %}
-                      <tr><td class="table-empty" colspan="3">{{ t("No protected rules.") }}</td></tr>
-                      {% endfor %}
-                    </tbody>
-                  </table>
-                {% endcall %}
-              </div>
+            <input type="hidden" name="schedule_time" value="{{ editable.schedule_time }}">
+            <input type="hidden" name="retry_interval" value="{{ editable.retry_interval }}">
+            <input type="hidden" name="max_retries" value="{{ editable.max_retries }}">
+            <input type="hidden" name="schedule_execution_mode" value="{{ editable.schedule_execution_mode }}">
+            {% call ui.helper_block(t("Persistent runtime rules moved"), t("OU placement, nested groups, cleanup, exclusions, and protected groups are edited only in Sync Policies. Scheduling remains in Automation And Schedules."), "info") %}
+              <div class="actions">{{ ui.button(t("Open Group Rules"), href="/sync-policies/group-rules", variant="secondary", icon="users-round") }}{{ ui.button(t("Open Automation And Schedules"), href="/operations-center/automation", variant="ghost", icon="calendar-clock") }}</div>
             {% endcall %}
           </div>
         </section>
@@ -430,7 +352,7 @@
           <span data-config-provider-guidance>{{ t("Select the source provider and complete the credentials required by {provider}.", provider=t(source_provider_name)) }}</span>
           <span>{{ t("LDAP Server, LDAP Domain, LDAP Username, and LDAP Password") }}</span>
           <span>{{ t("Default Password before the first apply run") }}</span>
-          <span>{{ t("Fill the source root unit IDs and the target AD root OU path or DN before the first apply.") }}</span>
+          <span>{{ t("Define source scope and target OU routing in Sync Policies before the first Dry Run.") }}</span>
         </div>
         <div class="config-action-row__actions">
           {% if config_rollout_status.show_run_dry_run and can("jobs.run") %}
@@ -456,12 +378,12 @@
         {% endif %}
         <div class="config-shortcut">
           <div>
-            <strong>{{ t("Need Account Creation Rules Or Department Routing?") }}</strong>
-            <span>{{ t("Open Advanced Sync when you need connector-level account naming, duplicate handling, source-branch routing, or explicit source-department to AD OU mapping.") }}</span>
+            <strong>{{ t("Need Account Naming Or Department Routing?") }}</strong>
+            <span>{{ t("Persistent synchronization rules now have one canonical editor in Sync Policies.") }}</span>
           </div>
           <div class="config-shortcut__actions">
-            {{ ui.button(t("Open Account Creation Rules"), href="/advanced-sync#account-creation-rules", variant="ghost", size="sm", icon="settings-2") }}
-            {{ ui.button(t("Open Department Routing"), href="/advanced-sync#department-ou-routing", variant="ghost", size="sm", icon="waypoints") }}
+            {{ ui.button(t("Open Account Naming"), href="/sync-policies/account-naming", variant="ghost", size="sm", icon="settings-2") }}
+            {{ ui.button(t("Open Department Routing"), href="/sync-policies/department-ou-routing", variant="ghost", size="sm", icon="waypoints") }}
           </div>
         </div>
       </section>

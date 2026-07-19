@@ -598,6 +598,85 @@
           })
           .finally(() => clearLoading(submitter));
       });
+
+      const namingForm = page.querySelector("[data-naming-policy-form]");
+      const liveExample = page.querySelector("[data-live-username-example]");
+      const collisionWarning = page.querySelector("[data-live-collision-warning]");
+      let livePreviewTimer = 0;
+      const buildLocalExample = () => {
+        if (!(namingForm instanceof HTMLFormElement)) return;
+        const namingData = new FormData(namingForm);
+        const sampleData = new FormData(previewForm);
+        const userId = String(sampleData.get("sample_userid") || "").trim();
+        const employeeId = String(sampleData.get("sample_employee_id") || "").trim();
+        const email = String(sampleData.get("sample_email") || "").trim();
+        const displayName = String(sampleData.get("sample_name") || "").trim();
+        const emailLocalPart = email.includes("@") ? email.split("@", 1)[0] : email;
+        const asciiNameParts = displayName.match(/[A-Za-z0-9]+/g) || [];
+        const pinyinInitials = asciiNameParts.map((part) => part.slice(0, 1)).join("").toLowerCase();
+        const pinyinFull = asciiNameParts.join("").toLowerCase();
+        const strategy = String(
+          namingData.get("username_strategy") || namingData.get("source_field") || "source_user_id",
+        );
+        const templates = {
+          userid: "{userid}",
+          source_user_id: "{userid}",
+          employee_id: "{employee_id}",
+          email_localpart: "{email_localpart}",
+          pinyin_initials_employee_id: "{pinyin_initials}{employee_id}",
+          pinyin_full_employee_id: "{pinyin_full}{employee_id}",
+          family_name_pinyin_given_initials: "{pinyin_full}{employee_id}",
+          family_name_pinyin_given_name_pinyin: "{pinyin_full}{employee_id}",
+        };
+        const template =
+          String(namingData.get("username_template") || "").trim()
+          || templates[strategy]
+          || `{${strategy}}`;
+        const context = {
+          userid: userId,
+          source_user_id: userId,
+          employee_id: employeeId,
+          email_localpart: emailLocalPart,
+          pinyin_initials: pinyinInitials,
+          pinyin_full: pinyinFull,
+        };
+        const raw = template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key) =>
+          String(context[key] || ""),
+        );
+        const normalized = raw.replace(/[^A-Za-z0-9._-]+/g, "").slice(0, 20);
+        if (liveExample instanceof HTMLElement) {
+          liveExample.textContent = normalized || "—";
+        }
+        if (collisionWarning instanceof HTMLElement) {
+          const hasStableUniqueField = /\{(?:userid|source_user_id|employee_id|email_localpart)\}/.test(
+            template,
+          );
+          collisionWarning.textContent = !normalized
+            ? t("No username candidate could be generated from the current sample payload.")
+            : !hasStableUniqueField
+              ? t("Review Recommended")
+              : t("A fresh Dry Run is required to scan the full in-scope population for collisions.");
+          collisionWarning.classList.toggle("text-danger", !normalized || !hasStableUniqueField);
+        }
+      };
+      const scheduleLivePreview = (event) => {
+        buildLocalExample();
+        if (!(event?.target instanceof HTMLElement) || !event.target.closest("[data-username-preview-form]")) {
+          return;
+        }
+        window.clearTimeout(livePreviewTimer);
+        const hasSample = Array.from(
+          previewForm.querySelectorAll("input:not([type='hidden'])"),
+        ).some((input) => input instanceof HTMLInputElement && input.value.trim());
+        if (hasSample) {
+          livePreviewTimer = window.setTimeout(() => previewForm.requestSubmit(), 450);
+        }
+      };
+      namingForm?.addEventListener("input", scheduleLivePreview);
+      namingForm?.addEventListener("change", scheduleLivePreview);
+      previewForm.addEventListener("input", scheduleLivePreview);
+      previewForm.addEventListener("change", scheduleLivePreview);
+      buildLocalExample();
     }
 
     const explainForm = page.querySelector("[data-identity-explain-form]");

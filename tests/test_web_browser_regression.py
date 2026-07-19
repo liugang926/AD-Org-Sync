@@ -1390,7 +1390,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             ("/sync-policies/attribute-mappings?lang=en", "Attribute Mappings"),
             ("/sync-policies/department-ou-routing?lang=en", "Department & OU Routing"),
             ("/sync-policies/group-rules?lang=en", "Group Rules"),
-            ("/sync-policies/lifecycle?lang=en", "Lifecycle Policy"),
+            ("/sync-policies/lifecycle?lang=en", "Lifecycle & Security"),
             ("/sync-policies/security?lang=en", "Security Policy"),
         )
         for path, heading in policy_pages:
@@ -1873,7 +1873,10 @@ class WebBrowserRegressionTests(unittest.TestCase):
         browse_source_button = self.page.get_by_role(
             "button", name="Browse Source Unit Tree"
         )
-        self.assertTrue(browse_source_button.is_visible())
+        self.assertEqual(browse_source_button.count(), 0)
+        self.assertTrue(
+            self.page.get_by_role("link", name="Open Sync Scope").is_visible()
+        )
         self.assertTrue(self.page.get_by_role("button", name="Save Draft").is_visible())
         self.assertTrue(
             self.page.get_by_role("button", name="Preview Changes").is_visible()
@@ -1883,155 +1886,86 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(supporting_help.is_visible())
         self.assertFalse(
             self.page.get_by_role(
-                "link", name="Open Account Creation Rules"
+                "link", name="Open Account Naming"
             ).is_visible()
         )
         supporting_help.locator("summary").click()
         self.assertTrue(
             self.page.get_by_role(
-                "link", name="Open Account Creation Rules"
+                "link", name="Open Account Naming"
             ).is_visible()
         )
         self.assertTrue(
             self.page.get_by_role("link", name="Open Department Routing").is_visible()
-        )
-        browse_source_button.click()
-        self.page.locator(
-            "#group-source_root_unit_ids [data-config-source-browser]"
-        ).wait_for(state="visible")
-        self.assertTrue(
-            self.page.locator(
-                "#group-source_root_unit_ids [data-config-source-browser]"
-            ).is_visible()
         )
         self.page.get_by_role("button", name="Target AD LDAP and OU roots").click()
         self.page.locator("#config-section-target").wait_for(state="visible")
         self.assertTrue(
             self.page.get_by_text("OU Filter And Root Mapping").first.is_visible()
         )
-        select_target_button = self.page.get_by_role(
-            "button", name="Select Target Root OU"
-        )
-        self.assertTrue(select_target_button.is_visible())
-        select_target_button.click()
-        self.page.locator(
-            "#group-directory_root_ou_path [data-config-target-browser]"
-        ).wait_for(state="visible")
-        self.assertTrue(
-            self.page.locator(
-                "#group-directory_root_ou_path [data-config-target-browser]"
-            ).is_visible()
-        )
-        self.assertFalse(
-            self.page.locator(
-                "#group-disabled_users_ou_path [data-config-target-browser]"
-            ).is_visible()
-        )
         self.assertTrue(
             self.page.get_by_role(
-                "button", name="Select Disabled Users OU"
+                "link", name="Open Department And OU Routing"
             ).is_visible()
         )
-        self.assertTrue(
-            self.page.get_by_role("button", name="Select Custom Group OU").is_visible()
+        self.assertEqual(
+            self.page.get_by_role("button", name="Select Target Root OU").count(), 0
+        )
+        self.assertEqual(
+            self.page.get_by_role("button", name="Select Disabled Users OU").count(),
+            0,
+        )
+        self.assertEqual(
+            self.page.get_by_role("button", name="Select Custom Group OU").count(), 0
         )
         self._capture("config-page.png")
 
-    def test_advanced_sync_page_surfaces_account_creation_rules_as_first_class_section(
+    def test_advanced_sync_page_is_jump_only_after_policy_migration(
         self,
     ):
         self._login()
         self.page.goto(f"{self.base_url}/advanced-sync", wait_until="networkidle")
-        self.assertEqual(self.page.locator("#account-creation-rules").count(), 1)
+        self.assertTrue(
+            self.page.get_by_role("heading", name="Advanced Sync", level=1).is_visible()
+        )
+        self.assertEqual(self.page.locator("#account-creation-rules").count(), 0)
+        self.assertEqual(self.page.locator("main [data-policy-change-form]").count(), 0)
+        self.assertEqual(
+            self.page.locator("main form[action^='/advanced-sync']").count(), 0
+        )
         self.assertIn(
-            "Account Creation Rules And Connector Routing",
+            "Persistent policy forms have moved.",
             self.page.locator("body").inner_text(),
         )
-        toggle = (
-            self.page.locator("summary")
-            .filter(has_text="Configure Account Creation Rule")
-            .first
-        )
-        self.assertTrue(toggle.is_visible())
-        if not self.page.locator("#username_collision_policy").is_visible():
-            toggle.click()
-        self.page.locator("#username_collision_policy").wait_for(state="visible")
-        self.assertTrue(self.page.locator("#username_collision_policy").is_visible())
-        self.assertTrue(self.page.locator("#root_department_ids").is_visible())
         self.assertTrue(
-            self.page.get_by_role(
-                "button", name="Save Account Creation Rule"
+            self.page.locator(
+                "main a[href='/sync-policies/account-naming']"
             ).is_visible()
         )
 
-    def test_config_source_picker_loads_and_selects_inside_same_field_frame(self):
+    def test_config_source_picker_moves_to_searchable_sync_scope_tree(self):
         self._login()
-        self.page.route(
-            "**/config/source-units/catalog",
-            lambda route: route.fulfill(
-                status=200,
-                content_type="application/json",
-                body=json.dumps(
-                    {
-                        "ok": True,
-                        "provider": "WeCom",
-                        "items": [
-                            {
-                                "department_id": "1",
-                                "name": "HQ",
-                                "path_display": "HQ",
-                                "level": 0,
-                                "selected": False,
-                            },
-                            {
-                                "department_id": "8",
-                                "name": "China",
-                                "path_display": "HQ / China",
-                                "level": 1,
-                                "selected": False,
-                            },
-                        ],
-                    }
-                ),
-            ),
-        )
         self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
-        source_group = self.page.locator("#group-source_root_unit_ids")
-        self.assertTrue(source_group.locator(".picker-field__surface").is_visible())
-        source_group.get_by_role("button", name="Browse Source Unit Tree").click()
-        source_group.locator("[data-config-source-browser]").wait_for(state="visible")
-        source_group.locator("[data-config-source-list] .config-tree-row").nth(
-            1
-        ).wait_for()
-        self.assertTrue(
-            source_group.locator(
-                ".picker-field__surface .picker-inline-panel"
-            ).is_visible()
-        )
-        source_group.locator('[data-source-unit-checkbox][value="8"]').check()
+        self.assertEqual(self.page.locator("#group-source_root_unit_ids").count(), 0)
         self.assertEqual(
-            source_group.locator('input[name="source_root_unit_ids"]').input_value(),
-            "8",
+            self.page.locator(
+                'form[data-config-form] input[type="hidden"][name="source_root_unit_ids"]'
+            ).count(),
+            1,
         )
-        self.assertIn(
-            "China [8]",
-            source_group.locator(
-                '[data-picker-summary-for="source_root_unit_ids"]'
-            ).inner_text(),
-        )
-        self.assertRegex(
-            source_group.locator(
-                '[data-picker-meta-for="source_root_unit_ids"]'
-            ).inner_text(),
-            r"1",
-        )
-        source_group.get_by_role("button", name="Close Picker").click()
-        source_group.get_by_role("button", name="Browse Source Unit Tree").click()
+        self.page.get_by_role("link", name="Open Sync Scope").click()
+        self.page.wait_for_url(f"{self.base_url}/sync-policies/scope")
         self.assertTrue(
-            source_group.locator("[data-config-source-list] .config-tree-row")
-            .nth(1)
-            .is_visible()
+            self.page.get_by_role("heading", name="Sync Scope", level=1).is_visible()
         )
+        self.assertTrue(
+            self.page.locator("[data-department-tree]").is_visible()
+        )
+        self.assertTrue(
+            self.page.locator("[data-department-tree-search]").is_visible()
+        )
+        self.assertEqual(self.page.locator("#sync-scope-policy-form").count(), 1)
+        self.assertEqual(self.page.locator("#sync-scope-selection-form").count(), 1)
 
     def test_legacy_jobs_actions_remain_visually_consistent_when_blocked(self):
         manager = DatabaseManager(db_path=str(self.db_path))

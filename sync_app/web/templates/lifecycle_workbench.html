@@ -9,7 +9,7 @@
       <span class="muted">{{ t("Current organization") }}:</span>
       <strong>{{ current_org.name }}</strong>
     </div>
-    {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost", icon="waypoints") }}
+    {{ ui.button(t("Open Lifecycle Policy"), href="/sync-policies/lifecycle", variant="ghost", icon="waypoints") }}
     {{ ui.button(t("Open Exceptions"), href="/exceptions", variant="secondary", icon="ban") }}
     {{ ui.button(t("Open Job History"), href="/execution-center/jobs", variant="ghost", icon="refresh-cw") }}
   {% endcall %}

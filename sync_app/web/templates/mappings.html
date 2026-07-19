@@ -33,7 +33,7 @@
   {% call ui.page_header(t("Identity Overrides"), t("Use this page for manual source-user to AD bindings and per-user department placement overrides after the base configuration is complete."), eyebrow=t("Configuration"), badge_text=t("Organization Scope"), badge_level="info") %}
     {% if can("config.read") %}
     {{ ui.button(t("Open Config"), href="/config", variant="secondary", icon="settings-2") }}
-    {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost", icon="waypoints") }}
+    {{ ui.button(t("Open Department Routing"), href="/sync-policies/department-ou-routing", variant="ghost", icon="waypoints") }}
     {% endif %}
     <div class="surface-inline">
       {{ ui.badge(t("Identity Overrides"), "info") }}
@@ -216,7 +216,7 @@
         {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
         {{ ui.button(t("Open Job Center"), href="/jobs", variant="ghost") }}
         {% if can("config.read") %}
-        {{ ui.button(t("Open Advanced Sync"), href="/advanced-sync", variant="ghost") }}
+        {{ ui.button(t("Open Sync Policies"), href="/sync-policies", variant="ghost") }}
         {% endif %}
       </div>
     </form>

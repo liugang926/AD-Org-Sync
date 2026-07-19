@@ -85,14 +85,14 @@ class WebTemplateConventionTests(unittest.TestCase):
 
     def test_irreversible_deletes_require_typed_confirmation(self):
         organizations = (TEMPLATE_DIR / "organizations.html").read_text(encoding="utf-8")
-        advanced_sync = (TEMPLATE_DIR / "advanced_sync.html").read_text(encoding="utf-8")
+        connectors = (TEMPLATE_DIR / "connectors.html").read_text(encoding="utf-8")
 
         self.assertIn('data-confirm-require="{{ organization.name }}"', organizations)
-        self.assertIn('data-confirm-require="{{ connector.connector_id }}"', advanced_sync)
+        self.assertIn('data-confirm-require="{{ connector.connector_id }}"', connectors)
 
     def test_scoped_deletes_describe_the_affected_record(self):
         templates = {
-            "advanced_sync.html": "Field Mapping",
+            "sync_policy_attribute_mappings.html": "Old value",
             "exceptions.html": "Match Value",
             "integration_center.html": "Target URL",
             "mappings.html": "Source User ID",

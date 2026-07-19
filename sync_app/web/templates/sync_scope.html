@@ -3,75 +3,161 @@
 {% import "components/sync_policy.html" as policy with context %}
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Sync Scope"), t("Define which organization, connector roots, departments, and source identities may enter the next Dry Run."), eyebrow=t("Sync Policies"), badge_text=(t("Snapshot #{id}", id=snapshot.id) if snapshot else t("No snapshot")), badge_level=("success" if snapshot and not snapshot_expired else "warning")) %}
-    {% if snapshot and can("config.write") %}{{ ui.button(t("Save Sync Scope"), type="submit", icon="save", attrs='form="sync-scope-form"') }}{% elif not snapshot %}{{ ui.button(t("Open Source Directory"), href="/data-sources/source-directory", icon="users-round") }}{% endif %}
+  {% call ui.page_header(t("Sync Scope"), t("Define the organization boundary separately from explicit identity selection."), eyebrow=t("Sync Policies"), badge_text=(t("Snapshot #{id}", id=snapshot.id) if snapshot else t("No snapshot")), badge_level=("success" if snapshot and not snapshot_expired else "warning")) %}
+    {% if snapshot and can("config.write") %}{{ ui.button(t("Save Scope Policy"), type="submit", icon="save", attrs='form="sync-scope-policy-form"') }}{% elif not snapshot %}{{ ui.button(t("Open Source Directory"), href="/data-sources/source-directory", icon="users-round") }}{% endif %}
   {% endcall %}
 
   {{ policy.tabs('scope') }}
-  {{ policy.status(has_unpublished_changes, latest_snapshot_title, (t('A successful source snapshot is required.') if not snapshot else (t('The source snapshot is stale.') if snapshot_expired else '')), t('Save scope, publish the configuration snapshot, then run a new Dry Run')) }}
+  {{ policy.status(has_unpublished_changes, latest_snapshot_title, (t('A successful source snapshot is required.') if not snapshot else (t('The source snapshot is stale.') if snapshot_expired else '')), t('Save this section, then run and review a new Dry Run'), policy_version, policy_last_modified_by, estimated_affected_users, dry_run_invalidated, latest_policy_dry_run) }}
 
   {% if not snapshot %}
   <div class="callout callout--warning" role="status"><strong>{{ t("A successful source snapshot is required.") }}</strong><span>{{ t("Refresh Source Directory before defining a synchronization scope.") }}</span><a href="/data-sources/source-directory">{{ t("Open Source Directory") }}</a></div>
   {% elif snapshot_expired %}
   <div class="callout callout--warning" role="status"><strong>{{ t("The source snapshot is stale.") }}</strong><span>{{ t("Refresh Source Directory before saving scope or starting a Dry Run.") }}</span></div>
-  {% else %}
-  <div class="callout callout--info" role="status"><strong>{{ t("Scope changes do not write to AD.") }}</strong><span>{{ t("The next Dry Run binds this snapshot and scope fingerprint to its plan.") }}</span></div>
   {% endif %}
 
-  {% call ui.panel(t("Connector Root Scope"), description=t("Select a connector to review or edit only its source root departments. Connection and naming fields stay unchanged.")) %}
+  <form
+    method="post"
+    action="/sync-policies/scope"
+    id="sync-scope-policy-form"
+    class="page-stack"
+    data-policy-change-form
+    data-policy-impact="{{ estimated_affected_users }}"
+    data-policy-scope="{{ current_org.name }}"
+    data-confirm="{{ t('Review the old values, new values, and estimated impact before saving this synchronization scope.') }}"
+    data-confirm-title="{{ t('Review Sync Scope Change') }}"
+    data-confirm-detail-1-label="{{ t('Old values') }}"
+    data-confirm-detail-1-value="{policy_old_values}"
+    data-confirm-detail-2-label="{{ t('New values') }}"
+    data-confirm-detail-2-value="{policy_new_values}"
+    data-confirm-detail-3-label="{{ t('Scope') }}"
+    data-confirm-detail-3-value="{policy_scope}"
+    data-confirm-detail-4-label="{{ t('Estimated impact') }}"
+    data-confirm-detail-4-value="{policy_impact} {{ t('users') }}"
+  >
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="submission_kind" value="boundary">
+
+    {% call ui.panel(t("Synchronization Boundary"), scope_label=t("Organization Scope"), scope_level="info", description=t("This form owns persistent scope rules only. Explicit user checkboxes are saved in the separate Identity Selection form below.")) %}
+      <div class="form-grid">
+        <label>{{ t("Sync Scope") }}
+          <select name="scope_type">
+            {% for value, label in [("full", "All active users"), ("department", "Selected departments and descendants"), ("selected_users", "Explicitly selected users"), ("source_user", "Single-user replay")] %}
+            <option value="{{ value }}" {% if scope and scope.scope_type == value %}selected{% endif %}>{{ t(label) }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        {% if selected_connector %}
+        <label>{{ t("Connector Root Department IDs") }}
+          <input type="text" name="root_department_ids" value="{{ selected_connector.root_department_ids|join(', ') }}" placeholder="2, 8">
+          <span class="form-help">{{ t("Connector scope") }} · {{ selected_connector.name }}{% if ui_mode == "advanced" %} ({{ selected_connector.connector_id }}){% endif %}</span>
+        </label>
+        <input type="hidden" name="connector_id" value="{{ selected_connector.connector_id }}">
+        {% endif %}
+      </div>
+
+      <div class="policy-department-tree" data-department-tree>
+        <label>{{ t("Search departments") }}
+          <input type="search" data-department-tree-search placeholder="{{ t('Search department name or path') }}" autocomplete="off">
+        </label>
+        <div class="policy-department-tree__list" role="tree" aria-label="{{ t('Searchable department tree') }}">
+          {% for department in departments %}
+          {% set department_path = department.path_names|join(" / ") %}
+          <label class="department-tree-node department-tree-node--depth-{{ [department.path_ids|length - 1, 8]|min }}" role="treeitem" data-department-tree-node data-department-search-text="{{ (department_path ~ ' ' ~ department.source_department_id)|lower }}">
+            <input type="checkbox" name="selected_department_ids" value="{{ department.source_department_id }}" {% if scope and department.source_department_id in scope.selected_department_ids %}checked{% endif %}>
+            <span><strong>{{ department.name }}</strong><small>{{ department_path }}{% if ui_mode == "advanced" %} · {{ department.source_department_id }}{% endif %}</small></span>
+          </label>
+          {% else %}
+          <div class="empty-state">{{ t("No departments are available in the current snapshot") }}</div>
+          {% endfor %}
+        </div>
+        <p class="form-help">{{ t("Selecting a department includes its descendants. The tree is searchable and preserves the existing department-scope semantics.") }}</p>
+      </div>
+
+      <details class="detail-toggle" {% if excluded_departments or ui_mode == "advanced" %}open{% endif %}>
+        <summary><strong>{{ t("Exclusion Scope") }}</strong></summary>
+        <div class="form-grid">
+          <label>{{ t("Excluded AD Departments / OUs") }}
+            <textarea name="excluded_department_names" rows="5" placeholder="{{ t('One existing exclusion name per line') }}">{{ excluded_departments|join('\n') }}</textarea>
+            <span class="form-help">{{ t("Keeps the existing target-directory exclusion semantics; it does not reinterpret these values as source department IDs.") }}</span>
+          </label>
+          <label>{{ t("Protected AD Accounts") }}
+            <textarea name="protected_account_names" rows="5" placeholder="{{ t('One protected account per line') }}">{{ protected_accounts|join('\n') }}</textarea>
+            <span class="form-help">{{ t("System-protected accounts remain protected even if omitted.") }}</span>
+          </label>
+        </div>
+      </details>
+
+      <div class="callout callout--warning"><strong>{{ t("Partial sync safety") }}</strong><span>{{ t("Partial synchronization will not process offboarding for unselected or out-of-scope users.") }}</span></div>
+    {% endcall %}
+  </form>
+
+  {% call ui.panel(t("Connector Scope Overview"), description=t("Choose a connector to edit its root scope without exposing connection credentials.")) %}
     <form method="get" action="/sync-policies/scope" class="filter-bar">
-      <label>{{ t("Connector") }}<select name="connector_id"><option value="">{{ t("No connector override") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}" {% if selected_connector and selected_connector.connector_id == connector.connector_id %}selected{% endif %}>{{ connector.name }}</option>{% endfor %}</select></label>
+      <label>{{ t("Connector") }}<select name="connector_id"><option value="">{{ t("No connector override") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}" {% if selected_connector and selected_connector.connector_id == connector.connector_id %}selected{% endif %}>{{ connector.name }}{% if ui_mode == "advanced" %} · {{ connector.connector_id }}{% endif %}</option>{% endfor %}</select></label>
       {{ ui.button(t("Review Connector Scope"), type="submit", variant="secondary", icon="list-filter") }}
     </form>
-    <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Connector root scopes') }}"><table data-policy-table><thead><tr><th>{{ t("Connector") }}</th><th>{{ t("Status") }}</th><th>{{ t("Root Department IDs") }}</th><th>{{ t("Naming Strategy") }}</th><th>{{ t("Routing Rules") }}</th><th>{{ t("Updated") }}</th></tr></thead><tbody>{% for connector in connectors %}<tr><td><strong>{{ connector.name }}</strong><div class="muted">{{ connector.connector_id }}</div></td><td>{{ t("Enabled") if connector.is_enabled else t("Disabled") }}</td><td>{{ connector.root_department_ids|join(', ') or t("All available roots") }}</td><td>{{ t(connector.username_strategy) }}</td><td><a href="/sync-policies/department-ou-routing">{{ t("Review routing") }}</a></td><td>{{ ui.local_time(connector.updated_at) }}</td></tr>{% else %}<tr><td colspan="6" class="empty-state">{{ t("No target connectors are configured") }}</td></tr>{% endfor %}</tbody></table></div>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Connector root scopes') }}"><table data-policy-table><thead><tr><th>{{ t("Scope") }}</th><th>{{ t("Connector") }}</th><th>{{ t("Status") }}</th><th>{{ t("Root Departments") }}</th><th>{{ t("Estimated Users") }}</th><th>{{ t("Updated") }}</th></tr></thead><tbody>{% for connector in connectors %}<tr><td>{{ t("Organization") }} / {{ t("Connector") }}</td><td><strong>{{ connector.name }}</strong>{% if ui_mode == "advanced" %}<div class="muted">{{ connector.connector_id }}</div>{% endif %}</td><td>{{ t("Enabled") if connector.is_enabled else t("Disabled") }}</td><td>{{ connector.root_department_ids|join(', ') or t("All available roots") }}</td><td>{{ estimated_affected_users }}</td><td>{{ ui.local_time(connector.updated_at) }}</td></tr>{% else %}<tr><td colspan="6" class="empty-state">{{ t("No target connectors are configured") }}</td></tr>{% endfor %}</tbody></table></div>
   {% endcall %}
 
-  {% call ui.panel(t("Find Source Identities"), description=t("Filter the fixed snapshot, then select an explicit set or all filtered results.")) %}
+  {% call ui.panel(t("Find Source Identities"), description=t("Filtering is read-only. Saving checked users happens only in the separate form that follows.")) %}
     <form method="get" action="/sync-policies/scope" class="filter-bar">
       {% if selected_connector %}<input type="hidden" name="connector_id" value="{{ selected_connector.connector_id }}">{% endif %}
       <label>{{ t("Search") }}<input type="search" name="search" value="{{ search }}" placeholder="{{ t('Name, source user ID, employee ID') }}"></label>
       <label>{{ t("Department") }}<select name="department_id"><option value="">{{ t("All departments") }}</option>{% for department in departments %}<option value="{{ department.source_department_id }}" {% if selected_department_id == department.source_department_id %}selected{% endif %}>{{ department.path_names|join(" / ") }}</option>{% endfor %}</select></label>
       <label>{{ t("Status") }}<select name="status"><option value="">{{ t("All statuses") }}</option><option value="active" {% if selected_status == "active" %}selected{% endif %}>{{ t("Active") }}</option><option value="inactive" {% if selected_status == "inactive" %}selected{% endif %}>{{ t("Inactive") }}</option></select></label>
-      <label>{{ t("Employee ID") }}<select name="employee_id_state"><option value="">{{ t("Any") }}</option><option value="present" {% if selected_employee_id_state == "present" %}selected{% endif %}>{{ t("Present") }}</option><option value="missing" {% if selected_employee_id_state == "missing" %}selected{% endif %}>{{ t("Missing") }}</option></select></label>
       {{ ui.button(t("Apply Filters"), type="submit", variant="secondary", icon="filter") }}
     </form>
   {% endcall %}
 
-  <form method="post" action="/sync-policies/scope" id="sync-scope-form" class="stack-md">
+  <form
+    method="post"
+    action="/sync-policies/scope"
+    id="sync-scope-selection-form"
+    class="stack-md"
+    data-policy-change-form
+    data-policy-impact="{{ total_users }}"
+    data-policy-scope="{{ current_org.name }}"
+    data-confirm="{{ t('Review the identity selection and its impact before saving. This does not save any other policy fields.') }}"
+    data-confirm-title="{{ t('Review Identity Selection') }}"
+    data-confirm-detail-1-label="{{ t('Old values') }}"
+    data-confirm-detail-1-value="{policy_old_values}"
+    data-confirm-detail-2-label="{{ t('New values') }}"
+    data-confirm-detail-2-value="{policy_new_values}"
+    data-confirm-detail-3-label="{{ t('Scope') }}"
+    data-confirm-detail-3-value="{policy_scope}"
+    data-confirm-detail-4-label="{{ t('Matching users') }}"
+    data-confirm-detail-4-value="{policy_impact}"
+  >
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="submission_kind" value="user_selection">
     <input type="hidden" name="selection_mode" value="explicit" data-selection-mode>
     <input type="hidden" name="selection_search" value="{{ search }}">
     <input type="hidden" name="selection_department_id" value="{{ selected_department_id }}">
     <input type="hidden" name="selection_status" value="{{ selected_status }}">
     <input type="hidden" name="selection_employee_id_state" value="{{ selected_employee_id_state }}">
-    {% if selected_connector %}<input type="hidden" name="connector_id" value="{{ selected_connector.connector_id }}">{% endif %}
 
-    {% call ui.panel(t("Synchronization Boundary"), description=t("Partial synchronization never treats unselected identities as offboarding candidates. Account naming is managed on its own policy page.")) %}
+    {% call ui.panel(t("Identity Selection"), scope_label=t("Organization Scope"), scope_level="info", description=t("This form contains user selection only; it cannot change naming, OU, mapping, group, or lifecycle settings.")) %}
       <div class="form-grid">
-        <label>{{ t("Sync Scope") }}<select name="scope_type">{% for value, label in [("full", "All active users"), ("department", "Selected departments and descendants"), ("selected_users", "Checked users only"), ("source_user", "Single user replay")] %}<option value="{{ value }}" {% if scope and scope.scope_type == value %}selected{% endif %}>{{ t(label) }}</option>{% endfor %}</select></label>
-        <label>{{ t("Departments in Scope") }}<select name="selected_department_ids" multiple size="4">{% for department in departments %}<option value="{{ department.source_department_id }}" {% if scope and department.source_department_id in scope.selected_department_ids %}selected{% endif %}>{{ department.path_names|join(" / ") }}</option>{% endfor %}</select></label>
-        {% if selected_connector %}<label>{{ t("Connector Root Department IDs") }}<input type="text" name="root_department_ids" value="{{ selected_connector.root_department_ids|join(', ') }}" placeholder="2, 8"><span class="form-help">{{ t("Leave empty to allow all roots visible to this connector.") }}</span></label>{% endif %}
+        <label>{{ t("Selection Purpose") }}<select name="scope_type"><option value="selected_users" {% if not scope or scope.scope_type != "source_user" %}selected{% endif %}>{{ t("Explicitly selected users") }}</option><option value="source_user" {% if scope and scope.scope_type == "source_user" %}selected{% endif %}>{{ t("Single-user replay") }}</option></select></label>
       </div>
-      <div class="callout callout--warning"><strong>{{ t("Partial sync safety") }}</strong><span>{{ t("Partial synchronization will not process offboarding for unselected or out-of-scope users.") }}</span></div>
-    {% endcall %}
-
-    {% call ui.panel(t("Identity Selection"), description=t("Select identities only for checked-user or single-user scopes. Identity matching and AD verification stay in Identity Governance.")) %}
       <div class="actions">
         {{ ui.button(t("Select Current Page"), type="button", variant="secondary", icon="check-square", attrs="data-select-current-page", disabled=(not snapshot)) }}
         {{ ui.button(t("Select All Filtered Results"), type="button", variant="secondary", icon="list-checks", attrs="data-select-all-filtered", disabled=(not snapshot)) }}
         {{ ui.button(t("Clear Selection"), type="button", variant="ghost", icon="x", attrs="data-clear-source-selection", disabled=(not snapshot)) }}
         <span class="form-help" data-source-selection-status data-all-filtered-text="{{ t('All filtered results will be selected on the server.') }}" data-one-selected-template="{{ t('{count} user selected on this page.', count='{count}') }}" data-many-selected-template="{{ t('{count} users selected on this page.', count='{count}') }}" aria-live="polite"></span>
       </div>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Synchronization scope identity selection') }}"><table data-scope-table><thead><tr><th><input type="checkbox" data-select-page-checkbox aria-label="{{ t('Select Current Page') }}"></th><th>{{ t("Employee") }}</th><th>{{ t("Source User ID") }}</th><th>{{ t("Department") }}</th><th>{{ t("Source Status") }}</th><th>{{ t("Employee ID") }}</th><th>{{ t("Current Scope") }}</th><th>{{ t("Next Step") }}</th></tr></thead><tbody>
-        {% for item in relationships %}<tr><td><input type="checkbox" name="selected_source_user_ids" value="{{ item.source_user_id }}" data-source-user-checkbox aria-label="{{ t('Select {name}', name=item.source_display_name or item.source_user_id) }}"></td><td><strong>{{ item.source_display_name or '-' }}</strong></td><td class="cell-mono">{{ item.source_user_id }}</td><td>{{ item.source_user.department_names|join(" / ") if item.source_user.department_names else '-' }}</td><td>{{ t("Active") if item.source_user.is_active else t("Inactive") }}</td><td>{{ item.employee_id or '-' }}</td><td>{{ t(scope.scope_type) if scope else t("Not saved") }}</td><td>{{ t("Include in next Dry Run") }}</td></tr>
-        {% else %}<tr><td colspan="8" class="table-empty">{{ t("No source identities match the current filters.") }}</td></tr>{% endfor %}
+      <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Synchronization scope identity selection') }}"><table data-scope-table><thead><tr><th><input type="checkbox" data-select-page-checkbox aria-label="{{ t('Select Current Page') }}"></th><th>{{ t("Employee") }}</th><th>{{ t("Source User ID") }}</th><th>{{ t("Department") }}</th><th>{{ t("Source Status") }}</th><th>{{ t("Employee ID") }}</th><th>{{ t("Current Scope") }}</th></tr></thead><tbody>
+        {% for item in relationships %}<tr><td><input type="checkbox" name="selected_source_user_ids" value="{{ item.source_user_id }}" data-source-user-checkbox {% if scope and item.source_user_id in scope.selected_source_user_ids %}checked{% endif %} aria-label="{{ t('Select {name}', name=item.source_display_name or item.source_user_id) }}"></td><td><strong>{{ item.source_display_name or '-' }}</strong></td><td class="cell-mono">{{ item.source_user_id }}</td><td>{{ item.source_user.department_names|join(" / ") if item.source_user.department_names else '-' }}</td><td>{{ t("Active") if item.source_user.is_active else t("Inactive") }}</td><td>{{ item.employee_id or '-' }}</td><td>{{ t(scope.scope_type) if scope else t("Not saved") }}</td></tr>
+        {% else %}<tr><td colspan="7" class="table-empty">{{ t("No source identities match the current filters.") }}</td></tr>{% endfor %}
       </tbody></table></div>
-      <div class="pagination-bar"><span>{{ t("{count} matching users", count=total_users) }}</span><div>{% if page_number > 1 %}{{ ui.button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state, variant="secondary") }}{% endif %}<span>{{ page_number }} / {{ total_pages }}</span>{% if page_number < total_pages %}{{ ui.button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status ~ "&employee_id_state=" ~ selected_employee_id_state, variant="secondary") }}{% endif %}</div></div>
+      <div class="pagination-bar"><span>{{ t("{count} matching users", count=total_users) }}</span><div>{% if page_number > 1 %}{{ ui.button(t("Previous"), href="?page_number=" ~ (page_number - 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status, variant="secondary") }}{% endif %}<span>{{ page_number }} / {{ total_pages }}</span>{% if page_number < total_pages %}{{ ui.button(t("Next"), href="?page_number=" ~ (page_number + 1) ~ "&search=" ~ (search|urlencode) ~ "&department_id=" ~ (selected_department_id|urlencode) ~ "&status=" ~ selected_status, variant="secondary") }}{% endif %}</div></div>
+      {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Identity Selection"), type="submit", variant="secondary", icon="users-round") }}</div>{% endif %}
     {% endcall %}
   </form>
 
-  {% call ui.helper_block(t("Next step"), t("Publish the reviewed scope snapshot, then run a new Dry Run. This page never changes AD accounts."), "info") %}
-    <div class="actions">{{ ui.button(t("Open Account Naming"), href="/sync-policies/account-naming", variant="ghost", icon="badge-check") }}{{ ui.button(t("Open Release History"), href="/sync-policies/releases", variant="ghost", icon="history") }}</div>
+  {% call ui.helper_block(t("Next step"), t("Every saved change invalidates older Dry Runs. Run and review a fresh Dry Run before Apply."), "warning") %}
+    <div class="actions">{{ ui.button(t("Open Account Naming"), href="/sync-policies/account-naming", variant="ghost", icon="badge-check") }}{{ ui.button(t("Run a new Dry Run"), href="/execution-center/dry-run", variant="secondary", icon="play-circle") }}</div>
   {% endcall %}
 </div>
 {% endblock %}

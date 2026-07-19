@@ -95,6 +95,7 @@ class RuntimePolicySettings:
     managed_relation_cleanup_enabled: bool
     user_ou_placement_strategy: str
     source_root_unit_ids: list[int]
+    source_employee_id_attribute: str
     default_directory_root_ou_path: str
     default_disabled_users_ou_path: str
     offboarding_grace_days: int
@@ -233,6 +234,9 @@ def _build_policy_settings(
             or "source_primary_department"
         ),
         source_root_unit_ids=_parse_root_unit_ids(get_org_setting_value("source_root_unit_ids", "")),
+        source_employee_id_attribute=(
+            get_org_setting_value("source_employee_id_attribute", "") or ""
+        ),
         default_directory_root_ou_path=_normalize_ou_path(
             get_org_setting_value("directory_root_ou_path", ""),
         ),
@@ -274,6 +278,12 @@ def _build_config_hash(
         ],
         "attribute_mappings": [record.to_dict() for record in enabled_mapping_rules],
         "department_ou_mappings": [record.to_dict() for record in enabled_department_ou_mappings],
+        "group_exclusion_rules": [
+            record.to_dict() for record in policy_settings.enabled_group_rules
+        ],
+        "exception_rules": [
+            record.to_dict() for record in policy_settings.enabled_exception_rules
+        ],
         "settings": {
             "advanced_connector_routing_enabled": policy_settings.connector_routing_enabled,
             "attribute_mapping_enabled": policy_settings.attribute_mapping_enabled,
@@ -296,11 +306,17 @@ def _build_config_hash(
             "managed_relation_cleanup_enabled": policy_settings.managed_relation_cleanup_enabled,
             "user_ou_placement_strategy": policy_settings.user_ou_placement_strategy,
             "source_root_unit_ids": policy_settings.source_root_unit_ids,
+            "source_employee_id_attribute": policy_settings.source_employee_id_attribute,
             "directory_root_ou_path": policy_settings.default_directory_root_ou_path,
             "disabled_users_ou_path": policy_settings.default_disabled_users_ou_path,
             "offboarding_grace_days": policy_settings.offboarding_grace_days,
+            "offboarding_notify_managers": policy_settings.offboarding_notify_managers,
+            "disable_circuit_breaker_enabled": policy_settings.disable_breaker_enabled,
             "disable_circuit_breaker_percent": policy_settings.disable_breaker_percent,
             "disable_circuit_breaker_min_count": policy_settings.disable_breaker_min_count,
+            "disable_circuit_breaker_requires_approval": (
+                policy_settings.disable_breaker_requires_approval
+            ),
             "first_sync_identity_claim_mode": policy_settings.first_sync_identity_claim_mode,
             "managed_group_type": policy_settings.global_group_type,
             "managed_group_mail_domain": policy_settings.global_group_mail_domain,

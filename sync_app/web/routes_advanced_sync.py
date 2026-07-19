@@ -16,12 +16,15 @@ from sync_app.services.high_risk_operations import (
     HighRiskOperationPolicy,
     high_risk_audit_payload,
 )
+from sync_app.services.runtime_bootstrap import resolve_runtime_config_fingerprint
 from sync_app.services.sync_policy_center import (
     USERNAME_STRATEGY_BY_SOURCE_FIELD,
+    build_policy_governance_context,
     build_connector_policy_upsert,
+    update_directory_policy_section,
     update_policy_section,
 )
-from sync_app.services.typed_settings import AdvancedSyncPolicySettings
+from sync_app.services.typed_settings import AdvancedSyncPolicySettings, DirectoryUiSettings
 from sync_app.web.app_state import (
     get_web_repositories,
     get_web_runtime_state,
@@ -219,15 +222,77 @@ def register_advanced_sync_routes(
     to_bool: Callable[[Optional[str], bool], bool],
     translate_text: Callable[..., str],
 ) -> None:
+    def current_policy_config_fingerprint(
+        request: Request,
+        current_org: Any,
+    ) -> str:
+        repositories = get_web_repositories(request)
+        try:
+            return resolve_runtime_config_fingerprint(
+                db_manager=repositories.db_manager,
+                org_id=current_org.org_id,
+                config_path=(
+                    str(getattr(current_org, "config_path", "") or "")
+                    or get_web_runtime_state(request).config_path
+                ),
+            )
+        except Exception:
+            # Keep policy and legacy jump pages available while connection
+            # configuration is incomplete. An empty fingerprint intentionally
+            # invalidates any historical Dry Run instead of treating it as safe.
+            return ""
+
     def policy_release_context(request: Request, current_org: Any) -> dict[str, Any]:
         release = get_web_services(request).config.build_release_center_context(
             current_org=current_org,
         )
-        return {
+        repositories = get_web_repositories(request)
+        runtime_state = get_web_runtime_state(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path or runtime_state.config_path,
+        )
+        source_snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=config.source_provider,
+        )
+        source_scope = repositories.source_directory_repo.get_scope_selection(
+            org_id=current_org.org_id,
+            provider_id=config.source_provider,
+        )
+        context = {
             "has_unpublished_changes": bool(release.get("has_unpublished_changes")),
             "latest_snapshot_title": str(release.get("latest_snapshot_title") or ""),
             "snapshot_count": int(release.get("snapshot_count") or 0),
+            "latest_snapshot": release.get("latest_snapshot"),
+            "source_snapshot": source_snapshot,
+            "source_scope": source_scope,
+            "source_departments": (
+                repositories.source_directory_repo.list_departments(
+                    int(source_snapshot["id"]),
+                    org_id=current_org.org_id,
+                )
+                if source_snapshot
+                else []
+            ),
+            "excluded_departments": list(config.exclude_departments),
+            "protected_accounts": list(config.exclude_accounts),
         }
+        context.update(
+            build_policy_governance_context(
+                repositories=repositories,
+                current_org=current_org,
+                provider_id=config.source_provider,
+                snapshot=source_snapshot,
+                scope=source_scope,
+                current_config_fingerprint=current_policy_config_fingerprint(
+                    request,
+                    current_org,
+                ),
+                release=release,
+            )
+        )
+        return context
 
     def policy_page_context(
         request: Request,
@@ -257,6 +322,25 @@ def register_advanced_sync_routes(
                 repositories.settings_repo,
                 org_id=current_org.org_id,
             ).to_dict(),
+            "directory_policy_settings": DirectoryUiSettings.load(
+                repositories.settings_repo,
+                org_id=current_org.org_id,
+            ).to_dict(),
+            "protected_group_rules": [
+                record
+                for record in repositories.exclusion_repo.list_enabled_rule_records(
+                    org_id=current_org.org_id,
+                )
+                if record.rule_type == "protect"
+            ],
+            "soft_excluded_group_rules": [
+                record
+                for record in repositories.exclusion_repo.list_enabled_rule_records(
+                    org_id=current_org.org_id,
+                )
+                if record.rule_type == "exclude"
+                and record.protection_level == "soft"
+            ],
             **policy_release_context(request, current_org),
         }
 
@@ -322,6 +406,22 @@ def register_advanced_sync_routes(
         updated.persist(repositories.settings_repo, org_id=current_org.org_id)
         return updated
 
+    def persist_directory_policy_settings_section(
+        request: Request,
+        *,
+        section: str,
+        values: dict[str, Any],
+    ) -> DirectoryUiSettings:
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        current = DirectoryUiSettings.load(
+            repositories.settings_repo,
+            org_id=current_org.org_id,
+        )
+        updated = update_directory_policy_section(current, section, values)
+        updated.persist(repositories.settings_repo, org_id=current_org.org_id)
+        return updated
+
     @app.get(CANONICAL_ROUTE_PATHS["advanced-sync"], response_class=HTMLResponse)
     def sync_policy_landing(request: Request):
         user = require_capability(request, "config.read")
@@ -335,77 +435,13 @@ def register_advanced_sync_routes(
         if isinstance(user, RedirectResponse):
             return user
         current_org = get_current_org(request)
-        ui_language = get_ui_language(request)
-        connectors = list_org_connector_records(request)
-        repositories = get_web_repositories(request)
-        policy_settings = AdvancedSyncPolicySettings.load(
-            repositories.settings_repo,
-            org_id=current_org.org_id,
-        )
-
         return render(
             request,
-            "advanced_sync.html",
+            "sync_policy_legacy_entry.html",
             page="advanced-sync",
             title="Advanced Sync",
-            advanced_sync_client_i18n={
-                key: translate_text(ui_language, key) for key in ADVANCED_SYNC_CLIENT_I18N_KEYS
-            },
-            connectors=connectors,
-            connector_config_sources={
-                record.connector_id: describe_connector_config_source(record)
-                for record in connectors
-            },
-            attribute_mappings=list_org_attribute_mapping_rules(request),
-            department_ou_mappings=repositories.department_ou_mapping_repo.list_mapping_records(
-                org_id=current_org.org_id
-            ),
-            custom_group_bindings=repositories.custom_group_binding_repo.list_active_records(
-                org_id=current_org.org_id
-            ),
-            offboarding_records=repositories.offboarding_repo.list_pending_records(org_id=current_org.org_id),
-            lifecycle_records=repositories.lifecycle_repo.list_pending_records(org_id=current_org.org_id),
-            replay_requests=repositories.replay_request_repo.list_request_records(
-                status="pending",
-                limit=20,
-                org_id=current_org.org_id,
-            ),
             current_org=current_org,
-            policy_settings=policy_settings.to_dict(),
-            mapping_direction_options=[
-                ("source_to_ad", attribute_mapping_direction_labels["source_to_ad"]),
-                ("ad_to_source", attribute_mapping_direction_labels["ad_to_source"]),
-            ],
-            mapping_direction_labels=attribute_mapping_direction_labels,
-            mapping_mode_options=[(value, value) for value in ATTRIBUTE_SYNC_MODES],
-            group_type_options=[(value, value.replace("_", " ").title()) for value in MANAGED_GROUP_TYPES],
-            username_strategy_options=[
-                ("userid", "Source User ID"),
-                ("email_localpart", "Email Local Part"),
-                ("employee_id", "Employee ID"),
-                ("pinyin_initials_employee_id", "Pinyin Initials + Employee ID"),
-                ("pinyin_full_employee_id", "Full Pinyin + Employee ID"),
-                ("family_name_pinyin_given_initials", "Family Pinyin + Given Initials"),
-                ("family_name_pinyin_given_name_pinyin", "Family Pinyin + Given Pinyin"),
-                ("custom_template", "Custom Template"),
-            ],
-            username_collision_policy_options=[
-                ("append_employee_id", "Append Employee ID"),
-                ("append_userid", "Append Source User ID"),
-                ("append_numeric_counter", "Append Numeric Counter"),
-                ("append_2digit_counter", "Append 2-Digit Sequence"),
-                ("append_3digit_counter", "Append 3-Digit Sequence"),
-                ("append_hash", "Append Deterministic Hash"),
-                ("custom_template", "Custom Collision Template"),
-            ],
-            department_ou_apply_mode_options=[
-                ("subtree", "Map subtree"),
-                ("exact", "Map exact department only"),
-            ],
-            first_sync_identity_claim_mode_options=[
-                ("auto_safe", "Auto-claim safe existing AD matches"),
-                ("review", "Review existing AD matches first"),
-            ],
+            **policy_release_context(request, current_org),
         )
 
     @app.get(CANONICAL_ROUTE_PATHS["sync-account-naming"], response_class=HTMLResponse)
@@ -435,7 +471,6 @@ def register_advanced_sync_routes(
             "sync_policy_account_naming.html",
             **context,
             source_provider=config.source_provider,
-            source_snapshot=source_snapshot,
             source_fields=(
                 repositories.source_directory_repo.list_field_catalog(
                     int(source_snapshot["id"]),
@@ -443,10 +478,6 @@ def register_advanced_sync_routes(
                 )
                 if source_snapshot
                 else []
-            ),
-            source_scope=repositories.source_directory_repo.get_scope_selection(
-                org_id=current_org.org_id,
-                provider_id=config.source_provider,
             ),
             employee_id_attribute=repositories.settings_repo.get_value(
                 "source_employee_id_attribute",
@@ -558,9 +589,13 @@ def register_advanced_sync_routes(
             **policy_page_context(
                 request,
                 page="sync-lifecycle-policy",
-                title="Lifecycle Policy",
+                title="Lifecycle & Security",
                 selected_connector_id=str(request.query_params.get("connector_id") or ""),
             ),
+            first_sync_identity_claim_mode_options=[
+                ("auto_safe", "Auto-claim safe existing AD matches"),
+                ("review", "Review existing AD matches first"),
+            ],
         )
 
     @app.get(CANONICAL_ROUTE_PATHS["sync-security-policy"], response_class=HTMLResponse)
@@ -575,12 +610,7 @@ def register_advanced_sync_routes(
                 request,
                 page="sync-security-policy",
                 title="Security Policy",
-                selected_connector_id=str(request.query_params.get("connector_id") or ""),
             ),
-            first_sync_identity_claim_mode_options=[
-                ("auto_safe", "Auto-claim safe existing AD matches"),
-                ("review", "Review existing AD matches first"),
-            ],
         )
 
     @app.post(CANONICAL_ROUTE_PATHS["sync-account-naming"] + "/preview")
@@ -760,7 +790,11 @@ def register_advanced_sync_routes(
                 "username_collision_policy": normalized_collision,
             },
         )
-        flash_t(request, "success", "Account naming policy saved")
+        flash(
+            request,
+            "success",
+            "Account naming policy saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
         return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post(CANONICAL_ROUTE_PATHS["sync-attribute-mappings"])
@@ -851,7 +885,11 @@ def register_advanced_sync_routes(
                 "target_field": str(target_field or "").strip(),
             },
         )
-        flash_t(request, "success", "Attribute mapping policy saved")
+        flash(
+            request,
+            "success",
+            "Attribute mapping policy saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
         return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post(CANONICAL_ROUTE_PATHS["sync-group-rules"])
@@ -868,6 +906,10 @@ def register_advanced_sync_routes(
         connector_custom_group_ou_path: str = Form("Managed Groups"),
         managed_tag_ids: str = Form(""),
         managed_external_chat_ids: str = Form(""),
+        group_display_separator: str | None = Form(None),
+        group_recursive_enabled: str | None = Form(None),
+        managed_relation_cleanup_enabled: str | None = Form(None),
+        soft_excluded_groups: str | None = Form(None),
     ):
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
@@ -900,6 +942,29 @@ def register_advanced_sync_routes(
                 "custom_group_ou_path": custom_group_ou_path,
             },
         )
+        directory_values: dict[str, Any] = {}
+        if isinstance(group_display_separator, str):
+            directory_values["group_display_separator"] = str(
+                group_display_separator or "-"
+            )
+        if isinstance(group_recursive_enabled, str):
+            directory_values["group_recursive_enabled"] = to_bool(
+                group_recursive_enabled,
+                True,
+            )
+        if isinstance(managed_relation_cleanup_enabled, str):
+            directory_values["managed_relation_cleanup_enabled"] = to_bool(
+                managed_relation_cleanup_enabled,
+                False,
+            )
+        directory_values["custom_group_ou_path"] = str(
+            custom_group_ou_path or "Managed Groups"
+        ).strip()
+        directory_settings = persist_directory_policy_settings_section(
+            request,
+            section="group_rules",
+            values=directory_values,
+        )
         try:
             if normalized_connector_id:
                 persist_connector_policy(
@@ -918,6 +983,20 @@ def register_advanced_sync_routes(
                         ),
                     },
                 )
+            if isinstance(soft_excluded_groups, str):
+                get_web_repositories(request).exclusion_repo.replace_soft_excluded_rules(
+                    (
+                        {
+                            "match_value": line.strip(),
+                            "display_name": line.strip(),
+                            "is_enabled": True,
+                            "source": "sync_policy",
+                        }
+                        for line in str(soft_excluded_groups or "").splitlines()
+                        if line.strip()
+                    ),
+                    org_id=get_current_org(request).org_id,
+                )
         except (TypeError, ValueError) as exc:
             flash_t(request, "error", "Failed to save group rules: {error}", error=str(exc))
             return RedirectResponse(url=redirect_url, status_code=303)
@@ -933,9 +1012,17 @@ def register_advanced_sync_routes(
                 "connector_id": normalized_connector_id,
                 "managed_tag_ids": split_csv_values(managed_tag_ids),
                 "managed_external_chat_ids": split_csv_values(managed_external_chat_ids),
+                "group_recursive_enabled": directory_settings.group_recursive_enabled,
+                "managed_relation_cleanup_enabled": (
+                    directory_settings.managed_relation_cleanup_enabled
+                ),
             },
         )
-        flash_t(request, "success", "Group rules saved")
+        flash(
+            request,
+            "success",
+            "Group rules saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
         return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post(CANONICAL_ROUTE_PATHS["sync-lifecycle-policy"])
@@ -1020,7 +1107,11 @@ def register_advanced_sync_routes(
                 "connector_id": normalized_connector_id,
             },
         )
-        flash_t(request, "success", "Lifecycle policy saved")
+        flash(
+            request,
+            "success",
+            "Lifecycle policy saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
         return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post(CANONICAL_ROUTE_PATHS["sync-security-policy"])
@@ -1036,11 +1127,16 @@ def register_advanced_sync_routes(
         connector_id: str = Form(""),
         force_change_password: str = Form(""),
         password_complexity: str = Form(""),
+        return_to: str = Form(""),
     ):
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        redirect_url = CANONICAL_ROUTE_PATHS["sync-security-policy"]
+        redirect_url = (
+            CANONICAL_ROUTE_PATHS["sync-lifecycle-policy"] + "#security"
+            if isinstance(return_to, str) and return_to.strip() == "lifecycle"
+            else CANONICAL_ROUTE_PATHS["sync-security-policy"]
+        )
         csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
         if csrf_error:
             return csrf_error
@@ -1110,7 +1206,11 @@ def register_advanced_sync_routes(
                 "connector_id": normalized_connector_id,
             },
         )
-        flash_t(request, "success", "Security policy saved")
+        flash(
+            request,
+            "success",
+            "Security policy saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
         return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post("/advanced-sync/policies")
@@ -1186,7 +1286,7 @@ def register_advanced_sync_routes(
         repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
-            action_type="advanced_sync.policy_update",
+            action_type="sync_policy.legacy.update",
             target_type="settings",
             target_id="advanced_sync",
             result="success",
@@ -1196,7 +1296,11 @@ def register_advanced_sync_routes(
                 **policy_settings.to_dict(),
             },
         )
-        flash_t(request, "success", "Advanced sync policies saved")
+        flash(
+            request,
+            "success",
+            "Legacy policy values saved. The previous Dry Run is now invalid; use Sync Policies and run a new Dry Run before Apply.",
+        )
         return RedirectResponse(url="/advanced-sync", status_code=303)
 
     @app.post("/advanced-sync/connectors")
@@ -1305,6 +1409,76 @@ def register_advanced_sync_routes(
         flash_t(request, "success", "Connector {connector_id} saved", connector_id=connector_id.strip())
         return RedirectResponse(url="/advanced-sync", status_code=303)
 
+    @app.post(CANONICAL_ROUTE_PATHS["sync-department-ou-routing"] + "/defaults")
+    def sync_department_ou_defaults_submit(
+        request: Request,
+        csrf_token: str = Form(""),
+        advanced_connector_routing_enabled: Optional[str] = Form(None),
+        user_ou_placement_strategy: str = Form("source_primary_department"),
+        source_root_unit_ids: str = Form(""),
+        source_root_unit_display_text: str = Form(""),
+        directory_root_ou_path: str = Form(""),
+        disabled_users_ou_path: str = Form("Disabled Users"),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        redirect_url = CANONICAL_ROUTE_PATHS["sync-department-ou-routing"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
+        if csrf_error:
+            return csrf_error
+        directory_settings = persist_directory_policy_settings_section(
+            request,
+            section="department_ou_routing",
+            values={
+                "user_ou_placement_strategy": str(
+                    user_ou_placement_strategy or "source_primary_department"
+                ).strip(),
+                "source_root_unit_ids": str(source_root_unit_ids or "").strip(),
+                "source_root_unit_display_text": str(
+                    source_root_unit_display_text or ""
+                ).strip(),
+                "directory_root_ou_path": str(directory_root_ou_path or "").strip(),
+                "disabled_users_ou_path": str(
+                    disabled_users_ou_path or "Disabled Users"
+                ).strip(),
+            },
+        )
+        advanced_settings = persist_policy_settings_section(
+            request,
+            section="security",
+            values={
+                "advanced_connector_routing_enabled": to_bool(
+                    advanced_connector_routing_enabled,
+                    False,
+                ),
+            },
+        )
+        audit_policy_change(
+            request,
+            user=user,
+            section="department_ou_routing",
+            target_type="settings",
+            target_id="organization_defaults",
+            payload={
+                "advanced_connector_routing_enabled": (
+                    advanced_settings.advanced_connector_routing_enabled
+                ),
+                "user_ou_placement_strategy": (
+                    directory_settings.user_ou_placement_strategy
+                ),
+                "source_root_unit_ids": directory_settings.source_root_unit_ids,
+                "directory_root_ou_path": directory_settings.directory_root_ou_path,
+                "disabled_users_ou_path": directory_settings.disabled_users_ou_path,
+            },
+        )
+        flash(
+            request,
+            "success",
+            "Department and OU defaults saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
+        return RedirectResponse(url=redirect_url, status_code=303)
+
     @app.post(CANONICAL_ROUTE_PATHS["sync-department-ou-routing"])
     @app.post("/advanced-sync/department-ou-mappings")
     def advanced_sync_department_ou_mapping_submit(
@@ -1371,7 +1545,11 @@ def register_advanced_sync_routes(
                 "is_enabled": to_bool(is_enabled, True),
             },
         )
-        flash_t(request, "success", "Department routing saved")
+        flash(
+            request,
+            "success",
+            "Department routing saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
         return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post(CANONICAL_ROUTE_PATHS["sync-department-ou-routing"] + "/{mapping_id}/delete")
@@ -1422,7 +1600,11 @@ def register_advanced_sync_routes(
                 "target_ou_path": record.target_ou_path,
             },
         )
-        flash_t(request, "success", "Department routing deleted")
+        flash(
+            request,
+            "success",
+            "Department routing deleted. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
         return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post("/advanced-sync/connectors/{connector_id}/toggle")
@@ -1611,7 +1793,11 @@ def register_advanced_sync_routes(
                 "is_enabled": to_bool(is_enabled, True),
             },
         )
-        flash_t(request, "success", "Mapping rule saved")
+        flash(
+            request,
+            "success",
+            "Mapping rule saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
         return RedirectResponse(url="/advanced-sync", status_code=303)
 
     @app.post(CANONICAL_ROUTE_PATHS["sync-attribute-mappings"] + "/{rule_id}/delete")
@@ -1654,5 +1840,9 @@ def register_advanced_sync_routes(
                 "target_field": record.target_field,
             },
         )
-        flash_t(request, "success", "Mapping rule deleted")
+        flash(
+            request,
+            "success",
+            "Mapping rule deleted. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
         return RedirectResponse(url=redirect_url, status_code=303)

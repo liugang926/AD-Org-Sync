@@ -72,7 +72,7 @@ class WebDashboardStateTests(unittest.TestCase):
         self.assertEqual(data["completed_steps"], 4)
         self.assertEqual(data["next_step"]["title"], "Clear blockers and run apply")
         self.assertEqual(data["next_step"]["status"], "current")
-        self.assertEqual(data["steps"][2]["href"], "/advanced-sync")
+        self.assertEqual(data["steps"][2]["href"], "/sync-policies/scope")
 
     def test_build_getting_started_data_keeps_legacy_live_wecom_snapshot_compatible(self):
         preflight_snapshot = {
