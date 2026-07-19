@@ -43,7 +43,7 @@
         <span>{{ t("Latest Successful Dry Run") }}</span>
         <strong>
           {% if job_center_summary.latest_successful_dry_run %}
-          {{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_successful_dry_run.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_successful_dry_run.job_id, t("View latest Dry Run")) }}
+          {{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_successful_dry_run.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_successful_dry_run.job_id, t("View latest Dry Run"), "", t("Copy Dry Run ID"), t("Dry Run ID copied")) }}
           {% else %}-{% endif %}
         </strong>
       </div>
@@ -51,7 +51,7 @@
         <span>{{ t("Latest Apply") }}</span>
         <strong>
           {% if job_center_summary.latest_apply %}
-          {{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_apply.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id, t("View latest Apply")) }}
+          {{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_apply.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id, t("View latest Apply"), "", t("Copy Job ID"), t("Job ID copied")) }}
           {% else %}-{% endif %}
         </strong>
       </div>
