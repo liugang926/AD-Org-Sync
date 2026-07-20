@@ -183,6 +183,10 @@ class WebDesignSystemComponentTests(unittest.TestCase):
                 self.assertIn(f".badge-{level}", stylesheet)
         self.assertIn(":focus-visible", stylesheet)
         self.assertIn("--focus-ring:", stylesheet)
+        self.assertRegex(
+            stylesheet,
+            r"\.identifier__link\s*\{[^}]*flex:\s*1\s+1\s+12ch;[^}]*width:\s*100%;",
+        )
 
     def test_core_pages_keep_one_primary_action(self):
         dashboard = (TEMPLATE_DIR / "dashboard.html").read_text(encoding="utf-8")

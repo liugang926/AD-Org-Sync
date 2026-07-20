@@ -2407,6 +2407,11 @@ class WebBrowserRegressionTests(unittest.TestCase):
             float(identifier.bounding_box()["width"]),
             float(self.page.locator(".control-metric").first.bounding_box()["width"]),
         )
+        identifier_link = identifier.locator(".identifier__link")
+        self.assertGreaterEqual(
+            float(identifier_link.bounding_box()["width"]),
+            44,
+        )
         identifier.locator("[data-copy-value]").click()
         self.page.wait_for_function(
             "() => document.querySelector('[data-copy-status]')?.textContent.includes('Dry Run ID copied')"

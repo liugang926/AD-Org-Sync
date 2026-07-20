@@ -2096,7 +2096,8 @@ form.inline { display: inline-flex; margin: 0; }
 
 .identifier__link {
   display: block;
-  flex: 1 1 auto;
+  flex: 1 1 12ch;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
