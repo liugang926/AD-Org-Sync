@@ -185,7 +185,7 @@ class DashboardSupport:
                     if dry_run_completed
                     else "No successful dry run has been recorded yet."
                 ),
-                "action_url": "/execution-center/dry-run",
+                "action_url": "/jobs?context=dashboard#dry-run",
             }
         )
         checks.append(
@@ -212,7 +212,7 @@ class DashboardSupport:
                     if apply_completed
                     else "No successful apply run has been recorded yet."
                 ),
-                "action_url": "/execution-center/apply",
+                "action_url": "/jobs?context=dashboard#apply",
             }
         )
 
@@ -311,13 +311,13 @@ class DashboardSupport:
             next_action_url = "/config"
             next_action_label = "Fix Connectivity"
         elif not dry_run_completed:
-            next_action_url = "/execution-center/dry-run"
+            next_action_url = "/jobs?context=dashboard#dry-run"
             next_action_label = "Run First Dry Run"
         elif open_conflicts_total > 0:
             next_action_url = "/conflicts"
             next_action_label = "Review Conflict Queue"
         elif not apply_completed:
-            next_action_url = "/execution-center/apply"
+            next_action_url = "/jobs?context=dashboard#apply"
             next_action_label = "Run First Apply"
         else:
             next_action_url = "/dashboard"
@@ -376,7 +376,7 @@ class DashboardSupport:
                     "title": "Background runner error",
                     "detail": "Last background execution error: {error}",
                     "detail_params": {"error": sync_runner_error},
-                    "action_url": "/execution-center/jobs",
+                    "action_url": "/jobs?context=dashboard#history",
                     "action_label": "Open Job History",
                 }
             )
@@ -384,7 +384,7 @@ class DashboardSupport:
         for reason in list(job_center_summary.get("blocked_reasons") or [])[:4]:
             next_url = str(
                 job_center_summary.get("next_action_url")
-                or "/execution-center/dry-run"
+                or "/jobs?context=dashboard#dry-run"
             )
             blockers.append(
                 {

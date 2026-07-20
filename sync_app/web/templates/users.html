@@ -4,8 +4,16 @@
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.panel(t("Local Admin Users")) %}
-    <form method="post" action="/system-management/administrators">
+  {% call ui.page_header(t("Platform Accounts"), t("Manage global administrator accounts and roles for every organization on this deployment."), eyebrow=t("System Settings"), badge_text=t("Global Scope"), badge_level="warning") %}{% endcall %}
+
+  {% call ui.panel(t("Local Admin Users"), t("Global Scope"), "warning") %}
+    <form method="post" action="/system-management/administrators"
+      data-confirm="{{ t('This creates a platform account with access determined by the selected global role.') }}"
+      data-confirm-title="{{ t('Confirm Platform Account Creation') }}"
+      data-confirm-require="GLOBAL"
+      data-confirm-input-help="{{ t('Type {value} to confirm.') }}"
+      data-confirm-detail-1-label="{{ t('Scope') }}"
+      data-confirm-detail-1-value="{{ t('Global Scope') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         {{ forms.input("username", t("Username"), required=True, autocomplete="username") }}
@@ -18,7 +26,7 @@
     </form>
   {% endcall %}
 
-  {% call ui.panel(t("Administrator List")) %}
+  {% call ui.panel(t("Administrator List"), t("Global Scope"), "warning") %}
     {% call ui.table_shell() %}
       <table>
         <thead><tr><th>{{ t("Username") }}</th><th>{{ t("Role") }}</th><th>{{ t("Status") }}</th><th>{{ t("Last Login") }}</th><th>{{ t("Actions") }}</th></tr></thead>
@@ -30,7 +38,15 @@
             <td>{{ t("Enabled") if item.is_enabled else t("Disabled") }}</td>
             <td>{{ ui.local_time(item.last_login_at) }}</td>
             <td>
-              <form class="inline" method="post" action="/system-management/administrators/{{ item.id }}/toggle">
+              <form class="inline" method="post" action="/system-management/administrators/{{ item.id }}/toggle"
+                data-confirm="{{ t('Review this global platform account status change before continuing.') }}"
+                data-confirm-title="{{ t('Confirm Platform Account Status Change') }}"
+                data-confirm-require="GLOBAL"
+                data-confirm-input-help="{{ t('Type {value} to confirm.') }}"
+                data-confirm-detail-1-label="{{ t('Account') }}"
+                data-confirm-detail-1-value="{{ item.username }}"
+                data-confirm-detail-2-label="{{ t('Scope') }}"
+                data-confirm-detail-2-value="{{ t('Global Scope') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 {{ ui.button(t("Disable") if item.is_enabled else t("Enable"), type="submit", variant=("danger" if item.is_enabled else "secondary")) }}
               </form>

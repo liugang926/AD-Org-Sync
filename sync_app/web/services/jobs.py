@@ -222,6 +222,68 @@ class WebJobService:
 
         return sections
 
+    def build_plan_review_summary(self, job: Any | None) -> dict[str, int]:
+        """Build stable business categories for the selected immutable plan."""
+
+        if job is None:
+            operation_counts: dict[str, int] = {}
+            summary: dict[str, Any] = {}
+            error_count = 0
+        else:
+            operation_counts = self.planned_operation_repo.count_operation_types_for_job(
+                str(getattr(job, "job_id", "") or "")
+            )
+            summary = dict(getattr(job, "summary", {}) or {})
+            error_count = int(getattr(job, "error_count", 0) or 0)
+
+        def count_prefixes(*prefixes: str) -> int:
+            return sum(
+                count
+                for operation_type, count in operation_counts.items()
+                if operation_type.startswith(prefixes)
+            )
+
+        group_relation_count = sum(
+            count
+            for operation_type, count in operation_counts.items()
+            if (
+                "group" in operation_type
+                and operation_type
+                not in {
+                    "create_group",
+                    "update_group",
+                    "enable_group",
+                    "disable_group",
+                }
+            )
+            or "membership" in operation_type
+        )
+        return {
+            "create_count": count_prefixes("create_"),
+            "update_count": count_prefixes(
+                "update_",
+                "move_",
+                "rename_",
+                "bind_",
+                "resolve_",
+                "propose_",
+            ),
+            "enable_count": count_prefixes("enable_", "restore_", "rehire_"),
+            "disable_count": count_prefixes("disable_"),
+            "group_relation_count": group_relation_count,
+            "conflict_count": int(summary.get("conflict_count") or 0),
+            "error_count": max(
+                error_count,
+                int(summary.get("error_count") or 0),
+            ),
+            "risk_count": int(summary.get("high_risk_operation_count") or 0),
+            "total_count": int(
+                summary.get("planned_operation_count")
+                or getattr(job, "planned_operation_count", 0)
+                or sum(operation_counts.values())
+            ),
+        }
+
     def build_job_center_summary(self, *, org_id: str, preflight_summary: dict[str, Any]) -> dict[str, Any]:
         recent_jobs = self.list_recent_jobs(org_id=org_id, limit=30)
         latest_dry_run = next(
@@ -287,7 +349,7 @@ class WebJobService:
             next_action_url = f"/execution-center/jobs/{latest_dry_run.job_id}"
             next_action_label_code = "jobs.action.inspect_dry_run_errors"
         elif not latest_successful_dry_run:
-            next_action_url = "/execution-center/dry-run"
+            next_action_url = "/jobs#dry-run"
             next_action_label_code = "jobs.action.run_dry_run"
         elif open_conflict_count > 0:
             next_action_url = "/conflicts"
@@ -296,15 +358,18 @@ class WebJobService:
             review_record is None or str(review_record.status or "").strip().lower() != "approved"
         ):
             next_action_url = (
-                "/execution-center/plan-review"
-                f"?plan_id={latest_successful_dry_run.job_id}"
+                "/jobs"
+                f"?plan_id={latest_successful_dry_run.job_id}#plan-review"
             )
             next_action_label_code = "jobs.action.approve_high_risk_plan"
         elif not latest_apply:
-            next_action_url = "/execution-center/apply"
+            next_action_url = (
+                "/jobs"
+                f"?plan_id={latest_successful_dry_run.job_id}#apply"
+            )
             next_action_label_code = "jobs.action.run_apply"
         else:
-            next_action_url = "/execution-center/jobs"
+            next_action_url = "/jobs#history"
             next_action_label_code = "jobs.action.review_latest_apply"
 
         impact_job = latest_successful_dry_run or latest_dry_run

@@ -1,0 +1,62 @@
+{% import "components/ui.html" as ui %}
+
+{% macro advanced(presentation, class_name='') -%}
+{% if presentation.is_advanced %}<div{% if class_name %} class="{{ class_name }}"{% endif %} data-mode-content="advanced">{{ caller() }}</div>{% endif %}
+{%- endmacro %}
+
+{% macro basic(presentation, class_name='') -%}
+{% if presentation.is_basic %}<div{% if class_name %} class="{{ class_name }}"{% endif %} data-mode-content="basic">{{ caller() }}</div>{% endif %}
+{%- endmacro %}
+
+{% macro advanced_inline(presentation, class_name='') -%}
+{% if presentation.is_advanced %}<span{% if class_name %} class="{{ class_name }}"{% endif %} data-mode-content="advanced">{{ caller() }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro technical_identifier(presentation, value, href='', basic_label='View details', class_name='', copy_label='Copy identifier', copied_label='Identifier copied') -%}
+{% if presentation.show_internal_identifiers and value %}
+  {% if class_name %}<span class="{{ class_name }}">{% endif %}{{ ui.identifier(value, copy_label, copied_label, href) }}{% if class_name %}</span>{% endif %}
+{% elif href %}
+  <a href="{{ href }}"{% if class_name %} class="{{ class_name }}"{% endif %}>{{ basic_label }}</a>
+{% else %}
+  <span aria-label="{{ basic_label }}">-</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro advanced_header(presentation, label, attrs='') -%}
+{% if presentation.is_advanced %}<th {{ attrs|safe }}>{{ label }}</th>{% endif %}
+{%- endmacro %}
+
+{% macro advanced_cell(presentation, attrs='') -%}
+{% if presentation.is_advanced %}<td {{ attrs|safe }}>{{ caller() }}</td>{% endif %}
+{%- endmacro %}
+
+{% macro basic_guidance(presentation, title, description, action_label='', action_url='') -%}
+{% if presentation.show_system_guidance %}
+<aside class="mode-guidance" data-mode-guidance="system-recommendation" role="note">
+  <div>
+    <span class="mode-guidance__eyebrow">{{ title }}</span>
+    <p>{{ description }}</p>
+  </div>
+  {% if action_label and action_url %}<a class="mode-guidance__action" href="{{ action_url }}">{{ action_label }}</a>{% endif %}
+</aside>
+{% endif %}
+{%- endmacro %}
+
+{% macro advanced_page_gate(presentation, title, current_path, csrf_token, t, ui) -%}
+{% if presentation.is_basic %}
+<section class="mode-gate" data-mode-gate="advanced-page">
+  <div class="mode-gate__icon"><i data-lucide="sliders-horizontal" class="icon icon-xl"></i></div>
+  <div class="mode-gate__body">
+    <div class="page-header__eyebrow">{{ t("Advanced workspace") }}</div>
+    <h1>{{ title }}</h1>
+    <p>{{ t("This page contains implementation-level configuration or technical evidence. Basic mode keeps it out of the daily administrator workflow.") }}</p>
+    <p class="muted">{{ t("Switching mode changes presentation only. It does not grant permissions or change saved business state.") }}</p>
+    <form action="/ui-mode" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="return_url" value="{{ current_path }}">
+      {{ ui.button(t("Switch to Advanced mode"), type="submit", name="ui_mode", value="advanced", icon="sliders-horizontal") }}
+    </form>
+  </div>
+</section>
+{% endif %}
+{%- endmacro %}

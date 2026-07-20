@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
+{% import "components/mode.html" as mode_ui %}
 
 {% macro localized_field(record, field) -%}
   {%- set code = record.get(field ~ "_code") -%}
@@ -39,9 +40,11 @@
       <span>{{ t("Selected AD Account") }}</span>
       <strong class="cell-mono">{{ decision_guide.selected_target_username or "-" }}</strong>
       <div class="dense-meta">
-        <div>{{ t("Source User") }}: <strong>{{ decision_guide.source_user.name or decision_guide.source_user.userid or "-" }}</strong></div>
+        <div>{{ t("Source User") }}: <strong>{{ decision_guide.source_user.name or t("Unnamed user") }}</strong></div>
+        {% call mode_ui.advanced(ui_presentation) %}
         <div>{{ t("Source User ID") }}: <strong class="cell-mono">{{ decision_guide.source_user.userid or conflict.source_id or "-" }}</strong></div>
         <div>{{ t("Job ID") }}: <a href="/execution-center/jobs/{{ conflict.job_id }}">{{ conflict.job_id }}</a></div>
+        {% endcall %}
       </div>
       {% if can("mappings.write") and decision_guide.selected_target_username %}
       <form method="post" action="{{ conflicts_base_path }}/{{ conflict.id }}/resolve-binding">
@@ -62,7 +65,7 @@
     <div class="decision-step is-complete">
       <span>1</span>
       <strong>{{ t("Source Identity") }}</strong>
-      <small>{{ decision_guide.source_user.email or decision_guide.source_user.userid or "-" }}</small>
+      <small>{{ decision_guide.source_user.email or decision_guide.source_user.name or t("Unnamed user") }}{% call mode_ui.advanced_inline(ui_presentation, "cell-mono") %}{{ decision_guide.source_user.userid or conflict.source_id or "-" }}{% endcall %}</small>
     </div>
     <div class="decision-step is-complete">
       <span>2</span>
@@ -96,7 +99,7 @@
 
   {% if decision_guide.shared_source_user_ids %}
   <div class="panel-note warning">
-    <strong>{{ t("Related Source Users") }}:</strong> {{ decision_guide.shared_source_user_ids|join(", ") }}
+    <strong>{{ t("Related Source Users") }}:</strong> {% if ui_presentation.show_internal_identifiers %}{{ decision_guide.shared_source_user_ids|join(", ") }}{% else %}{{ decision_guide.shared_source_user_ids|length }}{% endif %}
   </div>
   {% endif %}
 
@@ -112,7 +115,7 @@
         </div>
         <div class="detail-item">
           <div class="label">{{ t("Selected Connector") }}</div>
-          <div class="value">{{ decision_guide.selected_connector.name or decision_guide.selected_connector.connector_id or "-" }}</div>
+          <div class="value">{{ ui_presentation.choose(decision_guide.selected_connector.name or "-", decision_guide.selected_connector.name or decision_guide.selected_connector.connector_id or "-") }}</div>
         </div>
         <div class="detail-item">
           <div class="label">{{ t("Target Department") }}</div>
@@ -172,7 +175,7 @@
         {% endif %}
       </div>
       {% endif %}
-      {% if decision_guide.target_account.distinguished_name %}
+      {% if decision_guide.target_account.distinguished_name and ui_presentation.show_audit_evidence %}
       <div class="panel-note info">
         <strong>{{ t("DN") }}:</strong>
         <div class="muted cell-mono">{{ decision_guide.target_account.distinguished_name }}</div>
@@ -180,8 +183,8 @@
       {% endif %}
       {% if decision_guide.existing_binding_owner %}
       <div class="panel-note warning">
-        <strong>{{ t("Existing Binding Owner") }}:</strong> {{ decision_guide.existing_binding_owner.source_user_id }}
-        <div class="muted">{{ decision_guide.existing_binding_owner.source or "" }}</div>
+        <strong>{{ t("Existing Binding Owner") }}:</strong> {{ ui_presentation.choose(t("Another directory identity"), decision_guide.existing_binding_owner.source_user_id) }}
+        {% call mode_ui.advanced(ui_presentation) %}<div class="muted">{{ decision_guide.existing_binding_owner.source or "" }}</div>{% endcall %}
       </div>
       {% endif %}
     {% endcall %}
@@ -199,7 +202,7 @@
             {% if candidate.is_selected %}{{ ui.badge(t("Selected"), "success") }}{% endif %}
           </div>
         </div>
-        {% if candidate.rule %}<div class="muted">{{ t("Rule") }}: {{ t(candidate.rule_code) if candidate.rule_code else candidate.rule }}</div>{% endif %}
+        {% if candidate.rule and ui_presentation.show_field_codes %}<div class="muted">{{ t("Rule") }}: {{ t(candidate.rule_code) if candidate.rule_code else candidate.rule }}</div>{% endif %}
         {% if candidate.explanation_code %}
         <p>{{ t(candidate.explanation_code, **(candidate.explanation_params or {})) }}</p>
         {% elif candidate.explanation and ui_language != "zh-CN" %}
@@ -243,6 +246,7 @@
       {% if decision_guide.field_updates %}
       <div class="stack-tight">
         <div class="cell-strong">{{ t("Expected AD Field Updates") }}</div>
+        {% if ui_presentation.show_field_codes %}
         <div class="field-update-list">
           {% for field in decision_guide.field_updates %}
           <div class="field-update-item">
@@ -251,6 +255,9 @@
           </div>
           {% endfor %}
         </div>
+        {% else %}
+        <p class="muted">{{ t("{count} directory fields will be updated after this decision.", count=decision_guide.field_updates|length) }}</p>
+        {% endif %}
       </div>
       {% endif %}
       {% if decision_guide.decision.bind_now.note_messages or decision_guide.decision.bind_now.notes %}

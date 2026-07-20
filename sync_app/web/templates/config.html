@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
+{% import "components/mode.html" as mode_ui %}
 
 {% macro target_ou_picker(field_name, field_label, current_value, empty_label, help_text, trigger_label, panel_title, panel_description, class_name='') %}
 {% set toggle_attrs = 'data-config-open-target-browser data-open-label="' ~ t(trigger_label) ~ '" data-close-label="' ~ t("Hide OU Tree") ~ '"' %}
@@ -69,7 +70,7 @@
       <span class="config-brief__fact">
         <span>{{ t("Latest Dry Run") }}:</span>
         {% if config_rollout_status.latest_dry_run %}
-        {{ ui.identifier(config_rollout_status.latest_dry_run.job_id, t("Copy Dry Run ID"), t("Dry Run ID copied")) }}
+        {{ mode_ui.technical_identifier(ui_presentation, config_rollout_status.latest_dry_run.job_id, "/execution-center/jobs/" ~ config_rollout_status.latest_dry_run.job_id, t("View latest Dry Run")) }}
         {% else %}
         <strong>-</strong>
         {% endif %}
@@ -336,7 +337,7 @@
         {{ ui.badge(t("Unsaved changes"), "warning") }}
       </div>
       <div class="actions flush-top">
-        {{ ui.button(t("Save Draft"), type="submit", icon="save") }}
+        {{ ui.button(t("Save Draft"), type="submit", variant=("secondary" if config_change_preview else "primary"), icon="save") }}
         {{ ui.button(t("Preview Changes"), type="submit", variant="secondary", icon="file-search", attrs='formaction="/config/preview"') }}
         {{ ui.button(t("Publish"), href="/config/releases", variant="secondary", icon="send") }}
       </div>
@@ -356,7 +357,7 @@
         </div>
         <div class="config-action-row__actions">
           {% if config_rollout_status.show_run_dry_run and can("jobs.run") %}
-          {{ ui.button(t("Open Dry Run"), href="/execution-center/dry-run", variant="secondary", size="sm", icon="play") }}
+          {{ ui.button(t("Open Dry Run"), href="/jobs?context=config#dry-run", variant="secondary", size="sm", icon="play") }}
           {% endif %}
           {% if config_rollout_status.open_conflict_count > 0 %}
           {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost", size="sm", icon="shield-alert") }}

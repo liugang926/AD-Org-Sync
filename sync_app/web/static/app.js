@@ -14,13 +14,26 @@
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#39;"));
 
+  function announce(message) {
+    const status = document.querySelector("[data-app-status]");
+    if (!(status instanceof HTMLElement) || !message) {
+      return;
+    }
+    status.textContent = "";
+    window.requestAnimationFrame(() => {
+      status.textContent = String(message);
+    });
+  }
+
   function setLoading(button) {
     if (!(button instanceof HTMLElement) || button.classList.contains("btn-loading")) {
       return;
     }
     button.classList.add("btn-loading");
+    button.setAttribute("aria-busy", "true");
     const width = button.offsetWidth;
     button.style.width = `${width}px`;
+    announce(document.body?.dataset.loadingLabel || "Loading...");
   }
 
   function dismissFlash(element) {
@@ -43,6 +56,18 @@
     document.querySelectorAll("[data-auto-submit]").forEach((element) => {
       element.addEventListener("change", () => {
         element.closest("form")?.submit();
+      });
+    });
+  }
+
+  function initModeSwitchContext() {
+    document.querySelectorAll("form[action='/ui-mode']").forEach((form) => {
+      form.addEventListener("submit", () => {
+        const returnUrl = form.querySelector("input[name='return_url']");
+        if (!(returnUrl instanceof HTMLInputElement) || !window.location.hash) {
+          return;
+        }
+        returnUrl.value = `${returnUrl.value.split("#", 1)[0]}${window.location.hash}`;
       });
     });
   }
@@ -87,11 +112,46 @@
     const inputHelp = dialog?.querySelector("[data-confirm-input-help]");
     const confirmInput = dialog?.querySelector("[data-confirm-input]");
     const approveButton = dialog?.querySelector("[data-confirm-approve]");
+    const nextButton = dialog?.querySelector("[data-confirm-next]");
+    const backButton = dialog?.querySelector("[data-confirm-back]");
+    const wizardSteps = dialog
+      ? Array.from(dialog.querySelectorAll("[data-confirm-wizard-step]"))
+      : [];
     const approveLabel = approveButton?.querySelector("span");
     const defaultApproveLabel = approveLabel?.textContent || "Continue";
     const cancelButtons = dialog ? Array.from(dialog.querySelectorAll("[data-confirm-cancel]")) : [];
     let pendingElement = null;
+    let pendingRequiredText = "";
     let restoreFocusTo = null;
+
+    const setConfirmationStep = (step) => {
+      if (!(dialog instanceof HTMLElement)) {
+        return;
+      }
+      const usesWizard = dialog.dataset.confirmFlow === "wizard";
+      const resolvedStep = usesWizard ? step : "confirm";
+      dialog.dataset.confirmStep = resolvedStep;
+      if (nextButton instanceof HTMLElement) {
+        nextButton.hidden = !usesWizard || resolvedStep !== "review";
+      }
+      if (backButton instanceof HTMLElement) {
+        backButton.hidden = !usesWizard || resolvedStep !== "confirm";
+      }
+      if (approveButton instanceof HTMLElement) {
+        approveButton.hidden = usesWizard && resolvedStep === "review";
+      }
+      if (verification instanceof HTMLElement) {
+        verification.hidden = resolvedStep !== "confirm" || !pendingRequiredText;
+      }
+      wizardSteps.forEach((item) => {
+        if (!(item instanceof HTMLElement)) return;
+        if (item.dataset.confirmWizardStep === resolvedStep) {
+          item.setAttribute("aria-current", "step");
+        } else {
+          item.removeAttribute("aria-current");
+        }
+      });
+    };
 
     const policyFormDiff = (element) => {
       const form = element.closest("form[data-policy-change-form]");
@@ -209,6 +269,7 @@
       dialog.hidden = true;
       document.body?.classList.remove("confirm-dialog-open");
       pendingElement = null;
+      pendingRequiredText = "";
       if (confirmInput instanceof HTMLInputElement) {
         confirmInput.value = "";
       }
@@ -248,6 +309,24 @@
 
     if (approveButton instanceof HTMLElement) {
       approveButton.addEventListener("click", runConfirmedAction);
+    }
+    if (nextButton instanceof HTMLElement) {
+      nextButton.addEventListener("click", () => {
+        setConfirmationStep("confirm");
+        if (pendingRequiredText && confirmInput instanceof HTMLInputElement) {
+          confirmInput.focus();
+        } else if (approveButton instanceof HTMLElement) {
+          approveButton.focus();
+        }
+      });
+    }
+    if (backButton instanceof HTMLElement) {
+      backButton.addEventListener("click", () => {
+        setConfirmationStep("review");
+        if (nextButton instanceof HTMLElement) {
+          nextButton.focus();
+        }
+      });
     }
     cancelButtons.forEach((button) => {
       button.addEventListener("click", closeDialog);
@@ -295,6 +374,7 @@
           event.preventDefault();
           event.stopImmediatePropagation();
           pendingElement = element;
+          pendingRequiredText = requiredText;
           restoreFocusTo = element;
           messageTarget.textContent = message;
           if (titleTarget instanceof HTMLElement) {
@@ -319,7 +399,6 @@
             detailsTarget.hidden = detailsTarget.childElementCount === 0;
           }
           if (verification instanceof HTMLElement && confirmInput instanceof HTMLInputElement) {
-            verification.hidden = !requiredText;
             confirmInput.value = "";
             if (inputHelp instanceof HTMLElement) {
               const template = source?.getAttribute("data-confirm-input-help") || "Type {value} to confirm.";
@@ -343,11 +422,14 @@
             approveLabel.textContent = element.textContent?.trim() || defaultApproveLabel;
           }
           dialog.hidden = false;
+          setConfirmationStep("review");
           document.body?.classList.add("confirm-dialog-open");
           if (window.lucide) {
             window.lucide.createIcons();
           }
-          if (requiredText && confirmInput instanceof HTMLInputElement) {
+          if (dialog.dataset.confirmFlow === "wizard" && nextButton instanceof HTMLElement) {
+            nextButton.focus();
+          } else if (requiredText && confirmInput instanceof HTMLInputElement) {
             confirmInput.focus();
           } else if (cancelButtons[0] instanceof HTMLElement) {
             cancelButtons[0].focus();
@@ -369,7 +451,9 @@
   }
 
   function initIdentityDrawers() {
-    const drawers = Array.from(document.querySelectorAll("[data-identity-drawer]"));
+    const drawers = Array.from(
+      document.querySelectorAll("[data-detail-drawer], [data-identity-drawer]")
+    );
     if (!drawers.length) {
       return;
     }
@@ -394,7 +478,7 @@
         return;
       }
       activeDrawer.hidden = true;
-      document.body?.classList.remove("identity-drawer-open");
+      document.body?.classList.remove("identity-drawer-open", "detail-drawer-open");
       activeDrawer = null;
       if (restoreFocus && restoreFocusTo instanceof HTMLElement) {
         restoreFocusTo.focus();
@@ -414,11 +498,13 @@
       activeDrawer = drawer;
       restoreFocusTo = opener;
       drawer.hidden = false;
-      document.body?.classList.add("identity-drawer-open");
+      document.body?.classList.add("identity-drawer-open", "detail-drawer-open");
       const preferred = drawer.querySelector(
         ".identity-drawer__header [data-identity-drawer-close]"
       );
-      const panel = drawer.querySelector(".identity-drawer__panel");
+      const panel = drawer.querySelector(
+        ".detail-drawer__panel, .identity-drawer__panel"
+      );
       if (preferred instanceof HTMLElement) {
         preferred.focus();
       } else if (panel instanceof HTMLElement) {
@@ -447,7 +533,9 @@
         return;
       }
       const focusable = focusableElements(activeDrawer);
-      const panel = activeDrawer.querySelector(".identity-drawer__panel");
+      const panel = activeDrawer.querySelector(
+        ".detail-drawer__panel, .identity-drawer__panel"
+      );
       if (!focusable.length) {
         event.preventDefault();
         panel?.focus();
@@ -467,6 +555,7 @@
 
   function initSelectionSummaries() {
     document.querySelectorAll("[data-selection-scope]").forEach((scope) => {
+      let previousCheckedCount = null;
       const update = () => {
         const checkedCount = scope.querySelectorAll("input[type='checkbox']:checked").length;
         scope.querySelectorAll("[data-selection-count]").forEach((target) => {
@@ -481,6 +570,10 @@
             target.setAttribute("aria-disabled", String(checkedCount === 0));
           }
         });
+        if (previousCheckedCount !== null && previousCheckedCount !== checkedCount) {
+          announce(`${checkedCount} selected`);
+        }
+        previousCheckedCount = checkedCount;
       };
       scope.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
         checkbox.addEventListener("change", update);
@@ -725,21 +818,127 @@
   }
 
   function initTableScrollContainers() {
-    const containers = Array.from(document.querySelectorAll(".table-shell"));
+    const containers = Array.from(
+      new Set(
+        Array.from(
+          document.querySelectorAll(".table-shell, .table-scroll, [data-table-region]")
+        )
+      )
+    );
     if (!containers.length) {
       return;
     }
     const label =
       document.body?.dataset.tableScrollLabel ||
       "Scrollable data table. Use arrow keys to review hidden columns.";
+    const keyboardHelp =
+      document.body?.dataset.tableKeyboardHelp ||
+      "Use Left and Right to scroll columns, Up and Down to move rows, and Enter to open the first row action.";
     const update = () => {
       containers.forEach((container) => {
         const scrollable = container.scrollWidth > container.clientWidth + 1;
         container.dataset.scrollable = String(scrollable);
         container.setAttribute("role", "region");
-        container.setAttribute("aria-label", label);
+        if (!container.hasAttribute("aria-label")) {
+          container.setAttribute("aria-label", label);
+        }
+        if (!container.hasAttribute("tabindex")) {
+          container.setAttribute("tabindex", "0");
+        }
       });
     };
+    containers.forEach((container, containerIndex) => {
+      const helpId = `table-keyboard-help-${containerIndex + 1}`;
+      const help = document.createElement("span");
+      help.id = helpId;
+      help.className = "sr-only";
+      help.textContent = keyboardHelp;
+      container.prepend(help);
+      const describedBy = (container.getAttribute("aria-describedby") || "")
+        .split(/\s+/)
+        .filter(Boolean);
+      if (!describedBy.includes(helpId)) {
+        describedBy.push(helpId);
+        container.setAttribute("aria-describedby", describedBy.join(" "));
+      }
+
+      const rows = Array.from(container.querySelectorAll("tbody tr")).filter(
+        (row) => row.querySelector("td:not(.table-empty)")
+      );
+      rows.forEach((row) => row.setAttribute("tabindex", "-1"));
+      let activeRowIndex = -1;
+      const focusRow = (index) => {
+        if (!rows.length) {
+          return;
+        }
+        activeRowIndex = Math.max(0, Math.min(rows.length - 1, index));
+        rows.forEach((row, rowIndex) => {
+          if (rowIndex === activeRowIndex) {
+            row.setAttribute("data-keyboard-row", "true");
+          } else {
+            row.removeAttribute("data-keyboard-row");
+          }
+        });
+        rows[activeRowIndex].focus({ preventScroll: true });
+        rows[activeRowIndex].scrollIntoView({
+          block: "nearest",
+          inline: "nearest",
+        });
+      };
+
+      container.addEventListener("focusin", () => {
+        container.dataset.keyboardActive = "true";
+      });
+      container.addEventListener("focusout", (event) => {
+        if (!container.contains(event.relatedTarget)) {
+          delete container.dataset.keyboardActive;
+        }
+      });
+      container.addEventListener("keydown", (event) => {
+        const targetIsContainer = event.target === container;
+        const targetIsRow = event.target instanceof HTMLTableRowElement;
+        if (!targetIsContainer && !targetIsRow) {
+          if (event.key === "Escape") {
+            container.focus();
+          }
+          return;
+        }
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          event.preventDefault();
+          container.scrollBy({
+            left: event.key === "ArrowLeft" ? -120 : 120,
+            behavior: "smooth",
+          });
+          return;
+        }
+        if (event.key === "Home" || event.key === "End") {
+          event.preventDefault();
+          container.scrollTo({
+            left: event.key === "Home" ? 0 : container.scrollWidth,
+            behavior: "smooth",
+          });
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          const direction = event.key === "ArrowDown" ? 1 : -1;
+          const initialIndex = direction > 0 ? 0 : rows.length - 1;
+          focusRow(
+            activeRowIndex < 0 ? initialIndex : activeRowIndex + direction
+          );
+          return;
+        }
+        if (event.key === "Enter" && targetIsRow) {
+          const action = event.target.querySelector(
+            "a[href], button:not([disabled]), summary, input:not([disabled]), select:not([disabled])"
+          );
+          if (action instanceof HTMLElement) {
+            event.preventDefault();
+            action.focus();
+          }
+        }
+      });
+    });
     update();
     window.addEventListener("resize", update);
   }
@@ -772,11 +971,16 @@
       const [relativeUnit, divisor] =
         relativeUnits.find(([, seconds]) => Math.abs(deltaSeconds) >= seconds) || relativeUnits.at(-1);
       const relative = relativeFormatter.format(Math.round(deltaSeconds / divisor), relativeUnit);
-      const separator = String(locale).toLowerCase().startsWith("zh") ? "，" : ", ";
-      const display = `${formatted}${separator}${relative}`;
+      const display = `${formatted}${
+        String(locale).toLowerCase().startsWith("zh") ? " · " : ", "
+      }${relative}`;
       element.textContent = display;
       element.setAttribute("title", rawValue);
       element.setAttribute("aria-label", `${display}; ${rawValue}`);
+      const utcTarget = element.parentElement?.querySelector("[data-raw-utc]");
+      if (utcTarget instanceof HTMLElement) {
+        utcTarget.textContent = `UTC: ${parsed.toISOString()}`;
+      }
     });
   }
 
@@ -966,6 +1170,7 @@
   function boot() {
     initIcons();
     initAutoSubmit();
+    initModeSwitchContext();
     initCopyButtons();
     initConfirmationPrompts();
     initIdentityDrawers();
@@ -987,6 +1192,7 @@
 
   ADOrgSync.escapeHtml = escapeHtml;
   ADOrgSync.setLoading = setLoading;
+  ADOrgSync.announce = announce;
   ADOrgSync.dismissFlash = dismissFlash;
   window.dismissFlash = dismissFlash;
 

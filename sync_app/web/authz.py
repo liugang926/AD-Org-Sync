@@ -17,6 +17,7 @@ ROLE_CAPABILITIES = {
     ROLE_SUPER_ADMIN: {
         "dashboard.read",
         "organizations.manage",
+        "system.manage",
         "config.read",
         "config.write",
         "mappings.read",

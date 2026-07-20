@@ -88,6 +88,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_auditor_sees_readonly_mappings_and_cannot_run_jobs(self):
         self._login("auditor1")
+        self.session["ui_mode"] = "advanced"
 
         with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = []
@@ -107,6 +108,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_operator_can_view_exceptions_but_cannot_modify_them(self):
         self._login("operator1")
+        self.session["ui_mode"] = "advanced"
 
         with patch("sync_app.providers.source.wecom.WeComAPI") as mock_wecom:
             mock_wecom.return_value.get_department_list.return_value = []
@@ -297,7 +299,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn('href="/sync-policies/department-ou-routing"', body)
         self.assertIn('href="/sync-policies/group-rules"', body)
         self.assertIn('href="/sync-policies/lifecycle"', body)
-        self.assertIn("Pending Lifecycle Queue", body)
+        self.assertNotIn("Pending Lifecycle Queue", body)
         self.assertNotIn(
             'name="advanced_connector_routing_enabled"', body
         )
@@ -1415,56 +1417,29 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_jobs_page_shows_execution_readiness_and_impact_preview(self):
         self._login("superadmin")
-        self.app.state.job_repo.create_job(
-            "job-dryrun-001",
-            trigger_type="manual",
-            execution_mode="dry_run",
-            status="COMPLETED",
-            org_id="default",
-        )
-        self.app.state.job_repo.update_job(
-            "job-dryrun-001",
+        create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="job-dryrun-001",
+            environment_label=self.app.state.environment_label,
             planned_operation_count=12,
-            error_count=0,
-            summary={
-                "planned_operation_count": 12,
-                "high_risk_operation_count": 2,
-                "conflict_count": 1,
-                "review_required": True,
-            },
-        )
-        self.app.state.review_repo.upsert_review_request(
-            job_id="job-dryrun-001",
-            plan_fingerprint="plan-001",
-            config_snapshot_hash="cfg-001",
             high_risk_operation_count=2,
-        )
-        self.app.state.conflict_repo.add_conflict(
-            job_id="job-dryrun-001",
-            conflict_type="duplicate_user",
-            source_id="asmith",
-            message="duplicate identity",
-            severity="warning",
         )
 
         response = self._route("/jobs", "GET")(self._request("/jobs"))
         self.assertEqual(response.status_code, 200)
         body = self._text(response)
-        self.assertIn("Execution Readiness And Impact Preview", body)
+        self.assertIn("Current Execution Status", body)
         self.assertIn("job-dryrun-001", body)
-        self.assertIn("Open Conflicts", body)
+        self.assertIn("Plan Review", body)
         self.assertIn("Planned Changes", body)
-        self.assertIn("Apply 12 Changes", body)
-        self.assertIn('data-confirm-detail-2-label="Environment"', body)
-        self.assertIn('data-confirm-detail-3-label="Snapshot Version"', body)
-        self.assertIn('data-confirm-detail-4-label="Impact Count"', body)
-        self.assertIn('data-confirm-detail-5-label="User Role"', body)
-        self.assertIn('data-confirm-detail-15-label="Reversible"', body)
+        self.assertIn("Apply Blocked", body)
+        self.assertIn("Approve selected plan", body)
+        self.assertIn("Group Relationship Changes", body)
         self.assertEqual(body.count("data-high-risk-step="), 5)
         for step in ("scan", "preview", "confirm", "execute", "audit"):
             self.assertIn(f'data-high-risk-step="{step}"', body)
         self.assertIn(
-            "Latest high-risk dry run still needs review approval before apply can continue.",
+            "Approve the selected plan before Apply.",
             body,
         )
 
@@ -1559,6 +1534,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_job_detail_shows_failure_diagnostics_and_structured_log_payloads(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         job_id = "job-diagnostics-001"
         self.app.state.job_repo.create_job(
             job_id,
@@ -1648,6 +1624,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_page_uses_search_selectors_for_source_and_target_objects(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
 
         response = self._route("/mappings", "GET")(self._request("/mappings"))
         self.assertEqual(response.status_code, 200)
@@ -1875,6 +1852,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_and_advanced_sync_pages_use_generic_source_wording(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
 
         mappings_response = self._route("/mappings", "GET")(self._request("/mappings"))
         self.assertEqual(mappings_response.status_code, 200)
@@ -2053,11 +2031,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         body = self._text(response)
         self.assertIn("Next Step: Run The First Dry Run", body)
         self.assertIn("Open Dry Run", body)
-        self.assertIn('href="/execution-center/dry-run"', body)
+        self.assertIn('href="/jobs?context=config#dry-run"', body)
         self.assertNotIn('action="/jobs/run"', body)
 
     def test_super_admin_can_resolve_conflict_with_manual_binding(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.job_repo.create_job(
             "job-conflict-001",
             trigger_type="unit_test",
@@ -2597,6 +2576,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_conflicts_page_uses_database_pagination(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.job_repo.create_job(
             "job-conflict-paged",
             trigger_type="unit_test",
@@ -2625,6 +2605,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_conflicts_page_remembers_filters_for_current_session(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.job_repo.create_job(
             "job-conflict-remembered",
             trigger_type="unit_test",
@@ -2670,6 +2651,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_job_detail_supports_independent_pagination(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         job_id = "job-detail-paged"
         self.app.state.job_repo.create_job(
             job_id,
@@ -2860,6 +2842,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_audit_page_supports_search_and_pagination(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         for index in range(55):
             self.app.state.audit_repo.add_log(
                 actor_username="superadmin",
@@ -2897,6 +2880,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_audit_page_remembers_filters_for_current_session(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.audit_repo.add_log(
             actor_username="superadmin",
             action_type="job.run",
@@ -2925,6 +2909,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_audit_page_scopes_logs_to_selected_organization_with_global_entries(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
@@ -2981,6 +2966,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_page_supports_database_pagination(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         for index in range(25):
             userid = f"user-{index:02d}"
             self.app.state.user_binding_repo.upsert_binding(
@@ -3014,6 +3000,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_page_shows_rule_governance_summary(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         stale_iso = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat(
             timespec="seconds"
         )
@@ -3081,6 +3068,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_page_remembers_filters_for_current_session(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.user_binding_repo.upsert_binding(
             "alice",
             "alice.ad",
@@ -3114,6 +3102,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_exceptions_page_supports_database_pagination(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         for index in range(30):
             self.app.state.exception_rule_repo.upsert_rule(
                 rule_type="skip_user_disable",
@@ -3134,6 +3123,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_exceptions_page_shows_rule_governance_summary(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         stale_iso = (datetime.now(timezone.utc) - timedelta(days=140)).isoformat(
             timespec="seconds"
         )
@@ -3201,6 +3191,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_exceptions_page_remembers_filters_for_current_session(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.exception_rule_repo.upsert_rule(
             rule_type="skip_user_disable",
             match_value="alice",
@@ -3661,7 +3652,8 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
         self.assertNotIn("Webhook is not configured", text)
-        self.assertIn("Required WeCom and LDAP settings are complete.", text)
+        self.assertIn("Deployment Preflight", text)
+        self.assertIn("All execution happens in Jobs.", text)
 
     def test_config_page_surfaces_selected_provider_context_for_dingtalk(self):
         current_org = self.app.state.organization_repo.get_default_organization_record()
@@ -4602,6 +4594,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_mappings_page_scopes_bindings_and_overrides_to_selected_organization(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
@@ -4655,6 +4648,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_exceptions_page_scopes_rules_to_selected_organization(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self.app.state.organization_repo.upsert_organization(
             org_id="asia",
             name="Asia Region",
@@ -4748,6 +4742,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             is_enabled=True,
         )
         self.session["selected_org_id"] = "asia"
+        create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="job-asia-prior-dry-run",
+            org_id="asia",
+            environment_label=self.app.state.environment_label,
+        )
 
         jobs_page = self._route("/jobs", "GET")(self._request("/jobs"))
         self.assertEqual(jobs_page.status_code, 200)
@@ -4814,9 +4814,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(dashboard_response.status_code, 200)
         dashboard_text = self._text(dashboard_response)
-        self.assertIn("Scope Guide", dashboard_text)
-        self.assertIn("Global Scope", dashboard_text)
-        self.assertIn("Organization Scope", dashboard_text)
+        self.assertNotIn("Scope Guide", dashboard_text)
+        self.assertIn("Current Organization", dashboard_text)
+        self.assertIn("Open Jobs Execution Center", dashboard_text)
 
         config_response = self._route("/config", "GET")(self._request("/config"))
         self.assertEqual(config_response.status_code, 200)
@@ -4864,9 +4864,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             "Identity Governance",
             "Execution Center",
             "Control Tower",
-            "Plan Review",
-            "Job History",
-            "Configuration Validation",
+            "Jobs",
+            "Current Organization",
+            "Deployment Preflight",
             "AD Org Sync",
         ):
             with self.subTest(key=key):
@@ -4936,7 +4936,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             return_url="/advanced-sync",
         )
         self.assertEqual(back_to_basic.status_code, 303)
-        self.assertEqual(back_to_basic.headers["location"], "/config")
+        self.assertEqual(back_to_basic.headers["location"], "/advanced-sync")
         self.assertEqual(self.session.get("ui_mode"), "basic")
 
         basic_config = self._route("/config", "GET")(self._request("/config"))
@@ -5073,9 +5073,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         response = self._route("/jobs", "GET")(self._request("/jobs"))
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
-        self.assertIn("Run Your First Dry Run", text)
-        self.assertIn("Open Guided Setup", text)
-        self.assertIn("Review Config", text)
+        self.assertIn("Current Execution Status", text)
+        self.assertIn("Run New Dry Run", text)
+        self.assertIn("Save a synchronization scope", text)
+        self.assertIn("Task History", text)
 
     def test_login_page_defaults_to_browser_language_when_chinese_is_preferred(self):
         response = self._route("/login", "GET")(

@@ -312,6 +312,24 @@ class ExecutionCenterService:
                 job_scope=job_scope,
                 plan_generated_at=plan_generated_at,
             )
+        latest_snapshot = self.source_directory_repo.get_latest_successful_snapshot(
+            org_id=normalized_org_id,
+            provider_id=_clean_text(job_scope.get("provider_id")),
+            connector_id=_clean_text(job_scope.get("connector_id")) or "default",
+        )
+        if (
+            latest_snapshot is None
+            or int(latest_snapshot["id"] or 0) != snapshot_id
+            or _clean_text(latest_snapshot["snapshot_fingerprint"])
+            != snapshot_fingerprint
+        ):
+            return decision(
+                False,
+                "execution.blocker.snapshot_superseded",
+                "execution.action.save_scope",
+                job_scope=job_scope,
+                plan_generated_at=plan_generated_at,
+            )
         snapshot_expires_at = _parse_timestamp(snapshot["expires_at"])
         if snapshot_expires_at is None or snapshot_expires_at < current_time:
             return decision(

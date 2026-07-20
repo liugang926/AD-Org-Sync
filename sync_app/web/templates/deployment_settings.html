@@ -3,7 +3,7 @@
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Deployment Settings"), t("Manage global web binding, public URL, cookie, and trusted-proxy settings separately from organization connectors."), eyebrow=t("System Management"), badge_text=t("Global Scope"), badge_level="warning") %}{% endcall %}
+  {% call ui.page_header(t("Deployment Settings"), t("Manage global web binding, public URL, cookie, and trusted-proxy settings separately from organization connectors."), eyebrow=t("System Settings"), badge_text=t("Global Scope"), badge_level="warning") %}{% endcall %}
 
   {% if restart_required %}
   <div class="panel-note warning" role="status">
@@ -23,7 +23,15 @@
 
   <div class="grid cols-2">
     {% call ui.panel(t("Persisted Settings"), t("Global Scope"), "warning", t("Saving writes configuration only. It does not restart the service or deploy code.")) %}
-      <form method="post" action="/system-management/deployment" class="page-stack tight">
+      <form method="post" action="/system-management/deployment" class="page-stack tight"
+        data-confirm="{{ t('This global change affects web access for every organization and may require a service restart.') }}"
+        data-confirm-title="{{ t('Confirm Global Deployment Change') }}"
+        data-confirm-require="GLOBAL"
+        data-confirm-input-help="{{ t('Type {value} to confirm.') }}"
+        data-confirm-detail-1-label="{{ t('Scope') }}"
+        data-confirm-detail-1-value="{{ t('Global Scope') }}"
+        data-confirm-detail-2-label="{{ t('Environment') }}"
+        data-confirm-detail-2-value="{{ t(environment_label) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-grid">
           <div class="form-group">

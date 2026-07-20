@@ -2,6 +2,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from sync_app.web.ui_mode import get_ui_mode_presentation
+
 
 class WebMappingsPageTemplateTests(unittest.TestCase):
     def test_mappings_template_renders_pagination_and_department_name(self):
@@ -26,6 +28,8 @@ class WebMappingsPageTemplateTests(unittest.TestCase):
             language_options={"en": "English", "zh-CN": "简体中文"},
             language_urls={"en": "/mappings?lang=en", "zh-CN": "/mappings?lang=zh-CN"},
             current_path="/mappings",
+            is_advanced_page=True,
+            ui_presentation=get_ui_mode_presentation("advanced"),
             t=lambda text, **params: str(text).format(**params) if params else str(text),
             can=lambda capability: True,
             csrf_token="test-token",

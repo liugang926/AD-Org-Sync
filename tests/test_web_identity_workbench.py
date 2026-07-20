@@ -127,6 +127,7 @@ class WebIdentityWorkbenchTests(WebAuthzBaseTestCase):
 
     def test_filters_counts_and_server_pagination_share_one_result_set(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self._seed_users()
         path = "/identity-governance/identity-matching"
         query = {
@@ -181,6 +182,7 @@ class WebIdentityWorkbenchTests(WebAuthzBaseTestCase):
 
     def test_live_identity_and_ad_filters_return_the_business_conclusion(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self._seed_users(total=2, active_count=2)
         self.app.state.user_binding_repo.upsert_binding(
             "user-001",
@@ -240,6 +242,7 @@ class WebIdentityWorkbenchTests(WebAuthzBaseTestCase):
         self.assertNotIn("_identity_workbench_deferred", self.session)
 
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         rejected_csrf = self._route(path, "POST")(
             self._request(path, "POST"),
             csrf_token="wrong",
@@ -308,6 +311,7 @@ class WebIdentityWorkbenchTests(WebAuthzBaseTestCase):
 
     def test_drawer_has_seven_scoped_evidence_stages_and_deep_links(self):
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
         self._seed_users(total=1, active_count=1)
         self.app.state.job_repo.create_job(
             "workbench-conflict-default",
@@ -383,7 +387,7 @@ class WebIdentityWorkbenchTests(WebAuthzBaseTestCase):
         self.assertIn("Evidence fingerprint", body)
         self.assertNotIn("Evidence fingerprint", table)
         for href in (
-            "/execution-center/jobs",
+            "/jobs",
             "/identity-governance/manual-overrides",
             "/identity-governance/conflicts",
         ):

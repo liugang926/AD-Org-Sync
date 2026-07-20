@@ -1,9 +1,14 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
+{% import "components/mode.html" as mode_ui %}
 
 {% block content %}
+{% set next_action_is_config = job_center_summary.next_action_url.startswith("/config") or job_center_summary.next_action_url.startswith("/sync-policies") or job_center_summary.next_action_url.startswith("/data-sources") %}
+{% set visible_next_action_url = job_center_summary.next_action_url if (not next_action_is_config or can("config.read")) else "/jobs?context=dashboard" %}
+{% set visible_next_action_label = job_center_summary.next_action_label_code if (not next_action_is_config or can("config.read")) else "Open Jobs Execution Center" %}
 <div class="page-stack">
-  {{ ui.page_header(t("Control Tower"), t("One operating surface for rollout safety, blockers, dry run freshness, and the next best action for the current organization."), eyebrow=t("Operations")) }}
+  {{ ui.page_header(t("Control Tower"), t("Summary, blockers, and the single next action for the current organization. All execution happens in Jobs."), eyebrow=t("Overview")) }}
+  {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t(visible_next_action_label), t("Open next step"), visible_next_action_url) }}
 
   <section class="control-tower control-tower--{{ job_center_summary.overall_status }}">
     <div class="control-tower__layout">
@@ -14,75 +19,59 @@
           {% if job_center_summary.blocked_reasons %}
           {{ t(job_center_summary.blocked_reasons[0].message_code, **job_center_summary.blocked_reasons[0].params) }}
           {% else %}
-          {{ t("The latest checks show no blocking item. Review the most recent dry run before applying changes.") }}
+          {{ t("The latest checks show no blocking item. Review the selected Dry Run in Jobs before Apply.") }}
           {% endif %}
         </p>
         <div class="control-tower__actions">
-          {{ ui.button(t(job_center_summary.next_action_label_code), href=job_center_summary.next_action_url) }}
+          {{ ui.button(t(visible_next_action_label), href=visible_next_action_url) }}
+          {{ ui.button(t("Open Jobs Execution Center"), href="/jobs?context=dashboard", variant="secondary") }}
         </div>
       </div>
 
       <div class="control-gate-card">
-        <div class="control-gate-card__label">{{ t("Latest Apply") }}</div>
-        <div class="control-gate-card__status">
-          {% if job_center_summary.latest_apply %}
-          {{ ui.identifier(job_center_summary.latest_apply.job_id, t("Copy Job ID"), t("Job ID copied"), "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id) }}
-          {% else %}
-          <strong>-</strong>
-          {% endif %}
-        </div>
+        <div class="control-gate-card__label">{{ t("Current Organization") }}</div>
+        <div class="control-gate-card__status"><strong>{{ current_org.name if current_org else "-" }}</strong></div>
         <div class="control-gate-card__next">
-          <span>{{ t("Last known status") }}</span>
-          <strong>{{ t(job_center_summary.latest_apply.status) if job_center_summary.latest_apply else t("No apply run yet") }}</strong>
+          <span>{{ t("Blocking Reasons") }}</span>
+          <strong>{{ job_center_summary.blocked_reasons|length }}</strong>
         </div>
       </div>
     </div>
 
     <div class="control-metrics">
       <div class="control-metric">
-        <span>{{ t("Open Conflicts") }}</span>
-        <strong>{{ open_conflicts_count or 0 }}</strong>
-      </div>
-      <div class="control-metric">
-        <span>{{ t("Latest Dry Run") }}</span>
+        <span>{{ t("Latest Successful Dry Run") }}</span>
         <strong>
-          {% if job_center_summary.latest_dry_run %}
-          {{ ui.identifier(job_center_summary.latest_dry_run.job_id, t("Copy Dry Run ID"), t("Dry Run ID copied"), "/execution-center/jobs/" ~ job_center_summary.latest_dry_run.job_id) }}
-          {% else %}
-          -
-          {% endif %}
+          {% if job_center_summary.latest_successful_dry_run %}
+          {{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_successful_dry_run.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_successful_dry_run.job_id, t("View latest Dry Run"), "", t("Copy Dry Run ID"), t("Dry Run ID copied")) }}
+          {% else %}-{% endif %}
         </strong>
       </div>
       <div class="control-metric">
-        <span>{{ t("Planned Changes") }}</span>
-        <strong>{{ job_center_summary.impact_preview.planned_operation_count }}</strong>
+        <span>{{ t("Latest Apply") }}</span>
+        <strong>
+          {% if job_center_summary.latest_apply %}
+          {{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_apply.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id, t("View latest Apply"), "", t("Copy Apply ID"), t("Apply ID copied")) }}
+          {% else %}-{% endif %}
+        </strong>
       </div>
-      <div class="control-metric">
-        <span>{{ t("High-Risk Changes") }}</span>
-        <strong>{{ job_center_summary.impact_preview.high_risk_operation_count }}</strong>
-      </div>
-      <div class="control-metric">
-        <span>{{ t("Blocking Reasons") }}</span>
-        <strong>{{ job_center_summary.blocked_reasons|length }}</strong>
-      </div>
+      <div class="control-metric"><span>{{ t("Open Conflicts") }}</span><strong>{{ open_conflicts_count or 0 }}</strong></div>
+      <div class="control-metric"><span>{{ t("Planned Changes") }}</span><strong>{{ job_center_summary.impact_preview.planned_operation_count }}</strong></div>
+      <div class="control-metric"><span>{{ t("High-Risk Changes") }}</span><strong>{{ job_center_summary.impact_preview.high_risk_operation_count }}</strong></div>
     </div>
   </section>
 
-  {% call ui.detail_toggle(t("Gate Details"), t("Expand to review every blocker and the recent execution timeline."), open=False) %}
   <div class="grid cols-2">
-    {% call ui.panel(t("Blocking Queue"), description=t("The highest-priority items that stop or weaken safe rollout."), class_name="toolbar-card") %}
+    {% call ui.panel(t("Blocking Queue"), description=t("Only active rollout blockers are shown here. Resolve them, then return to Jobs.")) %}
       <div class="list-stack">
         {% for item in control_tower_blockers %}
-        {% set blocker_url = "/sync-policies" if item.action_url == "/advanced-sync" else item.action_url %}
-        {% set blocker_allowed = blocker_url != "/config" or can("config.read") %}
         <article class="blocker-item blocker-item--{{ item.level }}">
           <div>
             <div class="blocker-item__title">{{ t(item.title, **(item.title_params or {})) }}</div>
             <p class="blocker-item__detail">{{ t(item.detail, **(item.detail_params or {})) }}</p>
           </div>
-          {% if blocker_allowed %}
-          <a href="{{ blocker_url }}">{{ t(item.action_label) }}</a>
-          {% endif %}
+          {% set item_is_config = item.action_url.startswith("/config") or item.action_url.startswith("/sync-policies") or item.action_url.startswith("/data-sources") %}
+          <a href="{{ item.action_url if (not item_is_config or can('config.read')) else '/jobs?context=dashboard' }}">{{ t(item.action_label) if (not item_is_config or can('config.read')) else t("Open Jobs Execution Center") }}</a>
         </article>
         {% else %}
         <div class="panel-note success">{{ t("No blocking items are currently visible for this organization.") }}</div>
@@ -90,177 +79,38 @@
       </div>
     {% endcall %}
 
-    {% call ui.panel(t("Recent Timeline"), description=t("A short operating history for dry runs, apply runs, and live preflight checks."), class_name="toolbar-card") %}
-      <div class="timeline-list">
-        {% for item in control_tower_timeline %}
-        <a class="timeline-item timeline-item--{{ item.level }}" href="{{ item.href }}">
-          <span class="timeline-item__dot"></span>
-          <span class="timeline-item__body">
-            <strong>{{ t(item.title) }}</strong>
-            <span>{{ item.detail }}</span>
-          </span>
-          {% if item.meta %}<span class="timeline-item__meta">{{ t(item.meta) }}</span>{% endif %}
-        </a>
-        {% else %}
-        <div class="panel-note info">{{ t("No timeline events yet. Start with a live preflight or dry run.") }}</div>
-        {% endfor %}
-      </div>
-    {% endcall %}
-  </div>
-  {% endcall %}
-
-  <div class="dense-two-col">
-    {% call ui.panel(t("Rollout Path"), description=t("If the system is new, work through these actions in order."), class_name="toolbar-card") %}
+    {% call ui.panel(t("Next Step"), description=t("Dashboard points to one next action; it does not start Dry Run or Apply.")) %}
       <div class="stack-tight">
-        {% call ui.helper_block(t("Recommended Rollout Steps"), t("{done} of {total} steps are complete.", done=getting_started.completed_steps, total=getting_started.total_steps), "info") %}
-          <ul class="helper-list">
-            {% for step in getting_started.steps %}
-            <li>
-              <strong>{{ loop.index }}.</strong>
-              {{ t(step.title, **(step.detail_params or {})) }}
-              <span class="muted">/ {{ t(step.status|capitalize) }}</span>
-            </li>
-            {% endfor %}
-          </ul>
-        {% endcall %}
-        <div class="actions">
-          {{ ui.button(t("Open Guided Setup"), href="/getting-started", variant="secondary") }}
-          {% if can("config.read") %}
-          {{ ui.button(t("Open Organization Config"), href="/config", variant="secondary") }}
-          {% endif %}
-          {{ ui.button(t("Open Job History"), href="/execution-center/jobs", variant="ghost") }}
-        </div>
-      </div>
-    {% endcall %}
-
-    {% call ui.panel(t("Deployment Preflight"), description=t("Use this checklist before the first apply or before enabling unattended runs."), class_name="toolbar-card") %}
-      <div class="stack-tight" id="preflight">
-        <div class="surface-inline">
-          {% if preflight_summary.overall_status == "success" %}
-          {{ ui.badge(t("Ready"), "success") }}
-          {% elif preflight_summary.overall_status == "warning" %}
-          {{ ui.badge(t("Needs Review"), "warning") }}
+        <h2>{{ t(visible_next_action_label) }}</h2>
+        <p class="muted">
+          {% if job_center_summary.blocked_reasons %}
+          {{ t(job_center_summary.blocked_reasons[0].message_code, **job_center_summary.blocked_reasons[0].params) }}
           {% else %}
-          {{ ui.badge(t("Blocked"), "error") }}
+          {{ t("Open Jobs to review the current execution evidence.") }}
           {% endif %}
-          <span class="muted">{{ t("Successful") }} {{ preflight_summary.status_counts.success }} / {{ t("Warnings") }} {{ preflight_summary.status_counts.warning }} / {{ t("Errors") }} {{ preflight_summary.status_counts.error }}</span>
-        </div>
-        {% if preflight_summary.live_ran_at %}
-        <div class="surface-inline">
-          {{ ui.badge(t("Live source connection"), "info") }}
-          <span class="muted">{{ t("Last live check") }}: {{ preflight_summary.live_ran_at }}</span>
-        </div>
-        {% endif %}
-        <div class="check-list">
-          {% for item in preflight_summary.checks %}
-          <div class="check-item">
-            <div class="check-item__header">
-              <h3 class="check-item__title">{{ t(item.label, **(item.label_params or {})) }}</h3>
-              {{ ui.badge(t(item.status|capitalize), "success" if item.status == "success" else ("warning" if item.status == "warning" else "error")) }}
-            </div>
-            <p class="check-item__detail">{{ t(item.detail, **(item.detail_params or {})) }}</p>
-          </div>
-          {% endfor %}
-        </div>
-        <div class="actions">
-          <form class="inline" method="post" action="/preflight/run">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="return_url" value="/dashboard#preflight">
-            {{ ui.button(t("Run Live Preflight"), type="submit") }}
-          </form>
-        </div>
+        </p>
+        {{ ui.button(t(visible_next_action_label), href=visible_next_action_url, variant="secondary") }}
       </div>
     {% endcall %}
   </div>
 
-  <div class="dense-two-col">
-    {% call ui.panel(t("Scope Guide"), description=t("Use this guide to understand which pages change the whole control plane and which pages only affect the selected organization."), class_name="toolbar-card") %}
-      <div class="stack-tight">
-        {% call ui.helper_block(t("Global Scope"), t("These items affect every organization on this server, including the control plane, organization definitions, and administrator access."), "warning") %}
-          <ul class="helper-list">
-            <li>{{ t("Organizations and organization import or export") }}</li>
-            <li>{{ t("Web deployment settings and trusted proxy behavior") }}</li>
-            <li>{{ t("Administrator accounts and platform access") }}</li>
-          </ul>
-        {% endcall %}
-        {% call ui.helper_block(t("Organization Scope"), t("These items follow the organization picker and only affect the currently selected tenant."), "info") %}
-          <ul class="helper-list">
-            <li>{{ t("Organization configuration, jobs, connectors, mappings, and exception rules") }}</li>
-            <li>{{ t("Conflict handling, reviews, replay queues, and lifecycle actions") }}</li>
-            <li>{{ t("Current organization") }}: <strong>{{ current_org.name if current_org else "-" }}</strong></li>
-          </ul>
-        {% endcall %}
-        {% if current_org %}
-        <div class="detail-grid">
-          <div class="detail-item"><div class="label">{{ t("Organization ID") }}</div><div class="value">{{ current_org.org_id }}</div></div>
-          <div class="detail-item"><div class="label">{{ t("Organization Name") }}</div><div class="value">{{ current_org.name }}</div></div>
-          <div class="detail-item"><div class="label">{{ t("Legacy Import Path") }}</div><div class="value">{{ current_org.config_path or "-" }}</div></div>
-          <div class="detail-item"><div class="label">{{ t("Org Connectors") }}</div><div class="value">{{ current_org_connector_count }}</div></div>
-        </div>
+  {% call ui.panel(t("Deployment Preflight"), description=t("Summary only. Open Jobs for the unified execution history.")) %}
+    <div class="compact-stats">
+      {{ ui.compact_stat(t("Status"), t(preflight_summary.overall_status|capitalize)) }}
+      {{ ui.compact_stat(t("Successful"), preflight_summary.status_counts.success) }}
+      {{ ui.compact_stat(t("Warnings"), preflight_summary.status_counts.warning) }}
+      {{ ui.compact_stat(t("Errors"), preflight_summary.status_counts.error) }}
+    </div>
+    {% if preflight_summary.live_ran_at %}
+    <div class="surface-inline">
+      {% for check in preflight_summary.checks %}
+        {% if check.label.startswith("Live ") %}
+        {{ ui.badge(t(check.label, **(check.label_params or {})), check.status) }}
         {% endif %}
-        <div class="actions">
-          {% if show_advanced_navigation %}
-          {{ ui.button(t("Open Sync Policies"), href="/sync-policies", variant="secondary") }}
-          {% if can("config.read") %}
-          {{ ui.button(t("Open Automation Center"), href="/automation-center", variant="ghost") }}
-          {{ ui.button(t("Open Data Quality Center"), href="/data-quality", variant="ghost") }}
-          {{ ui.button(t("Open Integration Center"), href="/integrations", variant="ghost") }}
-          {{ ui.button(t("Open Lifecycle Workbench"), href="/lifecycle", variant="ghost") }}
-          {% endif %}
-          {% endif %}
-          {% if can("organizations.manage") and show_advanced_navigation %}
-          {{ ui.button(t("Manage Organizations"), href="/organizations", variant="ghost") }}
-          {% endif %}
-          {% if can("config.read") %}
-          {{ ui.button(t("Review Config"), href="/config", variant="ghost") }}
-          {% endif %}
-        </div>
-      </div>
-    {% endcall %}
-
-    {% call ui.panel(t("Current State"), description=t("Focus on the latest job, current validation, and runtime warnings."), class_name="toolbar-card") %}
-      <div class="stack-tight">
-        {% if active_job %}
-        <div class="surface-inline">
-          {{ ui.badge(t("Active"), "info") }}
-          <span><strong>{{ active_job.job_id }}</strong></span>
-          <span class="muted">/</span>
-          <span>{{ ui.badge(t(active_job.status), "info") }}</span>
-          <span class="muted">{{ t(active_job.execution_mode) }}</span>
-        </div>
-        {% else %}
-        <div class="panel-note info">{{ t("No active synchronization job.") }}</div>
-        {% endif %}
-        {% if sync_runner_error %}
-        <div class="panel-note error">{{ t("Last background execution error: {error}", error=sync_runner_error) }}</div>
-        {% endif %}
-        {% call ui.helper_block(t("Configuration Validation"), t("Review the missing required values or warnings before starting a dry run or apply."), "warning") %}
-        {% if config_validation_errors %}
-        <div class="panel-note error">
-          <ul class="list-compact">
-            {% for item in config_validation_errors[:4] %}
-            <li>{{ t(item.message_code, **item.params) }}</li>
-            {% endfor %}
-          </ul>
-        </div>
-        {% elif config_security_warnings %}
-        <div class="panel-note warning">
-          <ul class="list-compact">
-            {% for item in config_security_warnings[:4] %}
-            <li>{{ t(item) }}</li>
-            {% endfor %}
-          </ul>
-        </div>
-        {% else %}
-        <div class="panel-note info">{{ t("Validation Passed") }}</div>
-        {% endif %}
-        {% endcall %}
-      </div>
-    {% endcall %}
-  </div>
-
-  {% call ui.helper_block(t("Execution history moved to Execution Center"), t("Control Tower keeps only rollout status, blockers, and the next action. Use Job History for the complete run list and technical evidence."), "info") %}
-    <a href="/execution-center/jobs">{{ t("Open Job History") }}</a>
+      {% endfor %}
+      <span class="muted">{{ t("Last live check") }}: {{ preflight_summary.live_ran_at }}</span>
+    </div>
+    {% endif %}
   {% endcall %}
 </div>
 {% endblock %}

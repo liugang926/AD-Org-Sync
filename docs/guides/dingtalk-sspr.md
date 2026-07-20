@@ -45,13 +45,13 @@ The current official references are the [requestAuthCode JSAPI explorer](https:/
 
 ## AD Org Sync configuration
 
-Open `/config` for the intended organization and complete the Employee Self-Service panel:
+Open the dedicated authoritative pages for the intended organization:
 
-1. Select DingTalk as the source provider and save its AppKey, AgentId, and AppSecret.
-2. Set DingTalk CorpId separately.
-3. Set the public base URL to `https://it-service.tianjizn.com:9443`.
-4. Configure and test the AD/LDAPS target. Keep certificate validation enabled.
-5. Set the SSPR minimum password length, verification TTL, and default unlock behavior.
+1. In **Connectors** (`/data-sources/connectors`), select DingTalk as the source provider and save its AppKey, AgentId, and AppSecret.
+2. In **Employee Self-Service** (`/system-management/employee-self-service`), set DingTalk CorpId.
+3. In **Deployment Settings** (`/system-management/deployment`), set the global public base URL to `https://it-service.tianjizn.com:9443`. Employee Self-Service shows the derived callback URL as a read-only summary and links back to this authoritative field.
+4. In **Connectors**, configure and test the AD/LDAPS target. Keep certificate validation enabled.
+5. In **Employee Self-Service**, set the SSPR minimum password length, verification TTL, and default unlock behavior.
 6. Verify the identity binding page contains an enabled DingTalk-to-AD record with a non-empty AD username and the correct connector.
 7. Enable SSPR only after the status panel reports Ready.
 

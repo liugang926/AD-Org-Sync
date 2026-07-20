@@ -25,7 +25,7 @@ CANONICAL_ROUTE_PATHS = {
     "sync-lifecycle-policy": "/sync-policies/lifecycle",
     "sync-security-policy": "/sync-policies/security",
     "sync-policy-releases": "/sync-policies/releases",
-    "jobs": "/execution-center/run-review",
+    "jobs": "/jobs",
     "execution-dry-run": "/execution-center/dry-run",
     "execution-plan-review": "/execution-center/plan-review",
     "execution-apply": "/execution-center/apply",
@@ -45,6 +45,8 @@ CANONICAL_ROUTE_PATHS = {
 
 
 PHASE7_LEGACY_GET_REDIRECTS = {
+    "/config": CANONICAL_ROUTE_PATHS["config"],
+    "/advanced-sync": CANONICAL_ROUTE_PATHS["sync-scope"],
     "/lifecycle": CANONICAL_ROUTE_PATHS["lifecycle"],
     "/automation-center": CANONICAL_ROUTE_PATHS["automation-center"],
     "/integrations": CANONICAL_ROUTE_PATHS["integrations"],
@@ -91,7 +93,7 @@ NAVIGATION_GROUPS = (
         ),
     ),
     NavigationGroup(
-        label="Data Sources",
+        label="Connectors",
         items=(
             NavigationItem(
                 page="config",
@@ -101,6 +103,11 @@ NAVIGATION_GROUPS = (
                 legacy_paths=("/config", "/config/releases"),
                 advanced_only=True,
             ),
+        ),
+    ),
+    NavigationGroup(
+        label="Data Sources",
+        items=(
             NavigationItem(
                 page="source-directory",
                 label="Source Directory",
@@ -218,46 +225,36 @@ NAVIGATION_GROUPS = (
         label="Execution Center",
         items=(
             NavigationItem(
-                page="execution-dry-run",
-                label="Dry Run",
+                page="jobs",
+                label="Jobs",
                 icon="play-circle",
                 capability="jobs.read",
-                legacy_paths=("/jobs", "/execution-center/run-review"),
-            ),
-            NavigationItem(
-                page="execution-plan-review",
-                label="Plan Review",
-                icon="clipboard-check",
-                capability="jobs.read",
-                legacy_paths=(),
-            ),
-            NavigationItem(
-                page="execution-apply",
-                label="Apply",
-                icon="shield-check",
-                capability="jobs.read",
-                legacy_paths=(),
-            ),
-            NavigationItem(
-                page="execution-jobs",
-                label="Job History",
-                icon="history",
-                capability="jobs.read",
-                legacy_paths=(),
+                legacy_paths=(
+                    "/execution-center/run-review",
+                    "/execution-center/dry-run",
+                    "/execution-center/plan-review",
+                    "/execution-center/apply",
+                    "/execution-center/jobs",
+                ),
             ),
         ),
     ),
     NavigationGroup(
-        label="Operations Center",
+        label="Lifecycle Workbench",
         items=(
             NavigationItem(
                 page="lifecycle",
-                label="Lifecycle Queue",
+                label="Lifecycle Workbench",
                 icon="clock-3",
                 capability="config.read",
                 legacy_paths=("/lifecycle",),
                 advanced_only=True,
             ),
+        ),
+    ),
+    NavigationGroup(
+        label="Automation",
+        items=(
             NavigationItem(
                 page="automation-center",
                 label="Automation & Schedules",
@@ -274,6 +271,11 @@ NAVIGATION_GROUPS = (
                 legacy_paths=("/integrations",),
                 advanced_only=True,
             ),
+        ),
+    ),
+    NavigationGroup(
+        label="Operations Center",
+        items=(
             NavigationItem(
                 page="audit",
                 label="Audit Logs",
@@ -286,7 +288,20 @@ NAVIGATION_GROUPS = (
         ),
     ),
     NavigationGroup(
-        label="System Management",
+        label="Employee Services",
+        items=(
+            NavigationItem(
+                page="employee-self-service",
+                label="Employee Self-Service",
+                icon="key-round",
+                capability="config.read",
+                legacy_paths=("/config#config-section-security",),
+                advanced_only=True,
+            ),
+        ),
+    ),
+    NavigationGroup(
+        label="System Settings",
         items=(
             NavigationItem(
                 page="organizations",
@@ -298,18 +313,10 @@ NAVIGATION_GROUPS = (
             ),
             NavigationItem(
                 page="users",
-                label="Administrators & Permissions",
+                label="Platform Accounts",
                 icon="users-cog",
                 capability="users.manage",
                 legacy_paths=("/users",),
-                advanced_only=True,
-            ),
-            NavigationItem(
-                page="employee-self-service",
-                label="Employee Self-Service",
-                icon="key-round",
-                capability="config.read",
-                legacy_paths=("/config#config-section-security",),
                 advanced_only=True,
             ),
             NavigationItem(
@@ -324,7 +331,7 @@ NAVIGATION_GROUPS = (
                 page="branding",
                 label="Branding & Appearance",
                 icon="palette",
-                capability="config.read",
+                capability="system.manage",
                 legacy_paths=("/config#config-section-web",),
                 advanced_only=True,
             ),
@@ -332,7 +339,7 @@ NAVIGATION_GROUPS = (
                 page="deployment",
                 label="Deployment Settings",
                 icon="server-cog",
-                capability="config.read",
+                capability="system.manage",
                 legacy_paths=("/config#config-section-web",),
                 advanced_only=True,
             ),
@@ -340,11 +347,27 @@ NAVIGATION_GROUPS = (
     ),
 )
 
+# A compact navigation item and a mode-gated workspace are different concepts.
+# Basic mode keeps secondary destinations out of the daily navigation, while
+# only implementation-level workspaces are replaced by the explanatory gate.
+ADVANCED_MODE_PAGE_GATES = frozenset(
+    {
+        "audit",
+        "binding-reconciliation",
+        "exceptions",
+        "mappings",
+        "sync-attribute-mappings",
+        "sync-department-ou-routing",
+        "sync-policy-releases",
+    }
+)
+
 
 def build_navigation_groups(
     role: str | None,
     *,
     show_advanced_navigation: bool,
+    current_page: str = "",
 ) -> tuple[NavigationGroup, ...]:
     capabilities = role_capabilities(role)
     visible_groups: list[NavigationGroup] = []
@@ -356,6 +379,7 @@ def build_navigation_groups(
             and (
                 not item.advanced_only
                 or show_advanced_navigation
+                or item.page == current_page
                 or role in item.basic_roles
             )
         )

@@ -157,6 +157,7 @@ class WebIdentityRelationshipTests(WebAuthzBaseTestCase):
         _snapshot_id, selection = self._seed_source()
         job_id = self._seed_job(selection)
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
 
         page = self._route("/jobs/{job_id}", "GET")(
             self._request(f"/jobs/{job_id}"),
@@ -203,6 +204,7 @@ class WebIdentityRelationshipTests(WebAuthzBaseTestCase):
             source="managed_generated",
         )
         self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
 
         page = self._route("/mappings", "GET")(
             self._request("/mappings", query={"q": "Alice Zhang"})

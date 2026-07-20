@@ -41,6 +41,14 @@ def register_system_management_routes(
         current_org = get_current_org(request)
         repositories = get_web_repositories(request)
         settings = SSPRSettings.load(repositories.settings_repo, org_id=current_org.org_id)
+        runtime_state = get_web_runtime_state(request)
+        persisted_web_settings = resolve_web_runtime_settings(repositories.settings_repo)
+        editable_connector = repositories.org_config_repo.get_editable_config(
+            current_org.org_id,
+            config_path=current_org.config_path or runtime_state.config_path,
+        )
+        callback_path = "/sspr/callback/dingtalk"
+        public_base_url = str(persisted_web_settings.get("public_base_url") or "").rstrip("/")
         enabled_binding_count = sum(
             1
             for record in repositories.user_binding_repo.list_binding_records(org_id=current_org.org_id)
@@ -54,6 +62,15 @@ def register_system_management_routes(
             current_org=current_org,
             settings=settings.to_dict(),
             enabled_binding_count=enabled_binding_count,
+            callback_path=callback_path,
+            callback_url=(
+                f"{public_base_url}{callback_path}" if public_base_url else callback_path
+            ),
+            callback_public_base_configured=bool(public_base_url),
+            source_provider=editable_connector.get("source_provider", ""),
+            source_credentials_configured=bool(
+                editable_connector.get("corpsecret_configured")
+            ),
         )
 
     @app.post(CANONICAL_ROUTE_PATHS["employee-self-service"])
@@ -107,7 +124,7 @@ def register_system_management_routes(
 
     @app.get(CANONICAL_ROUTE_PATHS["branding"], response_class=HTMLResponse)
     def branding_page(request: Request):
-        user = require_capability(request, "config.read")
+        user = require_capability(request, "system.manage")
         if isinstance(user, RedirectResponse):
             return user
         return render(
@@ -127,7 +144,7 @@ def register_system_management_routes(
         brand_mark_text: str = Form(""),
         brand_attribution: str = Form(""),
     ):
-        user = require_capability(request, "config.write")
+        user = require_capability(request, "system.manage")
         if isinstance(user, RedirectResponse):
             return user
         return_path = CANONICAL_ROUTE_PATHS["branding"]
@@ -160,7 +177,7 @@ def register_system_management_routes(
 
     @app.get(CANONICAL_ROUTE_PATHS["deployment"], response_class=HTMLResponse)
     def deployment_page(request: Request):
-        user = require_capability(request, "config.read")
+        user = require_capability(request, "system.manage")
         if isinstance(user, RedirectResponse):
             return user
         repositories = get_web_repositories(request)
@@ -189,7 +206,7 @@ def register_system_management_routes(
         web_trust_proxy_headers: Optional[str] = Form(None),
         web_forwarded_allow_ips: str = Form("127.0.0.1"),
     ):
-        user = require_capability(request, "config.write")
+        user = require_capability(request, "system.manage")
         if isinstance(user, RedirectResponse):
             return user
         return_path = CANONICAL_ROUTE_PATHS["deployment"]
