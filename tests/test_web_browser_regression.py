@@ -2218,6 +2218,19 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(self.page.locator(".decision-wizard").is_visible())
         self.assertEqual(self.page.locator(".decision-step").count(), 5)
         self.assertTrue(self.page.locator(".outcome-card").first.is_visible())
+        outcome_badge_layouts = self.page.locator(
+            ".outcome-card .section-header > .badge"
+        ).evaluate_all(
+            """elements => elements.map(element => ({
+                width: element.getBoundingClientRect().width,
+                height: element.getBoundingClientRect().height,
+                whiteSpace: getComputedStyle(element).whiteSpace
+            }))"""
+        )
+        self.assertEqual(len(outcome_badge_layouts), 2)
+        for layout in outcome_badge_layouts:
+            self.assertEqual(layout["whiteSpace"], "nowrap")
+            self.assertGreater(layout["width"], layout["height"])
         self.assertIn(
             "If You Bind This Account", self.page.locator("body").inner_text()
         )

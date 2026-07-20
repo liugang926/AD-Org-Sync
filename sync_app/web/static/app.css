@@ -4093,6 +4093,11 @@ body.identity-drawer-open {
   border-top-width: 4px;
 }
 
+.outcome-card .section-header > .badge {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .outcome-card--success {
   border-top-color: var(--success);
 }
