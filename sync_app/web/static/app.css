@@ -2098,7 +2098,7 @@ form.inline { display: inline-flex; margin: 0; }
   display: block;
   flex: 1 1 12ch;
   width: 100%;
-  min-width: 0;
+  min-width: 44px;
   max-width: 100%;
   overflow: hidden;
   color: var(--primary);

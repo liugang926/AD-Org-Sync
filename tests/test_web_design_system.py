@@ -185,7 +185,8 @@ class WebDesignSystemComponentTests(unittest.TestCase):
         self.assertIn("--focus-ring:", stylesheet)
         self.assertRegex(
             stylesheet,
-            r"\.identifier__link\s*\{[^}]*flex:\s*1\s+1\s+12ch;[^}]*width:\s*100%;",
+            r"\.identifier__link\s*\{[^}]*flex:\s*1\s+1\s+12ch;[^}]*width:\s*100%;"
+            r"[^}]*min-width:\s*44px;",
         )
 
     def test_core_pages_keep_one_primary_action(self):

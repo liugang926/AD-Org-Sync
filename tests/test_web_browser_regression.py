@@ -2380,6 +2380,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
 
     def test_z_long_dry_run_id_truncates_copies_and_announces(self):
         long_job_id = "dry-run-" + ("identity-scope-" * 8) + "001"
+        long_apply_job_id = "apply-" + ("identity-scope-" * 8) + "001"
         manager = DatabaseManager(db_path=str(self.db_path))
         manager.initialize(create_startup_snapshot=False, verify_integrity=True)
         job_repo = SyncJobRepository(manager)
@@ -2387,6 +2388,13 @@ class WebBrowserRegressionTests(unittest.TestCase):
             long_job_id,
             trigger_type="browser_regression",
             execution_mode="dry_run",
+            status="COMPLETED",
+            org_id="default",
+        )
+        job_repo.create_job(
+            long_apply_job_id,
+            trigger_type="browser_regression",
+            execution_mode="apply",
             status="COMPLETED",
             org_id="default",
         )
@@ -2420,6 +2428,16 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "Dry Run ID copied",
             self.page.locator("[data-copy-status]").text_content(),
         )
+
+        self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
+        job_links = self.page.locator(".identifier__link:visible")
+        self.assertGreater(job_links.count(), 0)
+        for link_index in range(job_links.count()):
+            with self.subTest(surface="jobs", link_index=link_index):
+                self.assertGreaterEqual(
+                    float(job_links.nth(link_index).bounding_box()["width"]),
+                    44,
+                )
 
     def test_z_responsive_evidence_covers_critical_operating_pages(self):
         self._login(ui_mode="advanced")
