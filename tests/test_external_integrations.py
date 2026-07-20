@@ -373,7 +373,6 @@ class ExternalIntegrationServiceTests(unittest.TestCase):
         temp_dir, db_manager = self._create_db_manager()
         self.addCleanup(temp_dir.cleanup)
 
-        job_repo = SyncJobRepository(db_manager)
         review_repo = SyncPlanReviewRepository(db_manager)
         replay_repo = SyncReplayRequestRepository(db_manager)
         settings_repo = SettingsRepository(db_manager)

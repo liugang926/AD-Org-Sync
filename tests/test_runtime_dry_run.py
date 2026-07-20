@@ -2260,21 +2260,6 @@ class RunSyncDryRunTests(unittest.TestCase):
             account=AccountConfig(default_password="VeryStrong123!456"),
             config_path="asia.ini",
         )
-        asia_connector_config = AppConfig(
-            wecom=asia_config.wecom,
-            ldap=LDAPConfig(
-                server="ldap.asia-connector.example.com",
-                domain="asia-connector.example.com",
-                username="ASIA\\connector-admin",
-                password="password",
-                use_ssl=True,
-                port=636,
-            ),
-            domain="asia-connector.example.com",
-            account=AccountConfig(default_password="VeryStrong123!456"),
-            config_path="asia-connector.ini",
-        )
-
         test_dir = os.path.join(os.getcwd(), "test_artifacts")
         os.makedirs(test_dir, exist_ok=True)
         db_path = os.path.join(test_dir, "runtime_organization_scope_test.db")
