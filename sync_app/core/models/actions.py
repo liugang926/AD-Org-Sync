@@ -73,6 +73,8 @@ class UserAction:
     placement_reason: str
     user: SourceDirectoryUser
     lifecycle_profile: Dict[str, Any] = field(default_factory=dict)
+    before_state: Dict[str, Any] = field(default_factory=dict)
+    rollback_metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def source_user_id(self) -> str:

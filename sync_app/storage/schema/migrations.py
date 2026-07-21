@@ -1554,4 +1554,506 @@ MIGRATIONS = [
         ADD COLUMN binding_revision INTEGER NOT NULL DEFAULT 1;
         """,
     ),
+    (
+        34,
+        "add enterprise identity graph, AD snapshots, matching evidence, and takeover staging",
+        """
+        CREATE TABLE enterprise_identities (
+          identity_id TEXT PRIMARY KEY,
+          org_id TEXT NOT NULL,
+          display_name TEXT NOT NULL DEFAULT '',
+          canonical_employee_id TEXT NOT NULL DEFAULT '',
+          employment_status TEXT NOT NULL DEFAULT 'active',
+          employment_type TEXT NOT NULL DEFAULT 'employee',
+          primary_department_id TEXT NOT NULL DEFAULT '',
+          canonical_fields_json TEXT NOT NULL DEFAULT '{}',
+          field_sources_json TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'active',
+          identity_revision INTEGER NOT NULL DEFAULT 1,
+          created_by TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_enterprise_identities_employee
+        ON enterprise_identities (org_id, canonical_employee_id, status, identity_id);
+
+        CREATE TABLE source_connectors (
+          org_id TEXT NOT NULL,
+          connector_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          name TEXT NOT NULL DEFAULT '',
+          corpid TEXT NOT NULL DEFAULT '',
+          agentid TEXT NOT NULL DEFAULT '',
+          corpsecret TEXT NOT NULL DEFAULT '',
+          is_enabled INTEGER NOT NULL DEFAULT 1,
+          credentials_expires_at TEXT NOT NULL DEFAULT '',
+          granted_permissions_json TEXT NOT NULL DEFAULT '[]',
+          required_permissions_json TEXT NOT NULL DEFAULT '[]',
+          authorization_scope_json TEXT NOT NULL DEFAULT '{}',
+          connection_status TEXT NOT NULL DEFAULT 'not_tested',
+          last_tested_at TEXT NOT NULL DEFAULT '',
+          last_sync_at TEXT NOT NULL DEFAULT '',
+          department_count INTEGER NOT NULL DEFAULT 0,
+          account_count INTEGER NOT NULL DEFAULT 0,
+          quality_issue_count INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (org_id, connector_id)
+        );
+        CREATE INDEX idx_source_connectors_provider
+        ON source_connectors (org_id, provider_id, is_enabled, connector_id);
+        CREATE UNIQUE INDEX idx_source_connectors_tenant
+        ON source_connectors (org_id, provider_id, corpid)
+        WHERE corpid <> '';
+
+        CREATE TABLE platform_accounts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          connector_id TEXT NOT NULL DEFAULT 'default',
+          platform_account_id TEXT NOT NULL,
+          display_name TEXT NOT NULL DEFAULT '',
+          employee_id TEXT NOT NULL DEFAULT '',
+          email TEXT NOT NULL DEFAULT '',
+          mobile TEXT NOT NULL DEFAULT '',
+          account_status TEXT NOT NULL DEFAULT 'active',
+          account_type TEXT NOT NULL DEFAULT 'person',
+          primary_department_id TEXT NOT NULL DEFAULT '',
+          department_ids_json TEXT NOT NULL DEFAULT '[]',
+          manager_account_id TEXT NOT NULL DEFAULT '',
+          custom_fields_json TEXT NOT NULL DEFAULT '{}',
+          source_snapshot_id INTEGER,
+          raw_payload_json TEXT NOT NULL DEFAULT '{}',
+          is_excluded INTEGER NOT NULL DEFAULT 0,
+          first_seen_at TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (org_id, provider_id, connector_id, platform_account_id),
+          FOREIGN KEY(source_snapshot_id) REFERENCES source_directory_snapshots(id)
+        );
+        CREATE INDEX idx_platform_accounts_identity_fields
+        ON platform_accounts (org_id, employee_id, email, mobile, account_status);
+        CREATE INDEX idx_platform_accounts_snapshot
+        ON platform_accounts (org_id, provider_id, connector_id, source_snapshot_id);
+
+        CREATE TABLE ad_directory_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL,
+          connector_id TEXT NOT NULL DEFAULT 'default',
+          status TEXT NOT NULL DEFAULT 'refreshing',
+          started_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT '',
+          expires_at TEXT NOT NULL DEFAULT '',
+          user_count INTEGER NOT NULL DEFAULT 0,
+          ou_count INTEGER NOT NULL DEFAULT 0,
+          duplicate_employee_id_count INTEGER NOT NULL DEFAULT 0,
+          duplicate_employee_number_count INTEGER NOT NULL DEFAULT 0,
+          snapshot_fingerprint TEXT NOT NULL DEFAULT '',
+          capability_report_json TEXT NOT NULL DEFAULT '{}',
+          error_summary TEXT NOT NULL DEFAULT '',
+          created_by TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX idx_ad_directory_snapshots_latest
+        ON ad_directory_snapshots (org_id, connector_id, status, completed_at DESC, id DESC);
+
+        CREATE TABLE ad_accounts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL,
+          connector_id TEXT NOT NULL DEFAULT 'default',
+          object_guid TEXT NOT NULL DEFAULT '',
+          object_sid TEXT NOT NULL DEFAULT '',
+          distinguished_name TEXT NOT NULL DEFAULT '',
+          sam_account_name TEXT NOT NULL DEFAULT '',
+          user_principal_name TEXT NOT NULL DEFAULT '',
+          employee_id TEXT NOT NULL DEFAULT '',
+          employee_number TEXT NOT NULL DEFAULT '',
+          mail TEXT NOT NULL DEFAULT '',
+          telephone_number TEXT NOT NULL DEFAULT '',
+          mobile TEXT NOT NULL DEFAULT '',
+          display_name TEXT NOT NULL DEFAULT '',
+          account_enabled INTEGER,
+          manager_dn TEXT NOT NULL DEFAULT '',
+          group_membership_json TEXT NOT NULL DEFAULT '[]',
+          ou_path TEXT NOT NULL DEFAULT '',
+          extension_attributes_json TEXT NOT NULL DEFAULT '{}',
+          when_created TEXT NOT NULL DEFAULT '',
+          when_changed TEXT NOT NULL DEFAULT '',
+          account_type TEXT NOT NULL DEFAULT 'person',
+          is_protected INTEGER NOT NULL DEFAULT 0,
+          latest_snapshot_id INTEGER,
+          first_seen_at TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(latest_snapshot_id) REFERENCES ad_directory_snapshots(id)
+        );
+        CREATE UNIQUE INDEX idx_ad_accounts_object_guid
+        ON ad_accounts (org_id, connector_id, object_guid)
+        WHERE object_guid <> '';
+        CREATE UNIQUE INDEX idx_ad_accounts_sam
+        ON ad_accounts (org_id, connector_id, sam_account_name)
+        WHERE sam_account_name <> '';
+        CREATE INDEX idx_ad_accounts_match_fields
+        ON ad_accounts (org_id, connector_id, employee_id, employee_number, mail, mobile);
+
+        CREATE TABLE ad_ou_snapshots (
+          snapshot_id INTEGER NOT NULL,
+          org_id TEXT NOT NULL,
+          connector_id TEXT NOT NULL DEFAULT 'default',
+          object_guid TEXT NOT NULL DEFAULT '',
+          distinguished_name TEXT NOT NULL,
+          name TEXT NOT NULL DEFAULT '',
+          parent_distinguished_name TEXT NOT NULL DEFAULT '',
+          path TEXT NOT NULL DEFAULT '',
+          when_created TEXT NOT NULL DEFAULT '',
+          when_changed TEXT NOT NULL DEFAULT '',
+          PRIMARY KEY (snapshot_id, distinguished_name),
+          FOREIGN KEY(snapshot_id) REFERENCES ad_directory_snapshots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX idx_ad_ou_snapshots_tree
+        ON ad_ou_snapshots (org_id, connector_id, snapshot_id, parent_distinguished_name);
+
+        CREATE TABLE identity_account_links (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL,
+          identity_id TEXT NOT NULL,
+          account_kind TEXT NOT NULL,
+          platform_account_id INTEGER,
+          ad_account_id INTEGER,
+          account_role TEXT NOT NULL DEFAULT 'source',
+          account_purpose TEXT NOT NULL DEFAULT '',
+          association_type TEXT NOT NULL DEFAULT 'automatic',
+          status TEXT NOT NULL DEFAULT 'active',
+          source TEXT NOT NULL DEFAULT '',
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          confidence INTEGER NOT NULL DEFAULT 0,
+          created_by TEXT NOT NULL DEFAULT '',
+          valid_until TEXT NOT NULL DEFAULT '',
+          link_revision INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(identity_id) REFERENCES enterprise_identities(identity_id),
+          FOREIGN KEY(platform_account_id) REFERENCES platform_accounts(id),
+          FOREIGN KEY(ad_account_id) REFERENCES ad_accounts(id),
+          CHECK (
+            (account_kind = 'platform' AND platform_account_id IS NOT NULL AND ad_account_id IS NULL)
+            OR (account_kind = 'ad' AND ad_account_id IS NOT NULL AND platform_account_id IS NULL)
+          )
+        );
+        CREATE UNIQUE INDEX idx_identity_links_platform_active
+        ON identity_account_links (org_id, platform_account_id)
+        WHERE account_kind = 'platform' AND status = 'active';
+        CREATE UNIQUE INDEX idx_identity_links_ad_active
+        ON identity_account_links (org_id, ad_account_id)
+        WHERE account_kind = 'ad' AND status = 'active';
+        CREATE UNIQUE INDEX idx_identity_links_primary_ad
+        ON identity_account_links (org_id, identity_id)
+        WHERE account_kind = 'ad' AND account_role = 'primary_ad' AND status = 'active';
+        CREATE INDEX idx_identity_links_identity
+        ON identity_account_links (org_id, identity_id, status, account_kind, account_role);
+
+        CREATE TABLE identity_match_rules (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL,
+          rule_order INTEGER NOT NULL DEFAULT 100,
+          rule_name TEXT NOT NULL,
+          source_provider TEXT NOT NULL DEFAULT '*',
+          source_field TEXT NOT NULL,
+          ad_field TEXT NOT NULL,
+          is_required INTEGER NOT NULL DEFAULT 0,
+          case_sensitive INTEGER NOT NULL DEFAULT 0,
+          trim_whitespace INTEGER NOT NULL DEFAULT 1,
+          strip_phone_country_code INTEGER NOT NULL DEFAULT 0,
+          lowercase_email INTEGER NOT NULL DEFAULT 0,
+          allow_fallback INTEGER NOT NULL DEFAULT 1,
+          allow_auto_link INTEGER NOT NULL DEFAULT 0,
+          confidence_level TEXT NOT NULL DEFAULT 'medium',
+          confidence_score INTEGER NOT NULL DEFAULT 50,
+          stop_on_conflict INTEGER NOT NULL DEFAULT 1,
+          is_enabled INTEGER NOT NULL DEFAULT 1,
+          rule_revision INTEGER NOT NULL DEFAULT 1,
+          created_by TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (org_id, rule_name)
+        );
+        CREATE INDEX idx_identity_match_rules_order
+        ON identity_match_rules (org_id, is_enabled, rule_order, id);
+
+        CREATE TABLE identity_match_runs (
+          run_id TEXT PRIMARY KEY,
+          org_id TEXT NOT NULL,
+          source_snapshot_ids_json TEXT NOT NULL DEFAULT '[]',
+          ad_snapshot_id INTEGER,
+          rules_fingerprint TEXT NOT NULL DEFAULT '',
+          config_fingerprint TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'running',
+          summary_json TEXT NOT NULL DEFAULT '{}',
+          created_by TEXT NOT NULL DEFAULT '',
+          started_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(ad_snapshot_id) REFERENCES ad_directory_snapshots(id)
+        );
+        CREATE INDEX idx_identity_match_runs_latest
+        ON identity_match_runs (org_id, status, completed_at DESC, started_at DESC);
+
+        CREATE TABLE identity_match_candidates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id TEXT NOT NULL,
+          org_id TEXT NOT NULL,
+          platform_account_id INTEGER NOT NULL,
+          ad_account_id INTEGER,
+          proposed_identity_id TEXT,
+          result_level TEXT NOT NULL,
+          confidence INTEGER NOT NULL DEFAULT 0,
+          matched_rule_ids_json TEXT NOT NULL DEFAULT '[]',
+          matched_fields_json TEXT NOT NULL DEFAULT '{}',
+          unmatched_fields_json TEXT NOT NULL DEFAULT '{}',
+          conflict_fields_json TEXT NOT NULL DEFAULT '{}',
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          recommended_action TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending',
+          candidate_fingerprint TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(run_id) REFERENCES identity_match_runs(run_id) ON DELETE CASCADE,
+          FOREIGN KEY(platform_account_id) REFERENCES platform_accounts(id),
+          FOREIGN KEY(ad_account_id) REFERENCES ad_accounts(id),
+          FOREIGN KEY(proposed_identity_id) REFERENCES enterprise_identities(identity_id)
+        );
+        CREATE INDEX idx_identity_match_candidates_queue
+        ON identity_match_candidates (org_id, run_id, result_level, status, platform_account_id);
+
+        CREATE TABLE identity_match_decisions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL,
+          candidate_id INTEGER NOT NULL,
+          decision TEXT NOT NULL,
+          reason TEXT NOT NULL DEFAULT '',
+          candidate_fingerprint TEXT NOT NULL,
+          request_id TEXT NOT NULL DEFAULT '',
+          decision_payload_json TEXT NOT NULL DEFAULT '{}',
+          resulting_identity_id TEXT,
+          resulting_link_ids_json TEXT NOT NULL DEFAULT '[]',
+          decided_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(candidate_id) REFERENCES identity_match_candidates(id),
+          FOREIGN KEY(resulting_identity_id) REFERENCES enterprise_identities(identity_id)
+        );
+        CREATE INDEX idx_identity_match_decisions_candidate
+        ON identity_match_decisions (org_id, candidate_id, created_at DESC);
+        CREATE UNIQUE INDEX uq_identity_match_decisions_request
+        ON identity_match_decisions (org_id, request_id)
+        WHERE request_id <> '';
+
+        CREATE TABLE field_authority_rules (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL,
+          field_name TEXT NOT NULL,
+          source_provider TEXT NOT NULL DEFAULT '*',
+          source_priority INTEGER NOT NULL DEFAULT 100,
+          sync_direction TEXT NOT NULL DEFAULT 'source_to_ad',
+          sync_mode TEXT NOT NULL DEFAULT 'replace',
+          prevent_loop INTEGER NOT NULL DEFAULT 1,
+          is_enabled INTEGER NOT NULL DEFAULT 1,
+          rule_revision INTEGER NOT NULL DEFAULT 1,
+          notes TEXT NOT NULL DEFAULT '',
+          created_by TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (org_id, field_name, source_provider)
+        );
+        CREATE INDEX idx_field_authority_rules_priority
+        ON field_authority_rules (org_id, field_name, is_enabled, source_priority, id);
+
+        CREATE TABLE account_takeover_batches (
+          batch_id TEXT PRIMARY KEY,
+          org_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'validating',
+          original_filename TEXT NOT NULL DEFAULT '',
+          file_fingerprint TEXT NOT NULL DEFAULT '',
+          row_count INTEGER NOT NULL DEFAULT 0,
+          valid_count INTEGER NOT NULL DEFAULT 0,
+          conflict_count INTEGER NOT NULL DEFAULT 0,
+          overwrite_count INTEGER NOT NULL DEFAULT 0,
+          preview_fingerprint TEXT NOT NULL DEFAULT '',
+          approved_by TEXT NOT NULL DEFAULT '',
+          approved_at TEXT NOT NULL DEFAULT '',
+          applied_by TEXT NOT NULL DEFAULT '',
+          applied_at TEXT NOT NULL DEFAULT '',
+          created_by TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE account_takeover_rows (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          batch_id TEXT NOT NULL,
+          org_id TEXT NOT NULL,
+          row_number INTEGER NOT NULL,
+          provider_id TEXT NOT NULL DEFAULT '',
+          connector_id TEXT NOT NULL DEFAULT 'default',
+          platform_account_id TEXT NOT NULL DEFAULT '',
+          ad_account_key TEXT NOT NULL DEFAULT '',
+          validation_status TEXT NOT NULL DEFAULT 'pending',
+          proposed_action TEXT NOT NULL DEFAULT '',
+          existing_identity_id TEXT NOT NULL DEFAULT '',
+          conflict_codes_json TEXT NOT NULL DEFAULT '[]',
+          normalized_payload_json TEXT NOT NULL DEFAULT '{}',
+          result_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (batch_id, row_number),
+          FOREIGN KEY(batch_id) REFERENCES account_takeover_batches(batch_id) ON DELETE CASCADE
+        );
+        CREATE INDEX idx_account_takeover_rows_status
+        ON account_takeover_rows (org_id, batch_id, validation_status, row_number);
+
+        INSERT OR IGNORE INTO enterprise_identities (
+          identity_id, org_id, display_name, canonical_employee_id,
+          employment_status, employment_type, primary_department_id,
+          canonical_fields_json, field_sources_json, status,
+          identity_revision, created_by, created_at, updated_at
+        )
+        SELECT
+          'legacy-eid-' || id,
+          org_id,
+          source_display_name,
+          '',
+          'active',
+          'employee',
+          '',
+          '{}',
+          '{"migration":"user_identity_bindings_v34"}',
+          CASE WHEN is_enabled = 1 THEN 'active' ELSE 'inactive' END,
+          1,
+          'migration_v34',
+          COALESCE(NULLIF(updated_at, ''), CURRENT_TIMESTAMP),
+          COALESCE(NULLIF(updated_at, ''), CURRENT_TIMESTAMP)
+        FROM user_identity_bindings;
+
+        INSERT OR IGNORE INTO platform_accounts (
+          org_id, provider_id, connector_id, platform_account_id,
+          display_name, employee_id, email, mobile, account_status,
+          account_type, primary_department_id, department_ids_json,
+          manager_account_id, custom_fields_json, source_snapshot_id,
+          raw_payload_json, is_excluded, first_seen_at, last_seen_at,
+          created_at, updated_at
+        )
+        SELECT
+          org_id,
+          source_provider,
+          connector_id,
+          source_user_id,
+          source_display_name,
+          '', '', '',
+          CASE WHEN is_enabled = 1 THEN 'active' ELSE 'inactive' END,
+          'person', '', '[]', '', '{}', NULL,
+          '{"migration":"user_identity_bindings_v34"}',
+          0,
+          COALESCE(NULLIF(updated_at, ''), CURRENT_TIMESTAMP),
+          COALESCE(NULLIF(updated_at, ''), CURRENT_TIMESTAMP),
+          COALESCE(NULLIF(updated_at, ''), CURRENT_TIMESTAMP),
+          COALESCE(NULLIF(updated_at, ''), CURRENT_TIMESTAMP)
+        FROM user_identity_bindings;
+
+        INSERT OR IGNORE INTO ad_accounts (
+          org_id, connector_id, object_guid, object_sid,
+          distinguished_name, sam_account_name, user_principal_name,
+          employee_id, employee_number, mail, telephone_number, mobile,
+          display_name, account_enabled, manager_dn, group_membership_json,
+          ou_path, extension_attributes_json, when_created, when_changed,
+          account_type, is_protected, latest_snapshot_id, first_seen_at,
+          last_seen_at, created_at, updated_at
+        )
+        SELECT
+          org_id,
+          connector_id,
+          target_object_guid,
+          '',
+          target_object_dn,
+          ad_username,
+          '', '', '', '', '', '',
+          source_display_name,
+          CASE WHEN is_enabled = 1 THEN 1 ELSE NULL END,
+          '', '[]', '', '{}', '', '', 'person', 0, NULL,
+          COALESCE(NULLIF(updated_at, ''), CURRENT_TIMESTAMP),
+          COALESCE(NULLIF(updated_at, ''), CURRENT_TIMESTAMP),
+          COALESCE(NULLIF(updated_at, ''), CURRENT_TIMESTAMP),
+          COALESCE(NULLIF(updated_at, ''), CURRENT_TIMESTAMP)
+        FROM user_identity_bindings
+        WHERE ad_username <> '';
+
+        INSERT OR IGNORE INTO identity_account_links (
+          org_id, identity_id, account_kind, platform_account_id,
+          ad_account_id, account_role, account_purpose, association_type,
+          status, source, evidence_json, confidence, created_by,
+          valid_until, link_revision, created_at, updated_at
+        )
+        SELECT
+          binding.org_id,
+          'legacy-eid-' || binding.id,
+          'platform',
+          account.id,
+          NULL,
+          'source',
+          '',
+          CASE
+            WHEN LOWER(binding.source) LIKE '%import%' THEN 'imported'
+            WHEN LOWER(binding.source) LIKE '%manual%' THEN 'manual'
+            ELSE 'automatic'
+          END,
+          CASE WHEN binding.is_enabled = 1 THEN 'active' ELSE 'inactive' END,
+          binding.source,
+          '{"migration":"user_identity_bindings_v34"}',
+          CASE WHEN LOWER(binding.source) LIKE '%manual%' THEN 100 ELSE 90 END,
+          'migration_v34',
+          '', 1,
+          COALESCE(NULLIF(binding.updated_at, ''), CURRENT_TIMESTAMP),
+          COALESCE(NULLIF(binding.updated_at, ''), CURRENT_TIMESTAMP)
+        FROM user_identity_bindings AS binding
+        JOIN platform_accounts AS account
+          ON account.org_id = binding.org_id
+         AND account.provider_id = binding.source_provider
+         AND account.connector_id = binding.connector_id
+         AND account.platform_account_id = binding.source_user_id;
+
+        INSERT OR IGNORE INTO identity_account_links (
+          org_id, identity_id, account_kind, platform_account_id,
+          ad_account_id, account_role, account_purpose, association_type,
+          status, source, evidence_json, confidence, created_by,
+          valid_until, link_revision, created_at, updated_at
+        )
+        SELECT
+          binding.org_id,
+          'legacy-eid-' || binding.id,
+          'ad',
+          NULL,
+          account.id,
+          'primary_ad',
+          'primary_directory_account',
+          CASE
+            WHEN LOWER(binding.source) LIKE '%import%' THEN 'imported'
+            WHEN LOWER(binding.source) LIKE '%manual%' THEN 'manual'
+            ELSE 'automatic'
+          END,
+          CASE WHEN binding.is_enabled = 1 THEN 'active' ELSE 'inactive' END,
+          binding.source,
+          '{"migration":"user_identity_bindings_v34"}',
+          CASE WHEN LOWER(binding.source) LIKE '%manual%' THEN 100 ELSE 90 END,
+          'migration_v34',
+          '', 1,
+          COALESCE(NULLIF(binding.updated_at, ''), CURRENT_TIMESTAMP),
+          COALESCE(NULLIF(binding.updated_at, ''), CURRENT_TIMESTAMP)
+        FROM user_identity_bindings AS binding
+        JOIN ad_accounts AS account
+          ON account.org_id = binding.org_id
+         AND account.connector_id = binding.connector_id
+         AND LOWER(account.sam_account_name) = LOWER(binding.ad_username)
+        WHERE binding.ad_username <> '';
+        """,
+    ),
 ]

@@ -8,18 +8,27 @@ from fastapi import FastAPI, Request
 
 from sync_app.services.typed_settings import WebSecuritySettings
 from sync_app.storage.local_db import (
+    AccountTakeoverRepository,
+    ADAccountRepository,
+    ADDirectorySnapshotRepository,
     AttributeMappingRuleRepository,
     ConfigReleaseSnapshotRepository,
     CustomManagedGroupBindingRepository,
     DataQualitySnapshotRepository,
     DatabaseManager,
     DepartmentOuMappingRepository,
+    EnterpriseIdentityRepository,
+    FieldAuthorityRuleRepository,
     GroupExclusionRuleRepository,
     IntegrationWebhookOutboxRepository,
+    IdentityMatchDecisionRepository,
+    IdentityMatchRuleRepository,
+    IdentityMatchRunRepository,
     OffboardingQueueRepository,
     OrganizationConfigRepository,
     OrganizationRepository,
     PlannedOperationRepository,
+    PlatformAccountRepository,
     SettingsRepository,
     SyncConnectorRepository,
     SyncConflictRepository,
@@ -31,6 +40,7 @@ from sync_app.storage.local_db import (
     SyncPlanReviewRepository,
     SyncReplayRequestRepository,
     SourceDirectoryRepository,
+    SourceConnectorRepository,
     UserDepartmentOverrideRepository,
     UserIdentityBindingRepository,
     UserLifecycleQueueRepository,
@@ -76,6 +86,16 @@ class WebRepositoryState:
     user_binding_repo: UserIdentityBindingRepository
     department_override_repo: UserDepartmentOverrideRepository
     source_directory_repo: SourceDirectoryRepository
+    source_connector_repo: SourceConnectorRepository
+    account_takeover_repo: AccountTakeoverRepository
+    enterprise_identity_repo: EnterpriseIdentityRepository
+    platform_account_repo: PlatformAccountRepository
+    ad_account_repo: ADAccountRepository
+    ad_directory_snapshot_repo: ADDirectorySnapshotRepository
+    identity_match_rule_repo: IdentityMatchRuleRepository
+    identity_match_run_repo: IdentityMatchRunRepository
+    identity_match_decision_repo: IdentityMatchDecisionRepository
+    field_authority_rule_repo: FieldAuthorityRuleRepository
 
 
 @dataclass(slots=True)
@@ -176,6 +196,16 @@ def initialize_web_app_state(
         user_binding_repo=UserIdentityBindingRepository(db_manager),
         department_override_repo=UserDepartmentOverrideRepository(db_manager),
         source_directory_repo=SourceDirectoryRepository(db_manager),
+        source_connector_repo=SourceConnectorRepository(db_manager),
+        account_takeover_repo=AccountTakeoverRepository(db_manager),
+        enterprise_identity_repo=EnterpriseIdentityRepository(db_manager),
+        platform_account_repo=PlatformAccountRepository(db_manager),
+        ad_account_repo=ADAccountRepository(db_manager),
+        ad_directory_snapshot_repo=ADDirectorySnapshotRepository(db_manager),
+        identity_match_rule_repo=IdentityMatchRuleRepository(db_manager),
+        identity_match_run_repo=IdentityMatchRunRepository(db_manager),
+        identity_match_decision_repo=IdentityMatchDecisionRepository(db_manager),
+        field_authority_rule_repo=FieldAuthorityRuleRepository(db_manager),
     )
 
     repositories.organization_repo.ensure_default(config_path=config_path)
@@ -233,6 +263,8 @@ def initialize_web_app_state(
         conflict_repo=repositories.conflict_repo,
         audit_repo=repositories.audit_repo,
         source_directory_repo=repositories.source_directory_repo,
+        source_connector_repo=repositories.source_connector_repo,
+        ad_directory_snapshot_repo=repositories.ad_directory_snapshot_repo,
     )
 
     return WebAppState(repositories=repositories, runtime=runtime, services=services)

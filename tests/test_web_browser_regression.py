@@ -108,7 +108,13 @@ class WebBrowserRegressionTests(unittest.TestCase):
         manager = DatabaseManager(db_path=str(cls.db_path))
         manager.initialize(create_startup_snapshot=False, verify_integrity=True)
         OrganizationRepository(manager).ensure_default(config_path="config.ini")
-        WebAdminUserRepository(manager).create_user("admin", hash_password("simple888"))
+        admin_repo = WebAdminUserRepository(manager)
+        admin_repo.create_user("admin", hash_password("simple888"))
+        admin_repo.create_user(
+            "browser-executor",
+            hash_password("simple888"),
+            role="sync_executor",
+        )
 
         cls.port = _reserve_port()
         cls.base_url = f"http://127.0.0.1:{cls.port}"
@@ -180,10 +186,16 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertGreater(target.stat().st_size, 0)
         return target
 
-    def _login(self, *, ui_mode: str = "basic") -> None:
+    def _login(
+        self,
+        *,
+        ui_mode: str = "basic",
+        username: str = "admin",
+        password: str = "simple888",
+    ) -> None:
         self.page.goto(f"{self.base_url}/login", wait_until="networkidle")
-        self.page.fill("#username", "admin")
-        self.page.fill("#password", "simple888")
+        self.page.fill("#username", username)
+        self.page.fill("#password", password)
         self.page.click("button[type='submit']")
         self.page.wait_for_url(f"{self.base_url}/dashboard")
         if ui_mode != "advanced":
@@ -1572,6 +1584,12 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.page.wait_for_load_state("networkidle")
         self.assertIn("approved", self.page.locator("main").inner_text().lower())
 
+        self.context.close()
+        self.context = self.browser.new_context(
+            viewport={"width": 1440, "height": 1100}, locale="en-US"
+        )
+        self.page = self.context.new_page()
+        self._login(username="browser-executor")
         self.page.goto(
             f"{self.base_url}/execution-center/apply?plan_id=browser-execution-plan&lang=en",
             wait_until="networkidle",
@@ -2323,7 +2341,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 "browser-apply-ready-001",
                 "Planned Changes\n126",
                 "High-Risk Changes\n3",
-                "Reversible\nNo",
+                "Reversible\nDatabase state is recoverable; AD reversibility varies by operation",
             ):
                 self.assertIn(expected, details)
             self.assertEqual(

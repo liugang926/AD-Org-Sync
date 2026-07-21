@@ -25,7 +25,9 @@ class TargetDirectoryProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list_organizational_units(self) -> list[dict[str, Any]]:
+    def list_organizational_units(
+        self, *, search_base: str = ""
+    ) -> list[dict[str, Any]]:
         raise NotImplementedError
 
     @abstractmethod
@@ -52,6 +54,13 @@ class TargetDirectoryProvider(ABC):
             "enabled": True if details else None,
             "locked": None,
         }
+
+    def list_directory_users(
+        self, *, search_base: str = "", page_size: int = 500
+    ) -> list[dict[str, Any]]:
+        raise NotImplementedError(
+            "target provider does not support full directory snapshots"
+        )
 
     @abstractmethod
     def search_users(self, query: str, *, limit: int = 20) -> list[Any]:

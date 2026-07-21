@@ -130,7 +130,41 @@ def register_dashboard_routes(
                     snapshot["status_counts"] = count_check_statuses(snapshot["checks"])
         request.session["_preflight_snapshot"] = snapshot
         current_org = get_current_org(request)
-        get_web_repositories(request).audit_repo.add_log(
+        repositories = get_web_repositories(request)
+        if normalized_connection_kind in {"all", "source"}:
+            current_config, _, _ = load_config_summary(current_org)
+            provider_id = str(
+                getattr(current_config, "source_provider", "") or "wecom"
+            ).strip().lower()
+            connector = repositories.source_connector_repo.get_connector(
+                f"{provider_id}-default",
+                org_id=current_org.org_id,
+            )
+            source_result = next(
+                (
+                    item
+                    for item in list(snapshot.get("checks") or [])
+                    if str(item.get("key") or "") in {"live_source", "live_wecom"}
+                ),
+                None,
+            )
+            if connector is not None and source_result is not None:
+                source_status = str(source_result.get("status") or "warning")
+                repositories.source_connector_repo.update_connection_status(
+                    org_id=current_org.org_id,
+                    connector_id=connector.connector_id,
+                    connection_status=(
+                        "connected" if source_status == "success" else "failed"
+                    ),
+                    granted_permissions=connector.granted_permissions,
+                    authorization_scope=connector.authorization_scope,
+                    error_summary=(
+                        ""
+                        if source_status == "success"
+                        else str(source_result.get("detail") or "")
+                    ),
+                )
+        repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
             action_type="preflight.run",

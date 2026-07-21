@@ -1,3 +1,6 @@
+from unittest.mock import patch
+
+from sync_app.services.ad_capabilities import build_ad_capability_report
 from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
 
@@ -17,6 +20,9 @@ class WebDataSourcesTests(WebAuthzBaseTestCase):
             "ldap_port": 636,
             "ldap_validate_cert": "true",
             "ldap_ca_cert_path": "",
+            "ad_directory_mode": "writable",
+            "ad_user_search_base_dn": "",
+            "ad_ou_search_base_dn": "",
         }
         payload.update(overrides)
         return self._route("/data-sources/connectors/base", "POST")(
@@ -67,6 +73,70 @@ class WebDataSourcesTests(WebAuthzBaseTestCase):
         self.assertNotIn("Daily Schedule Time", body)
         self.assertNotIn("Brand Display Name", body)
 
+    def test_ad_directory_mode_and_snapshot_capability_matrix_are_visible(self):
+        self._login("superadmin")
+        saved = self._save_base_connections(
+            ad_directory_mode="read_only",
+            ad_user_search_base_dn="OU=People,DC=example,DC=local",
+            ad_ou_search_base_dn="OU=Managed,DC=example,DC=local",
+        )
+        self.assertEqual(saved.status_code, 303)
+        self.assertEqual(
+            self.app.state.settings_repo.get_value(
+                "ad_directory_mode", "", org_id="default"
+            ),
+            "read_only",
+        )
+        self.assertEqual(
+            self.app.state.settings_repo.get_value(
+                "ad_user_search_base_dn", "", org_id="default"
+            ),
+            "OU=People,DC=example,DC=local",
+        )
+        snapshot_id = self.app.state.ad_directory_snapshot_repo.start_snapshot(
+            org_id="default",
+            connector_id="default",
+            created_by="superadmin",
+        )
+        self.app.state.ad_directory_snapshot_repo.complete_snapshot(
+            snapshot_id,
+            org_id="default",
+            user_count=1,
+            ou_count=1,
+            duplicate_employee_id_count=0,
+            duplicate_employee_number_count=0,
+            snapshot_fingerprint="capability-fixture",
+            capability_report=build_ad_capability_report(
+                connected=True,
+                user_read_succeeded=True,
+                ou_read_succeeded=True,
+                directory_mode="read_only",
+                use_ssl=True,
+                validate_cert=True,
+            ),
+        )
+
+        page = self._text(
+            self._route("/data-sources/connectors", "GET")(
+                self._request("/data-sources/connectors")
+            )
+        )
+
+        self.assertIn('name="ad_directory_mode"', page)
+        self.assertIn('name="ad_user_search_base_dn"', page)
+        self.assertIn('value="OU=People,DC=example,DC=local"', page)
+        self.assertIn('value="read_only" selected', page)
+        self.assertIn("AD Capability Matrix", page)
+        self.assertIn("Read users", page)
+        self.assertIn("Create users", page)
+        self.assertIn("Blocked by configured read-only directory mode", page)
+        self.assertTrue(
+            any(
+                row.action_type == "data_source.ad_directory_mode.update"
+                for row in self.app.state.audit_repo.list_recent_logs(20)
+            )
+        )
+
     def test_base_connection_post_requires_csrf_preserves_blank_secrets_and_audits(self):
         self._login("superadmin")
         before = self.app.state.org_config_repo.get_raw_config(
@@ -102,6 +172,36 @@ class WebDataSourcesTests(WebAuthzBaseTestCase):
         self.assertEqual(log.org_id, "default")
         self.assertNotIn("Password123!", str(log.payload))
         self.assertNotIn("secret-001", str(log.payload))
+
+    def test_source_preflight_persists_connector_connection_status(self):
+        self._login("superadmin")
+        self.assertEqual(self._save_base_connections().status_code, 303)
+
+        with patch(
+            "sync_app.web.app.test_source_connection",
+            return_value=(True, "WeCom connection succeeded, departments: 2"),
+        ):
+            response = self._route("/preflight/run", "POST")(
+                self._request("/preflight/run", "POST"),
+                csrf_token=self.session["_csrf_token"],
+                return_url="/data-sources/connectors",
+                connection_kind="source",
+            )
+
+        self.assertEqual(response.status_code, 303)
+        connector = self.app.state.source_connector_repo.get_connector(
+            "wecom-default",
+            org_id="default",
+        )
+        self.assertIsNotNone(connector)
+        self.assertEqual(connector.connection_status, "connected")
+        self.assertTrue(connector.last_tested_at)
+        page = self._text(
+            self._route("/data-sources/connectors", "GET")(
+                self._request("/data-sources/connectors")
+            )
+        )
+        self.assertIn("Connected", page)
 
     def test_target_connection_edit_preserves_policy_and_rejects_cross_org_id(self):
         self._login("superadmin")

@@ -4,12 +4,14 @@ from dataclasses import dataclass
 
 from sync_app.services.external_integrations import build_approve_plan_use_case
 from sync_app.storage.local_db import (
+    ADDirectorySnapshotRepository,
     ConfigReleaseSnapshotRepository,
     DatabaseManager,
     IntegrationWebhookSubscriptionRepository,
     PlannedOperationRepository,
     OrganizationConfigRepository,
     SettingsRepository,
+    SourceConnectorRepository,
     SyncConnectorRepository,
     SyncConflictRepository,
     SyncJobRepository,
@@ -47,6 +49,8 @@ def build_web_service_state(
     conflict_repo: SyncConflictRepository,
     audit_repo: WebAuditLogRepository,
     source_directory_repo: SourceDirectoryRepository,
+    source_connector_repo: SourceConnectorRepository,
+    ad_directory_snapshot_repo: ADDirectorySnapshotRepository,
 ) -> WebServiceState:
     approve_plan_use_case = build_approve_plan_use_case(db_manager)
     return WebServiceState(
@@ -73,6 +77,10 @@ def build_web_service_state(
             org_config_repo=org_config_repo,
             connector_repo=connector_repo,
             audit_repo=audit_repo,
+            settings_repo=settings_repo,
+            source_connector_repo=source_connector_repo,
+            source_directory_repo=source_directory_repo,
+            ad_directory_snapshot_repo=ad_directory_snapshot_repo,
         ),
         integrations=WebIntegrationService(
             db_manager=db_manager,

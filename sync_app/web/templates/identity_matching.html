@@ -25,6 +25,109 @@
     </nav>
   </div>
 
+  {% call ui.panel(t("Unified enterprise identity evidence"), description=t("Build an immutable AD snapshot, ingest stable platform account IDs, then run ordered matching rules. No relationship is written by these preview actions."), class_name="identity-graph-panel") %}
+    <div class="stat-grid">
+      <article class="stat-card"><span>{{ t("Enterprise identities") }}</span><strong>{{ enterprise_identity_count }}</strong></article>
+      <article class="stat-card"><span>{{ t("AD snapshot") }}</span><strong>{{ latest_ad_snapshot.id if latest_ad_snapshot else t("Not ready") }}</strong></article>
+      <article class="stat-card"><span>{{ t("AD accounts") }}</span><strong>{{ latest_ad_snapshot.user_count if latest_ad_snapshot else 0 }}</strong></article>
+      <article class="stat-card"><span>{{ t("Duplicate AD employee IDs") }}</span><strong>{{ latest_ad_snapshot.duplicate_employee_id_count if latest_ad_snapshot else 0 }}</strong></article>
+      <article class="stat-card"><span>{{ t("Automatic links") }}</span><strong>{{ latest_match_summary.automatic_link or 0 }}</strong></article>
+      <article class="stat-card"><span>{{ t("Blocked matches") }}</span><strong>{{ latest_match_summary.blocked or 0 }}</strong></article>
+    </div>
+    {% if can("config.write") or can("mappings.write") %}
+    <div class="inline-actions">
+      {% if can("config.write") %}
+      <form method="post" action="/identity-governance/ad-snapshots/refresh">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="connector_id" value="{{ default_connector_id }}">
+        {{ ui.button(t("Refresh AD identity snapshot"), type="submit", variant="secondary", icon="database-zap") }}
+      </form>
+      {% endif %}
+      {% if can("mappings.write") %}
+      <form method="post" action="/identity-governance/match-runs">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="connector_id" value="{{ default_connector_id }}">
+        {{ ui.button(t("Run enterprise identity matching"), type="submit", variant="secondary", icon="scan-search") }}
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if latest_match_candidate_views %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>{{ t("Platform account") }}</th><th>{{ t("Evidence") }}</th><th>{{ t("Candidate AD account") }}</th><th>{{ t("Conclusion") }}</th><th>{{ t("Recommended action") }}</th><th>{{ t("Decision") }}</th></tr></thead>
+        <tbody>
+          {% for view in latest_match_candidate_views %}{% set candidate = view.candidate %}{% set source = view.source_account %}{% set target = view.target_account %}
+          <tr>
+            <td><strong>{{ source.display_name if source else candidate.platform_account_id }}</strong><small>{{ source.provider_id if source else "-" }} · {{ source.platform_account_id if source else "-" }}</small></td>
+            <td>{{ source.employee_id if source and source.employee_id else t("No strong identifier") }}<small>{{ candidate.matched_rule_ids|length }} {{ t("rules matched") }}</small></td>
+            <td>{{ target.sam_account_name if target else t("No unique candidate") }}<small>{{ target.object_guid if target else "-" }}</small></td>
+            <td>{{ ui.badge(t(candidate.result_level|replace("_", " ")|title), "danger" if candidate.result_level == "blocked" else ("warning" if candidate.result_level == "manual_confirmation" else ("info" if candidate.result_level == "suggested_link" else "success"))) }}</td>
+            <td>{{ t(candidate.recommended_action|replace("_", " ")|capitalize) }}</td>
+            <td>
+              {% if can("mappings.write") and candidate.status in ["pending", "deferred"] %}
+              <form method="post" action="/identity-governance/match-candidates/{{ candidate.id }}/decision" class="identity-decision-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="candidate_fingerprint" value="{{ candidate.candidate_fingerprint }}">
+                <input type="hidden" name="request_id" value="{{ view.decision_request_id }}">
+                <select name="decision" aria-label="{{ t('Decision') }}" required>
+                  <option value="">{{ t("Select decision") }}</option>
+                  {% if candidate.result_level != "blocked" and target %}
+                  <option value="link_once">{{ t("Link once for this run") }}</option>
+                  <option value="link_permanently">{{ t("Link permanently") }}</option>
+                  {% endif %}
+                  {% if candidate.result_level != "blocked" and not target %}
+                  <option value="create_new_ad_account">{{ t("Create new AD account") }}</option>
+                  {% endif %}
+                  <option value="not_same_person">{{ t("Not the same person") }}</option>
+                  <option value="defer">{{ t("Defer") }}</option>
+                  <option value="exclude">{{ t("Exclude from identity matching") }}</option>
+                </select>
+                <input type="text" name="reason" maxlength="500" placeholder="{{ t('Decision reason') }}">
+                {{ ui.button(t("Save decision"), type="submit", variant="secondary", size="sm", icon="check") }}
+              </form>
+              {% else %}
+              {{ ui.badge(t(candidate.status|replace("_", " ")|title), "neutral") }}
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  {% endcall %}
+
+  {% call ui.panel(t("Ordered identity matching rules"), description=t("Rules are versioned, evaluated in order, and stop on ambiguity. Automatic linking is accepted only for unique strong employee identifiers.")) %}
+    {% if can("mappings.write") %}
+    <details class="detail-toggle"><summary><strong>{{ t("Add or update a matching rule") }}</strong></summary>
+      <form method="post" action="/identity-governance/match-rules" class="page-stack">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-grid">
+          <label>{{ t("Rule order") }}<input type="number" name="rule_order" value="100" min="1" max="10000" required></label>
+          <label>{{ t("Rule name") }}<input type="text" name="rule_name" maxlength="120" placeholder="custom_employee_id" required></label>
+          <label>{{ t("Source platform") }}<select name="source_provider"><option value="*">{{ t("All platforms") }}</option><option value="dingtalk">{{ t("DingTalk") }}</option><option value="wecom">{{ t("WeCom") }}</option><option value="feishu">{{ t("Feishu") }}</option></select></label>
+          <label>{{ t("Source field") }}<input type="text" name="source_field" placeholder="employee_id" required></label>
+          <label>{{ t("AD field") }}<input type="text" name="ad_field" placeholder="employee_id" required></label>
+          <label>{{ t("Confidence level") }}<select name="confidence_level"><option value="low">{{ t("Low") }}</option><option value="medium" selected>{{ t("Medium") }}</option><option value="high">{{ t("High") }}</option><option value="certain">{{ t("Certain") }}</option></select></label>
+          <label>{{ t("Confidence score") }}<input type="number" name="confidence_score" value="50" min="0" max="100" required></label>
+        </div>
+        <div class="grid cols-3">
+          {% for name, label, checked in [("is_required", "Value required", false), ("case_sensitive", "Case sensitive", false), ("trim_whitespace", "Normalize whitespace", true), ("strip_phone_country_code", "Strip phone country code", false), ("lowercase_email", "Lowercase email", false), ("allow_fallback", "Allow fallback rules", true), ("allow_auto_link", "Allow automatic link", false), ("stop_on_conflict", "Stop on conflict", true), ("is_enabled", "Rule enabled", true)] %}
+          <label class="check-card"><input type="checkbox" name="{{ name }}" value="1" {% if checked %}checked{% endif %}><span><strong>{{ t(label) }}</strong></span></label>
+          {% endfor %}
+        </div>
+        <p class="muted">{{ t("Email, mobile, names, and custom fields can only produce suggestions or manual review even if automatic linking is requested.") }}</p>
+        <div class="form-actions">{{ ui.button(t("Save matching rule"), type="submit", variant="secondary", icon="save") }}</div>
+      </form>
+    </details>
+    {% endif %}
+    <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Identity matching rules') }}"><table><thead><tr><th>{{ t("Order") }}</th><th>{{ t("Rule") }}</th><th>{{ t("Platform") }}</th><th>{{ t("Source to AD") }}</th><th>{{ t("Normalization") }}</th><th>{{ t("Confidence") }}</th><th>{{ t("Conflict behavior") }}</th><th>{{ t("Revision") }}</th></tr></thead><tbody>
+      {% for rule in identity_match_rules %}<tr><td>{{ rule.rule_order }}</td><td><strong>{{ rule.rule_name }}</strong><small>{{ t("Enabled") if rule.is_enabled else t("Disabled") }}</small></td><td>{{ t("All platforms") if rule.source_provider == "*" else t(rule.source_provider) }}</td><td><code>{{ rule.source_field }}</code> → <code>{{ rule.ad_field }}</code><small>{{ t("Automatic") if rule.allow_auto_link else t("Review required") }}</small></td><td>{% if rule.trim_whitespace %}{{ t("Whitespace") }} {% endif %}{% if rule.lowercase_email %}{{ t("Email lowercase") }} {% endif %}{% if rule.strip_phone_country_code %}{{ t("Phone country code") }}{% endif %}</td><td>{{ t(rule.confidence_level|capitalize) }} · {{ rule.confidence_score }}</td><td>{{ t("Stop") if rule.stop_on_conflict else t("Continue") }}</td><td>{{ rule.rule_revision }}</td></tr>
+      {% else %}<tr><td colspan="8" class="empty-state">{{ t("No identity matching rules are configured") }}</td></tr>{% endfor %}
+    </tbody></table></div>
+  {% endcall %}
+
   {% if not snapshot %}
   <div class="callout callout--warning" role="status">
     <strong>{{ t("Identity matching is blocked because no source snapshot is available.") }}</strong>

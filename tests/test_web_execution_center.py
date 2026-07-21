@@ -277,6 +277,7 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
         self.assertEqual(approval_response.status_code, 303)
         self.assertIn("plan_id=web-plan-ready", approval_response.headers["location"])
 
+        self._login("operator1")
         apply_path = "/execution-center/apply"
         apply_page = self._route(apply_path, "GET")(
             self._request(apply_path, query={"plan_id": "web-plan-ready"}),
@@ -317,6 +318,61 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(requested.org_id, "default")
         self.assertEqual(requested.payload["preview_id"], "web-plan-ready")
+
+    def test_apply_blocks_when_approver_and_executor_are_the_same_user(self) -> None:
+        self._login("superadmin")
+        created = create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="web-plan-separated-duties",
+            environment_label=self.app.state.environment_label,
+        )
+        review_path = "/execution-center/plan-review"
+        review_page = self._route(review_path, "GET")(
+            self._request(review_path, query={"plan_id": "web-plan-separated-duties"}),
+            plan_id="web-plan-separated-duties",
+        )
+        self._route("/execution-center/plan-review/{job_id}/approve", "POST")(
+            self._request(
+                "/execution-center/plan-review/web-plan-separated-duties/approve",
+                "POST",
+            ),
+            job_id="web-plan-separated-duties",
+            csrf_token=self._csrf_token(self._text(review_page)),
+            review_notes="reviewed by the same actor used in the negative test",
+        )
+        apply_page = self._route("/execution-center/apply", "GET")(
+            self._request(
+                "/execution-center/apply",
+                query={"plan_id": "web-plan-separated-duties"},
+            ),
+            plan_id="web-plan-separated-duties",
+        )
+
+        with patch.object(self.app.state.sync_runner, "launch") as launch:
+            response = self._route("/execution-center/apply/run", "POST")(
+                self._request("/execution-center/apply/run", "POST"),
+                csrf_token=self._csrf_token(self._text(apply_page)),
+                operation_code="sync.apply",
+                organization_id="default",
+                environment_label=self.app.state.environment_label,
+                snapshot_version=f"#{created['snapshot_id']}",
+                impact_count="1",
+                preview_id="web-plan-separated-duties",
+            )
+
+        self.assertEqual(response.status_code, 303)
+        launch.assert_not_called()
+        blocked = next(
+            item
+            for item in WebAuditLogRepository(
+                self.app.state.db_manager
+            ).list_recent_logs(20)
+            if item.action_type == "high_risk.apply.blocked"
+        )
+        self.assertEqual(
+            blocked.payload["reason_code"],
+            "execution.blocker.approver_executor_same",
+        )
 
     def test_apply_rejects_bad_csrf_and_mismatched_confirmation(self) -> None:
         self._login("superadmin")

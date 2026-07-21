@@ -2011,6 +2011,58 @@ form.inline { display: inline-flex; margin: 0; }
   background: var(--primary-soft);
 }
 
+.source-platform-card {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.source-platform-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.source-platform-card__header h2 {
+  margin: 4px 0 0;
+  font-size: 20px;
+}
+
+.source-platform-card__facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  margin: 0;
+}
+
+.source-platform-card__facts div {
+  min-width: 0;
+}
+
+.source-platform-card__facts dt {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-platform-card__facts dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.identity-decision-form {
+  display: grid;
+  min-width: 220px;
+  gap: 8px;
+}
+
+.identity-decision-form select,
+.identity-decision-form input {
+  width: 100%;
+}
+
 .setup-step > span:first-child {
   display: grid;
   place-items: center;
@@ -3189,6 +3241,12 @@ body.identity-drawer-open {
   margin-top: var(--space-4);
 }
 
+.ou-dual-tree {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
 .policy-department-tree__list {
   display: grid;
   gap: 4px;
@@ -3215,6 +3273,7 @@ body.identity-drawer-open {
 }
 
 @media (max-width: 900px) {
+  .ou-dual-tree,
   .policy-status-grid {
     grid-template-columns: 1fr;
   }
@@ -5886,6 +5945,18 @@ button.small {
   .connector-test-actions,
   .connector-test-results {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .grid.source-platform-cards {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scroll-snap-type: x proximity;
+  }
+
+  .source-platform-card {
+    flex: 0 0 min(280px, 85vw);
+    scroll-snap-align: start;
   }
 
   .setup-step {

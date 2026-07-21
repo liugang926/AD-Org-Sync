@@ -36,11 +36,13 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="source_department_name" value="" data-selected-department-name>
     <div class="form-grid">
-      <label>{{ t("Connector Route") }}<select name="connector_id" required><option value="">{{ t("Select Connector") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}">{{ connector.name }}{% if ui_presentation.show_provider_connector_details %} ({{ connector.connector_id }}){% endif %}</option>{% endfor %}</select></label>
-      <label>{{ t("Target OU") }}<input type="text" name="target_ou_path" required placeholder="Managed Users / China"></label>
+      <label>{{ t("Connector Route") }}<select name="connector_id" required><option value="">{{ t("Select Connector") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}" {% if connector.connector_id == selected_connector_id %}selected{% endif %}>{{ connector.name }}{% if ui_presentation.show_provider_connector_details %} ({{ connector.connector_id }}){% endif %}</option>{% endfor %}</select></label>
+      <label>{{ t("Target OU") }}<input type="text" name="target_ou_path" required placeholder="Managed Users / China" data-target-ou-input><span class="form-help">{{ t("Choose from the AD OU snapshot or enter a reviewed path.") }}</span></label>
       <label>{{ t("Apply Mode") }}<select name="apply_mode">{% for value, label in department_ou_apply_mode_options %}<option value="{{ value }}">{{ t(label) }}{% if ui_presentation.show_field_codes %} ({{ value }}){% endif %}</option>{% endfor %}</select></label>
     </div>
+    <div class="ou-dual-tree">
     <div class="policy-department-tree" data-department-tree>
+      <strong>{{ t("Source organization tree") }}</strong>
       <label>{{ t("Search departments") }}<input type="search" data-department-tree-search placeholder="{{ t('Search department name or path') }}"></label>
       <div class="policy-department-tree__list" role="tree" aria-label="{{ t('Searchable department tree') }}">
         {% for department in source_departments %}
@@ -48,6 +50,17 @@
         <label class="department-tree-node" role="treeitem" data-department-tree-node data-department-search-text="{{ (department_path ~ ' ' ~ department.source_department_id)|lower }}"><input type="radio" name="source_department_id" value="{{ department.source_department_id }}" data-department-name="{{ department.name }}" required><span><strong>{{ department.name }}</strong><small>{{ department_path }}{% if ui_presentation.show_internal_identifiers %} ({{ department.source_department_id }}){% endif %}</small></span></label>
         {% else %}<div class="empty-state">{{ t("Refresh Source Directory to load the department tree") }}</div>{% endfor %}
       </div>
+    </div>
+    <div class="policy-department-tree" data-ou-tree>
+      <strong>{{ t("AD OU tree") }}</strong>
+      <label>{{ t("Search OUs") }}<input type="search" data-ou-tree-search placeholder="{{ t('Search OU name, path, or DN') }}"></label>
+      <div class="policy-department-tree__list" role="tree" aria-label="{{ t('Searchable AD OU tree') }}">
+        {% for ou in ad_ou_nodes %}
+        <label class="department-tree-node" role="treeitem" data-ou-tree-node data-ou-search-text="{{ ((ou.path or '') ~ ' ' ~ (ou.name or '') ~ ' ' ~ (ou.distinguished_name or ''))|lower }}"><input type="radio" name="target_ou_choice" value="{{ ou.path }}" data-target-ou-path="{{ ou.path }}"><span><strong>{{ ou.name or ou.path }}</strong><small>{{ ou.path or ou.distinguished_name }}{% if ui_presentation.show_internal_identifiers %}<br>{{ ou.distinguished_name }}{% endif %}</small></span></label>
+        {% else %}<div class="empty-state"><strong>{{ t("No AD OU snapshot") }}</strong><span>{{ t("Refresh the AD identity snapshot before choosing a target OU.") }}</span></div>{% endfor %}
+      </div>
+      {% if latest_ad_snapshot %}<small class="muted">{{ t("AD snapshot") }} #{{ latest_ad_snapshot.id }} · {{ latest_ad_snapshot.snapshot_fingerprint }}</small>{% endif %}
+    </div>
     </div>
     <label>{{ t("Business Notes") }}<textarea name="notes" placeholder="{{ t('Record the routing owner and business reason.') }}"></textarea></label>
     <label class="checkbox-row"><input type="checkbox" name="is_enabled" value="1" checked><span>{{ t("Rule Enabled") }}</span></label>

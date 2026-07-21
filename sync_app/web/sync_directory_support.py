@@ -347,6 +347,7 @@ class SyncDirectorySupportMixin:
             managed_group_mail_domain=connector_spec.get("group_mail_domain") or "",
             custom_group_ou_path=connector_spec.get("custom_group_ou_path") or "Managed Groups",
             user_root_ou_path=connector_spec.get("user_root_ou_path") or "",
+            initialize_managed_ous=False,
         )
 
     def build_identity_preview_connector_specs(

@@ -8,6 +8,68 @@ from sync_app.core.models.base import MappingLikeModel
 
 
 @dataclass(slots=True)
+class SourceConnectorRecord(MappingLikeModel):
+    org_id: str = "default"
+    connector_id: str = ""
+    provider_id: str = "wecom"
+    name: str = ""
+    corpid: str = ""
+    agentid: str = ""
+    corpsecret: str = ""
+    is_enabled: bool = True
+    credentials_expires_at: str = ""
+    granted_permissions: list[str] = field(default_factory=list)
+    required_permissions: list[str] = field(default_factory=list)
+    authorization_scope: dict[str, Any] = field(default_factory=dict)
+    connection_status: str = "not_tested"
+    last_tested_at: str = ""
+    last_sync_at: str = ""
+    department_count: int = 0
+    account_count: int = 0
+    quality_issue_count: int = 0
+    last_error: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: Any) -> "SourceConnectorRecord":
+        def decode_list(field_name: str) -> list[str]:
+            try:
+                value = json.loads(str(row[field_name] or "[]"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return []
+            return [str(item) for item in value] if isinstance(value, list) else []
+
+        try:
+            scope = json.loads(str(row["authorization_scope_json"] or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            scope = {}
+        return cls(
+            org_id=str(row["org_id"] or "default"),
+            connector_id=str(row["connector_id"] or ""),
+            provider_id=str(row["provider_id"] or "wecom"),
+            name=str(row["name"] or ""),
+            corpid=str(row["corpid"] or ""),
+            agentid=str(row["agentid"] or ""),
+            corpsecret=str(row["corpsecret"] or ""),
+            is_enabled=bool(row["is_enabled"]),
+            credentials_expires_at=str(row["credentials_expires_at"] or ""),
+            granted_permissions=decode_list("granted_permissions_json"),
+            required_permissions=decode_list("required_permissions_json"),
+            authorization_scope=scope if isinstance(scope, dict) else {},
+            connection_status=str(row["connection_status"] or "not_tested"),
+            last_tested_at=str(row["last_tested_at"] or ""),
+            last_sync_at=str(row["last_sync_at"] or ""),
+            department_count=int(row["department_count"] or 0),
+            account_count=int(row["account_count"] or 0),
+            quality_issue_count=int(row["quality_issue_count"] or 0),
+            last_error=str(row["last_error"] or ""),
+            created_at=str(row["created_at"] or ""),
+            updated_at=str(row["updated_at"] or ""),
+        )
+
+
+@dataclass(slots=True)
 class IntegrationWebhookSubscriptionRecord(MappingLikeModel):
     id: Optional[int] = None
     org_id: str = ""

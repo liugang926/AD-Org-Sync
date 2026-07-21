@@ -18,8 +18,8 @@
   (t("Planned Changes"), plan_review_summary.total_count),
   (t("High-Risk Changes"), plan_review_summary.risk_count),
   (t("User Role"), t(current_user.role)),
-  (t("Rollback Point"), t("No automatic rollback point")),
-  (t("Reversible"), t("No"))
+  (t("Rollback Point"), t("Automatic database snapshot immediately before Apply")),
+  (t("Reversible"), t("Database state is recoverable; AD reversibility varies by operation"))
 ] %}
 {% if ui_presentation.is_advanced %}{% set _ = apply_confirm_details.append((t("Dry Run ID"), apply_context.preview_id)) %}{% endif %}
 

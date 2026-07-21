@@ -206,6 +206,9 @@ def finalize_successful_sync(ctx: SyncContext) -> dict[str, Any]:
         'skip_detail_report': str(ctx.sync_stats.get('skip_detail_report') or ''),
         'operation_log_report': str(ctx.sync_stats.get('operation_log_report') or ''),
         'validation_report': str(ctx.sync_stats.get('validation_report') or ''),
+        'pre_apply_backup_path': str(
+            ctx.sync_stats.get('pre_apply_backup_path') or ''
+        ),
         'scope_type': str(ctx.sync_stats.get('scope_type') or 'full'),
         'selected_user_count': len(ctx.sync_stats.get('selected_source_user_ids') or []),
         'selected_department_count': len(ctx.sync_stats.get('selected_department_ids') or []),

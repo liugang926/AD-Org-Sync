@@ -26,6 +26,27 @@ from sync_app.infra.ldap_compat import (
 from sync_app.storage.local_db import ManagedGroupBindingRepository
 
 
+AD_IDENTITY_SNAPSHOT_ATTRIBUTES = [
+    "objectGUID",
+    "objectSid",
+    "distinguishedName",
+    "sAMAccountName",
+    "userPrincipalName",
+    "employeeID",
+    "employeeNumber",
+    "mail",
+    "telephoneNumber",
+    "mobile",
+    "displayName",
+    "userAccountControl",
+    "manager",
+    "memberOf",
+    "whenCreated",
+    "whenChanged",
+    *[f"extensionAttribute{index}" for index in range(1, 16)],
+]
+
+
 def build_group_sam(department_id: int | str) -> str:
     return f"WECOM_D{department_id}"
 
@@ -76,6 +97,7 @@ class ADSyncLDAPS:
         managed_group_mail_domain: str = "",
         custom_group_ou_path: str = "Managed Groups",
         user_root_ou_path: str = "",
+        initialize_managed_ous: bool = True,
     ):
         """
         初始化LDAPS连接
@@ -137,8 +159,9 @@ class ADSyncLDAPS:
             self.server = Server(server, port=self.port, get_info=ALL)
         self.connection = None
         self._connect()
-        self.ensure_user_root_ou_path()
-        self.ensure_disabled_users_ou()
+        if initialize_managed_ous:
+            self.ensure_user_root_ou_path()
+            self.ensure_disabled_users_ou()
 
     def _normalize_ou_path_segments(self, raw_value: Any) -> List[str]:
         if isinstance(raw_value, (list, tuple)):
@@ -267,7 +290,10 @@ class ADSyncLDAPS:
         except LDAPException:
             return False
     
-    def list_organizational_units(self) -> List[Dict[str, Any]]:
+    def list_organizational_units(
+        self, *, search_base: str = ""
+    ) -> List[Dict[str, Any]]:
+        resolved_search_base = str(search_base or "").strip() or self.base_dn
         items: List[Dict[str, Any]] = [
             {
                 "name": self.domain or "Domain Root",
@@ -278,9 +304,15 @@ class ADSyncLDAPS:
         ]
         try:
             self.connection.search(
-                self.base_dn,
+                resolved_search_base,
                 "(objectClass=organizationalUnit)",
-                attributes=["ou", "distinguishedName", "objectGUID"],
+                attributes=[
+                    "ou",
+                    "distinguishedName",
+                    "objectGUID",
+                    "whenCreated",
+                    "whenChanged",
+                ],
             )
             for entry in self.connection.entries:
                 dn = str(getattr(entry, "entry_dn", "") or "")
@@ -300,6 +332,15 @@ class ADSyncLDAPS:
                         "dn": dn,
                         "path": path,
                         "guid": guid_value,
+                        "parent_dn": dn.split(",", 1)[1] if "," in dn else self.base_dn,
+                        "when_created": str(
+                            getattr(getattr(entry, "whenCreated", None), "value", "")
+                            or ""
+                        ),
+                        "when_changed": str(
+                            getattr(getattr(entry, "whenChanged", None), "value", "")
+                            or ""
+                        ),
                     }
                 )
         except LDAPException as exc:
@@ -1175,6 +1216,127 @@ class ADSyncLDAPS:
             self.logger.error(f"获取AD用户列表失败: {str(e)}")
             return []
 
+    @staticmethod
+    def _snapshot_guid(value: Any) -> str:
+        if isinstance(value, (bytes, bytearray)) and len(value) == 16:
+            return str(uuid.UUID(bytes_le=bytes(value)))
+        normalized = str(value or "").strip()
+        if normalized.startswith("b'"):
+            return ""
+        return normalized
+
+    @staticmethod
+    def _snapshot_values(value: Any) -> List[str]:
+        if value in (None, ""):
+            return []
+        if isinstance(value, (list, tuple, set)):
+            return [str(item) for item in value if str(item).strip()]
+        return [str(value)]
+
+    def _normalize_directory_user_snapshot(
+        self, attributes: Dict[str, Any], *, distinguished_name: str = ""
+    ) -> Dict[str, Any]:
+        raw_uac = attributes.get("userAccountControl")
+        try:
+            user_account_control = int(raw_uac or 0)
+            account_enabled: Optional[bool] = not bool(user_account_control & 2)
+        except (TypeError, ValueError):
+            account_enabled = None
+        dn = str(attributes.get("distinguishedName") or distinguished_name or "")
+        extensions = {
+            f"extensionAttribute{index}": str(
+                attributes.get(f"extensionAttribute{index}") or ""
+            )
+            for index in range(1, 16)
+            if attributes.get(f"extensionAttribute{index}") not in (None, "")
+        }
+        return {
+            "object_guid": self._snapshot_guid(attributes.get("objectGUID")),
+            "object_sid": str(attributes.get("objectSid") or ""),
+            "distinguished_name": dn,
+            "sam_account_name": str(attributes.get("sAMAccountName") or ""),
+            "user_principal_name": str(attributes.get("userPrincipalName") or ""),
+            "employee_id": str(attributes.get("employeeID") or ""),
+            "employee_number": str(attributes.get("employeeNumber") or ""),
+            "mail": str(attributes.get("mail") or ""),
+            "telephone_number": str(attributes.get("telephoneNumber") or ""),
+            "mobile": str(attributes.get("mobile") or ""),
+            "display_name": str(attributes.get("displayName") or ""),
+            "account_enabled": account_enabled,
+            "manager_dn": str(attributes.get("manager") or ""),
+            "group_membership": self._snapshot_values(attributes.get("memberOf")),
+            "ou_path": "/".join(self._normalize_ou_path_segments(dn)),
+            "extension_attributes": extensions,
+            "when_created": str(attributes.get("whenCreated") or ""),
+            "when_changed": str(attributes.get("whenChanged") or ""),
+            "account_type": "person",
+            "is_protected": self._is_protected_account(
+                str(attributes.get("sAMAccountName") or "")
+            ),
+        }
+
+    def list_directory_users(
+        self,
+        *,
+        search_base: str = "",
+        page_size: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Read the stable identity and lifecycle attributes required by a snapshot."""
+
+        base = str(search_base or "").strip() or self.base_dn
+        search_filter = "(&(objectCategory=person)(objectClass=user)(!(sAMAccountName=*$)))"
+        bounded_page_size = min(max(int(page_size or 500), 1), 1000)
+        output: List[Dict[str, Any]] = []
+        paged_search = getattr(
+            getattr(getattr(self.connection, "extend", None), "standard", None),
+            "paged_search",
+            None,
+        )
+        if callable(paged_search):
+            entries = paged_search(
+                search_base=base,
+                search_filter=search_filter,
+                attributes=AD_IDENTITY_SNAPSHOT_ATTRIBUTES,
+                paged_size=bounded_page_size,
+                generator=True,
+            )
+            for entry in entries:
+                if not isinstance(entry, dict) or entry.get("type") != "searchResEntry":
+                    continue
+                output.append(
+                    self._normalize_directory_user_snapshot(
+                        dict(entry.get("attributes") or {}),
+                        distinguished_name=str(entry.get("dn") or ""),
+                    )
+                )
+        else:
+            self.connection.search(
+                base,
+                search_filter,
+                attributes=AD_IDENTITY_SNAPSHOT_ATTRIBUTES,
+            )
+            for entry in self.connection.entries:
+                attributes = {
+                    name: getattr(getattr(entry, name, None), "value", None)
+                    for name in AD_IDENTITY_SNAPSHOT_ATTRIBUTES
+                }
+                member_of = getattr(getattr(entry, "memberOf", None), "values", None)
+                if member_of is not None:
+                    attributes["memberOf"] = member_of
+                output.append(
+                    self._normalize_directory_user_snapshot(
+                        attributes,
+                        distinguished_name=str(getattr(entry, "entry_dn", "") or ""),
+                    )
+                )
+        output.sort(
+            key=lambda item: (
+                str(item.get("sam_account_name") or "").casefold(),
+                str(item.get("object_guid") or ""),
+            )
+        )
+        return output
+
     def search_users(self, query: str, *, limit: int = 20) -> List[DirectoryUserRecord]:
         """按账号、显示名、邮件或 UPN 搜索 AD 用户"""
         normalized_query = str(query or "").strip()
@@ -1392,6 +1554,8 @@ class ADSyncLDAPS:
                 extra_attributes=extra_attributes,
             ):
                 return False
+            refreshed_user = self.get_user(username)
+            user_dn = str((refreshed_user or {}).get('dn') or f"CN={display_name},{ou_dn}")
             if not self.connection.modify(
                 user_dn,
                 {

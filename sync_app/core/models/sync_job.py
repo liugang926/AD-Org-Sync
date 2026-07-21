@@ -110,6 +110,7 @@ class SyncRunStats(MappingLikeModel):
     db_path: str = ""
     db_backup_dir: str = ""
     db_startup_snapshot_path: str = ""
+    pre_apply_backup_path: str = ""
     db_migration_source_path: str = ""
     db_integrity_check: Dict[str, Any] = field(default_factory=dict)
     job_id: str = ""
@@ -166,6 +167,7 @@ class SyncRunStats(MappingLikeModel):
             db_path=str(value.get("db_path") or ""),
             db_backup_dir=str(value.get("db_backup_dir") or ""),
             db_startup_snapshot_path=str(value.get("db_startup_snapshot_path") or ""),
+            pre_apply_backup_path=str(value.get("pre_apply_backup_path") or ""),
             db_migration_source_path=str(value.get("db_migration_source_path") or ""),
             db_integrity_check=dict(value.get("db_integrity_check") or {}),
             job_id=str(value.get("job_id") or ""),
@@ -206,6 +208,7 @@ class SyncJobSummary:
     db_path: str = ""
     db_backup_dir: str = ""
     db_startup_snapshot_path: str = ""
+    pre_apply_backup_path: str = ""
     db_migration_source_path: str = ""
     summary: Optional[Dict[str, Any]] = None
 
@@ -224,6 +227,7 @@ class SyncJobSummary:
             db_path=str(sync_stats.get("db_path") or ""),
             db_backup_dir=str(sync_stats.get("db_backup_dir") or ""),
             db_startup_snapshot_path=str(sync_stats.get("db_startup_snapshot_path") or ""),
+            pre_apply_backup_path=str(sync_stats.get("pre_apply_backup_path") or ""),
             db_migration_source_path=str(sync_stats.get("db_migration_source_path") or ""),
             summary=sync_stats.get("summary"),
         )

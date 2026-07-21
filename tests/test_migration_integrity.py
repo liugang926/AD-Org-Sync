@@ -99,7 +99,7 @@ class MigrationIntegrityTests(unittest.TestCase):
             audit_count = connection.execute(
                 "SELECT COUNT(*) FROM web_audit_logs WHERE action_type = 'test.before_upgrade'"
             ).fetchone()[0]
-        self.assertEqual(applied, 33)
+        self.assertEqual(applied, 34)
         self.assertEqual((binding["source_provider"], binding["source_user_id"], binding["ad_username"]), ("wecom", "alice", "alice"))
         self.assertIn("source_directory_snapshots", tables)
         self.assertIn("sync_scope_selections", tables)
@@ -107,6 +107,16 @@ class MigrationIntegrityTests(unittest.TestCase):
         self.assertIn("sspr_oauth_transactions", tables)
         self.assertIn("sspr_reset_receipts", tables)
         self.assertIn("sspr_rate_limit_buckets", tables)
+        self.assertIn("enterprise_identities", tables)
+        self.assertIn("source_connectors", tables)
+        self.assertIn("platform_accounts", tables)
+        self.assertIn("ad_accounts", tables)
+        self.assertIn("identity_account_links", tables)
+        self.assertIn("identity_match_rules", tables)
+        self.assertIn("identity_match_runs", tables)
+        self.assertIn("identity_match_candidates", tables)
+        self.assertIn("field_authority_rules", tables)
+        self.assertIn("account_takeover_batches", tables)
         self.assertEqual(
             index_columns,
             ["org_id", "source_provider", "connector_id", "source_user_id"],
@@ -125,6 +135,22 @@ class MigrationIntegrityTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM web_audit_logs WHERE action_type = 'test.before_upgrade'"
                 ).fetchone()[0],
                 1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM enterprise_identities").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM platform_accounts").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM ad_accounts").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM identity_account_links").fetchone()[0],
+                2,
             )
 
 

@@ -39,6 +39,73 @@ class _RecordingAD(FakeADSyncApply):
 
 
 class ScopedSnapshotRuntimeTests(unittest.TestCase):
+    def test_read_only_directory_mode_blocks_apply_before_constructing_ad_client(self):
+        config = AppConfig(
+            wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),
+            ldap=LDAPConfig(
+                server="ldap.example.com",
+                domain="example.com",
+                username="svc",
+                password="password",
+                use_ssl=True,
+                port=636,
+            ),
+            domain="example.com",
+            account=AccountConfig(default_password="VeryStrong123!456"),
+            config_path="ignored.ini",
+        )
+        db_path = os.path.join("test_artifacts", "runtime_read_only_gate.db")
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+        manager = DatabaseManager(db_path=db_path)
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        SettingsRepository(manager).set_value(
+            "ad_directory_mode", "read_only", "string", org_id="default"
+        )
+
+        with (
+            patch.dict(os.environ, {"AD_ORG_SYNC_ENVIRONMENT_LABEL": "test"}),
+            patch.object(runtime, "load_sync_config", return_value=config),
+            patch.object(runtime, "ADSyncLDAPS") as ad_client,
+            patch.object(
+                runtime.sync_logging,
+                "setup_logging",
+                return_value=logging.getLogger("read-only-runtime"),
+            ),
+            patch.object(
+                runtime.sync_logging,
+                "log_filename",
+                "read-only-runtime.log",
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "read-only mode"):
+                runtime.run_sync_job(
+                    execution_mode="apply",
+                    trigger_type="unit_test",
+                    db_path=db_path,
+                    config_path="ignored.ini",
+                    requested_by="executor1",
+                )
+
+        ad_client.assert_not_called()
+        blocked_log = next(
+            item
+            for item in WebAuditLogRepository(manager).list_recent_logs(10)
+            if item.action_type == "high_risk.apply.blocked"
+        )
+        self.assertEqual(
+            blocked_log.payload["reason_code"],
+            "ad_directory_mode_read_only",
+        )
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+
     def test_direct_apply_rechecks_environment_before_constructing_ad_client(self):
         config = AppConfig(
             wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),
