@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
+{% import "components/mode.html" as mode_ui %}
 {% block content %}
 {% set governance = rule_governance_summary %}
 <div class="page-stack" data-mappings-page data-source-user-search-url="/api/metadata/source-users" data-target-user-search-url="/api/metadata/ad-users" data-source-user-departments-url="/api/metadata/source-user-departments" data-mapping-loading-label="{{ t('Loading options...') }}" data-mapping-no-results-label="{{ t('No matching records found') }}" data-mapping-search-source-placeholder="{{ t('Search source user name or ID') }}" data-mapping-search-target-placeholder="{{ t('Search AD username, display name, or mail') }}" data-mapping-department-placeholder="{{ t('Select a primary department from this user') }}" data-mapping-department-empty-label="{{ t('Select a source user first') }}" data-mapping-type-to-search-label="{{ t('Type at least 2 characters to search') }}">
@@ -55,12 +56,14 @@
     {% endcall %}
   </section>
 
+  {% call mode_ui.advanced(ui_presentation) %}
   {% call ui.detail_toggle(t("Advanced: bulk import manual bindings"), t("Use reviewed CSV rows only. Every imported binding is audited.")) %}
     <form method="post" action="/identity-governance/manual-overrides/import">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       {{ forms.textarea("bulk_bindings", t("Bulk Content"), placeholder="alice,alice.ad,iam@corp.example,Trusted account,2026-12-01T09:00,Reviewed") }}
       <div class="actions">{{ ui.button(t("Import Bindings"), type="submit", variant="secondary") }}</div>
     </form>
+  {% endcall %}
   {% endcall %}
   {% endif %}
 
@@ -92,6 +95,6 @@
     </tbody></table>{% endcall %}
   {% endcall %}
 
-  {% call ui.helper_block(t("Next step"), t("After an override changes, review Identity Matching and run a fresh Dry Run. Apply remains gated in Execution Center."), "info") %}<div class="actions">{{ ui.button(t("Open Identity Matching"), href="/identity-governance/identity-matching", variant="secondary") }}{{ ui.button(t("Open Dry Run"), href="/jobs?context=manual-overrides#dry-run", variant="ghost") }}</div>{% endcall %}
+  {% call ui.helper_block(t("Next step"), t("After an override changes, review Identity Matching and run a fresh Dry Run. Apply remains gated in Execution Center."), "info") %}<div class="actions">{{ ui.button(t("Open Identity Matching"), href="/identity-governance/identity-matching", variant="secondary") }}{{ ui.button(t("Open Dry Run"), href="/execution-center/dry-run", variant="ghost") }}</div>{% endcall %}
 </div>
 {% endblock %}

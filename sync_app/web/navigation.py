@@ -101,7 +101,6 @@ NAVIGATION_GROUPS = (
                 icon="plug-zap",
                 capability="config.read",
                 legacy_paths=("/config", "/config/releases"),
-                advanced_only=True,
             ),
         ),
     ),
@@ -121,7 +120,6 @@ NAVIGATION_GROUPS = (
                 icon="circle-check-big",
                 capability="config.read",
                 legacy_paths=("/data-quality",),
-                advanced_only=True,
             ),
         ),
     ),
@@ -177,7 +175,6 @@ NAVIGATION_GROUPS = (
                 icon="list-filter",
                 capability="config.read",
                 legacy_paths=(),
-                advanced_only=True,
             ),
             NavigationItem(
                 page="sync-account-naming",
@@ -225,17 +222,32 @@ NAVIGATION_GROUPS = (
         label="Execution Center",
         items=(
             NavigationItem(
-                page="jobs",
-                label="Jobs",
+                page="execution-dry-run",
+                label="Dry Run",
                 icon="play-circle",
                 capability="jobs.read",
-                legacy_paths=(
-                    "/execution-center/run-review",
-                    "/execution-center/dry-run",
-                    "/execution-center/plan-review",
-                    "/execution-center/apply",
-                    "/execution-center/jobs",
-                ),
+                legacy_paths=("/jobs", "/execution-center/run-review"),
+            ),
+            NavigationItem(
+                page="execution-plan-review",
+                label="Plan Review",
+                icon="clipboard-check",
+                capability="jobs.read",
+                legacy_paths=(),
+            ),
+            NavigationItem(
+                page="execution-apply",
+                label="Apply",
+                icon="shield-check",
+                capability="jobs.read",
+                legacy_paths=(),
+            ),
+            NavigationItem(
+                page="execution-jobs",
+                label="Job History",
+                icon="history",
+                capability="jobs.read",
+                legacy_paths=(),
             ),
         ),
     ),
@@ -345,6 +357,19 @@ NAVIGATION_GROUPS = (
             ),
         ),
     ),
+)
+
+ADVANCED_NAV_PAGES = frozenset(
+    {
+        item.page
+        for group in NAVIGATION_GROUPS
+        for item in group.items
+        if item.advanced_only
+    }
+    | {
+        # Compatibility routes that now hand off to an advanced workspace.
+        "sync-security-policy",
+    }
 )
 
 # A compact navigation item and a mode-gated workspace are different concepts.

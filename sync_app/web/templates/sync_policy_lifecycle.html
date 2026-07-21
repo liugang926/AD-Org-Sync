@@ -80,6 +80,6 @@
 {% endcall %}
 
 {% call ui.helper_block(t("Next step"), t("Every lifecycle or safety save invalidates the previous Dry Run. Apply remains blocked until a fresh plan is run and reviewed."), "warning") %}
-  {{ ui.button(t("Run a new Dry Run"), href="/jobs?context=lifecycle-policy#dry-run", variant="secondary", icon="play-circle") }}
+  {{ ui.button(t("Run a new Dry Run"), href="/execution-center/dry-run", variant="secondary", icon="play-circle") }}
 {% endcall %}
 {% endblock %}

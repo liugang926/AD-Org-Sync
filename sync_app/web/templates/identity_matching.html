@@ -19,7 +19,7 @@
       <span>{{ ui_presentation.choose(t("Directory snapshot"), provider_name) }} · {{ t("Snapshot {snapshot_id}", snapshot_id=snapshot.id) if snapshot else t("No snapshot") }}</span>
     </div>
     <nav aria-label="{{ t('Related identity pages') }}">
-      <a href="/jobs?context=identity-matching#history">{{ t("Jobs") }}</a>
+      <a href="/execution-center/jobs">{{ t("Jobs") }}</a>
       <a href="/identity-governance/manual-overrides">{{ t("Mappings") }}</a>
       <a href="/identity-governance/conflicts">{{ t("Conflicts") }}</a>
     </nav>
@@ -193,7 +193,7 @@
 
   {% call ui.helper_block(t("Workflow links"), t("Identity Matching remains compatible with Jobs, Mappings, and Conflicts; Dry Run and Apply evidence stays linked to its originating job."), "info") %}
     <div class="actions">
-      {{ ui.button(t("Open Jobs"), href="/jobs?context=identity-matching#history", variant="secondary", icon="history") }}
+      {{ ui.button(t("Open Jobs"), href="/execution-center/jobs", variant="secondary", icon="history") }}
       {{ ui.button(t("Open Mappings"), href="/identity-governance/manual-overrides", variant="ghost", icon="link") }}
       {{ ui.button(t("Open Conflicts"), href="/identity-governance/conflicts", variant="ghost", icon="shield-alert") }}
     </div>

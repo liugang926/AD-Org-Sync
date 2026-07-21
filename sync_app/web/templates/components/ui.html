@@ -359,6 +359,7 @@
     class="topbar-segment {% if option_value == active_value %}is-active active{% endif %}"
     name="{{ field_name }}"
     value="{{ option_value }}"
+    aria-pressed="{{ 'true' if option_value == active_value else 'false' }}"
   >
     <span>{{ option_label }}</span>
   </button>
@@ -372,7 +373,7 @@
   {% set option_value = option.value if option.value is defined else option[0] %}
   {% set option_label = option.label if option.label is defined else option[1] %}
   {% set option_href = option.href if option.href is defined else option[2] %}
-  <a href="{{ option_href }}" class="topbar-segment {% if option_value == active_value %}is-active active{% endif %}">{{ option_label }}</a>
+  <a href="{{ option_href }}" class="topbar-segment {% if option_value == active_value %}is-active active{% endif %}"{% if option_value == active_value %} aria-current="page"{% endif %}>{{ option_label }}</a>
   {% endfor %}
 </nav>
 {% endmacro %}

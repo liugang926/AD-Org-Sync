@@ -89,6 +89,7 @@ class WebRuntimeState:
     startup_persisted_web_runtime_settings: dict[str, Any]
     sync_runner: WebSyncRunner
     integration_outbox_worker: IntegrationOutboxWorker
+    environment_label: str = ""
 
 
 @dataclass(slots=True)

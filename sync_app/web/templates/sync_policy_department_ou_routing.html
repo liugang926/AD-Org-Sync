@@ -63,6 +63,6 @@
 {% endcall %}
 
 {% call ui.helper_block(t("Next step"), t("Saving invalidates the previous Dry Run. Verify connector and OU routing in a fresh plan before Apply."), "warning") %}
-  {{ ui.button(t("Run a new Dry Run"), href="/jobs?context=department-ou-routing#dry-run", variant="secondary", icon="play-circle") }}
+  {{ ui.button(t("Run a new Dry Run"), href="/execution-center/dry-run", variant="secondary", icon="play-circle") }}
 {% endcall %}
 {% endblock %}

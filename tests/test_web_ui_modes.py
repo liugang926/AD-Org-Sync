@@ -163,21 +163,23 @@ class WebUIModeTests(WebAuthzBaseTestCase):
             "unchanged",
         )
 
-    def test_basic_advanced_page_is_explanatory_gate_and_advanced_mode_opens_it(self):
+    def test_basic_advanced_page_stays_reachable_with_context_note(self):
         self._login("superadmin")
         path = "/sync-policies/department-ou-routing"
 
         basic = self._route(path, "GET")(self._request(path))
         basic_body = self._text(basic)
-        self.assertIn('data-mode-gate="advanced-page"', basic_body)
-        self.assertIn('name="ui_mode" value="advanced"', basic_body)
-        self.assertIn(f'name="return_url" value="{path}"', basic_body)
-        self.assertNotIn("Connector Route", _visible_text(basic_body))
+        self.assertNotIn('data-mode-gate="advanced-page"', basic_body)
+        self.assertIn("This is advanced configuration.", basic_body)
+        self.assertIn("Return to current rollout step", basic_body)
+        self.assertIn("Return to Control Tower", basic_body)
+        self.assertIn("Connector Route", _visible_text(basic_body))
 
         self.session["ui_mode"] = "advanced"
         advanced = self._route(path, "GET")(self._request(path))
         advanced_body = self._text(advanced)
         self.assertNotIn('data-mode-gate="advanced-page"', advanced_body)
+        self.assertNotIn("This is advanced configuration.", advanced_body)
         self.assertIn("Connector Route", _visible_text(advanced_body))
 
     def test_bulk_import_workspace_is_advanced_only(self):
@@ -185,7 +187,8 @@ class WebUIModeTests(WebAuthzBaseTestCase):
         path = "/identity-governance/manual-overrides"
 
         basic_body = self._text(self._route(path, "GET")(self._request(path)))
-        self.assertIn('data-mode-gate="advanced-page"', basic_body)
+        self.assertNotIn('data-mode-gate="advanced-page"', basic_body)
+        self.assertIn("This is advanced configuration.", basic_body)
         self.assertNotIn("bulk import manual bindings", _visible_text(basic_body))
 
         self.session["ui_mode"] = "advanced"

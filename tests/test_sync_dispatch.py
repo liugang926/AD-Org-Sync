@@ -258,7 +258,7 @@ class SyncDispatchTests(unittest.TestCase):
             self.assertIn("no completed Dry Run plan", result.message)
             self.assertEqual(SyncJobRepository(db_manager).count_jobs(), 1)
 
-    def test_enqueue_sync_job_allows_scheduled_apply_after_successful_dry_run(self):
+    def test_enqueue_sync_job_allows_scheduled_apply_after_manual_apply_and_green_dry_run(self):
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "dispatch-schedule-ready.db"
             db_manager = DatabaseManager(db_path=str(db_path))
@@ -269,6 +269,21 @@ class SyncDispatchTests(unittest.TestCase):
                 org_id="default",
                 high_risk_operation_count=0,
                 approved=True,
+            )
+            job_repo = SyncJobRepository(db_manager)
+            job_repo.create_job(
+                job_id="job-manual-apply-green",
+                trigger_type="web",
+                execution_mode="apply",
+                status="COMPLETED",
+                org_id="default",
+                started_at=(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+            )
+            SettingsRepository(db_manager).set_value(
+                "schedule_execution_mode",
+                "apply",
+                "string",
+                org_id="default",
             )
 
             result = enqueue_sync_job(
@@ -282,7 +297,7 @@ class SyncDispatchTests(unittest.TestCase):
 
             self.assertTrue(result.accepted)
             self.assertIsNotNone(result.job)
-            self.assertEqual(SyncJobRepository(db_manager).count_jobs(), 2)
+            self.assertEqual(SyncJobRepository(db_manager).count_jobs(), 3)
             self.assertEqual(result.job.plan_source_job_id, "job-dry-run-green")
 
     def test_enqueue_sync_job_does_not_reuse_a_consumed_plan(self):

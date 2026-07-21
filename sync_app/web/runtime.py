@@ -45,6 +45,7 @@ def normalize_secure_cookie_mode(value: Optional[str]) -> str:
 def resolve_web_runtime_settings(
     settings_repo: SettingsRepository,
     *,
+    environment_label: str | None = None,
     bind_host: str | None = None,
     bind_port: int | None = None,
     public_base_url: str | None = None,
@@ -54,6 +55,7 @@ def resolve_web_runtime_settings(
 ) -> dict[str, Any]:
     typed_settings = WebRuntimeSettings.load(
         settings_repo,
+        environment_label=environment_label,
         bind_host=bind_host,
         bind_port=bind_port,
         public_base_url=public_base_url,
@@ -82,6 +84,7 @@ def resolve_web_runtime_settings(
         warnings.append("Forwarded proxy headers are trusted from every IP address.")
 
     return {
+        "environment_label": typed_settings.environment_label,
         "bind_host": resolved_bind_host,
         "bind_port": resolved_bind_port,
         "public_base_url": resolved_public_base_url,

@@ -2154,6 +2154,7 @@ def register_source_directory_routes(
                 provider.close()
         return RedirectResponse(url=CANONICAL_ROUTE_PATHS["config"], status_code=303)
 
+    @app.post(CANONICAL_ROUTE_PATHS["source-directory"] + "/refresh")
     @app.post("/source-directory/refresh")
     def refresh_source_directory(
         request: Request,
@@ -2582,7 +2583,7 @@ def register_source_directory_routes(
             "Verified missing accounts are selected. Start a Dry Run to review the create operations; no AD changes have been made.",
         )
         return RedirectResponse(
-            url="/jobs?context=source-directory#dry-run",
+            url="/execution-center/dry-run",
             status_code=303,
         )
 

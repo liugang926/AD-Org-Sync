@@ -64,6 +64,6 @@
 {% endcall %}
 
 {% call ui.helper_block(t("Next step"), t("Saving invalidates the previous Dry Run. Inspect field-level differences in a fresh plan before Apply."), "warning") %}
-  {{ ui.button(t("Run a new Dry Run"), href="/jobs?context=attribute-mappings#dry-run", variant="secondary", icon="play-circle") }}
+  {{ ui.button(t("Run a new Dry Run"), href="/execution-center/dry-run", variant="secondary", icon="play-circle") }}
 {% endcall %}
 {% endblock %}

@@ -4,21 +4,8 @@
 
 {% block content %}
 <div class="page-stack">
-  <div class="hero-header">
-    <div>
-      <a class="back-link" href="/dashboard">{{ t("Back to Dashboard") }}</a>
-      <h1 class="hero-title">{{ t("Getting Started") }}</h1>
-      <p class="hero-meta">{{ t("Follow this rollout path for {name}.", name=getting_started.current_org_name) }}</p>
-    </div>
-    <div class="actions">
-      <form class="inline" method="post" action="/preflight/run">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="return_url" value="/getting-started">
-        {{ ui.button(t("Run Live Preflight"), type="submit") }}
-      </form>
-      {{ ui.button(t("Open Dry Run"), href="/jobs?context=getting-started#dry-run", variant="secondary") }}
-    </div>
-  </div>
+  <a class="back-link" href="/overview/control-tower">{{ t("Back to Control Tower") }}</a>
+  {{ ui.page_header(t("Getting Started"), t("Follow one safe rollout path for {name}. Only the current recommended action is emphasized.", name=getting_started.current_org_name), eyebrow=t("First Rollout"), badge_text=t("Organization Scope"), badge_level="info") }}
 
   {% call ui.panel(t("Recommended Rollout Steps"), description=t("{done} of {total} steps are complete.", done=getting_started.completed_steps, total=getting_started.total_steps)) %}
     <div class="step-list">
@@ -32,13 +19,15 @@
           {{ ui.badge(t("Complete"), "success") }}
           {% elif step.status == "current" %}
           {{ ui.badge(t("Current"), "info") }}
-          {% else %}
+          {% elif step.status == "upcoming" %}
           {{ ui.badge(t("Upcoming"), "warning") }}
+          {% else %}
+          {{ ui.badge(t("Blocked"), "error") }}
           {% endif %}
         </div>
         <div class="actions flush-top">
-          {% if not step.capability or can(step.capability) %}
-          {{ ui.button(t(step.action_label), href=step.href, variant=("secondary" if step.status == "current" else "ghost")) }}
+          {% if (not step.capability or can(step.capability)) and step.status in ["current", "complete"] %}
+          {{ ui.button(t(step.action_label), href=step.href, variant=("primary" if step.status == "current" else "ghost")) }}
           {% endif %}
         </div>
       </div>
@@ -46,7 +35,7 @@
     </div>
   {% endcall %}
 
-  {% call ui.panel(t("Latest Preflight Snapshot"), description=t("Refresh this before the first apply or before switching to unattended execution.")) %}
+  {% call ui.detail_toggle(t("Latest Preflight Snapshot"), t("Expand the technical readiness checks when you need to diagnose a blocked step."), open=False) %}
     <div class="surface-inline">
       {% if preflight_summary.overall_status == "success" %}
       {{ ui.badge(t("Ready"), "success") }}
@@ -55,9 +44,9 @@
       {% else %}
       {{ ui.badge(t("Blocked"), "error") }}
       {% endif %}
-      <span class="muted">{{ t("Generated At") }}: {{ preflight_summary.generated_at }}</span>
+      <span class="muted">{{ t("Generated At") }}: {{ ui.local_time(preflight_summary.generated_at) }}</span>
       {% if preflight_summary.live_ran_at %}
-      <span class="muted">{{ t("Last live check") }}: {{ preflight_summary.live_ran_at }}</span>
+      <span class="muted">{{ t("Last live check") }}: {{ ui.local_time(preflight_summary.live_ran_at) }}</span>
       {% endif %}
     </div>
     <div class="check-list">
@@ -73,9 +62,9 @@
     </div>
     <div class="actions">
       {% if can("config.read") %}
-      {{ ui.button(t("Open Organization Config"), href="/config", variant="secondary") }}
+      {{ ui.button(t("Open Connectors"), href="/data-sources/connectors", variant="secondary") }}
       {% endif %}
-      {{ ui.button(t("Open Conflict Queue"), href="/conflicts", variant="ghost") }}
+      {{ ui.button(t("Open Conflict Queue"), href="/identity-governance/conflicts", variant="ghost") }}
       {% call mode_ui.advanced_inline(ui_presentation) %}{{ ui.button(t("Open Sync Policies"), href="/sync-policies", variant="ghost") }}{% endcall %}
     </div>
   {% endcall %}

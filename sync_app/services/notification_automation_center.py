@@ -33,6 +33,15 @@ def _is_apply_job(job: Optional[SyncJobRecord]) -> bool:
     return _job_mode(job) == "apply"
 
 
+def _is_successful_manual_apply(job: Optional[SyncJobRecord]) -> bool:
+    trigger_type = str(getattr(job, "trigger_type", "") or "").strip().lower()
+    return (
+        _is_apply_job(job)
+        and _normalize_job_status(getattr(job, "status", "")) in GREEN_JOB_STATUSES
+        and trigger_type not in {"schedule", "scheduled", "automation"}
+    )
+
+
 def _parse_timestamp(value: str | None) -> Optional[datetime]:
     normalized = str(value or "").strip()
     if not normalized:
@@ -76,6 +85,10 @@ def evaluate_scheduled_apply_readiness(
     latest_successful_dry_run = _latest_matching_job(recent_jobs, _is_successful_dry_run)
     most_recent_dry_run = _latest_matching_job(recent_jobs, lambda job: _job_mode(job) == "dry_run")
     latest_apply = _latest_matching_job(recent_jobs, _is_apply_job)
+    latest_successful_manual_apply = _latest_matching_job(
+        recent_jobs,
+        _is_successful_manual_apply,
+    )
     pending_review_record: Optional[SyncPlanReviewRecord] = None
     review_required = False
 
@@ -100,23 +113,33 @@ def evaluate_scheduled_apply_readiness(
             "latest_dry_run": most_recent_dry_run,
             "latest_successful_dry_run": latest_successful_dry_run,
             "latest_apply": latest_apply,
+            "latest_successful_manual_apply": latest_successful_manual_apply,
             "open_conflict_count": open_conflict_total,
             "review_required": False,
             "review_record": None,
             "dry_run_age_hours": None,
         }
 
+    if latest_successful_manual_apply is None:
+        reasons.append(
+            "Complete at least one successful manual Apply before enabling unattended Apply."
+        )
+
     if not policy["scheduled_apply_gate_enabled"]:
         return {
             "mode": policy["schedule_execution_mode"],
             "gate_enabled": False,
-            "allowed": True,
-            "status": "warning",
-            "summary": "Scheduled apply safety gate is disabled.",
-            "reasons": [],
+            "allowed": False,
+            "status": "error",
+            "summary": "Scheduled Apply is blocked because its safety gate is disabled.",
+            "reasons": [
+                *reasons,
+                "Enable the scheduled Apply safety gate before unattended production runs.",
+            ],
             "latest_dry_run": most_recent_dry_run,
             "latest_successful_dry_run": latest_successful_dry_run,
             "latest_apply": latest_apply,
+            "latest_successful_manual_apply": latest_successful_manual_apply,
             "open_conflict_count": open_conflict_total,
             "review_required": False,
             "review_record": None,
@@ -172,6 +195,7 @@ def evaluate_scheduled_apply_readiness(
         "latest_dry_run": most_recent_dry_run,
         "latest_successful_dry_run": latest_successful_dry_run,
         "latest_apply": latest_apply,
+        "latest_successful_manual_apply": latest_successful_manual_apply,
         "open_conflict_count": open_conflict_total,
         "review_required": review_required,
         "review_record": pending_review_record,
@@ -216,6 +240,9 @@ def build_notification_automation_center_context(
     latest_dry_run = scheduled_apply_guard["latest_dry_run"]
     latest_successful_dry_run = scheduled_apply_guard["latest_successful_dry_run"]
     latest_apply = scheduled_apply_guard["latest_apply"]
+    latest_successful_manual_apply = scheduled_apply_guard[
+        "latest_successful_manual_apply"
+    ]
     latest_failed_dry_run = latest_dry_run if latest_dry_run is not None and not _is_successful_dry_run(latest_dry_run) else None
     open_conflict_count = int(scheduled_apply_guard["open_conflict_count"] or 0)
     pending_review_count = len(pending_review_records)
@@ -345,6 +372,7 @@ def build_notification_automation_center_context(
         "latest_dry_run": latest_dry_run,
         "latest_successful_dry_run": latest_successful_dry_run,
         "latest_apply": latest_apply,
+        "latest_successful_manual_apply": latest_successful_manual_apply,
         "latest_failed_dry_run": latest_failed_dry_run,
         "open_conflict_count": open_conflict_count,
         "pending_review_records": pending_review_records,

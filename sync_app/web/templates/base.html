@@ -31,7 +31,7 @@
     </div>
     <div class="brand">
       <div class="login-mark login-mark--sidebar">{{ brand_mark_text }}</div>
-      <h1>{{ brand_display_name }}</h1>
+      <div class="brand__name" aria-label="{{ brand_display_name }}">{{ brand_display_name }}</div>
       <div class="version">{{ t("Build {version}", version=app_version) }}</div>
     </div>
     <nav data-sidebar-nav>
@@ -163,12 +163,21 @@
         </button>
       </div>
       {% endif %}
-      
-      {% if current_user and is_advanced_page and ui_presentation.is_basic %}
-      {{ mode_ui.advanced_page_gate(ui_presentation, title, current_path, csrf_token, t, ui) }}
-      {% else %}
-      {% block content %}{% endblock %}
+
+      {% if current_user and is_advanced_page and ui_mode == "basic" %}
+      <section class="advanced-context-note" role="note" aria-label="{{ t('Advanced configuration') }}">
+        <div>
+          <strong>{{ t("This is advanced configuration.") }}</strong>
+          <span>{{ t("Use it when you need multi-domain routing, write-back, lifecycle, or advanced security policies.") }}</span>
+        </div>
+        <div class="actions">
+          {{ ui.button(t("Return to current rollout step"), href="/getting-started", variant="secondary", size="sm") }}
+          {{ ui.button(t("Return to Control Tower"), href="/overview/control-tower", variant="ghost", size="sm") }}
+        </div>
+      </section>
       {% endif %}
+      
+      {% block content %}{% endblock %}
     </div>
   </main>
 

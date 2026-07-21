@@ -18,7 +18,7 @@ def normalize_secure_cookie_mode(value: Any) -> str:
 
 def normalize_schedule_execution_mode(value: Any) -> str:
     normalized = str(value or "").strip().lower()
-    return normalized if normalized in SCHEDULE_EXECUTION_MODES else "apply"
+    return normalized if normalized in SCHEDULE_EXECUTION_MODES else "dry_run"
 
 
 def normalize_first_sync_identity_claim_mode(value: Any) -> str:
@@ -83,6 +83,7 @@ def _bool_setting(value: bool) -> str:
 
 @dataclass(frozen=True, slots=True)
 class WebRuntimeSettings:
+    environment_label: str = ""
     bind_host: str = "127.0.0.1"
     bind_port: int = 8000
     public_base_url: str = ""
@@ -95,6 +96,7 @@ class WebRuntimeSettings:
         cls,
         settings_repo: Any,
         *,
+        environment_label: str | None = None,
         bind_host: str | None = None,
         bind_port: int | None = None,
         public_base_url: str | None = None,
@@ -103,6 +105,11 @@ class WebRuntimeSettings:
         forwarded_allow_ips: str | None = None,
     ) -> "WebRuntimeSettings":
         return cls(
+            environment_label=_clean_text(
+                environment_label
+                if environment_label is not None
+                else settings_repo.get_value("environment_label", "")
+            ).lower(),
             bind_host=_clean_text(
                 bind_host if bind_host is not None else settings_repo.get_value("web_bind_host", "127.0.0.1"),
                 "127.0.0.1",
@@ -137,6 +144,7 @@ class WebRuntimeSettings:
     def from_mapping(cls, values: Mapping[str, Any]) -> "WebRuntimeSettings":
         data = dict(values or {})
         return cls(
+            environment_label=_clean_text(data.get("environment_label")).lower(),
             bind_host=_clean_text(data.get("web_bind_host"), "127.0.0.1"),
             bind_port=_coerce_int(data.get("web_bind_port"), 8000, minimum=1),
             public_base_url=_clean_public_base_url(data.get("web_public_base_url")),
@@ -149,6 +157,7 @@ class WebRuntimeSettings:
         return dict(asdict(self))
 
     def persist(self, settings_repo: Any) -> None:
+        settings_repo.set_value("environment_label", self.environment_label, "string")
         settings_repo.set_value("web_bind_host", self.bind_host, "string")
         settings_repo.set_value("web_bind_port", str(self.bind_port), "int")
         settings_repo.set_value("web_public_base_url", self.public_base_url, "string")
@@ -344,7 +353,7 @@ class DirectoryUiSettings:
     group_display_separator: str = "-"
     group_recursive_enabled: bool = True
     managed_relation_cleanup_enabled: bool = False
-    schedule_execution_mode: str = "apply"
+    schedule_execution_mode: str = "dry_run"
     user_ou_placement_strategy: str = "source_primary_department"
     source_root_unit_ids: str = ""
     source_root_unit_display_text: str = ""
@@ -371,7 +380,7 @@ class DirectoryUiSettings:
                 org_id=org_id,
             ),
             schedule_execution_mode=normalize_schedule_execution_mode(
-                settings_repo.get_value("schedule_execution_mode", "apply", org_id=org_id)
+                settings_repo.get_value("schedule_execution_mode", "dry_run", org_id=org_id)
             ),
             user_ou_placement_strategy=_clean_text(
                 settings_repo.get_value("user_ou_placement_strategy", "source_primary_department", org_id=org_id),
@@ -463,7 +472,7 @@ class DirectoryUiSettings:
 
 @dataclass(frozen=True, slots=True)
 class NotificationAutomationPolicySettings:
-    schedule_execution_mode: str = "apply"
+    schedule_execution_mode: str = "dry_run"
     notify_dry_run_failure_enabled: bool = False
     notify_conflict_backlog_enabled: bool = False
     notify_conflict_backlog_threshold: int = 5
@@ -479,7 +488,7 @@ class NotificationAutomationPolicySettings:
         normalized_org_id = normalize_org_id(org_id, fallback="default") or "default"
         return cls(
             schedule_execution_mode=normalize_schedule_execution_mode(
-                settings_repo.get_value("schedule_execution_mode", "apply", org_id=normalized_org_id)
+                settings_repo.get_value("schedule_execution_mode", "dry_run", org_id=normalized_org_id)
             ),
             notify_dry_run_failure_enabled=settings_repo.get_bool(
                 "ops_notify_dry_run_failure_enabled",

@@ -1112,6 +1112,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             self._request("/automation-center/policies", "POST"),
             csrf_token=match.group(1),
             schedule_execution_mode="apply",
+            confirm_scheduled_apply="1",
             ops_notify_dry_run_failure_enabled="1",
             ops_notify_conflict_backlog_enabled="1",
             ops_notify_conflict_backlog_threshold=2,
@@ -2031,7 +2032,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         body = self._text(response)
         self.assertIn("Next Step: Run The First Dry Run", body)
         self.assertIn("Open Dry Run", body)
-        self.assertIn('href="/jobs?context=config#dry-run"', body)
+        self.assertIn('href="/execution-center/dry-run"', body)
         self.assertNotIn('action="/jobs/run"', body)
 
     def test_super_admin_can_resolve_conflict_with_manual_binding(self):
@@ -3653,7 +3654,10 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         text = self._text(response)
         self.assertNotIn("Webhook is not configured", text)
         self.assertIn("Deployment Preflight", text)
-        self.assertIn("All execution happens in Jobs.", text)
+        self.assertIn(
+            "Dry Run, plan review, Apply, and history remain separate execution steps.",
+            text,
+        )
 
     def test_config_page_surfaces_selected_provider_context_for_dingtalk(self):
         current_org = self.app.state.organization_repo.get_default_organization_record()
@@ -3855,6 +3859,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_config_preview_formats_special_field_types_consistently(self):
         self._login("superadmin")
+        self.app.state.settings_repo.set_value(
+            "schedule_execution_mode", "apply", "string", org_id="default"
+        )
 
         response = self._route("/config", "GET")(self._request("/config"))
         self.assertEqual(response.status_code, 200)
@@ -4404,12 +4411,25 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             ],
         }
 
+        blocked = self._route("/organizations/import", "POST")(
+            self._request("/organizations/import", "POST"),
+            csrf_token=match.group(1),
+            bundle_json=json.dumps(bundle),
+            target_org_id="europe",
+            replace_existing="1",
+        )
+        self.assertEqual(blocked.status_code, 303)
+        self.assertIsNone(
+            self.app.state.organization_repo.get_organization_record("europe")
+        )
+
         response = self._route("/organizations/import", "POST")(
             self._request("/organizations/import", "POST"),
             csrf_token=match.group(1),
             bundle_json=json.dumps(bundle),
             target_org_id="europe",
             replace_existing="1",
+            confirm_replace="1",
         )
         self.assertEqual(response.status_code, 303)
 
@@ -4816,7 +4836,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         dashboard_text = self._text(dashboard_response)
         self.assertNotIn("Scope Guide", dashboard_text)
         self.assertIn("Current Organization", dashboard_text)
-        self.assertIn("Open Jobs Execution Center", dashboard_text)
+        self.assertIn("Open Job History", dashboard_text)
 
         config_response = self._route("/config", "GET")(self._request("/config"))
         self.assertEqual(config_response.status_code, 200)
@@ -5049,7 +5069,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(getting_started.status_code, 200)
         getting_started_text = self._text(getting_started)
         self.assertIn(
-            "Complete the DingTalk and LDAP values for the current organization.",
+            "Complete the DingTalk source and target AD connection settings for the current organization.",
             getting_started_text,
         )
         self.assertIn("Live DingTalk connection", getting_started_text)
@@ -5063,7 +5083,8 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
         self.assertIn("Recommended Rollout Steps", text)
-        self.assertIn("Run live connectivity preflight", text)
+        self.assertIn("Test saved connections", text)
+        self.assertIn("Refresh Source Directory", text)
         self.assertIn("Run the first dry run", text)
         self.assertIn("Latest Preflight Snapshot", text)
 
@@ -5114,7 +5135,10 @@ def _patched_test_login_page_defaults_to_browser_language_when_chinese_is_prefer
     self.assertEqual(response.status_code, 200)
     text = self._text(response)
     self.assertIn('<html lang="zh-CN">', text)
-    self.assertIn('class="topbar-segment is-active active">简体中文</a>', text)
+    self.assertIn(
+        'href="/login?lang=zh-CN" class="topbar-segment is-active active" aria-current="page"',
+        text,
+    )
     self.assertNotIn("AD Org Sync", text)
     self.assertIsNone(self.session.get("ui_language"))
 

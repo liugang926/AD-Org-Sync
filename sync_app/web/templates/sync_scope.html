@@ -10,7 +10,7 @@
 
   {{ policy.tabs('scope') }}
   {{ policy.status(has_unpublished_changes, latest_snapshot_title, (t('A successful source snapshot is required.') if not snapshot else (t('The source snapshot is stale.') if snapshot_expired else '')), t('Save this section, then run and review a new Dry Run'), policy_version, policy_last_modified_by, estimated_affected_users, dry_run_invalidated, latest_policy_dry_run) }}
-  {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t("Choose the business boundary by department, save it, then run a new Dry Run. Use Advanced mode only for connector roots or explicit user selection."), t("Open next step"), "/jobs?context=sync-scope#dry-run") }}
+  {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t("Choose the business boundary by department, save it, then run a new Dry Run. Use Advanced mode only for connector roots or explicit user selection."), t("Open next step"), "/execution-center/dry-run") }}
 
   {% if not snapshot %}
   <div class="callout callout--warning" role="status"><strong>{{ t("A successful source snapshot is required.") }}</strong><span>{{ t("Refresh Source Directory before defining a synchronization scope.") }}</span><a href="/data-sources/source-directory">{{ t("Open Source Directory") }}</a></div>
@@ -18,6 +18,7 @@
   <div class="callout callout--warning" role="status"><strong>{{ t("The source snapshot is stale.") }}</strong><span>{{ t("Refresh Source Directory before saving scope or starting a Dry Run.") }}</span></div>
   {% endif %}
 
+  {% if snapshot %}
   <form
     method="post"
     action="/sync-policies/scope"
@@ -43,8 +44,8 @@
     {% call ui.panel(t("Synchronization Boundary"), scope_label=t("Organization Scope"), scope_level="info", description=t("This form owns persistent scope rules only. Explicit user checkboxes are saved in the separate Identity Selection form below.")) %}
       <div class="form-grid">
         <label>{{ t("Sync Scope") }}
-          <select name="scope_type">
-            {% for value, label in [("full", "All active users"), ("department", "Selected departments and descendants"), ("selected_users", "Explicitly selected users"), ("source_user", "Single-user replay")] %}
+          <select name="scope_type" data-scope-type>
+            {% for value, label in [("full", "All active users"), ("department", "Selected departments and descendants"), ("selected_users", "Checked users only"), ("source_user", "Single user replay")] %}
             <option value="{{ value }}" {% if scope and scope.scope_type == value %}selected{% endif %}>{{ t(label) }}</option>
             {% endfor %}
           </select>
@@ -61,7 +62,7 @@
         {% endif %}
       </div>
 
-      <div class="policy-department-tree" data-department-tree>
+      <div class="policy-department-tree" data-department-tree data-scope-for="department">
         <label>{{ t("Search departments") }}
           <input type="search" data-department-tree-search placeholder="{{ t('Search department name or path') }}" autocomplete="off">
         </label>
@@ -106,6 +107,7 @@
     <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Connector root scopes') }}"><table data-policy-table><thead><tr><th>{{ t("Scope") }}</th><th>{{ t("Connector") }}</th><th>{{ t("Status") }}</th><th>{{ t("Root Departments") }}</th><th>{{ t("Estimated Users") }}</th><th>{{ t("Updated") }}</th></tr></thead><tbody>{% for connector in connectors %}<tr><td>{{ t("Organization") }} / {{ t("Connector") }}</td><td><strong>{{ connector.name }}</strong>{% if ui_presentation.show_provider_connector_details %}<div class="muted">{{ connector.connector_id }}</div>{% endif %}</td><td>{{ t("Enabled") if connector.is_enabled else t("Disabled") }}</td><td>{{ connector.root_department_ids|join(', ') or t("All available roots") }}</td><td>{{ estimated_affected_users }}</td><td>{{ ui.local_time(connector.updated_at) }}</td></tr>{% else %}<tr><td colspan="6" class="empty-state">{{ t("No target connectors are configured") }}</td></tr>{% endfor %}</tbody></table></div>
   {% endcall %}
 
+  <div data-scope-for="selected_users source_user">
   {% call ui.panel(t("Find Source Identities"), description=t("Filtering is read-only. Saving checked users happens only in the separate form that follows.")) %}
     <form method="get" action="/sync-policies/scope" class="filter-bar">
       {% if selected_connector %}<input type="hidden" name="connector_id" value="{{ selected_connector.connector_id }}">{% endif %}
@@ -161,10 +163,12 @@
       {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Identity Selection"), type="submit", variant="secondary", icon="users-round") }}</div>{% endif %}
     {% endcall %}
   </form>
+  </div>
   {% endcall %}
+  {% endif %}
 
   {% call ui.helper_block(t("Next step"), t("Every saved change invalidates older Dry Runs. Run and review a fresh Dry Run before Apply."), "warning") %}
-    <div class="actions">{{ ui.button(t("Open Account Naming"), href="/sync-policies/account-naming", variant="ghost", icon="badge-check") }}{{ ui.button(t("Run a new Dry Run"), href="/jobs?context=sync-scope#dry-run", variant="secondary", icon="play-circle") }}</div>
+    <div class="actions">{{ ui.button(t("Open Account Naming"), href="/sync-policies/account-naming", variant="ghost", icon="badge-check") }}{{ ui.button(t("Run a new Dry Run"), href="/execution-center/dry-run", variant="secondary", icon="play-circle") }}</div>
   {% endcall %}
 </div>
 {% endblock %}

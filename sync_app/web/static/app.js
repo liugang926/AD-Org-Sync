@@ -1167,6 +1167,86 @@
     });
   }
 
+  function initScheduledApplyConfirmation() {
+    const mode = document.querySelector("[data-scheduled-mode]");
+    const confirmation = document.querySelector("[data-scheduled-apply-confirmation]");
+    if (!(mode instanceof HTMLSelectElement) || !(confirmation instanceof HTMLElement)) {
+      return;
+    }
+    const checkbox = confirmation.querySelector('input[name="confirm_scheduled_apply"]');
+    const update = () => {
+      const isApply = mode.value === "apply";
+      confirmation.hidden = !isApply;
+      if (checkbox instanceof HTMLInputElement) {
+        checkbox.required = isApply;
+        if (!isApply) checkbox.checked = false;
+      }
+    };
+    mode.addEventListener("change", update);
+    update();
+  }
+
+  function initOrganizationImportPreview() {
+    const form = document.querySelector("[data-organization-import-form]");
+    if (!(form instanceof HTMLFormElement)) return;
+    const fileInput = form.querySelector("[data-organization-bundle-file]");
+    const jsonInput = form.querySelector("[data-organization-bundle-json]");
+    const targetInput = form.querySelector('input[name="target_org_id"]');
+    const preview = form.querySelector("[data-organization-import-preview]");
+    const replace = form.querySelector("[data-import-replace]");
+    const confirmation = form.querySelector("[data-import-replace-confirmation]");
+    const confirmCheckbox = confirmation?.querySelector('input[name="confirm_replace"]');
+    let parsedBundle = null;
+
+    const setText = (selector, value) => {
+      const element = form.querySelector(selector);
+      if (element) element.textContent = String(value);
+    };
+    const renderPreview = () => {
+      if (!(preview instanceof HTMLElement) || !(jsonInput instanceof HTMLTextAreaElement)) return;
+      try {
+        parsedBundle = JSON.parse(jsonInput.value || "");
+        const organization = parsedBundle?.organization || {};
+        const target = String(targetInput?.value || "").trim() || organization.org_id || "-";
+        setText("[data-import-preview-title]", preview.dataset.validTitle || "Import Preview");
+        setText("[data-import-preview-org]", target);
+        setText("[data-import-preview-settings]", Object.keys(parsedBundle?.org_settings || {}).length);
+        setText("[data-import-preview-connectors]", (parsedBundle?.connectors || []).length);
+        setText("[data-import-preview-rules]", (parsedBundle?.attribute_mappings || []).length + (parsedBundle?.department_ou_mappings || []).length + (parsedBundle?.group_exclusion_rules || []).length);
+        preview.classList.remove("error");
+        preview.hidden = false;
+      } catch (_error) {
+        parsedBundle = null;
+        if (!jsonInput.value.trim()) {
+          preview.hidden = true;
+          return;
+        }
+        setText("[data-import-preview-title]", preview.dataset.invalidTitle || "Invalid bundle JSON");
+        preview.classList.add("error");
+        preview.hidden = false;
+      }
+    };
+    fileInput?.addEventListener("change", async () => {
+      const file = fileInput.files?.[0];
+      if (!file || !(jsonInput instanceof HTMLTextAreaElement)) return;
+      jsonInput.value = await file.text();
+      renderPreview();
+    });
+    jsonInput?.addEventListener("input", renderPreview);
+    targetInput?.addEventListener("input", () => { if (parsedBundle) renderPreview(); });
+    const updateReplacement = () => {
+      const enabled = replace instanceof HTMLInputElement && replace.checked;
+      if (confirmation instanceof HTMLElement) confirmation.hidden = !enabled;
+      if (confirmCheckbox instanceof HTMLInputElement) {
+        confirmCheckbox.required = enabled;
+        if (!enabled) confirmCheckbox.checked = false;
+      }
+    };
+    replace?.addEventListener("change", updateReplacement);
+    updateReplacement();
+    renderPreview();
+  }
+
   function boot() {
     initIcons();
     initAutoSubmit();
@@ -1185,6 +1265,8 @@
     initMobileNav();
     initSharedTomSelectFields();
     initDepartmentTrees();
+    initScheduledApplyConfirmation();
+    initOrganizationImportPreview();
     ADOrgSync.initAdvancedSyncPage?.();
     ADOrgSync.initConfigPage?.();
     ADOrgSync.initMappingsPage?.();

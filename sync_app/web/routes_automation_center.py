@@ -49,7 +49,8 @@ def register_automation_center_routes(
     def automation_center_save(
         request: Request,
         csrf_token: str = Form(""),
-        schedule_execution_mode: str = Form("apply"),
+        schedule_execution_mode: str = Form("dry_run"),
+        confirm_scheduled_apply: Optional[str] = Form(None),
         ops_notify_dry_run_failure_enabled: Optional[str] = Form(None),
         ops_notify_conflict_backlog_enabled: Optional[str] = Form(None),
         ops_notify_conflict_backlog_threshold: int = Form(5),
@@ -66,6 +67,16 @@ def register_automation_center_routes(
         csrf_error = reject_invalid_csrf(request, csrf_token, "/automation-center")
         if csrf_error:
             return csrf_error
+        if str(schedule_execution_mode or "").strip().lower() == "apply" and not to_bool(
+            confirm_scheduled_apply,
+            False,
+        ):
+            flash_t(
+                request,
+                "error",
+                "Confirm the unattended Apply risk before changing scheduled mode.",
+            )
+            return RedirectResponse(url="/automation-center", status_code=303)
 
         current_org = get_current_org(request)
         repositories = get_web_repositories(request)
@@ -115,6 +126,7 @@ def register_automation_center_routes(
         retry_interval: int = Form(60),
         max_retries: int = Form(3),
         schedule_execution_mode: str = Form("dry_run"),
+        confirm_scheduled_apply: Optional[str] = Form(None),
         ops_scheduled_apply_gate_enabled: Optional[str] = Form(None),
         ops_scheduled_apply_max_dry_run_age_hours: int = Form(24),
         ops_scheduled_apply_requires_zero_conflicts: Optional[str] = Form(None),
@@ -127,6 +139,28 @@ def register_automation_center_routes(
         csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error
+
+        normalized_execution_mode = str(schedule_execution_mode or "").strip().lower()
+        if normalized_execution_mode == "apply" and not to_bool(
+            confirm_scheduled_apply,
+            False,
+        ):
+            flash_t(
+                request,
+                "error",
+                "Confirm the unattended Apply risk before changing scheduled mode.",
+            )
+            return RedirectResponse(url=return_path, status_code=303)
+        if normalized_execution_mode == "apply" and not to_bool(
+            ops_scheduled_apply_gate_enabled,
+            False,
+        ):
+            flash_t(
+                request,
+                "error",
+                "The scheduled Apply safety gate must remain enabled.",
+            )
+            return RedirectResponse(url=return_path, status_code=303)
 
         normalized_schedule_time = str(schedule_time or "").strip()
         if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", normalized_schedule_time):

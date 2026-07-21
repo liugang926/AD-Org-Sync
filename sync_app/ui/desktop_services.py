@@ -145,7 +145,7 @@ class DesktopLocalStrategyValues:
     group_display_separator: str = "-"
     group_recursive_enabled: bool = True
     managed_relation_cleanup_enabled: bool = False
-    schedule_execution_mode: str = "apply"
+    schedule_execution_mode: str = "dry_run"
     protected_rules: list[dict[str, Any]] = field(default_factory=list)
     soft_excluded_rules: list[dict[str, Any]] = field(default_factory=list)
 

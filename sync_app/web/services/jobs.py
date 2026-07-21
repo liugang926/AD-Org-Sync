@@ -343,33 +343,33 @@ class WebJobService:
             overall_label_code = "jobs.status.ready"
 
         if str(preflight_summary.get("overall_status") or "") == "error":
-            next_action_url = "/config"
+            next_action_url = "/data-sources/connectors"
             next_action_label_code = "jobs.action.fix_configuration"
         elif latest_dry_run and not latest_successful_dry_run:
             next_action_url = f"/execution-center/jobs/{latest_dry_run.job_id}"
             next_action_label_code = "jobs.action.inspect_dry_run_errors"
         elif not latest_successful_dry_run:
-            next_action_url = "/jobs#dry-run"
+            next_action_url = "/execution-center/dry-run"
             next_action_label_code = "jobs.action.run_dry_run"
         elif open_conflict_count > 0:
-            next_action_url = "/conflicts"
+            next_action_url = "/identity-governance/conflicts"
             next_action_label_code = "jobs.action.review_conflicts"
         elif review_required and (
             review_record is None or str(review_record.status or "").strip().lower() != "approved"
         ):
             next_action_url = (
-                "/jobs"
-                f"?plan_id={latest_successful_dry_run.job_id}#plan-review"
+                "/execution-center/plan-review"
+                f"?plan_id={latest_successful_dry_run.job_id}"
             )
             next_action_label_code = "jobs.action.approve_high_risk_plan"
         elif not latest_apply:
             next_action_url = (
-                "/jobs"
-                f"?plan_id={latest_successful_dry_run.job_id}#apply"
+                "/execution-center/apply"
+                f"?plan_id={latest_successful_dry_run.job_id}"
             )
             next_action_label_code = "jobs.action.run_apply"
         else:
-            next_action_url = "/jobs#history"
+            next_action_url = "/execution-center/jobs"
             next_action_label_code = "jobs.action.review_latest_apply"
 
         impact_job = latest_successful_dry_run or latest_dry_run

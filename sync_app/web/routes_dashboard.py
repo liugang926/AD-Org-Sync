@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from sync_app.web.app_state import get_web_repositories
+from sync_app.web.dashboard_state import count_check_statuses, summarize_check_status
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
@@ -83,16 +84,50 @@ def register_dashboard_routes(
     def run_preflight(
         request: Request,
         csrf_token: str = Form(""),
-        return_url: str = Form("/dashboard"),
+        return_url: str = Form(CANONICAL_ROUTE_PATHS["dashboard"]),
+        connection_kind: Optional[str] = Form(None),
     ):
         user = require_capability(request, "dashboard.read")
         if isinstance(user, RedirectResponse):
             return user
-        fallback_url = safe_redirect_target(return_url, "/dashboard")
+        fallback_url = safe_redirect_target(return_url, CANONICAL_ROUTE_PATHS["dashboard"])
         csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
         if csrf_error:
             return csrf_error
-        snapshot = build_preflight_snapshot(request, include_live=True)
+        normalized_connection_kind = str(connection_kind or "all").strip().lower()
+        snapshot = build_preflight_snapshot(
+            request,
+            include_live=True,
+            live_check=normalized_connection_kind,
+        )
+        if normalized_connection_kind in {"source", "ldap"}:
+            retained_keys = (
+                {"live_ldap"}
+                if normalized_connection_kind == "source"
+                else {"live_source", "live_wecom"}
+            )
+            previous_snapshot = request.session.get("_preflight_snapshot")
+            if (
+                isinstance(previous_snapshot, dict)
+                and str(previous_snapshot.get("org_id") or "")
+                == str(snapshot.get("org_id") or "")
+            ):
+                existing_keys = {
+                    str(item.get("key") or "")
+                    for item in list(snapshot.get("checks") or [])
+                    if isinstance(item, dict)
+                }
+                retained_checks = [
+                    item
+                    for item in list(previous_snapshot.get("checks") or [])
+                    if isinstance(item, dict)
+                    and str(item.get("key") or "") in retained_keys
+                    and str(item.get("key") or "") not in existing_keys
+                ]
+                if retained_checks:
+                    snapshot["checks"] = list(snapshot.get("checks") or []) + retained_checks
+                    snapshot["overall_status"] = summarize_check_status(snapshot["checks"])
+                    snapshot["status_counts"] = count_check_statuses(snapshot["checks"])
         request.session["_preflight_snapshot"] = snapshot
         current_org = get_current_org(request)
         get_web_repositories(request).audit_repo.add_log(
@@ -132,12 +167,12 @@ def register_dashboard_routes(
         request: Request,
         csrf_token: str = Form(""),
         ui_mode: str = Form("basic"),
-        return_url: str = Form("/dashboard"),
+        return_url: str = Form(CANONICAL_ROUTE_PATHS["dashboard"]),
     ):
         user = require_user(request)
         if isinstance(user, RedirectResponse):
             return user
-        fallback_url = safe_redirect_target(return_url, "/dashboard")
+        fallback_url = safe_redirect_target(return_url, CANONICAL_ROUTE_PATHS["dashboard"])
         csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
         if csrf_error:
             return csrf_error

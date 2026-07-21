@@ -88,6 +88,7 @@ class DashboardSupport:
         validation_errors: list[dict[str, Any]],
         security_warnings: list[str],
         include_live: bool = False,
+        live_check: str = "all",
     ) -> dict[str, Any]:
         repositories = get_web_repositories(request)
         recent_jobs = repositories.job_repo.list_recent_job_records(limit=100, org_id=current_org.org_id)
@@ -98,13 +99,51 @@ class DashboardSupport:
             status="open",
             org_id=current_org.org_id,
         )[1]
-        dry_run_completed = any(
-            str(job.execution_mode).lower() == "dry_run" and str(job.status).lower() == "success"
+        successful_statuses = {"success", "completed"}
+        dry_run_jobs = [
+            job
+            for job in recent_jobs
+            if str(job.execution_mode).lower() == "dry_run"
+            and str(job.status).lower() in successful_statuses
+        ]
+        dry_run_completed = bool(dry_run_jobs)
+        apply_completed = any(
+            str(job.execution_mode).lower() == "apply"
+            and str(job.status).lower() in successful_statuses
             for job in recent_jobs
         )
-        apply_completed = any(
-            str(job.execution_mode).lower() == "apply" and str(job.status).lower() == "success"
-            for job in recent_jobs
+        latest_snapshot = (
+            repositories.source_directory_repo.get_latest_successful_snapshot(
+                org_id=current_org.org_id,
+                provider_id=config.source_provider,
+            )
+            if config
+            else None
+        )
+        scope_selection = (
+            repositories.source_directory_repo.get_scope_selection(
+                org_id=current_org.org_id,
+                provider_id=config.source_provider,
+            )
+            if config and latest_snapshot
+            else None
+        )
+        try:
+            release_context = get_web_services(request).config.build_release_center_context(
+                current_org=current_org,
+            )
+        except Exception:
+            release_context = {}
+        latest_dry_run = dry_run_jobs[0] if dry_run_jobs else None
+        latest_review = (
+            repositories.review_repo.get_review_record_by_job_id(latest_dry_run.job_id)
+            if latest_dry_run
+            else None
+        )
+        review_ready = bool(
+            latest_review
+            and str(getattr(latest_review, "status", "") or "").strip().lower()
+            == "approved"
         )
         checks: list[dict[str, Any]] = []
         source_provider_name = self.request_support.source_provider_label(config.source_provider if config else "wecom")
@@ -117,7 +156,7 @@ class DashboardSupport:
                     "status": "success",
                     "detail": "Required {provider} and LDAP settings are complete.",
                     "detail_params": {"provider": source_provider_name},
-                    "action_url": "/config",
+                    "action_url": "/data-sources/connectors",
                 }
             )
         else:
@@ -136,7 +175,7 @@ class DashboardSupport:
                         if validation_errors
                         else {}
                     ),
-                    "action_url": "/config",
+                    "action_url": "/data-sources/connectors",
                 }
             )
 
@@ -185,7 +224,7 @@ class DashboardSupport:
                     if dry_run_completed
                     else "No successful dry run has been recorded yet."
                 ),
-                "action_url": "/jobs?context=dashboard#dry-run",
+                "action_url": "/execution-center/dry-run",
             }
         )
         checks.append(
@@ -199,7 +238,7 @@ class DashboardSupport:
                     else "There are {count} unresolved conflict(s) that still need review."
                 ),
                 "detail_params": {"count": open_conflicts_total} if open_conflicts_total else {},
-                "action_url": "/conflicts",
+                "action_url": "/identity-governance/conflicts",
             }
         )
         checks.append(
@@ -212,7 +251,7 @@ class DashboardSupport:
                     if apply_completed
                     else "No successful apply run has been recorded yet."
                 ),
-                "action_url": "/jobs?context=dashboard#apply",
+                "action_url": "/execution-center/apply",
             }
         )
 
@@ -223,11 +262,14 @@ class DashboardSupport:
                     "label": "Security recommendation",
                     "status": "warning",
                     "detail": warning,
-                    "action_url": "/config",
+                    "action_url": "/data-sources/connectors",
                 }
             )
 
-        if include_live:
+        normalized_live_check = str(live_check or "all").strip().lower()
+        if normalized_live_check not in {"all", "source", "ldap"}:
+            normalized_live_check = "all"
+        if include_live and normalized_live_check in {"all", "source"}:
             if (
                 config
                 and not validation_errors
@@ -247,7 +289,7 @@ class DashboardSupport:
                         "label_params": {"provider": source_provider_name},
                         "status": "success" if source_ok else "error",
                         "detail": source_message,
-                        "action_url": "/config",
+                        "action_url": "/data-sources/connectors",
                     }
                 )
             else:
@@ -265,9 +307,10 @@ class DashboardSupport:
                         "status": "warning",
                         "detail": live_source_detail,
                         "detail_params": live_source_detail_params,
-                        "action_url": "/config",
+                        "action_url": "/data-sources/connectors",
                     }
                 )
+        if include_live and normalized_live_check in {"all", "ldap"}:
             if config and not validation_errors and config.ldap.server and config.ldap.domain and config.ldap.username and config.ldap.password:
                 ldap_ok, ldap_message = self.test_ldap_connection(
                     config.ldap.server,
@@ -285,7 +328,7 @@ class DashboardSupport:
                         "label": "Live LDAP connection",
                         "status": "success" if ldap_ok else "error",
                         "detail": ldap_message,
-                        "action_url": "/config",
+                        "action_url": "/data-sources/connectors",
                     }
                 )
             else:
@@ -295,32 +338,32 @@ class DashboardSupport:
                         "label": "Live LDAP connection",
                         "status": "warning",
                         "detail": "Skipped because LDAP credentials are incomplete or still invalid.",
-                        "action_url": "/config",
+                        "action_url": "/data-sources/connectors",
                     }
                 )
 
         overall_status = summarize_check_status(checks)
         if str(checks[0].get("status")) == "error":
-            next_action_url = "/config"
+            next_action_url = "/data-sources/connectors"
             next_action_label = "Open Organization Config"
         elif include_live and any(
             str(item.get("key") or "") in {"live_source", "live_wecom", "live_ldap"}
             and str(item.get("status") or "") == "error"
             for item in checks
         ):
-            next_action_url = "/config"
+            next_action_url = "/data-sources/connectors"
             next_action_label = "Fix Connectivity"
         elif not dry_run_completed:
-            next_action_url = "/jobs?context=dashboard#dry-run"
+            next_action_url = "/execution-center/dry-run"
             next_action_label = "Run First Dry Run"
         elif open_conflicts_total > 0:
-            next_action_url = "/conflicts"
+            next_action_url = "/identity-governance/conflicts"
             next_action_label = "Review Conflict Queue"
         elif not apply_completed:
-            next_action_url = "/jobs?context=dashboard#apply"
+            next_action_url = "/execution-center/apply"
             next_action_label = "Run First Apply"
         else:
-            next_action_url = "/dashboard"
+            next_action_url = "/overview/control-tower"
             next_action_label = "Environment Ready"
         return {
             "org_id": current_org.org_id,
@@ -334,6 +377,13 @@ class DashboardSupport:
             "dry_run_completed": dry_run_completed,
             "apply_completed": apply_completed,
             "open_conflict_count": open_conflicts_total,
+            "source_snapshot_ready": latest_snapshot is not None,
+            "scope_ready": bool(scope_selection),
+            "release_ready": bool(
+                release_context.get("latest_snapshot")
+                and not release_context.get("has_unpublished_changes")
+            ),
+            "review_ready": review_ready,
         }
 
     def build_preflight_snapshot(
@@ -341,6 +391,7 @@ class DashboardSupport:
         request: Request,
         *,
         include_live: bool = False,
+        live_check: str = "all",
         current_org: Optional[OrganizationRecord] = None,
         config: Optional[AppConfig] = None,
         validation_errors: Optional[list[dict[str, Any]]] = None,
@@ -359,6 +410,7 @@ class DashboardSupport:
             validation_errors=resolved_validation_errors,
             security_warnings=resolved_security_warnings,
             include_live=include_live,
+            live_check=live_check,
         )
 
     @staticmethod
@@ -376,7 +428,7 @@ class DashboardSupport:
                     "title": "Background runner error",
                     "detail": "Last background execution error: {error}",
                     "detail_params": {"error": sync_runner_error},
-                    "action_url": "/jobs?context=dashboard#history",
+                    "action_url": "/execution-center/jobs",
                     "action_label": "Open Job History",
                 }
             )
@@ -384,7 +436,7 @@ class DashboardSupport:
         for reason in list(job_center_summary.get("blocked_reasons") or [])[:4]:
             next_url = str(
                 job_center_summary.get("next_action_url")
-                or "/jobs?context=dashboard#dry-run"
+                or "/execution-center/dry-run"
             )
             blockers.append(
                 {
@@ -414,7 +466,7 @@ class DashboardSupport:
                     "title_params": dict(check.get("label_params") or {}),
                     "detail": detail,
                     "detail_params": dict(check.get("detail_params") or {}),
-                    "action_url": str(check.get("action_url") or "/dashboard"),
+                    "action_url": str(check.get("action_url") or "/overview/control-tower"),
                     "action_label": "Review",
                 }
             )
@@ -449,7 +501,7 @@ class DashboardSupport:
                     "title": "Live preflight completed",
                     "detail": str(preflight_snapshot.get("live_ran_at") or ""),
                     "meta": str(preflight_snapshot.get("overall_status") or ""),
-                    "href": "/dashboard#preflight",
+                    "href": "/overview/control-tower#preflight",
                 }
             )
 

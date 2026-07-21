@@ -49,6 +49,17 @@ def resolve_environment_label(
     if label:
         return label
 
+    if settings_repo is not None:
+        persisted_label = _clean_text(
+            settings_repo.get_value(
+                "environment_label",
+                "",
+                org_id=org_id,
+            )
+        )
+        if persisted_label:
+            return persisted_label
+
     resolved_bind_host = _clean_text(bind_host).lower()
     if not resolved_bind_host and settings_repo is not None:
         resolved_bind_host = _clean_text(

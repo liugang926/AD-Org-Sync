@@ -3,9 +3,12 @@
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Database"), t("Inspect global persistence health, retention, integrity, and backups for this deployment."), eyebrow=t("System Settings"), badge_text=t("Global Scope"), badge_level="warning") %}{% endcall %}
-
-  {% call ui.panel(t("Database Runtime"), t("Global Scope"), "warning") %}
+  {{ ui.page_header(t("Database"), t("Review persistence health, retention, integrity evidence, and backup controls."), eyebrow=t("System Management"), badge_text=t("Global Scope"), badge_level="warning") }}
+  <div class="callout callout--info" role="status">
+    <strong>{{ t("Last integrity check") }}</strong>
+    <span>{{ integrity.result }} / {{ ui.local_time(integrity.checked_at) }}</span>
+  </div>
+  {% call ui.detail_toggle(t("Database Runtime"), t("Technical paths and migration evidence are kept here for diagnostics."), open=False) %}
     <div class="detail-grid">
       <div class="detail-item">
         <div class="label">{{ t("Database file") }}</div>
@@ -14,10 +17,6 @@
       <div class="detail-item">
         <div class="label">{{ t("Backup directory") }}</div>
         <div class="value">{{ db_info.backup_dir }}</div>
-      </div>
-      <div class="detail-item">
-        <div class="label">{{ t("Last integrity check") }}</div>
-        <div class="value">{{ integrity.result }} / {{ ui.local_time(integrity.checked_at) }}</div>
       </div>
       {% if db_info.last_startup_snapshot_path %}
       <div class="detail-item">
@@ -58,7 +57,7 @@
         data-confirm-detail-1-label="{{ t('Scope') }}"
         data-confirm-detail-1-value="{{ t('Global Scope') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        {{ ui.button(t("Create Backup"), type="submit") }}
+        {{ ui.button(t("Create Backup"), type="submit", confirm_text=t("Create a new database backup now?"), confirm_title=t("Confirm Database Backup")) }}
       </form>
     </div>
     {% else %}

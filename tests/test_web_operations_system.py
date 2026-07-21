@@ -56,9 +56,11 @@ class WebOperationsSystemTests(WebAuthzBaseTestCase):
         deployment_body = self._text(deployment_page)
         self.assertIn("Active Process", deployment_body)
         self.assertIn("Global Scope", deployment_body)
+        self.assertIn("Environment Classification", deployment_body)
         deployment_save = self._route(deployment_path, "POST")(
             self._request(deployment_path, "POST"),
             csrf_token=self._csrf(deployment_body),
+            environment_label="staging",
             web_bind_host="127.0.0.1",
             web_bind_port=8123,
             web_public_base_url="https://sync.example.test",
@@ -68,6 +70,8 @@ class WebOperationsSystemTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(deployment_save.status_code, 303)
         self.assertEqual(self.app.state.settings_repo.get_int("web_bind_port", 0), 8123)
+        self.assertEqual(self.app.state.settings_repo.get_value("environment_label", ""), "staging")
+        self.assertEqual(self.app.state.environment_label, "staging")
         actions = [item.action_type for item in self.app.state.audit_repo.list_recent_logs(limit=20)]
         self.assertIn("system_management.employee_self_service.update", actions)
         self.assertIn("system_management.branding.update", actions)

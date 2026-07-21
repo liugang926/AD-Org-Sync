@@ -29,6 +29,7 @@ class TypedSettingsTests(unittest.TestCase):
 
         runtime_settings = WebRuntimeSettings.from_mapping(
             {
+                "environment_label": " Staging ",
                 "web_bind_host": " 0.0.0.0 ",
                 "web_bind_port": "8443",
                 "web_public_base_url": "https://sync.example.com/ ",
@@ -40,6 +41,7 @@ class TypedSettingsTests(unittest.TestCase):
         runtime_settings.persist(settings_repo)
 
         loaded_settings = WebRuntimeSettings.load(settings_repo)
+        self.assertEqual(loaded_settings.environment_label, "staging")
         self.assertEqual(loaded_settings.bind_host, "0.0.0.0")
         self.assertEqual(loaded_settings.bind_port, 8443)
         self.assertEqual(loaded_settings.public_base_url, "https://sync.example.com")
@@ -78,6 +80,32 @@ class TypedSettingsTests(unittest.TestCase):
         self.assertEqual(loaded_settings.scheduled_apply_max_dry_run_age_hours, 1)
         self.assertFalse(loaded_settings.scheduled_apply_requires_zero_conflicts)
         self.assertFalse(loaded_settings.scheduled_apply_requires_review_approval)
+
+    def test_new_schedule_defaults_to_dry_run_without_overwriting_existing_apply(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        db_path = Path(temp_dir.name) / "defaults.db"
+        db_manager = DatabaseManager(str(db_path))
+        db_manager.initialize(create_startup_snapshot=False)
+        settings_repo = SettingsRepository(db_manager)
+
+        self.assertEqual(
+            NotificationAutomationPolicySettings.load(
+                settings_repo, org_id="new-org"
+            ).schedule_execution_mode,
+            "dry_run",
+        )
+        settings_repo.set_value(
+            "schedule_execution_mode", "apply", "string", org_id="existing-org"
+        )
+        db_manager.initialize(create_startup_snapshot=False)
+
+        self.assertEqual(
+            NotificationAutomationPolicySettings.load(
+                settings_repo, org_id="existing-org"
+            ).schedule_execution_mode,
+            "apply",
+        )
 
     def test_directory_ui_and_branding_settings_roundtrip(self):
         temp_dir, settings_repo = self._create_settings_repo()
