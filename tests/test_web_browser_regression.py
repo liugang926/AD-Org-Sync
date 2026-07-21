@@ -1279,10 +1279,14 @@ class WebBrowserRegressionTests(unittest.TestCase):
 
     def test_responsive_pages_keep_tables_local_and_body_within_viewport(self):
         self._login()
-        for width in (390, 768, 1024, 1366, 1440):
-            self.page.set_viewport_size({"width": width, "height": 900})
-            for path in ("/dashboard", "/data-sources/connectors", "/audit"):
-                with self.subTest(width=width, path=path):
+        for width, height in ((390, 844), (768, 900), (1024, 768), (1366, 900), (1440, 900)):
+            self.page.set_viewport_size({"width": width, "height": height})
+            for path in (
+                "/overview/control-tower",
+                "/data-sources/connectors",
+                "/operations-center/audit-log",
+            ):
+                with self.subTest(width=width, height=height, path=path):
                     self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
                     self._assert_page_has_no_horizontal_overflow()
                     if width <= 1024:
@@ -1501,24 +1505,25 @@ class WebBrowserRegressionTests(unittest.TestCase):
 
         self._login()
         pages = (
-            "/jobs?plan_id=browser-execution-plan&lang=en",
-            "/execution-center/dry-run?lang=en",
+            ("/execution-center/dry-run?lang=en", "Dry Run (Preview)"),
             (
                 "/execution-center/plan-review"
-                "?plan_id=browser-execution-plan&lang=en"
+                "?plan_id=browser-execution-plan&lang=en",
+                "Plan Review",
             ),
             (
                 "/execution-center/apply"
-                "?plan_id=browser-execution-plan&lang=en"
+                "?plan_id=browser-execution-plan&lang=en",
+                "Apply (Formal execution)",
             ),
-            "/execution-center/jobs?lang=en",
+            ("/execution-center/jobs?lang=en", "Job History"),
         )
-        for path in pages:
+        for path, heading in pages:
             with self.subTest(path=path):
                 self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
                 self.assertTrue(
                     self.page.get_by_role(
-                        "heading", name="Jobs", level=1, exact=True
+                        "heading", name=heading, level=1, exact=True
                     ).is_visible()
                 )
                 self.assertEqual(
@@ -1529,24 +1534,11 @@ class WebBrowserRegressionTests(unittest.TestCase):
                     self.page.locator(".execution-tabs a[aria-current='page']").count(),
                     1,
                 )
-                for section_id in (
-                    "current-status",
-                    "dry-run",
-                    "plan-review",
-                    "apply",
-                    "history",
-                ):
-                    self.assertEqual(
-                        self.page.locator(f"section#{section_id}").count(),
-                        1,
-                    )
                 main_text = self.page.locator("main").inner_text().lower()
                 self.assertIn("organization", main_text)
                 self.assertIn("environment", main_text)
-                self.assertIn("current source snapshot", main_text)
-                self.assertIn("current sync policy version", main_text)
-                self.assertIn("selected dry run id", main_text)
-                self.assertIn("task history", main_text)
+                self.assertIn("snapshot version", main_text)
+                self.assertIn("impact count", main_text)
                 for index in range(self.page.locator("main table").count()):
                     self.assertLessEqual(
                         self.page.locator("main table")
@@ -1557,10 +1549,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
                     )
 
         self.page.goto(
-            (
-                f"{self.base_url}/jobs"
-                "?plan_id=browser-execution-plan&lang=en#plan-review"
-            ),
+            f"{self.base_url}/execution-center/plan-review?plan_id=browser-execution-plan&lang=en",
             wait_until="networkidle",
         )
         current_tab = self.page.locator(
@@ -1571,9 +1560,9 @@ class WebBrowserRegressionTests(unittest.TestCase):
             current_tab.evaluate("element => document.activeElement === element")
         )
         self.page.keyboard.press("Tab")
-        self.assertEqual(
+        self.assertIn(
+            "/execution-center/apply",
             self.page.evaluate("document.activeElement?.getAttribute('href') || ''"),
-            "#dry-run",
         )
 
         self.page.get_by_role("button", name="Approve selected plan").click()
@@ -1584,10 +1573,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertIn("approved", self.page.locator("main").inner_text().lower())
 
         self.page.goto(
-            (
-                f"{self.base_url}/jobs"
-                "?plan_id=browser-execution-plan&lang=en#apply"
-            ),
+            f"{self.base_url}/execution-center/apply?plan_id=browser-execution-plan&lang=en",
             wait_until="networkidle",
         )
         self.assertIn(f"#{created['snapshot_id']}", self.page.locator("main").inner_text())
@@ -1612,6 +1598,10 @@ class WebBrowserRegressionTests(unittest.TestCase):
             "browser-execution-plan",
         )
 
+        self.page.goto(
+            f"{self.base_url}/execution-center/jobs?lang=en",
+            wait_until="networkidle",
+        )
         local_time = self.page.locator("time[data-local-time]").first
         self.assertTrue(local_time.is_visible())
         self.assertTrue(local_time.get_attribute("datetime"))
@@ -1619,24 +1609,18 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self._capture_viewport("execution-center-desktop-en.png")
 
         self.page.goto(
-            (
-                f"{self.base_url}/jobs"
-                "?plan_id=browser-execution-plan&lang=zh-CN#plan-review"
-            ),
+            f"{self.base_url}/execution-center/plan-review?plan_id=browser-execution-plan&lang=zh-CN",
             wait_until="networkidle",
         )
         self.assertTrue(
             self.page.get_by_role(
-                "heading", name="\u4efb\u52a1", level=1, exact=True
+                "heading", name="\u8ba1\u5212\u5ba1\u6838", level=1, exact=True
             ).is_visible()
         )
 
         self.page.set_viewport_size({"width": 390, "height": 900})
         self.page.goto(
-            (
-                f"{self.base_url}/jobs"
-                "?plan_id=browser-execution-plan&lang=zh-CN#history"
-            ),
+            f"{self.base_url}/execution-center/jobs?lang=zh-CN",
             wait_until="networkidle",
         )
         self._assert_page_has_no_horizontal_overflow()
@@ -1649,26 +1633,34 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.assertIn(tabs["overflowX"], {"auto", "scroll"}, tabs)
         self.assertGreaterEqual(tabs["scrollWidth"], tabs["clientWidth"], tabs)
-        history_section = self.page.locator("section#history")
-        self.assertTrue(history_section.is_visible())
-        history_section.scroll_into_view_if_needed()
-        history_box = history_section.bounding_box()
-        self.assertIsNotNone(history_box)
-        self.assertLess(float(history_box["y"]), 900)
         self._capture_viewport("execution-center-narrow-zh.png")
 
-    def test_jobs_is_the_only_browser_apply_surface(self):
+    def test_apply_is_available_only_on_execution_surfaces(self):
         self._login()
         self.page.goto(f"{self.base_url}/jobs?lang=en", wait_until="networkidle")
         self.assertEqual(
-            self.page.locator("aside a[href='/jobs']").count(),
+            self.page.locator("aside a[href^='/execution-center/']").count(),
+            4,
+        )
+        self.assertEqual(
+            self.page.locator("form[action='/jobs/run']").count(),
             1,
+        )
+
+        self.page.goto(
+            f"{self.base_url}/execution-center/apply?lang=en",
+            wait_until="networkidle",
+        )
+        self.assertTrue(
+            self.page.get_by_role(
+                "heading", name="Apply (Formal execution)", level=1, exact=True
+            ).is_visible()
         )
         self.assertEqual(
             self.page.locator(
-                "aside a[href^='/execution-center/']"
+                "aside a[href='/execution-center/apply'][aria-current='page']"
             ).count(),
-            0,
+            1,
         )
 
         non_execution_pages = (
@@ -1781,7 +1773,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.assertEqual(recent_links.count(), 1)
         self.assertEqual(
-            recent_links.first.get_attribute("href"), "/jobs"
+            recent_links.first.get_attribute("href"), "/execution-center/dry-run"
         )
         self.assertEqual(
             self.page.locator("[data-sidebar-recent-link].active").count(), 0
@@ -1812,7 +1804,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertEqual(current_links.count(), 1)
         self.assertEqual(
             current_links.first.get_attribute("href"),
-            "/jobs",
+            "/execution-center/jobs",
         )
 
     def test_mobile_navigation_traps_focus_and_restores_the_menu_button(self):
@@ -1949,7 +1941,12 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         self.assertTrue(
             self.page.get_by_role(
-                "button", name="Test Saved Connections"
+                "button", name="Test source directory"
+            ).is_visible()
+        )
+        self.assertTrue(
+            self.page.get_by_role(
+                "button", name="Test target AD"
             ).is_visible()
         )
         self.assertTrue(self.page.locator("#ldap_server").is_visible())
@@ -1973,6 +1970,33 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertNotIn("Pending Lifecycle Queue", self.page.locator("main").inner_text())
 
     def test_config_source_picker_moves_to_searchable_sync_scope_tree(self):
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        source_repo = SourceDirectoryRepository(manager)
+        current_config = OrganizationConfigRepository(manager).get_raw_config(
+            "default",
+            config_path="config.ini",
+        )
+        snapshot_id = source_repo.start_refresh(
+            org_id="default",
+            provider_id=str(current_config.get("source_provider") or "wecom"),
+            created_by="browser-scope-test",
+        )
+        source_repo.replace_snapshot(
+            snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "browser-scope-root",
+                    "name": "Browser Scope Root",
+                    "parent_department_id": "0",
+                    "path_ids": ["browser-scope-root"],
+                    "path_names": ["Browser Scope Root"],
+                }
+            ],
+            users=[],
+            fields=[],
+            fingerprint=f"sha256:v2:browser-scope:{snapshot_id}",
+        )
         self._login(ui_mode="advanced")
         self.page.goto(f"{self.base_url}/config", wait_until="networkidle")
         self.assertEqual(self.page.url, f"{self.base_url}/data-sources/connectors")
@@ -1984,9 +2008,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(
             self.page.get_by_role("heading", name="Sync Scope", level=1).is_visible()
         )
-        self.assertTrue(
-            self.page.locator("[data-department-tree]").is_visible()
-        )
+        self.assertTrue(self.page.locator("[data-department-tree]").is_visible())
         self.assertTrue(
             self.page.locator("[data-department-tree-search]").is_visible()
         )
@@ -2453,13 +2475,11 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 )
 
     def test_z_responsive_evidence_covers_critical_operating_pages(self):
-        self._login(ui_mode="advanced")
-        viewports = (390, 768, 1024, 1366, 1440)
+        self._login()
+        viewports = ((390, 844), (768, 900), (1024, 768), (1440, 900))
         pages = {
-            "dashboard": ("/dashboard?lang=zh-CN", ".control-tower"),
-            "jobs": ("/jobs?lang=zh-CN", ".execution-flow"),
-            "audit": ("/audit?lang=zh-CN", ".table-shell"),
-            "organizations": ("/organizations?lang=zh-CN", ".table-shell"),
+            "dashboard": ("/overview/control-tower?lang=zh-CN", ".control-tower"),
+            "getting-started": ("/getting-started?lang=zh-CN", ".step-list"),
             "connectors": ("/data-sources/connectors?lang=zh-CN", ".page-header"),
             "source-directory": (
                 "/data-sources/source-directory?lang=zh-CN",
@@ -2469,6 +2489,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 "/data-sources/snapshots?lang=zh-CN",
                 ".table-scroll",
             ),
+            "data-quality": ("/data-sources/data-quality?lang=zh-CN", ".page-header"),
             "binding-reconciliation": (
                 "/identity-governance/binding-reconciliation?lang=zh-CN",
                 ".page-header",
@@ -2517,9 +2538,18 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 "/sync-policies/security?lang=zh-CN",
                 ".policy-status-grid",
             ),
-            "mappings": ("/mappings?lang=zh-CN", ".table-shell"),
+            "dry-run": ("/execution-center/dry-run?lang=zh-CN", ".execution-flow"),
+            "plan-review": ("/execution-center/plan-review?lang=zh-CN", ".execution-flow"),
+            "apply": ("/execution-center/apply?lang=zh-CN", ".execution-flow"),
+            "job-history": ("/execution-center/jobs?lang=zh-CN", ".execution-flow"),
+            "lifecycle": ("/operations-center/lifecycle-queue?lang=zh-CN", ".lifecycle-command-center"),
+            "automation": ("/operations-center/automation?lang=zh-CN", ".page-header"),
+            "notifications": ("/operations-center/notifications?lang=zh-CN", ".page-header"),
+            "audit": ("/operations-center/audit-log?lang=zh-CN", ".table-shell"),
+            "organizations": ("/system-management/organizations?lang=zh-CN", ".table-shell"),
+            "deployment": ("/system-management/deployment?lang=zh-CN", ".page-header"),
             "identity-job": (
-                "/jobs/browser-identity-apply?lang=zh-CN",
+                "/execution-center/jobs/browser-identity-apply?lang=zh-CN",
                 ".identity-resolution-results",
             ),
         }
@@ -2541,10 +2571,10 @@ class WebBrowserRegressionTests(unittest.TestCase):
             ),
         )
 
-        for width in viewports:
-            self.page.set_viewport_size({"width": width, "height": 900})
+        for width, height in viewports:
+            self.page.set_viewport_size({"width": width, "height": height})
             for page_name, (path, first_selector) in pages.items():
-                with self.subTest(width=width, page=page_name):
+                with self.subTest(width=width, height=height, page=page_name):
                     self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
                     metrics = self.page.evaluate(
                         """firstSelector => {
@@ -2600,7 +2630,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
                         self.assertIn(table["overflowX"], {"auto", "scroll"})
                         self.assertGreaterEqual(int(table["tabindex"] or -1), 0)
                     records.append(
-                        {"page": page_name, "path": path, "width": width, **metrics}
+                        {"page": page_name, "path": path, "width": width, "height": height, **metrics}
                     )
                     screenshot_path = ARTIFACT_DIR / f"evidence-{page_name}-{width}.png"
                     self.page.screenshot(path=str(screenshot_path), full_page=True)
@@ -2608,8 +2638,8 @@ class WebBrowserRegressionTests(unittest.TestCase):
         login_context = self.browser.new_context(locale="en-US")
         try:
             login_page = login_context.new_page()
-            for width in viewports:
-                login_page.set_viewport_size({"width": width, "height": 900})
+            for width, height in viewports:
+                login_page.set_viewport_size({"width": width, "height": height})
                 login_page.goto(f"{self.base_url}/login?lang=zh-CN", wait_until="networkidle")
                 dimensions = login_page.evaluate(
                     "() => ({clientWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth, pageHeight: document.documentElement.scrollHeight})"
@@ -2620,7 +2650,8 @@ class WebBrowserRegressionTests(unittest.TestCase):
                         "page": "login",
                         "path": "/login?lang=zh-CN",
                         "width": width,
-                        "viewport": {"width": width, "height": 900},
+                        "height": height,
+                        "viewport": {"width": width, "height": height},
                         **dimensions,
                     }
                 )

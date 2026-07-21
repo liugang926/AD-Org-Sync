@@ -12,7 +12,7 @@
     ) }}
     {% call mode_ui.advanced_inline(ui_presentation) %}{{ ui.button(t("Open Sync Scope"), href="/sync-policies/scope", variant="secondary", icon="list-filter") }}{% endcall %}
     {% if can("config.write") %}
-    <form method="post" action="/source-directory/refresh" class="inline">
+    <form method="post" action="/data-sources/source-directory/refresh" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       {{ ui.button(t("Refresh Directory"), type="submit", variant="primary", icon="refresh-cw", disabled=refresh_in_progress) }}
     </form>

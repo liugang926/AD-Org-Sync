@@ -4,8 +4,7 @@
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Platform Accounts"), t("Manage global administrator accounts and roles for every organization on this deployment."), eyebrow=t("System Settings"), badge_text=t("Global Scope"), badge_level="warning") %}{% endcall %}
-
+  {{ ui.page_header(t("Administrators And Permissions"), t("Manage local control-plane administrators and their RBAC roles."), eyebrow=t("System Management"), badge_text=t("Global Scope"), badge_level="warning") }}
   {% call ui.panel(t("Local Admin Users"), t("Global Scope"), "warning") %}
     <form method="post" action="/system-management/administrators"
       data-confirm="{{ t('This creates a platform account with access determined by the selected global role.') }}"

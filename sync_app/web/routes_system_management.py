@@ -6,6 +6,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from sync_app.services.typed_settings import BrandingSettings, SSPRSettings, WebRuntimeSettings
+from sync_app.services.high_risk_operations import resolve_environment_label
 from sync_app.web.app_state import get_web_repositories, get_web_runtime_state
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 from sync_app.web.runtime import resolve_web_runtime_settings, web_runtime_requires_restart
@@ -199,6 +200,7 @@ def register_system_management_routes(
     def deployment_save(
         request: Request,
         csrf_token: str = Form(""),
+        environment_label: Optional[str] = Form(None),
         web_bind_host: str = Form("127.0.0.1"),
         web_bind_port: int = Form(8000),
         web_public_base_url: str = Form(""),
@@ -214,8 +216,26 @@ def register_system_management_routes(
         if csrf_error:
             return csrf_error
         repositories = get_web_repositories(request)
+        current_environment_label = repositories.settings_repo.get_value(
+            "environment_label", ""
+        )
+        submitted_environment_label = (
+            current_environment_label
+            if environment_label is None
+            else str(environment_label or "").strip().lower()
+        )
+        if submitted_environment_label not in {
+            "",
+            "production",
+            "staging",
+            "test",
+            "development",
+        }:
+            flash_t(request, "error", "Select a valid environment classification.")
+            return RedirectResponse(url=return_path, status_code=303)
         settings = WebRuntimeSettings.from_mapping(
             {
+                "environment_label": submitted_environment_label,
                 "web_bind_host": web_bind_host,
                 "web_bind_port": web_bind_port,
                 "web_public_base_url": web_public_base_url,
@@ -225,9 +245,14 @@ def register_system_management_routes(
             }
         )
         settings.persist(repositories.settings_repo)
+        runtime = get_web_runtime_state(request)
+        runtime.environment_label = resolve_environment_label(
+            settings_repo=repositories.settings_repo,
+        )
+        request.app.state.environment_label = runtime.environment_label
         persisted = resolve_web_runtime_settings(repositories.settings_repo)
         restart_required = web_runtime_requires_restart(
-            get_web_runtime_state(request).web_runtime_settings,
+            runtime.web_runtime_settings,
             persisted,
         )
         repositories.audit_repo.add_log(

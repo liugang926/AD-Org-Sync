@@ -96,7 +96,7 @@ class ConfigSupport:
         group_display_separator: str = "-",
         group_recursive_enabled: Optional[str] = None,
         managed_relation_cleanup_enabled: Optional[str] = None,
-        schedule_execution_mode: str = "apply",
+        schedule_execution_mode: str = "dry_run",
         web_bind_host: str = "127.0.0.1",
         web_bind_port: int = 8000,
         web_public_base_url: str = "",

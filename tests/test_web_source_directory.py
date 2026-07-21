@@ -1107,7 +1107,7 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(
             response.headers["location"],
-            "/jobs?context=source-directory#dry-run",
+            "/execution-center/dry-run",
         )
         selection = self.app.state.source_directory_repo.get_scope_selection(
             org_id="default", provider_id="wecom"

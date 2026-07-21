@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Automation And Schedules"), t("Configure when synchronization is requested and the safety gate that blocks unattended Apply."), eyebrow=t("Operations Center"), badge_text=t("Organization Scope"), badge_level="info") %}
-    {{ ui.button(t("Open Jobs"), href="/jobs?context=automation#history", variant="secondary", icon="history") }}
+    {{ ui.button(t("Open Jobs"), href="/execution-center/jobs", variant="secondary", icon="history") }}
   {% endcall %}
 
   {% if scheduled_apply_guard.mode == "apply" and not scheduled_apply_guard.allowed %}
@@ -49,10 +49,11 @@
           </div>
           <div class="form-group">
             <label for="schedule_execution_mode">{{ t("Scheduled Mode") }}</label>
-            <select id="schedule_execution_mode" name="schedule_execution_mode">
+            <select id="schedule_execution_mode" name="schedule_execution_mode" data-scheduled-mode>
               <option value="dry_run" {% if policy_settings.schedule_execution_mode == "dry_run" %}selected{% endif %}>{{ t("Dry Run") }}</option>
               <option value="apply" {% if policy_settings.schedule_execution_mode == "apply" %}selected{% endif %}>{{ t("Apply") }}</option>
             </select>
+            <span class="form-help">{{ t("New organizations start in Dry Run. Unattended Apply is appropriate only after a successful manual Apply and green safety checks.") }}</span>
           </div>
           <div class="form-group">
             <label for="ops_scheduled_apply_max_dry_run_age_hours">{{ t("Max Dry Run Age (Hours)") }}</label>
@@ -63,6 +64,14 @@
           <label class="inline-checkbox"><input type="checkbox" name="ops_scheduled_apply_gate_enabled" value="1" {% if policy_settings.scheduled_apply_gate_enabled %}checked{% endif %}>{{ t("Enable scheduled Apply safety gate") }}</label>
           <label class="inline-checkbox"><input type="checkbox" name="ops_scheduled_apply_requires_zero_conflicts" value="1" {% if policy_settings.scheduled_apply_requires_zero_conflicts %}checked{% endif %}>{{ t("Require zero open conflicts") }}</label>
           <label class="inline-checkbox"><input type="checkbox" name="ops_scheduled_apply_requires_review_approval" value="1" {% if policy_settings.scheduled_apply_requires_review_approval %}checked{% endif %}>{{ t("Require approved high-risk review") }}</label>
+        </div>
+        <div class="callout callout--warning" data-scheduled-apply-confirmation {% if policy_settings.schedule_execution_mode != "apply" %}hidden{% endif %}>
+          <strong>{{ t("Unattended Apply can change production identities without an operator present.") }}</strong>
+          <span>{{ t("The latest successful manual Apply, a fresh Dry Run, zero open conflicts, and any required approval must remain valid at execution time.") }}</span>
+          <label class="inline-checkbox" for="confirm_scheduled_apply">
+            <input id="confirm_scheduled_apply" type="checkbox" name="confirm_scheduled_apply" value="1">
+            {{ t("I understand the unattended Apply risk and want to save this mode.") }}
+          </label>
         </div>
         <div class="actions">
           {{ ui.button(t("Save Automation Policy"), type="submit", icon="save") }}
@@ -82,6 +91,7 @@
           <div><strong>{{ t("Open Conflicts") }}:</strong> {{ scheduled_apply_guard.open_conflict_count }}</div>
           <div><strong>{{ t("Review Approval Needed") }}:</strong> {{ t("Yes") if scheduled_apply_guard.review_required else t("No") }}</div>
           <div><strong>{{ t("Dry Run Age") }}:</strong> {% if scheduled_apply_guard.dry_run_age_hours is not none %}{{ "%.1f"|format(scheduled_apply_guard.dry_run_age_hours) }}h{% else %}-{% endif %}</div>
+          <div><strong>{{ t("Successful Manual Apply") }}:</strong> {% if latest_successful_manual_apply %}<a href="/execution-center/jobs/{{ latest_successful_manual_apply.job_id }}">{{ latest_successful_manual_apply.job_id }}</a>{% else %}{{ t("Not completed") }}{% endif %}</div>
         </div>
         {% if scheduled_apply_guard.reasons %}
         <ul class="helper-list">{% for reason in scheduled_apply_guard.reasons %}<li>{{ t(reason) }}</li>{% endfor %}</ul>
@@ -91,7 +101,7 @@
         {% if scheduled_apply_guard.latest_successful_dry_run %}
         <a href="/execution-center/jobs/{{ scheduled_apply_guard.latest_successful_dry_run.job_id }}">{{ t("Open latest successful Dry Run") }}{% if ui_presentation.show_internal_identifiers %}: {{ scheduled_apply_guard.latest_successful_dry_run.job_id }}{% endif %}</a>
         {% else %}
-        <a href="/jobs?context=automation#dry-run">{{ t("Next step: run a Dry Run") }}</a>
+        <a href="/execution-center/dry-run">{{ t("Next step: run a Dry Run") }}</a>
         {% endif %}
       </div>
     {% endcall %}

@@ -5,12 +5,14 @@
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Connectors"), t("Configure the upstream people directory and target AD connections for the current organization. Synchronization scope, naming, routing, and lifecycle rules live in Sync Policies."), eyebrow=t("Data Sources"), badge_text=t("Organization Scope"), badge_level="info") %}
-    <form method="post" action="/preflight/run" class="inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="return_url" value="/data-sources/connectors">
-      {{ ui.button(t("Test Saved Connections"), type="submit", variant="secondary", icon="plug-zap") }}
-    </form>
+    {{ ui.button(t("Open Source Directory"), href="/data-sources/source-directory", variant="secondary", icon="users-round") }}
   {% endcall %}
+
+  <section class="setup-steps" aria-label="{{ t('Connector setup progress') }}">
+    <article class="setup-step" data-state="{{ 'complete' if source_ready and base_target_ready else 'current' }}"><span>1</span><div><strong>{{ t("Save connections") }}</strong><small>{{ t("Store source and target credentials for this organization.") }}</small></div>{{ ui.badge(t("Complete") if source_ready and base_target_ready else t("Current"), "success" if source_ready and base_target_ready else "info") }}</article>
+    <article class="setup-step" data-state="{{ 'complete' if preflight_summary.has_live_checks else ('current' if source_ready and base_target_ready else 'pending') }}"><span>2</span><div><strong>{{ t("Test independently") }}</strong><small>{{ t("Verify the source directory and target AD separately.") }}</small></div>{{ ui.badge(t("Complete") if preflight_summary.has_live_checks else (t("Current") if source_ready and base_target_ready else t("Pending")), "success" if preflight_summary.has_live_checks else "warning") }}</article>
+    <article class="setup-step" data-state="pending"><span>3</span><div><strong>{{ t("Refresh snapshot") }}</strong><small>{{ t("Create a source snapshot before data quality and scope review.") }}</small></div>{{ ui.badge(t("Next"), "warning") }}</article>
+  </section>
 
   <div class="stat-grid">
     <article class="stat-card"><span>{{ t("Organization") }}</span><strong>{{ current_org.name }}</strong></article>
@@ -26,6 +28,14 @@
     <strong>{{ t("Saved connection test") }}: {{ t(preflight_summary.overall_status|upper) }}</strong>
     <span>{{ t("Review any failed source or LDAP check below, update the saved connection, then test again.") }}</span>
   </section>
+  {% if preflight_summary.has_live_checks %}
+  <div class="grid cols-2 connector-test-results">
+    {% for key, title in [("live_source", "Source directory test"), ("live_ldap", "Target AD test")] %}
+      {% set result = (preflight_summary.checks|selectattr("key", "equalto", key)|list|first) %}
+      {% if result %}<article class="callout {{ 'callout--success' if result.status == 'success' else ('callout--danger' if result.status == 'error' else 'callout--warning') }}"><strong>{{ t(title) }} · {{ t(result.status|capitalize) }}</strong><span>{{ t(result.detail, **(result.detail_params or {})) }}</span></article>{% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
   {% endif %}
 
   <form method="post" action="/data-sources/connectors/base" class="page-stack" data-connector-base-form>
@@ -62,6 +72,19 @@
       <span class="form-help">{{ t("Next: test the saved connections, then refresh Source Directory.") }}</span>
     </div>
   </form>
+
+  <div class="grid cols-2 connector-test-actions">
+    {% for kind, title, detail in [("source", "Test source directory", "Tests only the saved upstream provider credentials."), ("ldap", "Test target AD", "Tests only the saved base LDAP credentials and certificate policy.")] %}
+    {% call ui.panel(t(title), description=t(detail)) %}
+      <form method="post" action="/preflight/run" class="actions">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="return_url" value="/data-sources/connectors">
+        <input type="hidden" name="connection_kind" value="{{ kind }}">
+        {{ ui.button(t(title), type="submit", variant="secondary", icon="plug-zap") }}
+      </form>
+    {% endcall %}
+    {% endfor %}
+  </div>
 
   {{ mode_ui.basic_guidance(ui_presentation, t("Next step"), t("Test the saved base connections, then refresh Source Directory. Switch to Advanced mode only when this organization needs more than one target AD connection."), t("Open Source Directory"), "/data-sources/source-directory") }}
 

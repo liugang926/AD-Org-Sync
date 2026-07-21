@@ -4,10 +4,10 @@
 
 {% block content %}
 {% set next_action_is_config = job_center_summary.next_action_url.startswith("/config") or job_center_summary.next_action_url.startswith("/sync-policies") or job_center_summary.next_action_url.startswith("/data-sources") %}
-{% set visible_next_action_url = job_center_summary.next_action_url if (not next_action_is_config or can("config.read")) else "/jobs?context=dashboard" %}
-{% set visible_next_action_label = job_center_summary.next_action_label_code if (not next_action_is_config or can("config.read")) else "Open Jobs Execution Center" %}
+{% set visible_next_action_url = job_center_summary.next_action_url if (not next_action_is_config or can("config.read")) else "/execution-center/jobs" %}
+{% set visible_next_action_label = job_center_summary.next_action_label_code if (not next_action_is_config or can("config.read")) else "Open Job History" %}
 <div class="page-stack">
-  {{ ui.page_header(t("Control Tower"), t("Summary, blockers, and the single next action for the current organization. All execution happens in Jobs."), eyebrow=t("Overview")) }}
+  {{ ui.page_header(t("Control Tower"), t("Summary, blockers, and the single next action for the current organization. Dry Run, plan review, Apply, and history remain separate execution steps."), eyebrow=t("Overview")) }}
   {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t(visible_next_action_label), t("Open next step"), visible_next_action_url) }}
 
   <section class="control-tower control-tower--{{ job_center_summary.overall_status }}">
@@ -19,12 +19,12 @@
           {% if job_center_summary.blocked_reasons %}
           {{ t(job_center_summary.blocked_reasons[0].message_code, **job_center_summary.blocked_reasons[0].params) }}
           {% else %}
-          {{ t("The latest checks show no blocking item. Review the selected Dry Run in Jobs before Apply.") }}
+          {{ t("The latest checks show no blocking item. Review the selected Dry Run before Apply.") }}
           {% endif %}
         </p>
         <div class="control-tower__actions">
           {{ ui.button(t(visible_next_action_label), href=visible_next_action_url) }}
-          {{ ui.button(t("Open Jobs Execution Center"), href="/jobs?context=dashboard", variant="secondary") }}
+          {{ ui.button(t("Open Job History"), href="/execution-center/jobs", variant="secondary") }}
         </div>
       </div>
 
@@ -71,7 +71,7 @@
             <p class="blocker-item__detail">{{ t(item.detail, **(item.detail_params or {})) }}</p>
           </div>
           {% set item_is_config = item.action_url.startswith("/config") or item.action_url.startswith("/sync-policies") or item.action_url.startswith("/data-sources") %}
-          <a href="{{ item.action_url if (not item_is_config or can('config.read')) else '/jobs?context=dashboard' }}">{{ t(item.action_label) if (not item_is_config or can('config.read')) else t("Open Jobs Execution Center") }}</a>
+          <a href="{{ item.action_url if (not item_is_config or can('config.read')) else '/execution-center/jobs' }}">{{ t(item.action_label) if (not item_is_config or can('config.read')) else t("Open Job History") }}</a>
         </article>
         {% else %}
         <div class="panel-note success">{{ t("No blocking items are currently visible for this organization.") }}</div>
@@ -79,22 +79,25 @@
       </div>
     {% endcall %}
 
-    {% call ui.panel(t("Next Step"), description=t("Dashboard points to one next action; it does not start Dry Run or Apply.")) %}
+    {% call ui.panel(t("Next Step"), description=t("Control Tower points to one recommended action; execution starts only on its owning page.")) %}
       <div class="stack-tight">
         <h2>{{ t(visible_next_action_label) }}</h2>
         <p class="muted">
           {% if job_center_summary.blocked_reasons %}
           {{ t(job_center_summary.blocked_reasons[0].message_code, **job_center_summary.blocked_reasons[0].params) }}
           {% else %}
-          {{ t("Open Jobs to review the current execution evidence.") }}
+          {{ t("Open the execution step to review the current evidence.") }}
           {% endif %}
         </p>
-        {{ ui.button(t(visible_next_action_label), href=visible_next_action_url, variant="secondary") }}
+        <div class="actions">
+          {{ ui.button(t(visible_next_action_label), href=visible_next_action_url, variant="secondary") }}
+          {{ ui.button(t("Open Guided Setup"), href="/getting-started", variant="secondary") }}
+        </div>
       </div>
     {% endcall %}
   </div>
 
-  {% call ui.panel(t("Deployment Preflight"), description=t("Summary only. Open Jobs for the unified execution history.")) %}
+  {% call ui.panel(t("Deployment Preflight"), description=t("Summary only. Expand the owning execution step when a check blocks progress.")) %}
     <div class="compact-stats">
       {{ ui.compact_stat(t("Status"), t(preflight_summary.overall_status|capitalize)) }}
       {{ ui.compact_stat(t("Successful"), preflight_summary.status_counts.success) }}
@@ -108,7 +111,7 @@
         {{ ui.badge(t(check.label, **(check.label_params or {})), check.status) }}
         {% endif %}
       {% endfor %}
-      <span class="muted">{{ t("Last live check") }}: {{ preflight_summary.live_ran_at }}</span>
+      <span class="muted">{{ t("Last live check") }}: {{ ui.local_time(preflight_summary.live_ran_at) }}</span>
     </div>
     {% endif %}
   {% endcall %}

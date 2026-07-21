@@ -173,6 +173,7 @@ def register_organization_routes(
         bundle_json: str = Form(""),
         target_org_id: str = Form(""),
         replace_existing: Optional[str] = Form(None),
+        confirm_replace: Optional[str] = Form(None),
     ):
         user = require_capability(request, "organizations.manage")
         if isinstance(user, RedirectResponse):
@@ -191,12 +192,20 @@ def register_organization_routes(
         except json.JSONDecodeError as exc:
             flash_t(request, "error", "Invalid configuration bundle JSON: {error}", error=str(exc))
             return RedirectResponse(url=return_path, status_code=303)
+        replace_requested = to_bool(replace_existing, False)
+        if replace_requested and not to_bool(confirm_replace, False):
+            flash(
+                request,
+                "error",
+                "Confirm replacement before deleting existing organization-scoped configuration",
+            )
+            return RedirectResponse(url=return_path, status_code=303)
         try:
             summary = import_organization_bundle(
                 repositories.db_manager,
                 bundle,
                 target_org_id=str(target_org_id or "").strip() or None,
-                replace_existing=to_bool(replace_existing, False),
+                replace_existing=replace_requested,
             )
         except Exception as exc:
             flash_t(request, "error", "Failed to import organization bundle: {error}", error=str(exc))

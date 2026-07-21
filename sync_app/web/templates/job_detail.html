@@ -6,12 +6,12 @@
 <div class="page-stack">
   {% set status_level = 'success' if job.status == 'COMPLETED' else ('error' if job.status == 'FAILED' else 'warning') %}
   {% set summary = job.summary or {} %}
-  <a href="/jobs#history" class="back-link">&larr; {{ t("Back to Job History") }}</a>
+  <a href="/execution-center/jobs" class="back-link">&larr; {{ t("Back to Job History") }}</a>
 
   <section class="job-review-hero job-review-hero--{{ status_level }}">
     <div class="job-review-hero__main">
       <div class="control-tower__eyebrow">{{ t("Run Detail") }}</div>
-      <h2>{{ t("Job Details") }}</h2>
+      <h1>{{ t("Job Details") }}</h1>
       <p>
         {{ t("Review the execution result, risk profile, comparison baseline, and raw evidence for this synchronization run.") }}
       </p>
@@ -163,7 +163,7 @@
         <div class="stack-md">
           <div class="cell-strong">{{ t("Action Required") }}</div>
           <p>{{ t("Approval decisions are recorded in Plan Review, where the current environment, snapshot, scope, and expiry are revalidated.") }}</p>
-          <a href="/jobs?plan_id={{ job.job_id|urlencode }}#plan-review">{{ t("Open Plan Review") }}</a>
+          <a href="/execution-center/plan-review?plan_id={{ job.job_id|urlencode }}">{{ t("Open Plan Review") }}</a>
         </div>
       </div>
       {% endif %}
@@ -266,6 +266,7 @@
   {% endcall %}
   {% endif %}
 
+  {% if identity_resolutions %}
   {% call ui.panel(t("Identity Resolution Results")) %}
     <div class="panel-note info">
       {{ t("Dry Run rows are planned identity evidence only. Applied values appear only for a completed Apply job with a successful user operation.") }}
@@ -311,7 +312,9 @@
       {% endif %}
     {% endcall %}
   {% endcall %}
+  {% endif %}
 
+  {% if planned_operations %}
   {% call ui.panel(t("Planned Operations")) %}
     {% call ui.table_shell() %}
       <table class="table-sm">
@@ -351,8 +354,9 @@
       {% endif %}
     {% endcall %}
   {% endcall %}
+  {% endif %}
 
-  {% call mode_ui.advanced(ui_presentation) %}
+  {% if operation_records %}
   {% call ui.panel(t("Operation Records")) %}
     {% call ui.table_shell() %}
       <table class="table-sm">
@@ -395,9 +399,11 @@
       {% endif %}
     {% endcall %}
   {% endcall %}
-  {% endcall %}
+  {% endif %}
 
+  {% if conflicts or events %}
   <div class="grid cols-2">
+    {% if conflicts %}
     {% call ui.panel(t("Conflict Queue")) %}
       {% call ui.table_shell() %}
         <table class="table-sm">
@@ -426,8 +432,9 @@
         {% endif %}
       {% endcall %}
     {% endcall %}
+    {% endif %}
 
-    {% call mode_ui.advanced(ui_presentation) %}
+    {% if events %}
     {% call ui.panel(t("System Events")) %}
       {% call ui.table_shell() %}
         <table class="table-sm">
@@ -466,13 +473,12 @@
         {% endif %}
       {% endcall %}
     {% endcall %}
-    {% endcall %}
+    {% endif %}
   </div>
+  {% endif %}
 
-  {% call mode_ui.advanced(ui_presentation) %}
-  {% call ui.panel(t("Raw Summary")) %}
+  {% call ui.detail_toggle(t("Raw Summary"), t("Technical JSON evidence for support and audit troubleshooting."), open=False) %}
     <pre>{{ summary_json }}</pre>
-  {% endcall %}
   {% endcall %}
 </div>
 {% endblock %}

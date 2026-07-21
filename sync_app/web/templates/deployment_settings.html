@@ -34,6 +34,16 @@
         data-confirm-detail-2-value="{{ t(environment_label) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-grid">
+          <div class="form-group field-span-full">
+            <label for="environment_label">{{ t("Environment Classification") }}</label>
+            <select id="environment_label" name="environment_label">
+              <option value="" {% if not settings.environment_label %}selected{% endif %}>{{ t("Not configured") }}</option>
+              {% for value, label in [("production", "Production"), ("staging", "Staging"), ("test", "Test"), ("development", "Development")] %}
+              <option value="{{ value }}" {% if settings.environment_label == value %}selected{% endif %}>{{ t(label) }}</option>
+              {% endfor %}
+            </select>
+            <small>{{ t("Classify this deployment before running Apply. This value takes effect immediately and does not require a service restart.") }}</small>
+          </div>
           <div class="form-group">
             <label for="web_bind_host">{{ t("Bind Host") }}</label>
             <input id="web_bind_host" name="web_bind_host" value="{{ settings.bind_host }}" required>
@@ -65,6 +75,7 @@
         </div>
         <div class="actions">
           {{ ui.button(t("Save Deployment Settings"), type="submit", icon="save") }}
+          {{ ui.button(t("Return to Apply"), href="/execution-center/apply", variant="ghost", icon="arrow-left") }}
         </div>
       </form>
     {% endcall %}

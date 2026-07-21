@@ -181,7 +181,7 @@
           <tbody>
             {% for item in review_items %}
             <tr{% if item.review.job_id == selected_plan_id %} aria-current="true"{% endif %}>
-              <td>{{ mode_ui.technical_identifier(ui_presentation, item.review.job_id, "/jobs?plan_id=" ~ (item.review.job_id|urlencode) ~ "#plan-review", t("Review plan")) }}</td>
+              <td>{{ mode_ui.technical_identifier(ui_presentation, item.review.job_id, "/execution-center/plan-review?plan_id=" ~ (item.review.job_id|urlencode), t("Review plan")) }}</td>
               <td>{{ ui.badge(t(item.review.status|capitalize), "success" if item.review.status == "approved" else "warning") }}</td>
               <td>{{ item.evaluation.context.snapshot_version }}</td>
               <td>{{ item.evaluation.context.impact_count }}</td>

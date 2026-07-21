@@ -19,7 +19,7 @@ from sync_app.web.i18n import (
     normalize_ui_language,
     translate,
 )
-from sync_app.web.navigation import build_navigation_groups
+from sync_app.web.navigation import ADVANCED_NAV_PAGES, build_navigation_groups
 from sync_app.web.security import ensure_csrf_token, validate_admin_password_strength, validate_csrf_token
 from sync_app.web.ui_mode import get_ui_mode_presentation, normalize_ui_mode
 
@@ -292,7 +292,13 @@ class RequestSupport:
         context.setdefault("brand_display_name", brand_display_name)
         context.setdefault("brand_mark_text", str(brand_mark_text or "").strip() or self.default_brand_mark_text)
         context.setdefault("brand_attribution", str(brand_attribution or "").strip() or self.default_brand_attribution)
-        context.setdefault("environment_label", self.environment_label)
+        context.setdefault(
+            "environment_label",
+            str(
+                get_web_runtime_state(request).environment_label
+                or self.environment_label
+            ),
+        )
         context.setdefault("has_users", repositories.user_repo.has_any_user())
         context.setdefault(
             "organizations",
@@ -319,7 +325,11 @@ class RequestSupport:
             "show_advanced_navigation",
             ui_presentation.is_advanced,
         )
-        context.setdefault("is_advanced_page", current_page in self.mode_gated_pages)
+        context.setdefault(
+            "is_advanced_page",
+            current_page in ADVANCED_NAV_PAGES or current_page in self.mode_gated_pages,
+        )
+        context.setdefault("is_mode_gated_page", current_page in self.mode_gated_pages)
         context.setdefault(
             "navigation_groups",
             build_navigation_groups(

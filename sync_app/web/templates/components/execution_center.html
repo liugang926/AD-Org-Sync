@@ -1,0 +1,62 @@
+{% import "components/ui.html" as ui %}
+{% macro tabs(active_page) -%}
+<nav class="execution-tabs" aria-label="{{ t('Execution Center') }}">
+  {% for page_code, path, label in [
+    ('execution-dry-run', '/execution-center/dry-run', 'Dry Run'),
+    ('execution-plan-review', '/execution-center/plan-review', 'Plan Review'),
+    ('execution-apply', '/execution-center/apply', 'Apply'),
+    ('execution-jobs', '/execution-center/jobs', 'Job History')
+  ] %}
+  <a href="{{ path }}"{% if active_page == page_code %} aria-current="page" class="active"{% endif %}>{{ t(label) }}</a>
+  {% endfor %}
+</nav>
+{%- endmacro %}
+
+{% macro progress(active_page, dry_run_state='', review_state='', apply_state='', audit_state='') -%}
+{% set active_index = {'execution-dry-run': 1, 'execution-plan-review': 2, 'execution-apply': 3, 'execution-jobs': 4}.get(active_page, 1) %}
+<nav class="execution-progress-nav" aria-label="{{ t('Execution progress') }}">
+  <ol class="execution-flow execution-progress">
+    {% for index, path, label, detail, actual_state in [
+      (1, '/execution-center/dry-run', 'Dry Run', 'Generate the change plan', dry_run_state),
+      (2, '/execution-center/plan-review', 'Plan Review', 'Review and approve evidence', review_state),
+      (3, '/execution-center/apply', 'Apply', 'Execute the approved plan', apply_state),
+      (4, '/execution-center/jobs', 'Audit Complete', 'Inspect results and audit evidence', audit_state)
+    ] %}
+    {% set state = actual_state or ('complete' if index < active_index else ('current' if index == active_index else 'pending')) %}
+    <li class="execution-flow__step" data-state="{{ state }}"{% if state == 'current' %} aria-current="step"{% endif %}>
+      <span class="execution-flow__index" aria-hidden="true">{{ index }}</span>
+      <span>
+        <strong>
+          {% if state in ['complete', 'current'] %}<a href="{{ path }}">{{ t(label) }}</a>{% else %}{{ t(label) }}{% endif %}
+        </strong>
+        <small>{{ t(detail) if state not in ['blocked', 'pending'] else t('Complete the previous step first') }}</small>
+      </span>
+      {{ ui.badge(t(state|capitalize), 'success' if state == 'complete' else ('info' if state == 'current' else ('error' if state == 'blocked' else 'warning'))) }}
+    </li>
+    {% endfor %}
+  </ol>
+</nav>
+{%- endmacro %}
+
+{% macro status(blocker_code='', next_action_code='', active_text='') -%}
+<div class="execution-status {{ 'execution-status--blocked' if blocker_code else 'execution-status--ready' }}" role="status">
+  <div>
+    <strong>{{ t('Action required') if blocker_code else t('Ready for the next step') }}</strong>
+    <p>
+      {% if blocker_code %}{{ t(blocker_code) }}
+      {% elif active_text %}{{ t(active_text) }}
+      {% else %}{{ t('The current evidence is valid for this step.') }}{% endif %}
+    </p>
+  </div>
+  {% if next_action_code %}<span class="execution-status__next">{{ t('Next step') }}: {{ t(next_action_code) }}</span>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro scope_context(current_org, environment_label, context=None) -%}
+<div class="execution-context" aria-label="{{ t('Execution context') }}">
+  <div><span>{{ t('Organization') }}</span><strong>{{ current_org.name }} ({{ current_org.org_id }})</strong></div>
+  <div><span>{{ t('Environment') }}</span><strong>{{ t(environment_label) }}</strong></div>
+  <div><span>{{ t('Snapshot Version') }}</span><strong>{{ t(context.snapshot_version) if context else t('Not selected') }}</strong></div>
+  <div><span>{{ t('Impact Count') }}</span><strong>{{ context.impact_count if context else 0 }}</strong></div>
+</div>
+{%- endmacro %}

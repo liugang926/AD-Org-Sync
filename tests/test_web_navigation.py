@@ -28,10 +28,16 @@ class WebNavigationTests(WebAuthzBaseTestCase):
             hrefs,
             [
                 "/overview/control-tower",
+                "/data-sources/connectors",
                 "/data-sources/source-directory",
+                "/data-sources/data-quality",
                 "/identity-governance/identity-matching",
                 "/identity-governance/conflicts",
-                "/jobs",
+                "/sync-policies/scope",
+                "/execution-center/dry-run",
+                "/execution-center/plan-review",
+                "/execution-center/apply",
+                "/execution-center/jobs",
             ],
         )
         self.assertEqual(navigation.count('aria-current="page"'), 1)
@@ -83,6 +89,19 @@ class WebNavigationTests(WebAuthzBaseTestCase):
         self.assertNotIn(CANONICAL_ROUTE_PATHS["organizations"], operator_navigation)
         self.assertNotIn(CANONICAL_ROUTE_PATHS["users"], operator_navigation)
 
+    def test_basic_mode_keeps_advanced_pages_reachable_with_context_note(self):
+        self._login("superadmin")
+
+        response = self._route(CANONICAL_ROUTE_PATHS["sync-security-policy"], "GET")(
+            self._request(CANONICAL_ROUTE_PATHS["sync-security-policy"])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("This is advanced configuration.", body)
+        self.assertIn("Return to current rollout step", body)
+        self.assertIn("Return to Control Tower", body)
+
     def test_legacy_get_routes_remain_registered_during_page_migration(self):
         legacy_paths = {
             "dashboard": "/dashboard",
@@ -129,7 +148,10 @@ class WebNavigationTests(WebAuthzBaseTestCase):
 
         connector_body = self._text(connector_page)
         self.assertIn("Save Connection Settings", connector_body)
-        self.assertIn("Test Saved Connections", connector_body)
+        self.assertIn("Test source directory", connector_body)
+        self.assertIn("Test target AD", connector_body)
+        self.assertIn('name="connection_kind" value="source"', connector_body)
+        self.assertIn('name="connection_kind" value="ldap"', connector_body)
         self.assertNotIn("Web Deployment", connector_body)
         self.assertEqual(legacy_page.status_code, 200)
         self.assertEqual(

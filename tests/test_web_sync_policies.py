@@ -365,6 +365,48 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
             org_id="default",
         )
         self.assertNotEqual(settings.directory_root_ou_path, "Managed Users/Denied")
+    def test_sync_scope_hides_large_selectors_until_snapshot_exists(self):
+        self._login("superadmin")
+
+        response = self._route("/sync-policies/scope", "GET")(
+            self._request("/sync-policies/scope")
+        )
+        body = response.body.decode("utf-8")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("A successful source snapshot is required.", body)
+        self.assertNotIn("data-scope-table", body)
+        self.assertNotIn("Connector root scopes", body)
+
+    def test_sync_scope_uses_complete_chinese_scope_labels(self):
+        self._login("superadmin")
+        self.session["ui_language"] = "zh-CN"
+        self._seed_policy_fixture()
+
+        response = self._route("/sync-policies/scope", "GET")(
+            self._request("/sync-policies/scope")
+        )
+        body = response.body.decode("utf-8")
+        scope_options = re.search(
+            r'<select name="scope_type"[^>]*>(.*?)</select>', body, re.S
+        )
+
+        self.assertIsNotNone(scope_options)
+        option_text = scope_options.group(1)
+        for label in (
+            "全部在职用户",
+            "所选部门及其下级部门",
+            "仅已勾选用户",
+            "单用户重放",
+        ):
+            self.assertIn(label, option_text)
+        for english_label in (
+            "All active users",
+            "Selected departments and descendants",
+            "Checked users only",
+            "Single user replay",
+        ):
+            self.assertNotIn(english_label, option_text)
 
     def test_attribute_section_update_preserves_lifecycle_and_is_audited(self):
         self._login("superadmin")

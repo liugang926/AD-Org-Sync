@@ -34,6 +34,17 @@ def test_environment_resolution_is_explicit_local_or_fail_closed(monkeypatch):
     assert is_environment_marked("Unlabeled environment") is False
 
 
+def test_environment_resolution_uses_persisted_classification(monkeypatch):
+    monkeypatch.delenv("AD_ORG_SYNC_ENVIRONMENT_LABEL", raising=False)
+
+    class Settings:
+        @staticmethod
+        def get_value(key, default, org_id=None):
+            return "staging" if key == "environment_label" else default
+
+    assert resolve_environment_label(settings_repo=Settings(), bind_host="0.0.0.0") == "staging"
+
+
 def test_unlabeled_environment_blocks_high_risk_operation():
     decision = HighRiskOperationPolicy.evaluate(
         _context(environment_label="Unlabeled environment")

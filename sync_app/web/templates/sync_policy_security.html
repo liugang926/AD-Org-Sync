@@ -10,6 +10,6 @@
 {{ policy.status(has_unpublished_changes, latest_snapshot_title, '', t('Review safety gates in Lifecycle & Security, then run a new Dry Run'), policy_version, policy_last_modified_by, estimated_affected_users, dry_run_invalidated, latest_policy_dry_run) }}
 
 {% call ui.helper_block(t("Security Policy moved"), t("The duplicate security form was removed. Existing settings and POST compatibility are preserved, but all interactive editing now happens in the unified sixth policy section."), "warning") %}
-  <div class="actions">{{ ui.button(t("Open Lifecycle & Security"), href="/sync-policies/lifecycle#security", variant="secondary", icon="shield-check") }}{{ ui.button(t("Run a new Dry Run"), href="/jobs?context=security-policy#dry-run", variant="ghost", icon="play-circle") }}</div>
+  <div class="actions">{{ ui.button(t("Open Lifecycle & Security"), href="/sync-policies/lifecycle#security", variant="secondary", icon="shield-check") }}{{ ui.button(t("Run a new Dry Run"), href="/execution-center/dry-run", variant="ghost", icon="play-circle") }}</div>
 {% endcall %}
 {% endblock %}

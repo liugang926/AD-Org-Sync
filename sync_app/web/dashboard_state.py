@@ -64,43 +64,77 @@ def build_getting_started_data(
     ) == "success"
     live_ldap_ok = str(check_index.get("live_ldap", {}).get("status") or "") == "success"
     live_ready = live_source_ok and live_ldap_ok
+    source_snapshot_ready = bool(preflight_snapshot.get("source_snapshot_ready"))
+    scope_ready = bool(preflight_snapshot.get("scope_ready"))
+    release_ready = bool(preflight_snapshot.get("release_ready"))
     dry_run_ready = bool(preflight_snapshot.get("dry_run_completed"))
     conflicts_ready = dry_run_ready and int(preflight_snapshot.get("open_conflict_count") or 0) == 0
+    review_ready = bool(preflight_snapshot.get("review_ready"))
     apply_ready = bool(preflight_snapshot.get("apply_completed"))
 
     steps = [
         {
-            "title": "Configure organization settings",
-            "detail": "Complete the {provider} and LDAP values for the current organization.",
+            "title": "Configure connectors",
+            "detail": "Complete the {provider} source and target AD connection settings for the current organization.",
             "detail_params": {"provider": source_provider_name},
-            "href": "/config",
-            "action_label": "Open Config",
+            "href": "/data-sources/connectors",
+            "action_label": "Configure connectors",
             "capability": "config.read",
             "done": config_ready,
+            "available": True,
         },
         {
-            "title": "Run live connectivity preflight",
+            "title": "Test saved connections",
             "detail": (
                 "Verify both {provider} and LDAP from this server before the first synchronization run."
                 if not live_ready
                 else "Live {provider} and LDAP connectivity checks both passed."
             ),
             "detail_params": {"provider": source_provider_name},
-            "href": "/dashboard#preflight",
+            "href": "/data-sources/connectors#connection-tests",
             "action_label": "Run Preflight",
-            "capability": "dashboard.read",
+            "capability": "config.read",
             "done": live_ready,
+            "available": config_ready,
+        },
+        {
+            "title": "Refresh Source Directory",
+            "detail": "Create the first immutable source snapshot after both saved connections pass.",
+            "href": "/data-sources/source-directory",
+            "action_label": "Refresh Source Directory",
+            "capability": "config.read",
+            "done": source_snapshot_ready,
+            "available": live_ready,
+        },
+        {
+            "title": "Check data quality",
+            "detail": "Review source identity, naming, and routing risks before selecting the synchronization boundary.",
+            "href": "/data-sources/data-quality",
+            "action_label": "Check Data Quality",
+            "capability": "config.read",
+            "done": source_snapshot_ready,
+            "available": source_snapshot_ready,
         },
         {
             "title": "Review sync scope",
             "detail": presentation.choose(
-                "Basic mode keeps the default single-organization flow. Switch to Advanced mode only if you need routing, write-back, or lifecycle controls.",
+                "Choose all active users, departments, checked users, or one replay identity and confirm the estimated scope.",
                 "Review connectors, mappings, and lifecycle policies before the first rollout.",
             ),
             "href": "/sync-policies/scope",
-            "action_label": "Review Scope",
+            "action_label": "Review Sync Scope",
             "capability": "config.read",
-            "done": config_ready,
+            "done": scope_ready,
+            "available": source_snapshot_ready,
+        },
+        {
+            "title": "Publish sync policy",
+            "detail": "Publish the reviewed configuration snapshot before generating a new Dry Run plan.",
+            "href": "/sync-policies/releases",
+            "action_label": "Publish Policy",
+            "capability": "config.read",
+            "done": release_ready,
+            "available": scope_ready,
         },
         {
             "title": "Run the first dry run",
@@ -109,30 +143,46 @@ def build_getting_started_data(
                 if dry_run_ready
                 else "Preview planned changes before applying them to AD."
             ),
-            "href": "/jobs?context=dashboard#dry-run",
-            "action_label": "Open Dry Run",
+            "href": "/execution-center/dry-run",
+            "action_label": "Run Dry Run",
             "capability": "jobs.read",
             "done": dry_run_ready,
+            "available": release_ready,
         },
         {
-            "title": "Clear blockers and run apply",
+            "title": "Resolve conflicts",
+            "detail": (
+                "No unresolved identity conflicts remain for the latest plan."
+                if conflicts_ready
+                else "Resolve open conflicts before reviewing the plan."
+            ),
+            "href": "/identity-governance/conflicts",
+            "action_label": "Resolve Conflicts",
+            "capability": "jobs.read",
+            "done": conflicts_ready,
+            "available": dry_run_ready,
+        },
+        {
+            "title": "Review the plan",
+            "detail": "Review the exact Dry Run evidence and record an auditable approval before Apply.",
+            "href": "/execution-center/plan-review",
+            "action_label": "Review Plan",
+            "capability": "jobs.read",
+            "done": review_ready,
+            "available": conflicts_ready,
+        },
+        {
+            "title": "Run Apply",
             "detail": (
                 "Apply is already successful for this organization."
                 if apply_ready
-                else (
-                    "Resolve open conflicts before the first apply run."
-                    if dry_run_ready and not conflicts_ready
-                    else "Run the first apply after the dry run looks safe."
-                )
+                else "Run the approved plan only after every safety gate passes."
             ),
-            "href": (
-                "/identity-governance/conflicts"
-                if dry_run_ready and not conflicts_ready
-                else "/jobs?context=dashboard#apply"
-            ),
-            "action_label": "Resolve Conflicts" if dry_run_ready and not conflicts_ready else "Run Apply",
-            "capability": "conflicts.read" if dry_run_ready and not conflicts_ready else "jobs.read",
+            "href": "/execution-center/apply",
+            "action_label": "Run Apply",
+            "capability": "jobs.read",
             "done": apply_ready,
+            "available": review_ready,
         },
     ]
 
@@ -142,13 +192,18 @@ def build_getting_started_data(
         if step["done"]:
             step["status"] = "complete"
             completed_steps += 1
-        elif not current_assigned:
+        elif not current_assigned and step.get("available", True):
             step["status"] = "current"
             current_assigned = True
+        elif not step.get("available", True):
+            step["status"] = "blocked"
         else:
             step["status"] = "upcoming"
 
-    next_step = next((step for step in steps if step["status"] == "current"), steps[-1])
+    next_step = next(
+        (step for step in steps if step["status"] == "current"),
+        next((step for step in steps if not step["done"]), steps[-1]),
+    )
     return {
         "current_org_name": current_org_name,
         "steps": steps,

@@ -56,7 +56,11 @@ class WebDashboardStateTests(unittest.TestCase):
                 {"key": "live_source", "status": "success"},
                 {"key": "live_ldap", "status": "success"},
             ],
+            "source_snapshot_ready": True,
+            "scope_ready": True,
+            "release_ready": True,
             "dry_run_completed": True,
+            "review_ready": True,
             "apply_completed": False,
             "open_conflict_count": 0,
         }
@@ -69,10 +73,12 @@ class WebDashboardStateTests(unittest.TestCase):
         )
 
         self.assertEqual(data["current_org_name"], "HQ")
-        self.assertEqual(data["completed_steps"], 4)
-        self.assertEqual(data["next_step"]["title"], "Clear blockers and run apply")
+        self.assertEqual(data["completed_steps"], 9)
+        self.assertEqual(data["total_steps"], 10)
+        self.assertEqual(data["next_step"]["title"], "Run Apply")
         self.assertEqual(data["next_step"]["status"], "current")
-        self.assertEqual(data["steps"][2]["href"], "/sync-policies/scope")
+        self.assertEqual(data["steps"][2]["href"], "/data-sources/source-directory")
+        self.assertEqual(data["steps"][7]["href"], "/identity-governance/conflicts")
 
     def test_build_getting_started_data_keeps_legacy_live_wecom_snapshot_compatible(self):
         preflight_snapshot = {
@@ -93,8 +99,8 @@ class WebDashboardStateTests(unittest.TestCase):
             ui_mode="basic",
         )
 
-        self.assertEqual(data["completed_steps"], 3)
-        self.assertEqual(data["next_step"]["title"], "Run the first dry run")
+        self.assertEqual(data["completed_steps"], 2)
+        self.assertEqual(data["next_step"]["title"], "Refresh Source Directory")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,8 @@
 {% import "components/ui.html" as ui %}
 
 {% block content %}
+<div class="page-stack">
+{{ ui.page_header(t("My Account"), t("Change the password for the signed-in administrator account."), eyebrow=t("System Management"), badge_text=t("Personal Scope"), badge_level="info") }}
 {% call ui.panel(t("Change Password")) %}
   <form method="post" action="/system-management/account/password">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -16,4 +18,5 @@
     </div>
   </form>
 {% endcall %}
+</div>
 {% endblock %}

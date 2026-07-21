@@ -98,7 +98,7 @@ FAVICON_PATH = STATIC_DIR / "favicon.ico"
 LEGACY_FAVICON_PATH = APP_ROOT / "icon.ico"
 DEFAULT_BRAND_DISPLAY_NAME = "AD Org Sync"
 DEFAULT_BRAND_MARK_TEXT = "AD"
-DEFAULT_BRAND_ATTRIBUTION = "微信公众号：大刘讲IT"
+DEFAULT_BRAND_ATTRIBUTION = "Enterprise Identity Operations"
 PLACEMENT_STRATEGIES = {
     "source_primary_department": "Prefer source primary department",
     "wecom_primary_department": "Prefer source primary department",
@@ -242,7 +242,7 @@ def create_app(
     oidc_service = OIDCService(oidc_settings)
 
     app = FastAPI(title="AD Org Sync Web", version=APP_VERSION)
-    app.state.environment_label = oidc_settings.environment_label or environment_label
+    runtime_state.environment_label = oidc_settings.environment_label or environment_label
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     web_app_state.bind_to_app(app)
@@ -279,7 +279,7 @@ def create_app(
         default_brand_display_name=DEFAULT_BRAND_DISPLAY_NAME,
         default_brand_mark_text=DEFAULT_BRAND_MARK_TEXT,
         default_brand_attribution=DEFAULT_BRAND_ATTRIBUTION,
-        environment_label=app.state.environment_label,
+        environment_label=runtime_state.environment_label,
         supported_ui_modes=SUPPORTED_UI_MODES,
         placement_strategies=PLACEMENT_STRATEGIES,
         mode_gated_pages=ADVANCED_MODE_PAGE_GATES,
