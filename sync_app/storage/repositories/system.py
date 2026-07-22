@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from sync_app.core.models import (
     ConfigReleaseSnapshotRecord,
+    DataQualityReviewRecord,
     DataQualitySnapshotRecord,
     IntegrationWebhookOutboxRecord,
     IntegrationWebhookSubscriptionRecord,
@@ -612,6 +613,108 @@ class DataQualitySnapshotRepository(BaseRepository):
             (normalized_org_id, int(limit)),
         )
         return [DataQualitySnapshotRecord.from_row(row) for row in rows]
+
+
+class DataQualityReviewRepository(BaseRepository):
+    """Persist the auditable human confirmation for one immutable source snapshot."""
+
+    def confirm_snapshot(
+        self,
+        *,
+        org_id: str,
+        source_snapshot_id: int,
+        source_snapshot_fingerprint: str,
+        reviewer_username: str,
+        review_notes: str = "",
+    ) -> DataQualityReviewRecord:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        normalized_fingerprint = str(source_snapshot_fingerprint or "").strip()
+        normalized_reviewer = str(reviewer_username or "").strip()
+        if not normalized_fingerprint:
+            raise ValueError("source snapshot fingerprint is required")
+        if not normalized_reviewer:
+            raise ValueError("reviewer username is required")
+        snapshot = self._fetchone(
+            """
+            SELECT id, snapshot_fingerprint
+            FROM source_directory_snapshots
+            WHERE id = ? AND org_id = ? AND status IN ('success', 'succeeded')
+            LIMIT 1
+            """,
+            (int(source_snapshot_id), normalized_org_id),
+        )
+        if snapshot is None:
+            raise ValueError("source snapshot is not available in this organization")
+        if str(snapshot["snapshot_fingerprint"] or "") != normalized_fingerprint:
+            raise ValueError("source snapshot fingerprint no longer matches")
+        reviewed_at = utcnow_iso()
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO rollout_data_quality_reviews (
+                  org_id, source_snapshot_id, source_snapshot_fingerprint,
+                  status, reviewer_username, review_notes, reviewed_at
+                ) VALUES (?, ?, ?, 'confirmed', ?, ?, ?)
+                ON CONFLICT(org_id, source_snapshot_id) DO UPDATE SET
+                  source_snapshot_fingerprint = excluded.source_snapshot_fingerprint,
+                  status = 'confirmed',
+                  reviewer_username = excluded.reviewer_username,
+                  review_notes = excluded.review_notes,
+                  reviewed_at = excluded.reviewed_at
+                """,
+                (
+                    normalized_org_id,
+                    int(source_snapshot_id),
+                    normalized_fingerprint,
+                    normalized_reviewer,
+                    str(review_notes or "").strip(),
+                    reviewed_at,
+                ),
+            )
+        record = self.get_review_for_snapshot(
+            org_id=normalized_org_id,
+            source_snapshot_id=int(source_snapshot_id),
+        )
+        if record is None:
+            raise RuntimeError("data quality review was not persisted")
+        return record
+
+    def get_review_for_snapshot(
+        self,
+        *,
+        org_id: str,
+        source_snapshot_id: int,
+    ) -> Optional[DataQualityReviewRecord]:
+        row = self._fetchone(
+            """
+            SELECT *
+            FROM rollout_data_quality_reviews
+            WHERE org_id = ? AND source_snapshot_id = ?
+            LIMIT 1
+            """,
+            (
+                self._resolve_org_id(org_id, default="default") or "default",
+                int(source_snapshot_id),
+            ),
+        )
+        return DataQualityReviewRecord.from_row(row) if row else None
+
+    def get_latest_review(
+        self,
+        *,
+        org_id: str,
+    ) -> Optional[DataQualityReviewRecord]:
+        row = self._fetchone(
+            """
+            SELECT *
+            FROM rollout_data_quality_reviews
+            WHERE org_id = ?
+            ORDER BY reviewed_at DESC, id DESC
+            LIMIT 1
+            """,
+            (self._resolve_org_id(org_id, default="default") or "default",),
+        )
+        return DataQualityReviewRecord.from_row(row) if row else None
 
 
 class IntegrationWebhookSubscriptionRepository(BaseRepository):

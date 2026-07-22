@@ -2056,4 +2056,45 @@ MIGRATIONS = [
         WHERE binding.ad_username <> '';
         """,
     ),
+    (
+        35,
+        "bind rollout reviews and execution plans to current identity evidence",
+        """
+        CREATE TABLE rollout_data_quality_reviews (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL,
+          source_snapshot_id INTEGER NOT NULL,
+          source_snapshot_fingerprint TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'confirmed',
+          reviewer_username TEXT NOT NULL,
+          review_notes TEXT NOT NULL DEFAULT '',
+          reviewed_at TEXT NOT NULL,
+          UNIQUE (org_id, source_snapshot_id),
+          FOREIGN KEY(source_snapshot_id) REFERENCES source_directory_snapshots(id)
+        );
+        CREATE INDEX idx_rollout_data_quality_reviews_current
+        ON rollout_data_quality_reviews (
+          org_id, source_snapshot_id, source_snapshot_fingerprint, status, reviewed_at DESC
+        );
+
+        ALTER TABLE sync_job_source_scopes
+        ADD COLUMN ad_snapshot_id INTEGER;
+        ALTER TABLE sync_job_source_scopes
+        ADD COLUMN ad_snapshot_fingerprint TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_job_source_scopes
+        ADD COLUMN identity_match_run_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_job_source_scopes
+        ADD COLUMN identity_match_rules_fingerprint TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_job_source_scopes
+        ADD COLUMN policy_release_id INTEGER;
+        ALTER TABLE sync_job_source_scopes
+        ADD COLUMN policy_release_hash TEXT NOT NULL DEFAULT '';
+
+        CREATE INDEX idx_sync_job_rollout_evidence
+        ON sync_job_source_scopes (
+          org_id, execution_mode, snapshot_id, ad_snapshot_id,
+          identity_match_run_id, policy_release_id, created_at DESC
+        );
+        """,
+    ),
 ]

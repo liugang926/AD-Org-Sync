@@ -9,7 +9,11 @@ from sync_app.services.execution_center import ExecutionCenterService
 from sync_app.services.high_risk_operations import resolve_environment_label
 from sync_app.services.runtime_bootstrap import resolve_runtime_config_fingerprint
 from sync_app.storage.local_db import (
+    ADDirectorySnapshotRepository,
+    ConfigReleaseSnapshotRepository,
     DatabaseManager,
+    IdentityMatchRuleRepository,
+    IdentityMatchRunRepository,
     OrganizationRepository,
     SettingsRepository,
     SyncJobRepository,
@@ -117,6 +121,10 @@ class ApproveSyncPlanUseCase:
             review_repo=self.review_repo,
             source_directory_repo=self.source_directory_repo,
             settings_repo=self.settings_repo,
+            ad_directory_snapshot_repo=ADDirectorySnapshotRepository(self.db_manager),
+            identity_match_run_repo=IdentityMatchRunRepository(self.db_manager),
+            identity_match_rule_repo=IdentityMatchRuleRepository(self.db_manager),
+            config_release_snapshot_repo=ConfigReleaseSnapshotRepository(self.db_manager),
         ).evaluate_plan(
             org_id=tenant.org_id,
             organization_name=getattr(organization, "name", tenant.org_id),

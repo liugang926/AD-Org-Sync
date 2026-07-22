@@ -586,17 +586,52 @@ def register_advanced_sync_routes(
                 connector_id=selected_connector_id,
             )
         )
+        page_context = policy_page_context(
+            request,
+            page="sync-department-ou-routing",
+            title="Department & OU Routing",
+        )
+        department_mappings = (
+            repositories.department_ou_mapping_repo.list_mapping_records(
+                org_id=current_org.org_id
+            )
+        )
+        source_departments = list(page_context.get("source_departments") or [])
+        mapped_department_ids = {
+            str(record.source_department_id or "").strip()
+            for record in department_mappings
+            if bool(record.is_enabled)
+        }
+        routing_conflicts = [
+            conflict
+            for conflict in repositories.conflict_repo.list_conflict_records(
+                status="open",
+                org_id=current_org.org_id,
+            )
+            if any(
+                token in str(conflict.conflict_type or "").lower()
+                for token in ("department", "routing", "ou_")
+            )
+        ]
         return render(
             request,
             "sync_policy_department_ou_routing.html",
-            **policy_page_context(
-                request,
-                page="sync-department-ou-routing",
-                title="Department & OU Routing",
+            **page_context,
+            department_ou_mappings=department_mappings,
+            unmapped_department_count=sum(
+                1
+                for department in source_departments
+                if str(
+                    (
+                        department.get("source_department_id")
+                        if isinstance(department, dict)
+                        else getattr(department, "source_department_id", "")
+                    )
+                    or ""
+                ).strip()
+                not in mapped_department_ids
             ),
-            department_ou_mappings=repositories.department_ou_mapping_repo.list_mapping_records(
-                org_id=current_org.org_id
-            ),
+            routing_conflict_count=len(routing_conflicts),
             department_ou_apply_mode_options=[
                 ("subtree", "Map subtree"),
                 ("exact", "Map exact department only"),
@@ -613,6 +648,54 @@ def register_advanced_sync_routes(
             ),
         )
 
+    @app.get(CANONICAL_ROUTE_PATHS["sync-field-authority"], response_class=HTMLResponse)
+    def sync_field_authority_page(request: Request):
+        user = require_capability(request, "config.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        repositories.field_authority_rule_repo.seed_defaults(
+            org_id=current_org.org_id
+        )
+        return render(
+            request,
+            "sync_policy_field_authority.html",
+            **policy_page_context(
+                request,
+                page="sync-field-authority",
+                title="Field Authority",
+            ),
+            field_authority_rules=repositories.field_authority_rule_repo.list_rules(
+                org_id=current_org.org_id
+            ),
+            field_authority_fields=(
+                "employee_id",
+                "display_name",
+                "email",
+                "mobile",
+                "primary_department_id",
+                "manager_account_id",
+                "account_status",
+            ),
+            field_authority_providers=("dingtalk", "wecom", "feishu", "*"),
+            field_authority_directions=(
+                "source_to_ad",
+                "ad_to_source",
+                "bidirectional",
+                "compare_only",
+                "manual",
+                "create_only",
+            ),
+            field_authority_modes=(
+                "replace",
+                "fill_if_empty",
+                "preserve",
+                "compare_only",
+                "manual",
+                "create_only",
+            ),
+        )
     @app.get(CANONICAL_ROUTE_PATHS["sync-group-rules"], response_class=HTMLResponse)
     def sync_group_rules_page(request: Request):
         user = require_capability(request, "config.read")
@@ -1043,6 +1126,7 @@ def register_advanced_sync_routes(
         )
         return RedirectResponse(url=redirect_url, status_code=303)
 
+    @app.post(CANONICAL_ROUTE_PATHS["sync-field-authority"])
     @app.post(CANONICAL_ROUTE_PATHS["sync-attribute-mappings"] + "/field-authority")
     def field_authority_rule_submit(
         request: Request,
@@ -1059,7 +1143,11 @@ def register_advanced_sync_routes(
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
-        redirect_url = CANONICAL_ROUTE_PATHS["sync-attribute-mappings"]
+        redirect_url = (
+            CANONICAL_ROUTE_PATHS["sync-field-authority"]
+            if request.url.path == CANONICAL_ROUTE_PATHS["sync-field-authority"]
+            else CANONICAL_ROUTE_PATHS["sync-attribute-mappings"]
+        )
         csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
         if csrf_error:
             return csrf_error

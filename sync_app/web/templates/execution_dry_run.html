@@ -19,17 +19,32 @@
   {{ execution.progress("execution-dry-run", dry_run_state=("complete" if latest_dry_run and latest_dry_run.status|upper == "COMPLETED" else ("blocked" if blocker_code else "current")), review_state=("current" if latest_dry_run and latest_dry_run.status|upper == "COMPLETED" else "pending")) }}
   {{ execution.scope_context(current_org, environment_label) }}
   {{ execution.status(blocker_code, next_action_code, "The saved scope and preflight evidence are ready to generate a plan.") }}
+  {{ execution.rollout_evidence(execution_context) }}
 
   {% if sync_runner_error %}<div class="callout callout--danger" role="alert"><strong>{{ t("Last background execution error") }}</strong><span>{{ sync_runner_error }}</span></div>{% endif %}
+
+  {% call ui.panel(t("Latest business impact"), description=t("The plan is grouped by administrator-facing outcomes instead of requiring the Dry Run ID to explain its result.")) %}
+    <div class="compact-stats">
+      {{ ui.compact_stat(t("Create"), latest_plan_summary.create_count) }}
+      {{ ui.compact_stat(t("Update or move"), latest_plan_summary.update_count) }}
+      {{ ui.compact_stat(t("Enable or rehire"), latest_plan_summary.enable_count) }}
+      {{ ui.compact_stat(t("Disable"), latest_plan_summary.disable_count) }}
+      {{ ui.compact_stat(t("Group relationships"), latest_plan_summary.group_relation_count) }}
+      {{ ui.compact_stat(t("Conflicts"), latest_plan_summary.conflict_count) }}
+      {{ ui.compact_stat(t("High-risk changes"), latest_plan_summary.risk_count) }}
+      {{ ui.compact_stat(t("Errors"), latest_plan_summary.error_count) }}
+    </div>
+  {% endcall %}
 
   {% call ui.panel(t("Recent Dry Runs"), description=t("Basic mode shows only the evidence needed to choose a plan. Open a job for technical details.")) %}
     {% if recent_dry_runs %}
     <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Recent Dry Runs') }}">
       <table>
-        <thead><tr><th>{{ t("Dry Run ID") }}</th><th>{{ t("Status") }}</th><th>{{ t("Snapshot Version") }}</th><th>{{ t("Planned Changes") }}</th><th>{{ t("Completed") }}</th><th>{{ t("Next step") }}</th></tr></thead>
+        <thead><tr><th>{{ t("Dry Run ID") }}</th><th>{{ t("Status") }}</th><th>{{ t("Validity") }}</th><th>{{ t("Snapshot Version") }}</th><th>{{ t("Planned Changes") }}</th><th>{{ t("Completed") }}</th><th>{{ t("Next step") }}</th></tr></thead>
         <tbody>{% for job in recent_dry_runs %}{% set summary = job.summary or {} %}<tr>
           <td>{{ ui.identifier(job.job_id, t("Copy Dry Run ID"), t("Dry Run ID copied"), "/execution-center/jobs/" ~ job.job_id) }}</td>
           <td>{{ ui.badge(t(job.status|capitalize), "success" if job.status|upper == "COMPLETED" else ("error" if job.status|upper == "FAILED" else "warning")) }}</td>
+          <td>{% set current_job_id = execution_context.rollout_readiness.step_map.dry_run_current.job_id or '' %}{{ ui.badge(t("Current") if job.job_id == current_job_id and execution_context.rollout_readiness.step_map.dry_run_current.status == "complete" else t("Stale"), "success" if job.job_id == current_job_id and execution_context.rollout_readiness.step_map.dry_run_current.status == "complete" else "warning") }}</td>
           <td>#{{ summary.source_snapshot_id or "-" }}</td>
           <td>{{ summary.planned_operation_count or job.planned_operation_count or 0 }}</td>
           <td>{{ ui.local_time(job.ended_at) }}</td>

@@ -12,13 +12,16 @@ from sync_app.services.config_resolution import resolve_organization_config
 from sync_app.services.state import SyncStateManager
 from sync_app.services.typed_settings import normalize_first_sync_identity_claim_mode
 from sync_app.storage.local_db import (
+    ADDirectorySnapshotRepository,
     AttributeMappingRuleRepository,
     CustomManagedGroupBindingRepository,
+    ConfigReleaseSnapshotRepository,
     DatabaseManager,
     DepartmentOuMappingRepository,
     FieldAuthorityRuleRepository,
     GroupExclusionRuleRepository,
     IdentityMatchRuleRepository,
+    IdentityMatchRunRepository,
     ManagedGroupBindingRepository,
     ObjectStateRepository,
     OffboardingQueueRepository,
@@ -71,6 +74,9 @@ class RuntimeRepositories:
     platform_account_repo: PlatformAccountRepository
     field_authority_rule_repo: FieldAuthorityRuleRepository
     identity_match_rule_repo: IdentityMatchRuleRepository
+    identity_match_run_repo: IdentityMatchRunRepository
+    ad_directory_snapshot_repo: ADDirectorySnapshotRepository
+    config_release_snapshot_repo: ConfigReleaseSnapshotRepository
 
 
 @dataclass(frozen=True)
@@ -488,6 +494,9 @@ def bootstrap_sync_runtime(
     identity_match_rule_repo = IdentityMatchRuleRepository(
         db_manager, default_org_id=organization.org_id
     )
+    identity_match_run_repo = IdentityMatchRunRepository(db_manager)
+    ad_directory_snapshot_repo = ADDirectorySnapshotRepository(db_manager)
+    config_release_snapshot_repo = ConfigReleaseSnapshotRepository(db_manager)
     identity_match_rule_repo.seed_defaults(org_id=organization.org_id)
 
     active_job = job_repo.get_execution_job_record()
@@ -540,6 +549,9 @@ def bootstrap_sync_runtime(
         platform_account_repo=platform_account_repo,
         field_authority_rule_repo=field_authority_rule_repo,
         identity_match_rule_repo=identity_match_rule_repo,
+        identity_match_run_repo=identity_match_run_repo,
+        ad_directory_snapshot_repo=ad_directory_snapshot_repo,
+        config_release_snapshot_repo=config_release_snapshot_repo,
     )
     config_hash = _build_config_hash(
         config=config,

@@ -14,6 +14,7 @@ from sync_app.storage.local_db import (
     AttributeMappingRuleRepository,
     ConfigReleaseSnapshotRepository,
     CustomManagedGroupBindingRepository,
+    DataQualityReviewRepository,
     DataQualitySnapshotRepository,
     DatabaseManager,
     DepartmentOuMappingRepository,
@@ -80,6 +81,7 @@ class WebRepositoryState:
     user_repo: WebAdminUserRepository
     audit_repo: WebAuditLogRepository
     config_release_snapshot_repo: ConfigReleaseSnapshotRepository
+    data_quality_review_repo: DataQualityReviewRepository
     data_quality_snapshot_repo: DataQualitySnapshotRepository
     integration_webhook_outbox_repo: IntegrationWebhookOutboxRepository
     integration_webhook_subscription_repo: IntegrationWebhookSubscriptionRepository
@@ -190,6 +192,7 @@ def initialize_web_app_state(
         user_repo=WebAdminUserRepository(db_manager),
         audit_repo=WebAuditLogRepository(db_manager),
         config_release_snapshot_repo=ConfigReleaseSnapshotRepository(db_manager),
+        data_quality_review_repo=DataQualityReviewRepository(db_manager),
         data_quality_snapshot_repo=DataQualitySnapshotRepository(db_manager),
         integration_webhook_outbox_repo=IntegrationWebhookOutboxRepository(db_manager),
         integration_webhook_subscription_repo=IntegrationWebhookSubscriptionRepository(db_manager),
@@ -265,6 +268,13 @@ def initialize_web_app_state(
         source_directory_repo=repositories.source_directory_repo,
         source_connector_repo=repositories.source_connector_repo,
         ad_directory_snapshot_repo=repositories.ad_directory_snapshot_repo,
+        identity_match_rule_repo=repositories.identity_match_rule_repo,
+        identity_match_run_repo=repositories.identity_match_run_repo,
+        field_authority_rule_repo=repositories.field_authority_rule_repo,
+        account_takeover_repo=repositories.account_takeover_repo,
+        attribute_mapping_repo=repositories.attribute_mapping_repo,
+        department_ou_mapping_repo=repositories.department_ou_mapping_repo,
+        data_quality_review_repo=repositories.data_quality_review_repo,
     )
 
     return WebAppState(repositories=repositories, runtime=runtime, services=services)

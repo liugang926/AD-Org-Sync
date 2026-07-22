@@ -3,15 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sync_app.services.external_integrations import build_approve_plan_use_case
+from sync_app.services.rollout_readiness import RolloutReadinessService
 from sync_app.storage.local_db import (
+    AccountTakeoverRepository,
     ADDirectorySnapshotRepository,
+    AttributeMappingRuleRepository,
     ConfigReleaseSnapshotRepository,
+    DataQualityReviewRepository,
     DatabaseManager,
+    DepartmentOuMappingRepository,
+    FieldAuthorityRuleRepository,
     IntegrationWebhookSubscriptionRepository,
     PlannedOperationRepository,
     OrganizationConfigRepository,
     SettingsRepository,
     SourceConnectorRepository,
+    IdentityMatchRuleRepository,
+    IdentityMatchRunRepository,
     SyncConnectorRepository,
     SyncConflictRepository,
     SyncJobRepository,
@@ -33,6 +41,7 @@ class WebServiceState:
     config: WebConfigService
     data_sources: WebDataSourceService
     integrations: WebIntegrationService
+    readiness: RolloutReadinessService
 
 
 def build_web_service_state(
@@ -51,8 +60,34 @@ def build_web_service_state(
     source_directory_repo: SourceDirectoryRepository,
     source_connector_repo: SourceConnectorRepository,
     ad_directory_snapshot_repo: ADDirectorySnapshotRepository,
+    identity_match_rule_repo: IdentityMatchRuleRepository,
+    identity_match_run_repo: IdentityMatchRunRepository,
+    field_authority_rule_repo: FieldAuthorityRuleRepository,
+    account_takeover_repo: AccountTakeoverRepository,
+    attribute_mapping_repo: AttributeMappingRuleRepository,
+    department_ou_mapping_repo: DepartmentOuMappingRepository,
+    data_quality_review_repo: DataQualityReviewRepository,
 ) -> WebServiceState:
     approve_plan_use_case = build_approve_plan_use_case(db_manager)
+    readiness_service = RolloutReadinessService(
+        db_manager=db_manager,
+        org_config_repo=org_config_repo,
+        settings_repo=settings_repo,
+        source_directory_repo=source_directory_repo,
+        source_connector_repo=source_connector_repo,
+        ad_directory_snapshot_repo=ad_directory_snapshot_repo,
+        identity_match_rule_repo=identity_match_rule_repo,
+        identity_match_run_repo=identity_match_run_repo,
+        field_authority_rule_repo=field_authority_rule_repo,
+        account_takeover_repo=account_takeover_repo,
+        attribute_mapping_repo=attribute_mapping_repo,
+        department_ou_mapping_repo=department_ou_mapping_repo,
+        config_release_snapshot_repo=config_release_snapshot_repo,
+        data_quality_review_repo=data_quality_review_repo,
+        job_repo=job_repo,
+        review_repo=review_repo,
+        conflict_repo=conflict_repo,
+    )
     return WebServiceState(
         jobs=WebJobService(
             approve_plan_use_case=approve_plan_use_case,
@@ -62,6 +97,10 @@ def build_web_service_state(
             conflict_repo=conflict_repo,
             source_directory_repo=source_directory_repo,
             settings_repo=settings_repo,
+            ad_directory_snapshot_repo=ad_directory_snapshot_repo,
+            identity_match_run_repo=identity_match_run_repo,
+            identity_match_rule_repo=identity_match_rule_repo,
+            config_release_snapshot_repo=config_release_snapshot_repo,
         ),
         conflicts=WebConflictService(
             conflict_repo=conflict_repo,
@@ -72,6 +111,7 @@ def build_web_service_state(
             settings_repo=settings_repo,
             config_release_snapshot_repo=config_release_snapshot_repo,
             audit_repo=audit_repo,
+            readiness_service=readiness_service,
         ),
         data_sources=WebDataSourceService(
             org_config_repo=org_config_repo,
@@ -92,4 +132,5 @@ def build_web_service_state(
             conflict_repo=conflict_repo,
             audit_repo=audit_repo,
         ),
+        readiness=readiness_service,
     )

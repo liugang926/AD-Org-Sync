@@ -1,71 +1,104 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
-{% import "components/mode.html" as mode_ui %}
 
 {% block content %}
-<div class="page-stack">
-  <a class="back-link" href="/overview/control-tower">{{ t("Back to Control Tower") }}</a>
-  {{ ui.page_header(t("Getting Started"), t("Follow one safe rollout path for {name}. Only the current recommended action is emphasized.", name=getting_started.current_org_name), eyebrow=t("First Rollout"), badge_text=t("Organization Scope"), badge_level="info") }}
-
-  {% call ui.panel(t("Recommended Rollout Steps"), description=t("{done} of {total} steps are complete.", done=getting_started.completed_steps, total=getting_started.total_steps)) %}
-    <div class="step-list">
-      {% for step in getting_started.steps %}
-      <div class="step-item {{ step.status }}">
-        <div class="step-index">{{ loop.index }}</div>
-        <div class="step-body">
-          <h2 class="step-title">{{ t(step.title) }}</h2>
-          <p class="step-description">{{ t(step.detail, **(step.detail_params or {})) }}</p>
-          {% if step.status == "complete" %}
-          {{ ui.badge(t("Complete"), "success") }}
-          {% elif step.status == "current" %}
-          {{ ui.badge(t("Current"), "info") }}
-          {% elif step.status == "upcoming" %}
-          {{ ui.badge(t("Upcoming"), "warning") }}
-          {% else %}
-          {{ ui.badge(t("Blocked"), "error") }}
-          {% endif %}
-        </div>
-        <div class="actions flush-top">
-          {% if (not step.capability or can(step.capability)) and step.status in ["current", "complete"] %}
-          {{ ui.button(t(step.action_label), href=step.href, variant=("primary" if step.status == "current" else "ghost")) }}
-          {% endif %}
-        </div>
-      </div>
-      {% endfor %}
-    </div>
+<div class="page-stack rollout-guide">
+  {% call ui.page_header(t("Configuration Guide"), t("Complete one evidence-bound enterprise identity rollout for {name}. Every status comes from the same readiness model.", name=getting_started.current_org_name), eyebrow=t("Enterprise Identity Rollout"), badge_text=t("Current organization"), badge_level="info") %}
+    {{ ui.button(t("Return to Control Tower"), href="/overview/control-tower", variant="ghost", icon="layout-dashboard") }}
   {% endcall %}
 
-  {% call ui.detail_toggle(t("Latest Preflight Snapshot"), t("Expand the technical readiness checks when you need to diagnose a blocked step."), open=False) %}
-    <div class="surface-inline">
+  <section class="rollout-summary" aria-label="{{ t('Rollout summary') }}">
+    <div><span>{{ t("Current organization") }}</span><strong>{{ getting_started.current_org_name }}</strong></div>
+    <div><span>{{ t("Overall completion") }}</span><strong>{{ getting_started.completion_percent or 0 }}%</strong></div>
+    <div><span>{{ t("Current phase") }}</span><strong>{{ t(getting_started.current_phase) }}</strong></div>
+    <div><span>{{ t("Blocking items") }}</span><strong>{{ getting_started.blocker_count or 0 }}</strong></div>
+  </section>
+
+  <section class="rollout-next" data-rollout-next-step>
+    <div>
+      <div class="decision-wizard__eyebrow">{{ t("Recommended next step") }}</div>
+      <h2>{{ t(getting_started.next_step.title) }}</h2>
+      <p>{{ t(getting_started.next_step.blocker_reason or getting_started.next_step.summary) }}</p>
+      <div class="rollout-next__meta">
+        <span>{{ t("Phase") }}: {{ t(getting_started.next_step.phase) }}</span>
+        <span>{{ t("Status") }}: {{ t(getting_started.next_step.status|replace("_", " ")|title) }}</span>
+      </div>
+    </div>
+    {% if getting_started.next_step.action_url %}
+      {{ ui.button(t(getting_started.next_step.action_label), href=getting_started.next_step.action_url, variant="primary", icon="arrow-right") }}
+    {% endif %}
+  </section>
+
+  <div class="rollout-phases step-list">
+    {% for phase in getting_started.phases %}
+    <section class="rollout-phase{% if phase.has_recommended %} rollout-phase--current{% endif %}">
+      <header>
+        <div>
+          <span>{{ t("Phase {number}", number=loop.index) }}</span>
+          <h2>{{ t(phase.name) }}</h2>
+        </div>
+        <strong>{{ phase.completed_count }}/{{ phase.required_count }}</strong>
+      </header>
+      <div class="rollout-phase__steps">
+        {% for step in phase.steps %}
+        <article class="rollout-step rollout-step--{{ step.status }}{% if step.is_recommended %} rollout-step--recommended{% endif %}" data-readiness-key="{{ step.key }}">
+          <div class="rollout-step__state" aria-hidden="true">{{ loop.index }}</div>
+          <div class="rollout-step__body">
+            <div class="rollout-step__title">
+              <strong>{{ t(step.title) }}</strong>
+              {% if step.status == "complete" %}
+                {{ ui.badge(t("Complete"), "success") }}
+              {% elif step.status == "stale" %}
+                {{ ui.badge(t("Needs revalidation"), "warning") }}
+              {% elif step.status == "blocked" %}
+                {{ ui.badge(t("Blocked"), "danger") }}
+              {% elif step.status == "ready" %}
+                {{ ui.badge(t("Ready"), "info") }}
+              {% elif step.status == "action_required" %}
+                {{ ui.badge(t("Action required"), "warning") }}
+              {% else %}
+                {{ ui.badge(t("Not started"), "neutral") }}
+              {% endif %}
+              {% if not step.whether_required %}{{ ui.badge(t("When applicable"), "neutral") }}{% endif %}
+            </div>
+            <p>{{ t(step.summary) }}</p>
+            {% if step.blocker_reason %}<div class="rollout-step__blocker">{{ t(step.blocker_reason) }}</div>{% endif %}
+            <div class="rollout-step__meta">
+              {% if step.last_updated_at %}<span>{{ t("Last updated") }}: {{ ui.local_time(step.last_updated_at) }}</span>{% endif %}
+              {% if step.related_snapshot_id %}<span>{{ t("Snapshot") }} #{{ step.related_snapshot_id }}</span>{% endif %}
+              {% if step.release_id %}<span>{{ t("Release") }} #{{ step.release_id }}</span>{% endif %}
+              {% if step.related_match_run_id and ui_presentation.show_internal_identifiers %}<span>{{ t("Match run") }}: {{ step.related_match_run_id }}</span>{% endif %}
+            </div>
+          </div>
+          {% if step.action_url and (step.is_recommended or step.status in ["action_required", "stale", "ready"]) %}
+            {{ ui.button(t(step.action_label), href=step.action_url, variant=("primary" if step.is_recommended else "secondary"), size="sm") }}
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+
+  {% call ui.detail_toggle(t("Technical preflight evidence"), t("Connection diagnostics remain available here, but they do not replace the rollout readiness model."), open=False) %}
+    <div class="status-line">
       {% if preflight_summary.overall_status == "success" %}
-      {{ ui.badge(t("Ready"), "success") }}
+        {{ ui.badge(t("PASS"), "success") }}
       {% elif preflight_summary.overall_status == "warning" %}
-      {{ ui.badge(t("Needs Review"), "warning") }}
+        {{ ui.badge(t("WARNING"), "warning") }}
       {% else %}
-      {{ ui.badge(t("Blocked"), "error") }}
+        {{ ui.badge(t("BLOCKED"), "danger") }}
       {% endif %}
       <span class="muted">{{ t("Generated At") }}: {{ ui.local_time(preflight_summary.generated_at) }}</span>
-      {% if preflight_summary.live_ran_at %}
-      <span class="muted">{{ t("Last live check") }}: {{ ui.local_time(preflight_summary.live_ran_at) }}</span>
-      {% endif %}
     </div>
     <div class="check-list">
       {% for item in preflight_summary.checks %}
-      <div class="check-item">
-        <div class="check-item__header">
-          <h3 class="check-item__title">{{ t(item.label, **(item.label_params or {})) }}</h3>
-          {{ ui.badge(t(item.status|capitalize), "success" if item.status == "success" else ("warning" if item.status == "warning" else "error")) }}
-        </div>
-        <p class="check-item__detail">{{ t(item.detail, **(item.detail_params or {})) }}</p>
-      </div>
+      <article class="check-item check-item--{{ item.status }}">
+        <span class="check-icon">{{ "✓" if item.status == "success" else ("!" if item.status == "warning" else "×") }}</span>
+        <div><strong>{{ t(item.label, **(item.label_params or {})) }}</strong><p>{{ t(item.detail, **(item.detail_params or {})) }}</p></div>
+        {% if item.action_url %}{{ ui.button(t("Open"), href=item.action_url, variant="ghost", size="sm") }}{% endif %}
+      </article>
       {% endfor %}
-    </div>
-    <div class="actions">
-      {% if can("config.read") %}
-      {{ ui.button(t("Open Connectors"), href="/data-sources/connectors", variant="secondary") }}
-      {% endif %}
-      {{ ui.button(t("Open Conflict Queue"), href="/identity-governance/conflicts", variant="ghost") }}
-      {% call mode_ui.advanced_inline(ui_presentation) %}{{ ui.button(t("Open Sync Policies"), href="/sync-policies", variant="ghost") }}{% endcall %}
     </div>
   {% endcall %}
 </div>

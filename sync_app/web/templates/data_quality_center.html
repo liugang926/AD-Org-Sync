@@ -15,6 +15,32 @@
     {% endif %}
   {% endcall %}
 
+  {% if source_snapshot %}
+  {% call ui.panel(t("Current Source Snapshot Review"), description=t("This audited confirmation applies only to the immutable source snapshot shown here. A newer snapshot requires a new review."), class_name="toolbar-card") %}
+    <div class="detail-grid">
+      <div class="detail-item"><div class="label">{{ t("Source Snapshot") }}</div><div class="value">#{{ source_snapshot.id }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Generated At") }}</div><div class="value">{{ ui.local_time(source_snapshot.completed_at) }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Users") }}</div><div class="value">{{ source_snapshot.user_count or 0 }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Review Status") }}</div><div class="value">{% if quality_review %}{{ ui.badge(t("Confirmed"), "success") }}{% else %}{{ ui.badge(t("Action required"), "warning") }}{% endif %}</div></div>
+    </div>
+    {% if quality_review %}
+      <div class="panel-note success">{{ t("Reviewed by {name} at {time}.", name=quality_review.reviewer_username, time=quality_review.reviewed_at) }}</div>
+    {% elif can("config.write") %}
+      <form method="post" action="/data-sources/data-quality/review" class="page-stack" data-confirm="{{ t('Confirm that you reviewed identity, naming and routing risks for this exact source snapshot.') }}" data-confirm-title="{{ t('Confirm Data Quality Review') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="source_snapshot_id" value="{{ source_snapshot.id }}">
+        <input type="hidden" name="source_snapshot_fingerprint" value="{{ source_snapshot.snapshot_fingerprint }}">
+        <input type="hidden" name="confirmed" value="1">
+        <label>{{ t("Review notes") }}<textarea name="review_notes" rows="2" placeholder="{{ t('Optional audit note') }}"></textarea></label>
+        <div class="actions">{{ ui.button(t("Confirm Current Snapshot Review"), type="submit", variant="primary", icon="clipboard-check") }}</div>
+      </form>
+    {% endif %}
+  {% endcall %}
+  {% else %}
+    {{ ui.empty_state(t("No current source snapshot"), t("Refresh the source directory before reviewing data quality."), "warning") }}
+    <div class="actions">{{ ui.button(t("Refresh source snapshot"), href="/data-sources/source-directory", variant="secondary") }}</div>
+  {% endif %}
+
   <section class="quality-ops-hero">
     <div>
       <div class="decision-wizard__eyebrow">{{ t("Quality Operations") }}</div>

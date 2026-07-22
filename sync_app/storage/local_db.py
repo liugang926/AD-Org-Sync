@@ -862,6 +862,7 @@ from sync_app.storage.repositories.connectors import SyncConnectorRepository
 from sync_app.storage.repositories.exclusions import GroupExclusionRuleRepository
 from sync_app.storage.repositories.system import (
     ConfigReleaseSnapshotRepository,
+    DataQualityReviewRepository,
     DataQualitySnapshotRepository,
     IntegrationWebhookOutboxRepository,
     IntegrationWebhookSubscriptionRepository,

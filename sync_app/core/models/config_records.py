@@ -141,6 +141,33 @@ class DataQualitySnapshotRecord(MappingLikeModel):
             created_at=str(row["created_at"] or ""),
         )
 
+
+@dataclass(slots=True)
+class DataQualityReviewRecord(MappingLikeModel):
+    id: Optional[int] = None
+    org_id: str = ""
+    source_snapshot_id: int = 0
+    source_snapshot_fingerprint: str = ""
+    status: str = "confirmed"
+    reviewer_username: str = ""
+    review_notes: str = ""
+    reviewed_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: Any) -> "DataQualityReviewRecord":
+        return cls(
+            id=int(row["id"]) if row["id"] is not None else None,
+            org_id=str(row["org_id"] or ""),
+            source_snapshot_id=int(row["source_snapshot_id"] or 0),
+            source_snapshot_fingerprint=str(
+                row["source_snapshot_fingerprint"] or ""
+            ),
+            status=str(row["status"] or "confirmed"),
+            reviewer_username=str(row["reviewer_username"] or ""),
+            review_notes=str(row["review_notes"] or ""),
+            reviewed_at=str(row["reviewed_at"] or ""),
+        )
+
 @dataclass(slots=True)
 class AttributeMappingRuleRecord(MappingLikeModel):
     id: Optional[int] = None

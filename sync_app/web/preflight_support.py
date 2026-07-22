@@ -16,6 +16,7 @@ from sync_app.services.config_validation import (
     test_source_connection,
     validate_config,
 )
+from sync_app.services.runtime_bootstrap import resolve_runtime_config_fingerprint
 from sync_app.web.app_state import get_web_repositories, get_web_runtime_state, get_web_services
 from sync_app.web.dashboard_state import (
     build_getting_started_data as build_getting_started_view_state,
@@ -111,39 +112,6 @@ class DashboardSupport:
             str(job.execution_mode).lower() == "apply"
             and str(job.status).lower() in successful_statuses
             for job in recent_jobs
-        )
-        latest_snapshot = (
-            repositories.source_directory_repo.get_latest_successful_snapshot(
-                org_id=current_org.org_id,
-                provider_id=config.source_provider,
-            )
-            if config
-            else None
-        )
-        scope_selection = (
-            repositories.source_directory_repo.get_scope_selection(
-                org_id=current_org.org_id,
-                provider_id=config.source_provider,
-            )
-            if config and latest_snapshot
-            else None
-        )
-        try:
-            release_context = get_web_services(request).config.build_release_center_context(
-                current_org=current_org,
-            )
-        except Exception:
-            release_context = {}
-        latest_dry_run = dry_run_jobs[0] if dry_run_jobs else None
-        latest_review = (
-            repositories.review_repo.get_review_record_by_job_id(latest_dry_run.job_id)
-            if latest_dry_run
-            else None
-        )
-        review_ready = bool(
-            latest_review
-            and str(getattr(latest_review, "status", "") or "").strip().lower()
-            == "approved"
         )
         checks: list[dict[str, Any]] = []
         source_provider_name = self.request_support.source_provider_label(config.source_provider if config else "wecom")
@@ -342,29 +310,63 @@ class DashboardSupport:
                     }
                 )
 
+        source_live_check = next(
+            (
+                item
+                for item in checks
+                if str(item.get("key") or "") in {"live_source", "live_wecom"}
+            ),
+            None,
+        )
+        ad_live_check = next(
+            (item for item in checks if str(item.get("key") or "") == "live_ldap"),
+            None,
+        )
+        try:
+            config_fingerprint = resolve_runtime_config_fingerprint(
+                db_manager=repositories.db_manager,
+                org_id=current_org.org_id,
+                config_path=current_org.config_path or self.config_path,
+            )
+        except Exception:
+            config_fingerprint = ""
+        rollout_readiness = get_web_services(request).readiness.evaluate(
+            org_id=current_org.org_id,
+            org_name=current_org.name,
+            source_provider=(config.source_provider if config else "wecom"),
+            config_fingerprint=config_fingerprint,
+            source_connector_configured=bool(
+                config
+                and config.source_connector.corpid
+                and config.source_connector.corpsecret
+            ),
+            ad_connector_configured=bool(
+                config
+                and config.ldap.server
+                and config.ldap.domain
+                and config.ldap.username
+                and config.ldap.password
+            ),
+            source_connection_status_override=(
+                "connected"
+                if source_live_check and source_live_check.get("status") == "success"
+                else "failed"
+                if source_live_check and source_live_check.get("status") == "error"
+                else ""
+            ),
+            ad_connection_status_override=(
+                "connected"
+                if ad_live_check and ad_live_check.get("status") == "success"
+                else "failed"
+                if ad_live_check and ad_live_check.get("status") == "error"
+                else ""
+            ),
+        ).to_dict()
+        readiness_step_map = dict(rollout_readiness.get("step_map") or {})
+        next_step = dict(rollout_readiness.get("next_step") or {})
         overall_status = summarize_check_status(checks)
-        if str(checks[0].get("status")) == "error":
-            next_action_url = "/data-sources/connectors"
-            next_action_label = "Open Organization Config"
-        elif include_live and any(
-            str(item.get("key") or "") in {"live_source", "live_wecom", "live_ldap"}
-            and str(item.get("status") or "") == "error"
-            for item in checks
-        ):
-            next_action_url = "/data-sources/connectors"
-            next_action_label = "Fix Connectivity"
-        elif not dry_run_completed:
-            next_action_url = "/execution-center/dry-run"
-            next_action_label = "Run First Dry Run"
-        elif open_conflicts_total > 0:
-            next_action_url = "/identity-governance/conflicts"
-            next_action_label = "Review Conflict Queue"
-        elif not apply_completed:
-            next_action_url = "/execution-center/apply"
-            next_action_label = "Run First Apply"
-        else:
-            next_action_url = "/overview/control-tower"
-            next_action_label = "Environment Ready"
+        next_action_url = str(next_step.get("action_url") or "/getting-started")
+        next_action_label = str(next_step.get("action_label") or "Open configuration guide")
         return {
             "org_id": current_org.org_id,
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -374,16 +376,27 @@ class DashboardSupport:
             "has_live_checks": include_live,
             "next_action_url": next_action_url,
             "next_action_label": next_action_label,
-            "dry_run_completed": dry_run_completed,
-            "apply_completed": apply_completed,
+            "dry_run_completed": str(
+                readiness_step_map.get("dry_run_current", {}).get("status") or ""
+            ) == "complete",
+            "apply_completed": str(
+                readiness_step_map.get("apply_allowed", {}).get("status") or ""
+            ) == "complete",
             "open_conflict_count": open_conflicts_total,
-            "source_snapshot_ready": latest_snapshot is not None,
-            "scope_ready": bool(scope_selection),
-            "release_ready": bool(
-                release_context.get("latest_snapshot")
-                and not release_context.get("has_unpublished_changes")
-            ),
-            "review_ready": review_ready,
+            "source_snapshot_ready": str(
+                readiness_step_map.get("source_snapshot_current", {}).get("status") or ""
+            ) == "complete",
+            "scope_ready": str(
+                readiness_step_map.get("sync_scope_current", {}).get("status") or ""
+            ) == "complete",
+            "release_ready": str(
+                readiness_step_map.get("policy_release_current", {}).get("status") or ""
+            ) == "complete",
+            "review_ready": str(
+                readiness_step_map.get("approval_current", {}).get("status") or ""
+            ) == "complete",
+            "rollout_readiness": rollout_readiness,
+            "config_fingerprint": config_fingerprint,
         }
 
     def build_preflight_snapshot(
@@ -432,6 +445,38 @@ class DashboardSupport:
                     "action_label": "Open Job History",
                 }
             )
+
+        readiness = dict(preflight_snapshot.get("rollout_readiness") or {})
+        readiness_steps = [
+            dict(step)
+            for step in list(readiness.get("steps") or [])
+            if isinstance(step, dict)
+            and bool(step.get("whether_required", True))
+            and str(step.get("status") or "")
+            in {"blocked", "action_required", "stale"}
+        ]
+        if readiness_steps:
+            for step in readiness_steps[:6]:
+                status = str(step.get("status") or "blocked")
+                blockers.append(
+                    {
+                        "level": "error" if status == "blocked" else "warning",
+                        "title": str(step.get("title") or "Rollout readiness"),
+                        "detail": str(
+                            step.get("blocker_reason")
+                            or step.get("summary")
+                            or "This rollout step requires attention."
+                        ),
+                        "detail_params": {},
+                        "action_url": str(
+                            step.get("action_url") or "/getting-started"
+                        ),
+                        "action_label": str(
+                            step.get("action_label") or "Review"
+                        ),
+                    }
+                )
+            return blockers
 
         for reason in list(job_center_summary.get("blocked_reasons") or [])[:4]:
             next_url = str(

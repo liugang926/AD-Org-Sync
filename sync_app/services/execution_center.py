@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+from sync_app.core.fingerprints import fingerprint_json
 
 from sync_app.services.high_risk_operations import (
     HighRiskOperationContext,
@@ -71,11 +74,19 @@ class ExecutionCenterService:
         review_repo: Any,
         source_directory_repo: Any,
         settings_repo: Any,
+        ad_directory_snapshot_repo: Any | None = None,
+        identity_match_run_repo: Any | None = None,
+        identity_match_rule_repo: Any | None = None,
+        config_release_snapshot_repo: Any | None = None,
     ) -> None:
         self.job_repo = job_repo
         self.review_repo = review_repo
         self.source_directory_repo = source_directory_repo
         self.settings_repo = settings_repo
+        self.ad_directory_snapshot_repo = ad_directory_snapshot_repo
+        self.identity_match_run_repo = identity_match_run_repo
+        self.identity_match_rule_repo = identity_match_rule_repo
+        self.config_release_snapshot_repo = config_release_snapshot_repo
 
     def _max_age_hours(self, org_id: str) -> int:
         return max(
@@ -360,6 +371,115 @@ class ExecutionCenterService:
                 current_scope=current_scope,
                 plan_generated_at=plan_generated_at,
             )
+
+        rollout_repositories = (
+            self.ad_directory_snapshot_repo,
+            self.identity_match_run_repo,
+            self.identity_match_rule_repo,
+            self.config_release_snapshot_repo,
+        )
+        if all(repository is not None for repository in rollout_repositories):
+            ad_snapshot_id = int(job_scope.get("ad_snapshot_id") or 0)
+            ad_snapshot_fingerprint = _clean_text(
+                job_scope.get("ad_snapshot_fingerprint")
+            )
+            match_run_id = _clean_text(job_scope.get("identity_match_run_id"))
+            match_rules_fingerprint = _clean_text(
+                job_scope.get("identity_match_rules_fingerprint")
+            )
+            release_id = int(job_scope.get("policy_release_id") or 0)
+            release_hash = _clean_text(job_scope.get("policy_release_hash"))
+            if not all(
+                (
+                    ad_snapshot_id,
+                    ad_snapshot_fingerprint,
+                    match_run_id,
+                    match_rules_fingerprint,
+                    release_id,
+                    release_hash,
+                )
+            ):
+                return decision(
+                    False,
+                    "execution.blocker.rollout_evidence_missing",
+                    "execution.action.run_dry_run",
+                    job_scope=job_scope,
+                    current_scope=current_scope,
+                    plan_generated_at=plan_generated_at,
+                )
+            latest_ad_snapshot = (
+                self.ad_directory_snapshot_repo.get_latest_successful_snapshot(
+                    org_id=normalized_org_id,
+                    connector_id="default",
+                )
+            )
+            if (
+                latest_ad_snapshot is None
+                or int(latest_ad_snapshot["id"] or 0) != ad_snapshot_id
+                or _clean_text(latest_ad_snapshot["snapshot_fingerprint"])
+                != ad_snapshot_fingerprint
+            ):
+                return decision(
+                    False,
+                    "execution.blocker.ad_snapshot_changed",
+                    "execution.action.run_dry_run",
+                    job_scope=job_scope,
+                    current_scope=current_scope,
+                    plan_generated_at=plan_generated_at,
+                )
+            latest_match_run = self.identity_match_run_repo.get_latest_completed_run(
+                org_id=normalized_org_id
+            )
+            current_rules = self.identity_match_rule_repo.list_enabled_rules(
+                org_id=normalized_org_id
+            )
+            current_rules_fingerprint = fingerprint_json(
+                [rule.to_dict() for rule in current_rules],
+                namespace="identity-match-rules",
+            )
+            try:
+                match_source_ids = {
+                    int(value)
+                    for value in json.loads(
+                        str(latest_match_run["source_snapshot_ids_json"] or "[]")
+                    )
+                } if latest_match_run is not None else set()
+            except (TypeError, ValueError, json.JSONDecodeError):
+                match_source_ids = set()
+            if (
+                latest_match_run is None
+                or _clean_text(latest_match_run["run_id"]) != match_run_id
+                or int(latest_match_run["ad_snapshot_id"] or 0) != ad_snapshot_id
+                or snapshot_id not in match_source_ids
+                or _clean_text(latest_match_run["rules_fingerprint"])
+                != match_rules_fingerprint
+                or current_rules_fingerprint != match_rules_fingerprint
+            ):
+                return decision(
+                    False,
+                    "execution.blocker.identity_match_changed",
+                    "execution.action.run_dry_run",
+                    job_scope=job_scope,
+                    current_scope=current_scope,
+                    plan_generated_at=plan_generated_at,
+                )
+            latest_release = self.config_release_snapshot_repo.get_latest_snapshot_record(
+                org_id=normalized_org_id
+            )
+            if (
+                latest_release is None
+                or int(latest_release.id or 0) != release_id
+                or _clean_text(latest_release.bundle_hash) != release_hash
+                or int(latest_release.source_snapshot_id or 0) != snapshot_id
+            ):
+                return decision(
+                    False,
+                    "execution.blocker.policy_release_changed",
+                    "execution.action.publish_policy",
+                    job_scope=job_scope,
+                    current_scope=current_scope,
+                    plan_generated_at=plan_generated_at,
+                )
 
         review = self.review_repo.get_review_record_by_job_id(
             _clean_text(getattr(job, "job_id", ""))

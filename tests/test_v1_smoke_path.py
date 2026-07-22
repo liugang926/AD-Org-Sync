@@ -1,11 +1,13 @@
 import logging
 import unittest
 from contextlib import ExitStack
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from sync_app.core.models import AccountConfig, AppConfig, LDAPConfig, WeComConfig
+from sync_app.core.fingerprints import fingerprint_json
 from sync_app.services import runtime
 from sync_app.services.config_release import (
     publish_current_config_release_snapshot,
@@ -13,8 +15,12 @@ from sync_app.services.config_release import (
 )
 from sync_app.services.external_integrations import approve_job_review
 from sync_app.storage.local_db import (
+    ADDirectorySnapshotRepository,
     ConfigReleaseSnapshotRepository,
     DatabaseManager,
+    DataQualityReviewRepository,
+    IdentityMatchRuleRepository,
+    IdentityMatchRunRepository,
     OrganizationConfigRepository,
     OrganizationRepository,
     SettingsRepository,
@@ -28,7 +34,7 @@ from tests.helpers.runtime_fakes import FakeADSyncPolicy, FakeWeChatBot, FakeWeC
 
 
 class V1SmokePathTests(unittest.TestCase):
-    def _seed_source_scope(self, db_manager: DatabaseManager) -> None:
+    def _seed_source_scope(self, db_manager: DatabaseManager) -> int:
         source_repo = SourceDirectoryRepository(db_manager)
         snapshot_id = source_repo.start_refresh(
             org_id="default",
@@ -68,6 +74,60 @@ class V1SmokePathTests(unittest.TestCase):
             scope_type="full",
             snapshot_id=snapshot_id,
             requested_by="tester",
+        )
+        return snapshot_id
+
+    def _seed_rollout_evidence(
+        self,
+        db_manager: DatabaseManager,
+        *,
+        source_snapshot_id: int,
+    ) -> None:
+        DataQualityReviewRepository(db_manager).confirm_snapshot(
+            org_id="default",
+            source_snapshot_id=source_snapshot_id,
+            source_snapshot_fingerprint="sha256:v2:test-v1-smoke-source",
+            reviewer_username="tester",
+            review_notes="V1 smoke source snapshot reviewed.",
+        )
+        ad_snapshot_repo = ADDirectorySnapshotRepository(db_manager)
+        ad_snapshot_id = ad_snapshot_repo.start_snapshot(
+            org_id="default",
+            connector_id="default",
+            created_by="test-v1-smoke",
+        )
+        ad_snapshot_repo.complete_snapshot(
+            ad_snapshot_id,
+            org_id="default",
+            user_count=1,
+            ou_count=1,
+            duplicate_employee_id_count=0,
+            duplicate_employee_number_count=0,
+            snapshot_fingerprint="sha256:v2:test-v1-smoke-ad",
+            expires_at=(datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(
+                timespec="seconds"
+            ),
+        )
+        rule_repo = IdentityMatchRuleRepository(db_manager)
+        rule_repo.seed_defaults(org_id="default", created_by="test-v1-smoke")
+        rules_fingerprint = fingerprint_json(
+            [rule.to_dict() for rule in rule_repo.list_enabled_rules(org_id="default")],
+            namespace="identity-match-rules",
+        )
+        match_repo = IdentityMatchRunRepository(db_manager)
+        match_run_id = match_repo.create_run(
+            org_id="default",
+            source_snapshot_ids=[source_snapshot_id],
+            ad_snapshot_id=ad_snapshot_id,
+            rules_fingerprint=rules_fingerprint,
+            created_by="test-v1-smoke",
+            run_id="match-v1-smoke",
+        )
+        match_repo.replace_candidates(
+            match_run_id,
+            org_id="default",
+            candidates=[],
+            summary={"total": 0, "blocked": 0},
         )
 
     def _org_config_values(self, *, ldap_server: str = "dc01.example.local") -> dict:
@@ -172,15 +232,6 @@ class V1SmokePathTests(unittest.TestCase):
             snapshot_repo = ConfigReleaseSnapshotRepository(db_manager)
             job_repo = SyncJobRepository(db_manager)
 
-            baseline_publish = publish_current_config_release_snapshot(
-                db_manager,
-                "default",
-                created_by="tester",
-                snapshot_name="Smoke Baseline",
-            )
-            self.assertTrue(baseline_publish["created"])
-            self.assertIsNotNone(baseline_publish["snapshot"])
-
             UserIdentityBindingRepository(db_manager).upsert_binding(
                 "bob.wecom",
                 "bob",
@@ -193,7 +244,20 @@ class V1SmokePathTests(unittest.TestCase):
             FakeADSyncPolicy.reset()
             FakeWeChatBot.reset()
             FakeADSyncPolicy.enabled_users_by_domain = {"example.com": ["bob"]}
-            self._seed_source_scope(db_manager)
+            source_snapshot_id = self._seed_source_scope(db_manager)
+            self._seed_rollout_evidence(
+                db_manager,
+                source_snapshot_id=source_snapshot_id,
+            )
+
+            baseline_publish = publish_current_config_release_snapshot(
+                db_manager,
+                "default",
+                created_by="tester",
+                snapshot_name="Smoke Baseline",
+            )
+            self.assertTrue(baseline_publish["created"])
+            self.assertIsNotNone(baseline_publish["snapshot"])
 
             dry_run_result = self._run_job(
                 config=config,

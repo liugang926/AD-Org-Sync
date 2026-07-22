@@ -60,3 +60,33 @@
   <div><span>{{ t('Impact Count') }}</span><strong>{{ context.impact_count if context else 0 }}</strong></div>
 </div>
 {%- endmacro %}
+
+{% macro rollout_evidence(execution_context, selected=False) -%}
+{% set evidence = execution_context.selected_evidence if selected else execution_context.current_evidence %}
+{% set evidence_status = execution_context.selected_evidence_status if selected else 'complete' %}
+<section class="card execution-evidence-set" data-rollout-evidence data-evidence-status="{{ evidence_status }}">
+  <div class="panel__intro">
+    <div class="panel__header">
+      <h2 class="panel__title">{{ t("Selected plan evidence") if selected else t("Current rollout evidence") }}</h2>
+      {% if selected %}{{ ui.badge(t(evidence_status|replace("_", " ")|title), "success" if evidence_status == "complete" else "warning") }}{% endif %}
+    </div>
+    <p class="panel__description">{{ t("Dry Run, approval and Apply are valid only while every value below matches the current organization state.") }}</p>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-item"><div class="label">{{ t("Source snapshot") }}</div><div class="value">{% if evidence.source_snapshot_id %}#{{ evidence.source_snapshot_id }}{% else %}{{ t("Not available") }}{% endif %}</div></div>
+    <div class="detail-item"><div class="label">{{ t("AD snapshot") }}</div><div class="value">{% if evidence.ad_snapshot_id %}#{{ evidence.ad_snapshot_id }}{% else %}{{ t("Not available") }}{% endif %}</div></div>
+    <div class="detail-item"><div class="label">{{ t("Identity match run") }}</div><div class="value cell-mono">{{ evidence.identity_match_run_id or t("Not available") }}</div></div>
+    <div class="detail-item"><div class="label">{{ t("Policy release") }}</div><div class="value">{% if evidence.policy_release_id %}v{{ evidence.policy_release_id }}{% else %}{{ t("Not available") }}{% endif %}</div></div>
+    <div class="detail-item"><div class="label">{{ t("Configuration fingerprint") }}</div><div class="value cell-mono cell-truncate" title="{{ evidence.config_fingerprint or '' }}">{{ evidence.config_fingerprint or t("Not available") }}</div></div>
+  </div>
+  {% if selected and not execution_context.selected_evidence_current %}
+  <div class="panel-note warning" role="alert"><strong>{{ t("This plan is no longer current") }}</strong><span>{{ t(execution_context.selected_evidence_reason) }}</span></div>
+  {% endif %}
+  <details class="detail-toggle"><summary>{{ t("Version fingerprints") }}</summary><div class="evidence-code">
+    <div>{{ t("Source snapshot fingerprint") }}: <code>{{ evidence.source_snapshot_fingerprint or "-" }}</code></div>
+    <div>{{ t("AD snapshot fingerprint") }}: <code>{{ evidence.ad_snapshot_fingerprint or "-" }}</code></div>
+    <div>{{ t("Match rule fingerprint") }}: <code>{{ evidence.identity_match_rules_fingerprint or "-" }}</code></div>
+    <div>{{ t("Policy release hash") }}: <code>{{ evidence.policy_release_hash or "-" }}</code></div>
+  </div></details>
+</section>
+{%- endmacro %}

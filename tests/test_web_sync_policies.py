@@ -292,17 +292,17 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
         self._login("superadmin")
         self.session["ui_mode"] = "advanced"
         self._seed_policy_fixture()
-        path = "/sync-policies/attribute-mappings"
+        path = "/sync-policies/field-authority"
         page = self._text(self._route(path, "GET")(self._request(path)))
-        self.assertIn('action="/sync-policies/attribute-mappings/field-authority"', page)
-        self.assertIn("Field Authority &amp; Direction", page)
+        self.assertIn('action="/sync-policies/field-authority"', page)
+        self.assertIn("Add or update field authority", page)
         fingerprint_before = resolve_runtime_config_fingerprint(
             db_manager=self.app.state.db_manager,
             org_id="default",
             config_path=str(self.config_path),
         )
 
-        save_path = path + "/field-authority"
+        save_path = path
         response = self._route(save_path, "POST")(
             self._request(save_path, "POST"),
             csrf_token=self.session["_csrf_token"],
@@ -318,6 +318,24 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
 
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], path)
+        legacy_path = "/sync-policies/attribute-mappings/field-authority"
+        legacy_response = self._route(legacy_path, "POST")(
+            self._request(legacy_path, "POST"),
+            csrf_token=self.session["_csrf_token"],
+            field_name="email",
+            source_provider="wecom",
+            source_priority=5,
+            sync_direction="bidirectional",
+            sync_mode="fill_if_empty",
+            prevent_loop="1",
+            is_enabled="1",
+            notes="Compatibility route remains supported.",
+        )
+        self.assertEqual(legacy_response.status_code, 303)
+        self.assertEqual(
+            legacy_response.headers["location"],
+            "/sync-policies/attribute-mappings",
+        )
         rules = self.app.state.field_authority_rule_repo.list_rules(org_id="default")
         saved = next(
             rule
@@ -905,7 +923,7 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
             )
         )
 
-    def test_release_alias_uses_canonical_actions_and_existing_release_service(self):
+    def test_release_alias_uses_canonical_actions_and_blocks_incomplete_readiness(self):
         self._login("superadmin")
         path = "/sync-policies/releases"
         page = self._route(path, "GET")(self._request(path))
@@ -913,6 +931,7 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn('action="/sync-policies/releases/publish"', body)
         self.assertNotIn('action="/config/releases/publish"', body)
+        self.assertIn('disabled aria-disabled="true"', body)
 
         published = self._route(path + "/publish", "POST")(
             self._request(path + "/publish", "POST"),
@@ -924,13 +943,9 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
         snapshots = self.app.state.config_release_snapshot_repo.list_snapshot_records(
             org_id="default"
         )
-        self.assertEqual(len(snapshots), 1)
-        self.assertTrue(
-            any(
-                row.action_type == "config.release_publish"
-                for row in self.app.state.audit_repo.list_recent_logs(20)
-            )
-        )
+        self.assertEqual(snapshots, [])
+        blocked_page = self._text(self._route(path, "GET")(self._request(path)))
+        self.assertIn("Policy release blocked", blocked_page)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ from sync_app.storage.local_db import (
     DepartmentOuMappingRepository,
     DatabaseManager,
     GroupExclusionRuleRepository,
+    FieldAuthorityRuleRepository,
+    IdentityMatchRuleRepository,
     OrganizationConfigRepository,
     OrganizationRepository,
     SettingsRepository,
@@ -48,6 +50,8 @@ def export_organization_bundle(db_manager: DatabaseManager, org_id: str) -> Dict
     mapping_repo = AttributeMappingRuleRepository(db_manager)
     department_ou_mapping_repo = DepartmentOuMappingRepository(db_manager)
     exclusion_repo = GroupExclusionRuleRepository(db_manager)
+    identity_match_rule_repo = IdentityMatchRuleRepository(db_manager)
+    field_authority_rule_repo = FieldAuthorityRuleRepository(db_manager)
 
     org_settings: Dict[str, Any] = {}
     for key in EXPORTABLE_ORG_SETTINGS:
@@ -141,6 +145,42 @@ def export_organization_bundle(db_manager: DatabaseManager, org_id: str) -> Dict
         for record in exclusion_repo.list_rule_records(org_id=organization.org_id)
     ]
 
+    identity_match_rules = [
+        {
+            "rule_order": record.rule_order,
+            "rule_name": record.rule_name,
+            "source_provider": record.source_provider,
+            "source_field": record.source_field,
+            "ad_field": record.ad_field,
+            "is_required": record.is_required,
+            "case_sensitive": record.case_sensitive,
+            "trim_whitespace": record.trim_whitespace,
+            "strip_phone_country_code": record.strip_phone_country_code,
+            "lowercase_email": record.lowercase_email,
+            "allow_fallback": record.allow_fallback,
+            "allow_auto_link": record.allow_auto_link,
+            "confidence_level": record.confidence_level,
+            "confidence_score": record.confidence_score,
+            "stop_on_conflict": record.stop_on_conflict,
+            "is_enabled": record.is_enabled,
+        }
+        for record in identity_match_rule_repo.list_rules(org_id=organization.org_id)
+    ]
+
+    field_authority_rules = [
+        {
+            "field_name": record.field_name,
+            "source_provider": record.source_provider,
+            "source_priority": record.source_priority,
+            "sync_direction": record.sync_direction,
+            "sync_mode": record.sync_mode,
+            "prevent_loop": record.prevent_loop,
+            "is_enabled": record.is_enabled,
+            "notes": record.notes,
+        }
+        for record in field_authority_rule_repo.list_rules(org_id=organization.org_id)
+    ]
+
     raw_org_config = org_config_repo.get_raw_config(
         organization.org_id,
         config_path=organization.config_path,
@@ -164,6 +204,8 @@ def export_organization_bundle(db_manager: DatabaseManager, org_id: str) -> Dict
         "attribute_mappings": attribute_mappings,
         "department_ou_mappings": department_ou_mappings,
         "group_exclusion_rules": group_exclusion_rules,
+        "identity_match_rules": identity_match_rules,
+        "field_authority_rules": field_authority_rules,
     }
 
 
@@ -192,6 +234,8 @@ def import_organization_bundle(
     mapping_repo = AttributeMappingRuleRepository(db_manager)
     department_ou_mapping_repo = DepartmentOuMappingRepository(db_manager)
     exclusion_repo = GroupExclusionRuleRepository(db_manager)
+    identity_match_rule_repo = IdentityMatchRuleRepository(db_manager)
+    field_authority_rule_repo = FieldAuthorityRuleRepository(db_manager)
 
     config_path = str(organization_data.get("config_path") or "").strip()
     organization_repo.upsert_organization(
@@ -208,6 +252,10 @@ def import_organization_bundle(
         mapping_repo.delete_rules_for_org(effective_org_id)
         department_ou_mapping_repo.delete_mappings_for_org(effective_org_id)
         exclusion_repo.delete_rules_for_org(effective_org_id)
+        if "identity_match_rules" in bundle:
+            identity_match_rule_repo.delete_rules_for_org(effective_org_id)
+        if "field_authority_rules" in bundle:
+            field_authority_rule_repo.delete_rules_for_org(effective_org_id)
 
     org_config_values = dict(bundle.get("organization_config") or {})
     org_config_repo.save_config(effective_org_id, org_config_values, config_path=config_path)
@@ -297,6 +345,50 @@ def import_organization_bundle(
         )
         imported_group_rules += 1
 
+    imported_identity_match_rules = 0
+    for rule in list(bundle.get("identity_match_rules") or []):
+        identity_match_rule_repo.upsert_rule(
+            org_id=effective_org_id,
+            rule_order=int(rule.get("rule_order") or 100),
+            rule_name=str(rule.get("rule_name") or "").strip(),
+            source_provider=str(rule.get("source_provider") or "*").strip(),
+            source_field=str(rule.get("source_field") or "").strip(),
+            ad_field=str(rule.get("ad_field") or "").strip(),
+            is_required=bool(rule.get("is_required", False)),
+            case_sensitive=bool(rule.get("case_sensitive", False)),
+            trim_whitespace=bool(rule.get("trim_whitespace", True)),
+            strip_phone_country_code=bool(
+                rule.get("strip_phone_country_code", False)
+            ),
+            lowercase_email=bool(rule.get("lowercase_email", False)),
+            allow_fallback=bool(rule.get("allow_fallback", True)),
+            allow_auto_link=bool(rule.get("allow_auto_link", False)),
+            confidence_level=str(rule.get("confidence_level") or "medium"),
+            confidence_score=int(rule.get("confidence_score") or 50),
+            stop_on_conflict=bool(rule.get("stop_on_conflict", True)),
+            is_enabled=bool(rule.get("is_enabled", True)),
+            created_by="config_bundle_import",
+        )
+        imported_identity_match_rules += 1
+
+    imported_field_authority_rules = 0
+    for rule in list(bundle.get("field_authority_rules") or []):
+        field_authority_rule_repo.upsert_rule(
+            org_id=effective_org_id,
+            field_name=str(rule.get("field_name") or "").strip(),
+            source_provider=str(rule.get("source_provider") or "*").strip(),
+            source_priority=int(rule.get("source_priority") or 100),
+            sync_direction=str(
+                rule.get("sync_direction") or "source_to_ad"
+            ).strip(),
+            sync_mode=str(rule.get("sync_mode") or "replace").strip(),
+            prevent_loop=bool(rule.get("prevent_loop", True)),
+            is_enabled=bool(rule.get("is_enabled", True)),
+            notes=str(rule.get("notes") or "").strip(),
+            created_by="config_bundle_import",
+        )
+        imported_field_authority_rules += 1
+
     return {
         "org_id": effective_org_id,
         "source_org_id": source_org_id,
@@ -306,4 +398,6 @@ def import_organization_bundle(
         "imported_mappings": imported_mappings,
         "imported_department_ou_mappings": imported_department_ou_mappings,
         "imported_group_rules": imported_group_rules,
+        "imported_identity_match_rules": imported_identity_match_rules,
+        "imported_field_authority_rules": imported_field_authority_rules,
     }

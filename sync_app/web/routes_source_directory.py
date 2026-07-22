@@ -1603,6 +1603,27 @@ def register_source_directory_routes(
             ),
         )
 
+    @app.get(CANONICAL_ROUTE_PATHS["identity-match-rules"], response_class=HTMLResponse)
+    def identity_match_rules_page(request: Request):
+        user = require_capability(request, "mappings.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        repositories.identity_match_rule_repo.seed_defaults(
+            org_id=current_org.org_id
+        )
+        return render(
+            request,
+            "identity_match_rules.html",
+            page="identity-match-rules",
+            title="Identity Match Rules",
+            current_org=current_org,
+            identity_match_rules=repositories.identity_match_rule_repo.list_rules(
+                org_id=current_org.org_id
+            ),
+        )
+
     @app.post("/identity-governance/ad-snapshots/refresh")
     def refresh_ad_identity_snapshot(
         request: Request,
@@ -1725,7 +1746,7 @@ def register_source_directory_routes(
         user = require_capability(request, "mappings.write")
         if isinstance(user, RedirectResponse):
             return user
-        return_path = CANONICAL_ROUTE_PATHS["identity-matching"]
+        return_path = CANONICAL_ROUTE_PATHS["identity-match-rules"]
         csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
         if csrf_error:
             return csrf_error

@@ -31,6 +31,8 @@ SECTION_TITLES = {
     "attribute_mappings": "Attribute Mappings",
     "department_ou_mappings": "Department Routing",
     "group_exclusion_rules": "Group Exclusion Rules",
+    "identity_match_rules": "Identity Match Rules",
+    "field_authority_rules": "Field Authority Rules",
     "sync_scopes": "Source Sync Scopes",
 }
 FIELD_LABELS = {
@@ -208,6 +210,27 @@ FIELD_ORDER = {
         "source_snapshot_fingerprint",
         "selection_fingerprint",
     ),
+    "identity_match_rules": (
+        "rule_order",
+        "rule_name",
+        "source_provider",
+        "source_field",
+        "ad_field",
+        "allow_auto_link",
+        "confidence_level",
+        "confidence_score",
+        "is_enabled",
+    ),
+    "field_authority_rules": (
+        "field_name",
+        "source_provider",
+        "source_priority",
+        "sync_direction",
+        "sync_mode",
+        "prevent_loop",
+        "is_enabled",
+        "notes",
+    ),
 }
 TRIGGER_LABELS = {
     "manual_release": "Manual Publish",
@@ -279,6 +302,24 @@ def _normalized_bundle_payload(bundle: dict[str, Any]) -> dict[str, Any]:
                 str(item.get("protection_level") or ""),
                 str(item.get("match_type") or ""),
                 str(item.get("match_value") or ""),
+            ]
+        ),
+    )
+    normalized["identity_match_rules"] = _normalize_collection(
+        list(normalized.get("identity_match_rules") or []),
+        key_builder=lambda item: "|".join(
+            [
+                str(item.get("rule_order") or ""),
+                str(item.get("rule_name") or ""),
+            ]
+        ),
+    )
+    normalized["field_authority_rules"] = _normalize_collection(
+        list(normalized.get("field_authority_rules") or []),
+        key_builder=lambda item: "|".join(
+            [
+                str(item.get("field_name") or ""),
+                str(item.get("source_provider") or "*"),
             ]
         ),
     )
@@ -364,6 +405,15 @@ def _collection_item_key(section_key: str, item: dict[str, Any]) -> str:
                 str(item.get("connector_id") or "default"),
             ]
         )
+    if section_key == "identity_match_rules":
+        return str(item.get("rule_name") or "")
+    if section_key == "field_authority_rules":
+        return "|".join(
+            [
+                str(item.get("field_name") or ""),
+                str(item.get("source_provider") or "*"),
+            ]
+        )
     return json.dumps(item, ensure_ascii=False, sort_keys=True)
 
 
@@ -399,6 +449,12 @@ def _collection_item_label(section_key: str, item: dict[str, Any]) -> str:
         provider_id = str(item.get("provider_id") or "-").strip()
         connector_id = str(item.get("connector_id") or "default").strip()
         return f"{provider_id} / {connector_id}"
+    if section_key == "identity_match_rules":
+        return str(item.get("rule_name") or "Identity match rule")
+    if section_key == "field_authority_rules":
+        field_name = str(item.get("field_name") or "Field").strip()
+        provider = str(item.get("source_provider") or "*").strip()
+        return f"{field_name} / {provider}"
     return _collection_item_key(section_key, item) or "Item"
 
 
@@ -582,6 +638,16 @@ def build_config_release_diff(
             list(normalized_baseline.get("group_exclusion_rules") or []),
         ),
         _build_collection_group(
+            "identity_match_rules",
+            list(normalized_current.get("identity_match_rules") or []),
+            list(normalized_baseline.get("identity_match_rules") or []),
+        ),
+        _build_collection_group(
+            "field_authority_rules",
+            list(normalized_current.get("field_authority_rules") or []),
+            list(normalized_baseline.get("field_authority_rules") or []),
+        ),
+        _build_collection_group(
             "sync_scopes",
             list(normalized_current.get("sync_scopes") or []),
             list(normalized_baseline.get("sync_scopes") or []),
@@ -759,12 +825,41 @@ def publish_current_config_release_snapshot(
         latest_snapshot.bundle if latest_snapshot and isinstance(latest_snapshot.bundle, dict) else None,
     )
     summary = _snapshot_summary(diff, latest_snapshot)
+    current_scopes = list(current_bundle.get("sync_scopes") or [])
+    current_scope_snapshot_ids = {
+        int(scope.get("snapshot_id") or 0)
+        for scope in current_scopes
+        if int(scope.get("snapshot_id") or 0) > 0
+    }
+    resolved_source_snapshot_id = source_snapshot_id
+    if resolved_source_snapshot_id is None:
+        configured_provider = str(
+            dict(current_bundle.get("organization_config") or {}).get(
+                "source_provider"
+            )
+            or ""
+        ).strip().lower()
+        configured_scope_snapshot_ids = {
+            int(scope.get("snapshot_id") or 0)
+            for scope in current_scopes
+            if int(scope.get("snapshot_id") or 0) > 0
+            and str(scope.get("provider_id") or "").strip().lower()
+            == configured_provider
+            and str(scope.get("connector_id") or "default").strip().lower()
+            == "default"
+        }
+        if len(configured_scope_snapshot_ids) == 1:
+            resolved_source_snapshot_id = next(
+                iter(configured_scope_snapshot_ids)
+            )
+        elif len(current_scope_snapshot_ids) == 1:
+            resolved_source_snapshot_id = next(iter(current_scope_snapshot_ids))
     snapshot_id = repo.add_snapshot(
         org_id=normalized_org_id,
         snapshot_name=str(snapshot_name or "").strip(),
         trigger_action=str(trigger_action or "manual_release").strip() or "manual_release",
         created_by=str(created_by or "").strip(),
-        source_snapshot_id=source_snapshot_id if source_snapshot_id is not None else (latest_snapshot.id if latest_snapshot else None),
+        source_snapshot_id=resolved_source_snapshot_id,
         bundle_hash=current_hash,
         bundle=current_bundle,
         summary=summary,

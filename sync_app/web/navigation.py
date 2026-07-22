@@ -6,12 +6,15 @@ from sync_app.web.authz import ROLE_AUDITOR, role_capabilities
 
 
 CANONICAL_ROUTE_PATHS = {
+    "getting-started": "/getting-started",
     "dashboard": "/overview/control-tower",
     "config": "/data-sources/connectors",
     "source-directory": "/data-sources/source-directory",
     "snapshots": "/data-sources/snapshots",
     "data-quality": "/data-sources/data-quality",
     "identity-matching": "/identity-governance/identity-matching",
+    "identity-match-rules": "/identity-governance/match-rules",
+    "account-takeover": "/identity-governance/account-takeover",
     "binding-reconciliation": "/identity-governance/binding-reconciliation",
     "conflicts": "/identity-governance/conflicts",
     "mappings": "/identity-governance/manual-overrides",
@@ -20,6 +23,7 @@ CANONICAL_ROUTE_PATHS = {
     "sync-scope": "/sync-policies/scope",
     "sync-account-naming": "/sync-policies/account-naming",
     "sync-attribute-mappings": "/sync-policies/attribute-mappings",
+    "sync-field-authority": "/sync-policies/field-authority",
     "sync-department-ou-routing": "/sync-policies/department-ou-routing",
     "sync-group-rules": "/sync-policies/group-rules",
     "sync-lifecycle-policy": "/sync-policies/lifecycle",
@@ -81,8 +85,15 @@ class NavigationGroup:
 
 NAVIGATION_GROUPS = (
     NavigationGroup(
-        label="Overview",
+        label="Configuration Guide",
         items=(
+            NavigationItem(
+                page="getting-started",
+                label="Configuration Guide",
+                icon="map",
+                capability="dashboard.read",
+                legacy_paths=(),
+            ),
             NavigationItem(
                 page="dashboard",
                 label="Control Tower",
@@ -93,7 +104,7 @@ NAVIGATION_GROUPS = (
         ),
     ),
     NavigationGroup(
-        label="Connectors",
+        label="Data Sources & AD",
         items=(
             NavigationItem(
                 page="config",
@@ -102,21 +113,16 @@ NAVIGATION_GROUPS = (
                 capability="config.read",
                 legacy_paths=("/config", "/config/releases"),
             ),
-        ),
-    ),
-    NavigationGroup(
-        label="Data Sources",
-        items=(
             NavigationItem(
                 page="source-directory",
-                label="Source Directory",
+                label="Source Directory & Snapshots",
                 icon="users-round",
                 capability="config.read",
                 legacy_paths=("/source-directory",),
             ),
             NavigationItem(
                 page="data-quality",
-                label="Data Quality",
+                label="Data Quality Review",
                 icon="circle-check-big",
                 capability="config.read",
                 legacy_paths=("/data-quality",),
@@ -124,14 +130,36 @@ NAVIGATION_GROUPS = (
         ),
     ),
     NavigationGroup(
-        label="Identity Governance",
+        label="Identity Matching",
         items=(
             NavigationItem(
                 page="identity-matching",
-                label="Identity Matching",
+                label="Identity Matching Workbench",
                 icon="user-round-search",
                 capability="mappings.read",
                 legacy_paths=(),
+            ),
+            NavigationItem(
+                page="identity-match-rules",
+                label="Identity Match Rules",
+                icon="list-checks",
+                capability="mappings.read",
+                legacy_paths=(),
+            ),
+            NavigationItem(
+                page="account-takeover",
+                label="Existing Account Takeover",
+                icon="link-2",
+                capability="mappings.read",
+                legacy_paths=(),
+            ),
+            NavigationItem(
+                page="mappings",
+                label="Manual Identity Overrides",
+                icon="layers",
+                capability="mappings.read",
+                legacy_paths=("/mappings",),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="binding-reconciliation",
@@ -141,20 +169,97 @@ NAVIGATION_GROUPS = (
                 legacy_paths=(),
                 advanced_only=True,
             ),
+        ),
+    ),
+    NavigationGroup(
+        label="Organization & OU",
+        items=(
+            NavigationItem(
+                page="sync-account-naming",
+                label="Account Naming",
+                icon="badge-check",
+                capability="config.read",
+                legacy_paths=("/advanced-sync",),
+            ),
+            NavigationItem(
+                page="sync-field-authority",
+                label="Field Authority",
+                icon="shield-check",
+                capability="config.read",
+                legacy_paths=(),
+            ),
+            NavigationItem(
+                page="sync-attribute-mappings",
+                label="Attribute Mappings",
+                icon="arrow-left-right",
+                capability="config.read",
+                legacy_paths=(),
+            ),
+            NavigationItem(
+                page="sync-department-ou-routing",
+                label="Department & OU Routing",
+                icon="route",
+                capability="config.read",
+                legacy_paths=(),
+            ),
+            NavigationItem(
+                page="sync-group-rules",
+                label="Group Rules",
+                icon="users-round",
+                capability="config.read",
+                legacy_paths=(),
+            ),
+            NavigationItem(
+                page="sync-lifecycle-policy",
+                label="Lifecycle Policy",
+                icon="refresh-cw",
+                capability="config.read",
+                legacy_paths=(),
+            ),
+            NavigationItem(
+                page="sync-security-policy",
+                label="Security Gates",
+                icon="shield-alert",
+                capability="config.read",
+                legacy_paths=(),
+            ),
+        ),
+    ),
+    NavigationGroup(
+        label="Sync Preview",
+        items=(
+            NavigationItem(
+                page="sync-scope",
+                label="Synchronization Scope",
+                icon="list-filter",
+                capability="config.read",
+                legacy_paths=(),
+            ),
+            NavigationItem(
+                page="sync-policy-releases",
+                label="Policy Summary & Release",
+                icon="package-check",
+                capability="config.read",
+                legacy_paths=(),
+            ),
+            NavigationItem(
+                page="execution-dry-run",
+                label="Dry Run",
+                icon="play-circle",
+                capability="jobs.read",
+                legacy_paths=("/jobs", "/execution-center/run-review"),
+            ),
+        ),
+    ),
+    NavigationGroup(
+        label="Conflict Resolution",
+        items=(
             NavigationItem(
                 page="conflicts",
                 label="Conflict Queue",
                 icon="shield-alert",
                 capability="jobs.read",
                 legacy_paths=("/conflicts",),
-            ),
-            NavigationItem(
-                page="mappings",
-                label="Manual Overrides",
-                icon="layers",
-                capability="mappings.read",
-                legacy_paths=("/mappings",),
-                advanced_only=True,
             ),
             NavigationItem(
                 page="exceptions",
@@ -167,67 +272,8 @@ NAVIGATION_GROUPS = (
         ),
     ),
     NavigationGroup(
-        label="Sync Policies",
+        label="Execution & History",
         items=(
-            NavigationItem(
-                page="sync-scope",
-                label="Sync Scope",
-                icon="list-filter",
-                capability="config.read",
-                legacy_paths=(),
-            ),
-            NavigationItem(
-                page="sync-account-naming",
-                label="Account Naming",
-                icon="badge-check",
-                capability="config.read",
-                legacy_paths=("/advanced-sync",),
-                advanced_only=True,
-            ),
-            NavigationItem(
-                page="sync-attribute-mappings",
-                label="Attribute Mappings",
-                icon="arrow-left-right",
-                capability="config.read",
-                legacy_paths=(),
-                advanced_only=True,
-            ),
-            NavigationItem(
-                page="sync-department-ou-routing",
-                label="Department & OU Routing",
-                icon="route",
-                capability="config.read",
-                legacy_paths=(),
-                advanced_only=True,
-            ),
-            NavigationItem(
-                page="sync-group-rules",
-                label="Group Rules",
-                icon="users-round",
-                capability="config.read",
-                legacy_paths=(),
-                advanced_only=True,
-            ),
-            NavigationItem(
-                page="sync-lifecycle-policy",
-                label="Lifecycle & Security",
-                icon="refresh-cw",
-                capability="config.read",
-                legacy_paths=(),
-                advanced_only=True,
-            ),
-        ),
-    ),
-    NavigationGroup(
-        label="Execution Center",
-        items=(
-            NavigationItem(
-                page="execution-dry-run",
-                label="Dry Run",
-                icon="play-circle",
-                capability="jobs.read",
-                legacy_paths=("/jobs", "/execution-center/run-review"),
-            ),
             NavigationItem(
                 page="execution-plan-review",
                 label="Plan Review",
@@ -244,7 +290,7 @@ NAVIGATION_GROUPS = (
             ),
             NavigationItem(
                 page="execution-jobs",
-                label="Job History",
+                label="Execution History",
                 icon="history",
                 capability="jobs.read",
                 legacy_paths=(),
@@ -252,7 +298,20 @@ NAVIGATION_GROUPS = (
         ),
     ),
     NavigationGroup(
-        label="Lifecycle Workbench",
+        label="Audit Center",
+        items=(
+            NavigationItem(
+                page="audit",
+                label="Audit Logs",
+                icon="scroll-text",
+                capability="audit.read",
+                legacy_paths=("/audit",),
+                basic_roles=(ROLE_AUDITOR,),
+            ),
+        ),
+    ),
+    NavigationGroup(
+        label="Advanced Operations",
         items=(
             NavigationItem(
                 page="lifecycle",
@@ -262,11 +321,6 @@ NAVIGATION_GROUPS = (
                 legacy_paths=("/lifecycle",),
                 advanced_only=True,
             ),
-        ),
-    ),
-    NavigationGroup(
-        label="Automation",
-        items=(
             NavigationItem(
                 page="automation-center",
                 label="Automation & Schedules",
@@ -283,25 +337,6 @@ NAVIGATION_GROUPS = (
                 legacy_paths=("/integrations",),
                 advanced_only=True,
             ),
-        ),
-    ),
-    NavigationGroup(
-        label="Operations Center",
-        items=(
-            NavigationItem(
-                page="audit",
-                label="Audit Logs",
-                icon="scroll-text",
-                capability="audit.read",
-                legacy_paths=("/audit",),
-                advanced_only=True,
-                basic_roles=(ROLE_AUDITOR,),
-            ),
-        ),
-    ),
-    NavigationGroup(
-        label="Employee Services",
-        items=(
             NavigationItem(
                 page="employee-self-service",
                 label="Employee Self-Service",
@@ -344,7 +379,7 @@ NAVIGATION_GROUPS = (
                 label="Branding & Appearance",
                 icon="palette",
                 capability="system.manage",
-                legacy_paths=("/config#config-section-web",),
+                legacy_paths=(),
                 advanced_only=True,
             ),
             NavigationItem(
@@ -352,40 +387,33 @@ NAVIGATION_GROUPS = (
                 label="Deployment Settings",
                 icon="server-cog",
                 capability="system.manage",
-                legacy_paths=("/config#config-section-web",),
+                legacy_paths=(),
+                advanced_only=True,
+            ),
+            NavigationItem(
+                page="account",
+                label="My Account",
+                icon="circle-user-round",
+                capability="account.manage",
+                legacy_paths=("/account",),
                 advanced_only=True,
             ),
         ),
     ),
 )
 
+
 ADVANCED_NAV_PAGES = frozenset(
-    {
-        item.page
-        for group in NAVIGATION_GROUPS
-        for item in group.items
-        if item.advanced_only
-    }
-    | {
-        # Compatibility routes that now hand off to an advanced workspace.
-        "sync-security-policy",
-    }
+    item.page
+    for group in NAVIGATION_GROUPS
+    for item in group.items
+    if item.advanced_only
 )
 
-# A compact navigation item and a mode-gated workspace are different concepts.
-# Basic mode keeps secondary destinations out of the daily navigation, while
-# only implementation-level workspaces are replaced by the explanatory gate.
-ADVANCED_MODE_PAGE_GATES = frozenset(
-    {
-        "audit",
-        "binding-reconciliation",
-        "exceptions",
-        "mappings",
-        "sync-attribute-mappings",
-        "sync-department-ou-routing",
-        "sync-policy-releases",
-    }
-)
+# Pages in this set remain directly addressable in Basic mode, but the shell
+# explains that they are infrequent operational or system-administration tools.
+# Business rollout configuration pages deliberately stay out of this gate.
+ADVANCED_MODE_PAGE_GATES = ADVANCED_NAV_PAGES
 
 
 def build_navigation_groups(

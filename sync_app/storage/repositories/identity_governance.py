@@ -849,6 +849,14 @@ class ADDirectorySnapshotRepository(BaseRepository):
 
 
 class IdentityMatchRuleRepository(BaseRepository):
+    def delete_rules_for_org(self, org_id: str) -> None:
+        normalized_org_id = self._resolve_org_id(org_id) or "default"
+        with self.db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM identity_match_rules WHERE org_id = ?",
+                (normalized_org_id,),
+            )
+
     def seed_defaults(self, *, org_id: str, created_by: str = "system") -> None:
         normalized_org_id = self._resolve_org_id(org_id) or "default"
         now = utcnow_iso()
@@ -1011,6 +1019,14 @@ class IdentityMatchRuleRepository(BaseRepository):
 
 
 class FieldAuthorityRuleRepository(BaseRepository):
+    def delete_rules_for_org(self, org_id: str) -> None:
+        normalized_org_id = self._resolve_org_id(org_id) or "default"
+        with self.db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM field_authority_rules WHERE org_id = ?",
+                (normalized_org_id,),
+            )
+
     def seed_defaults(self, *, org_id: str, created_by: str = "system") -> None:
         normalized_org_id = self._resolve_org_id(org_id) or "default"
         now = utcnow_iso()

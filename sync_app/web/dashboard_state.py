@@ -54,6 +54,36 @@ def build_getting_started_data(
     source_provider_name: str,
     ui_mode: str,
 ) -> dict[str, Any]:
+    rollout_readiness = preflight_snapshot.get("rollout_readiness")
+    if isinstance(rollout_readiness, dict) and rollout_readiness.get("steps"):
+        steps = [
+            dict(step)
+            for step in list(rollout_readiness.get("steps") or [])
+            if isinstance(step, dict)
+        ]
+        next_step = dict(rollout_readiness.get("next_step") or {})
+        next_key = str(next_step.get("key") or "")
+        for step in steps:
+            step["done"] = str(step.get("status") or "") == "complete"
+            step["available"] = str(step.get("status") or "") not in {
+                "blocked",
+                "not_started",
+            }
+            step["is_recommended"] = str(step.get("key") or "") == next_key
+            step["href"] = str(step.get("action_url") or "")
+            step["detail"] = str(step.get("summary") or "")
+        return {
+            "current_org_name": current_org_name,
+            "steps": steps,
+            "completed_steps": int(rollout_readiness.get("completed_count") or 0),
+            "total_steps": int(rollout_readiness.get("required_count") or len(steps)),
+            "completion_percent": int(rollout_readiness.get("completion_percent") or 0),
+            "blocker_count": int(rollout_readiness.get("blocker_count") or 0),
+            "current_phase": str(rollout_readiness.get("current_phase") or ""),
+            "next_step": next_step,
+            "phases": _group_rollout_phases(steps),
+        }
+
     presentation = get_ui_mode_presentation(ui_mode)
     check_index = {
         str(item.get("key") or ""): item for item in list(preflight_snapshot.get("checks") or []) if isinstance(item, dict)
@@ -211,3 +241,29 @@ def build_getting_started_data(
         "total_steps": len(steps),
         "next_step": next_step,
     }
+
+
+def _group_rollout_phases(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    phases: list[dict[str, Any]] = []
+    by_name: dict[str, dict[str, Any]] = {}
+    for step in steps:
+        phase_name = str(step.get("phase") or "Rollout")
+        phase = by_name.get(phase_name)
+        if phase is None:
+            phase = {
+                "name": phase_name,
+                "steps": [],
+                "completed_count": 0,
+                "required_count": 0,
+                "has_recommended": False,
+            }
+            by_name[phase_name] = phase
+            phases.append(phase)
+        phase["steps"].append(step)
+        if bool(step.get("whether_required", True)):
+            phase["required_count"] += 1
+            if str(step.get("status") or "") == "complete":
+                phase["completed_count"] += 1
+        if step.get("is_recommended"):
+            phase["has_recommended"] = True
+    return phases

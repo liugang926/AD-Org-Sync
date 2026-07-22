@@ -3263,13 +3263,15 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(deployment.status_code, 200)
         self.assertIn("Secure Cookie Policy", self._text(deployment))
 
-        dashboard = self._route("/dashboard", "GET")(self._request("/dashboard"))
-        self.assertEqual(dashboard.status_code, 200)
-        dashboard_text = self._text(dashboard)
-        self.assertIn("LDAPS certificate validation is disabled.", dashboard_text)
+        getting_started = self._route("/getting-started", "GET")(
+            self._request("/getting-started")
+        )
+        self.assertEqual(getting_started.status_code, 200)
+        preflight_text = self._text(getting_started)
+        self.assertIn("LDAPS certificate validation is disabled.", preflight_text)
         self.assertIn(
             "Default password is still a sample or weak password. Replace it immediately.",
-            dashboard_text,
+            preflight_text,
         )
 
     def test_config_page_moves_optional_notification_settings_to_notifications(self):
@@ -3305,6 +3307,17 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
     def test_super_admin_can_publish_and_rollback_config_release_snapshots(self):
         self._login("superadmin")
+        create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="web-release-prerequisites",
+            approved=True,
+        )
+        self.app.state.settings_repo.set_value(
+            "group_display_separator",
+            "+",
+            "string",
+            org_id="default",
+        )
 
         release_page = self._route("/config/releases", "GET")(
             self._request("/config/releases")
@@ -3327,7 +3340,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         snapshots = self.app.state.config_release_snapshot_repo.list_snapshot_records(
             org_id="default", limit=10
         )
-        self.assertEqual(len(snapshots), 1)
+        self.assertEqual(len(snapshots), 2)
         first_snapshot = snapshots[0]
         self.assertEqual(first_snapshot.snapshot_name, "Release Candidate")
 
@@ -4879,12 +4892,15 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(dashboard.status_code, 200)
         text = self._text(dashboard)
         for key in (
-            "Overview",
-            "Data Sources",
-            "Identity Governance",
-            "Execution Center",
+            "Configuration Guide",
+            "Data Sources & AD",
+            "Identity Matching",
+            "Organization & OU",
+            "Sync Preview",
+            "Conflict Resolution",
+            "Execution & History",
+            "Audit Center",
             "Control Tower",
-            "Jobs",
             "Current Organization",
             "Deployment Preflight",
             "AD Org Sync",
@@ -4945,7 +4961,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
                     f'href="{CANONICAL_ROUTE_PATHS[page]}"', advanced_text
                 )
         self.assertIn('data-route-aliases="/mappings"', advanced_text)
-        self.assertIn("Manual Overrides", advanced_text)
+        self.assertIn("Manual Identity Overrides", advanced_text)
 
         csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', advanced_text)
         self.assertIsNotNone(csrf_match)
@@ -5061,17 +5077,15 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             self._request("/dashboard")
         )
         dashboard_text = self._text(refreshed_dashboard)
-        self.assertIn("Live DingTalk connection", dashboard_text)
+        self.assertIn("Deployment Preflight", dashboard_text)
 
         getting_started = self._route("/getting-started", "GET")(
             self._request("/getting-started")
         )
         self.assertEqual(getting_started.status_code, 200)
         getting_started_text = self._text(getting_started)
-        self.assertIn(
-            "Complete the DingTalk source and target AD connection settings for the current organization.",
-            getting_started_text,
-        )
+        self.assertIn("Configuration Guide", getting_started_text)
+        self.assertIn("Source platform connector", getting_started_text)
         self.assertIn("Live DingTalk connection", getting_started_text)
 
     def test_getting_started_page_renders_rollout_steps(self):
@@ -5082,11 +5096,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
-        self.assertIn("Recommended Rollout Steps", text)
-        self.assertIn("Test saved connections", text)
-        self.assertIn("Refresh Source Directory", text)
-        self.assertIn("Run the first dry run", text)
-        self.assertIn("Latest Preflight Snapshot", text)
+        self.assertIn("Configuration Guide", text)
+        self.assertIn("Recommended next step", text)
+        self.assertIn("Source platform connector", text)
+        self.assertIn("Source identity snapshot", text)
+        self.assertIn("Current Dry Run", text)
+        self.assertIn("Technical preflight evidence", text)
 
     def test_jobs_empty_state_guides_first_sync_run(self):
         self._login("superadmin")

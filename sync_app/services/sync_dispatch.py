@@ -16,7 +16,11 @@ from sync_app.services.high_risk_operations import (
 from sync_app.services.notification_automation_center import evaluate_scheduled_apply_readiness
 from sync_app.services.runtime_bootstrap import resolve_runtime_config_fingerprint
 from sync_app.storage.local_db import (
+    ADDirectorySnapshotRepository,
+    ConfigReleaseSnapshotRepository,
     DatabaseManager,
+    IdentityMatchRuleRepository,
+    IdentityMatchRunRepository,
     OrganizationRepository,
     SyncJobRepository,
     SourceDirectoryRepository,
@@ -203,6 +207,10 @@ def enqueue_sync_job(
             review_repo=SyncPlanReviewRepository(_db_manager),
             source_directory_repo=SourceDirectoryRepository(_db_manager),
             settings_repo=settings_repo,
+            ad_directory_snapshot_repo=ADDirectorySnapshotRepository(_db_manager),
+            identity_match_run_repo=IdentityMatchRunRepository(_db_manager),
+            identity_match_rule_repo=IdentityMatchRuleRepository(_db_manager),
+            config_release_snapshot_repo=ConfigReleaseSnapshotRepository(_db_manager),
         )
         evaluation_args = {
             "org_id": normalized_org_id,

@@ -45,6 +45,72 @@ def register_mapping_routes(
     def return_url_for(request: Request) -> str:
         return canonical_path if request.url.path.startswith(canonical_path) else "/mappings"
 
+    def takeover_page_context(request: Request, current_org: Any) -> dict[str, Any]:
+        repositories = get_web_repositories(request)
+        batches = repositories.account_takeover_repo.list_batches(
+            org_id=current_org.org_id,
+            limit=20,
+        )
+        selected_batch_id = str(
+            request.query_params.get("takeover_batch")
+            or (batches[0]["batch_id"] if batches else "")
+        ).strip()
+        selected_batch = (
+            repositories.account_takeover_repo.get_batch(
+                selected_batch_id,
+                org_id=current_org.org_id,
+            )
+            if selected_batch_id
+            else None
+        )
+        rows = []
+        if selected_batch:
+            for row in repositories.account_takeover_repo.list_rows(
+                selected_batch_id,
+                org_id=current_org.org_id,
+            ):
+                try:
+                    row["conflict_codes"] = json.loads(
+                        str(row.get("conflict_codes_json") or "[]")
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    row["conflict_codes"] = ["invalid_conflict_evidence"]
+                try:
+                    row["normalized_payload"] = json.loads(
+                        str(row.get("normalized_payload_json") or "{}")
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    row["normalized_payload"] = {}
+                rows.append(row)
+        return {
+            "takeover_batches": batches,
+            "selected_takeover_batch": selected_batch,
+            "takeover_rows": rows,
+        }
+
+    def takeover_return_url(request: Request, batch_id: str = "") -> str:
+        base_path = (
+            CANONICAL_ROUTE_PATHS["account-takeover"]
+            if request.url.path.startswith(CANONICAL_ROUTE_PATHS["account-takeover"])
+            else canonical_path
+        )
+        return f"{base_path}?takeover_batch={batch_id}" if batch_id else base_path
+
+    @app.get(CANONICAL_ROUTE_PATHS["account-takeover"], response_class=HTMLResponse)
+    def account_takeover_page(request: Request):
+        user = require_capability(request, "mappings.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        return render(
+            request,
+            "account_takeover.html",
+            page="account-takeover",
+            title="Existing Account Takeover",
+            current_org=current_org,
+            **takeover_page_context(request, current_org),
+        )
+
     @app.get(CANONICAL_ROUTE_PATHS["mappings"], response_class=HTMLResponse)
     @app.get("/mappings", response_class=HTMLResponse)
     def mappings_page(request: Request):
@@ -482,6 +548,7 @@ def register_mapping_routes(
             ),
         )
 
+    @app.post(CANONICAL_ROUTE_PATHS["account-takeover"] + "/preview")
     @app.post(f"{canonical_path}/takeover/preview")
     def takeover_preview(
         request: Request,
@@ -492,7 +559,8 @@ def register_mapping_routes(
         user = require_capability(request, "mappings.write")
         if isinstance(user, RedirectResponse):
             return user
-        csrf_error = reject_invalid_csrf(request, csrf_token, canonical_path)
+        preview_return_url = takeover_return_url(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, preview_return_url)
         if csrf_error:
             return csrf_error
         current_org = get_current_org(request)
@@ -532,7 +600,7 @@ def register_mapping_routes(
                 "Takeover preview is ready. Resolve every conflict before approval.",
             )
             return RedirectResponse(
-                url=f"{canonical_path}?takeover_batch={batch['batch_id']}",
+                url=takeover_return_url(request, str(batch["batch_id"])),
                 status_code=303,
             )
         except ValueError as exc:
@@ -547,8 +615,9 @@ def register_mapping_routes(
                 payload={"error": str(exc)},
             )
             flash(request, "error", str(exc))
-            return RedirectResponse(url=canonical_path, status_code=303)
+            return RedirectResponse(url=preview_return_url, status_code=303)
 
+    @app.post(CANONICAL_ROUTE_PATHS["account-takeover"] + "/{batch_id}/approve")
     @app.post(f"{canonical_path}/takeover/{{batch_id}}/approve")
     def takeover_approve(
         request: Request,
@@ -559,7 +628,7 @@ def register_mapping_routes(
         user = require_capability(request, "jobs.review")
         if isinstance(user, RedirectResponse):
             return user
-        return_url = f"{canonical_path}?takeover_batch={batch_id}"
+        return_url = takeover_return_url(request, batch_id)
         csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
         if csrf_error:
             return csrf_error
@@ -608,6 +677,7 @@ def register_mapping_routes(
             flash(request, "error", str(exc))
         return RedirectResponse(url=return_url, status_code=303)
 
+    @app.post(CANONICAL_ROUTE_PATHS["account-takeover"] + "/{batch_id}/apply")
     @app.post(f"{canonical_path}/takeover/{{batch_id}}/apply")
     def takeover_apply(
         request: Request,
@@ -618,7 +688,7 @@ def register_mapping_routes(
         user = require_capability(request, "jobs.run")
         if isinstance(user, RedirectResponse):
             return user
-        return_url = f"{canonical_path}?takeover_batch={batch_id}"
+        return_url = takeover_return_url(request, batch_id)
         csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
         if csrf_error:
             return csrf_error

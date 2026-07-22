@@ -9,6 +9,14 @@
 {{ policy.tabs('department-ou-routing') }}
 {{ policy.status(has_unpublished_changes, latest_snapshot_title, (t('No target connectors are configured') if not connectors else ''), t('Save this section, then verify OU placement in a new Dry Run'), policy_version, policy_last_modified_by, estimated_affected_users, dry_run_invalidated, latest_policy_dry_run) }}
 
+<section class="compact-stats" aria-label="{{ t('Department routing summary') }}">
+  {{ ui.compact_stat(t("Source departments"), source_departments|length) }}
+  {{ ui.compact_stat(t("AD OUs"), ad_ou_nodes|length) }}
+  {{ ui.compact_stat(t("Current mappings"), department_ou_mappings|length) }}
+  {{ ui.compact_stat(t("Unmapped departments"), unmapped_department_count) }}
+  {{ ui.compact_stat(t("Routing conflicts"), routing_conflict_count) }}
+</section>
+
 {% call ui.panel(t("Organization Routing Defaults"), scope_label=t("Organization Scope"), scope_level="info", description=t("These values use the existing organization settings keys, so runtime and database compatibility are preserved.")) %}
   <form method="post" action="/sync-policies/department-ou-routing/defaults" class="page-stack" data-policy-change-form data-policy-impact="{{ estimated_affected_users }}" data-policy-scope="{{ current_org.name }}" data-confirm="{{ t('Review old values, new values, organization scope, and estimated impact before saving routing defaults.') }}" data-confirm-title="{{ t('Review Routing Defaults') }}" data-confirm-detail-1-label="{{ t('Old values') }}" data-confirm-detail-1-value="{policy_old_values}" data-confirm-detail-2-label="{{ t('New values') }}" data-confirm-detail-2-value="{policy_new_values}" data-confirm-detail-3-label="{{ t('Scope') }}" data-confirm-detail-3-value="{policy_scope}" data-confirm-detail-4-label="{{ t('Estimated impact') }}" data-confirm-detail-4-value="{policy_impact} {{ t('users') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -17,6 +25,8 @@
       <label>{{ t("Disabled Users OU") }}<input type="text" name="disabled_users_ou_path" value="{{ directory_policy_settings.disabled_users_ou_path }}" placeholder="Disabled Users"></label>
       <label>{{ t("Department Placement") }}<select name="user_ou_placement_strategy">{% for value, label in [("source_primary_department", "Prefer source primary department"), ("first_valid", "Pick the first valid department in source order"), ("shortest_path", "Pick the shortest department path"), ("lowest_id", "Pick the lowest department ID")] %}<option value="{{ value }}" {% if directory_policy_settings.user_ou_placement_strategy == value %}selected{% endif %}>{{ t(label) }}{% if ui_presentation.show_field_codes %} ({{ value }}){% endif %}</option>{% endfor %}</select></label>
       <label class="check-card"><input type="checkbox" name="advanced_connector_routing_enabled" value="1" {% if policy_settings.advanced_connector_routing_enabled %}checked{% endif %}><span><strong>{{ t("Connector Routing") }}</strong><small>{{ t("Require one unambiguous connector route for every managed identity.") }}</small></span></label>
+      <div class="check-card" role="status"><span><strong>{{ t("Create missing OUs") }}: {{ t("Enabled") }}</strong><small>{{ t("Missing reviewed OU paths are created during Apply; Dry Run shows the planned OU changes first.") }}</small></span></div>
+      <div class="check-card" role="status"><span><strong>{{ t("Move existing accounts") }}: {{ t("Enabled with review") }}</strong><small>{{ t("Existing managed accounts move only when the current Dry Run contains the OU move and the plan is approved.") }}</small></span></div>
     </div>
     {% if ui_presentation.is_advanced %}
     <details class="detail-toggle" open><summary><strong>{{ t("Advanced source root details") }}</strong></summary><div class="form-grid">

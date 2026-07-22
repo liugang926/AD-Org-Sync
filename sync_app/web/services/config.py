@@ -29,6 +29,7 @@ class WebConfigService:
     settings_repo: SettingsRepository
     config_release_snapshot_repo: ConfigReleaseSnapshotRepository
     audit_repo: WebAuditLogRepository
+    readiness_service: Any | None = None
 
     def build_saved_message(self, *, current_web_runtime_settings: dict[str, Any]) -> str:
         persisted_web_runtime_settings = resolve_web_runtime_settings(self.settings_repo)
@@ -83,7 +84,44 @@ class WebConfigService:
         org_id: str,
         actor_username: str,
         snapshot_name: str = "",
+        current_org: Any | None = None,
+        config_path: str = "config.ini",
     ) -> dict[str, Any]:
+        if self.readiness_service is not None and current_org is not None:
+            readiness = self.readiness_service.evaluate_organization(
+                organization=current_org,
+                config_path=config_path,
+            )
+            required_keys = {
+                "source_connector_ready",
+                "ad_connector_ready",
+                "source_snapshot_current",
+                "ad_snapshot_current",
+                "data_quality_reviewed",
+                "identity_rules_configured",
+                "identity_match_run_current",
+                "identity_blockers_resolved",
+                "account_takeover_resolved",
+                "account_naming_configured",
+                "field_authority_configured",
+                "attribute_mappings_configured",
+                "department_ou_routing_configured",
+                "lifecycle_safety_configured",
+                "sync_scope_current",
+            }
+            blocking_steps = [
+                step
+                for step in readiness.steps
+                if step.key in required_keys
+                and step.whether_required
+                and step.status != "complete"
+            ]
+            if blocking_steps:
+                blocker = blocking_steps[0]
+                raise ValueError(
+                    "Policy release blocked: "
+                    + (blocker.blocker_reason or blocker.summary)
+                )
         result = publish_current_config_release_snapshot(
             self.db_manager,
             org_id,
