@@ -5,10 +5,12 @@
   {% for key, label, href in [
     ('scope', 'Sync Scope', '/sync-policies/scope'),
     ('account-naming', 'Account Naming', '/sync-policies/account-naming'),
+    ('field-authority', 'Field Authority', '/sync-policies/field-authority'),
     ('attribute-mappings', 'Attribute Mappings', '/sync-policies/attribute-mappings'),
     ('department-ou-routing', 'Department & OU Routing', '/sync-policies/department-ou-routing'),
     ('group-rules', 'Group Rules', '/sync-policies/group-rules'),
-    ('lifecycle', 'Lifecycle & Security', '/sync-policies/lifecycle')
+    ('lifecycle', 'Lifecycle & Security', '/sync-policies/lifecycle'),
+    ('releases', 'Policy Summary & Release', '/sync-policies/releases')
   ] %}
   <a href="{{ href }}" class="policy-tabs__link{% if active == key %} is-active{% endif %}"{% if active == key %} aria-current="page"{% endif %}>{{ t(label) }}</a>
   {% endfor %}

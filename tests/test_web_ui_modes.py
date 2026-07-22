@@ -163,16 +163,14 @@ class WebUIModeTests(WebAuthzBaseTestCase):
             "unchanged",
         )
 
-    def test_basic_advanced_page_stays_reachable_with_context_note(self):
+    def test_required_ou_routing_stays_reachable_in_both_modes(self):
         self._login("superadmin")
         path = "/sync-policies/department-ou-routing"
 
         basic = self._route(path, "GET")(self._request(path))
         basic_body = self._text(basic)
         self.assertNotIn('data-mode-gate="advanced-page"', basic_body)
-        self.assertIn("This is advanced configuration.", basic_body)
-        self.assertIn("Return to current rollout step", basic_body)
-        self.assertIn("Return to Control Tower", basic_body)
+        self.assertNotIn("This is advanced configuration.", basic_body)
         self.assertIn("Connector Route", _visible_text(basic_body))
 
         self.session["ui_mode"] = "advanced"

@@ -2046,27 +2046,30 @@ class WebBrowserRegressionTests(unittest.TestCase):
         )
         try:
             self._login()
-            self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
-            self.assertTrue(self.page.locator(".run-review").is_visible())
+            self.page.goto(
+                f"{self.base_url}/execution-center/apply?plan_id=browser-apply-ready-001",
+                wait_until="networkidle",
+            )
+            blocked_status = self.page.locator(
+                ".execution-status.execution-status--blocked"
+            )
+            self.assertTrue(blocked_status.is_visible())
             self.assertEqual(self.page.locator("[data-high-risk-step]").count(), 5)
             self.assertTrue(self.page.locator("[data-high-risk-context]").is_visible())
             self.assertIn(
-                "current execution status",
-                self.page.locator(".run-review").inner_text().lower(),
+                "action required",
+                blocked_status.inner_text().lower(),
             )
-            dry_run_button = self.page.get_by_role(
-                "button", name="Run New Dry Run", exact=True
-            )
-            apply_button = self.page.get_by_role(
-                "button", name="Apply Blocked", exact=True
-            )
-            self.assertTrue(dry_run_button.is_disabled())
-            self.assertTrue(apply_button.is_disabled())
-            self.assertTrue(
-                self.page.locator("section#dry-run").is_visible()
+            self.assertEqual(
+                self.page.locator(
+                    "form[action='/execution-center/apply/run']"
+                ).count(),
+                0,
             )
             self.assertTrue(
-                self.page.locator("section#apply").is_visible()
+                self.page.locator(
+                    ".blocker-list a[href='/execution-center/jobs']"
+                ).first.is_visible()
             )
             self._capture("jobs-page.png")
         finally:
@@ -2279,6 +2282,18 @@ class WebBrowserRegressionTests(unittest.TestCase):
     def test_z_apply_confirmation_shows_real_impact_and_explicit_action(self):
         manager = DatabaseManager(db_path=str(self.db_path))
         manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        # This case proves the ready path. Isolate it from blockers intentionally
+        # created by earlier browser scenarios that share this class database.
+        with manager.transaction() as connection:
+            connection.execute(
+                "UPDATE sync_conflicts SET status = 'resolved' WHERE status = 'open'"
+            )
+            connection.execute(
+                "UPDATE sync_jobs SET status = 'FAILED', ended_at = ? "
+                "WHERE org_id = 'default' AND status IN "
+                "('QUEUED', 'LEASED', 'CREATED', 'PLANNING', 'READY', 'RUNNING', 'CANCELING')",
+                (datetime.now(timezone.utc).isoformat(timespec="seconds"),),
+            )
         config_repo = OrganizationConfigRepository(manager)
         configured_values = {
             "source_provider": "wecom",
@@ -2321,12 +2336,21 @@ class WebBrowserRegressionTests(unittest.TestCase):
             )
             self.page = self.context.new_page()
             self._login(ui_mode="advanced")
-            self.page.goto(f"{self.base_url}/jobs", wait_until="networkidle")
+            self.page.goto(
+                f"{self.base_url}/execution-center/apply"
+                "?plan_id=browser-apply-ready-001",
+                wait_until="networkidle",
+            )
 
             apply_button = self.page.get_by_role(
                 "button", name="Apply 126 Changes", exact=True
             )
-            self.assertEqual(apply_button.count(), 1)
+            apply_diagnostics = " | ".join(
+                self.page.locator(
+                    ".execution-status, .blocker-item, [role='alert']"
+                ).all_inner_texts()
+            )
+            self.assertEqual(apply_button.count(), 1, apply_diagnostics)
             self.assertTrue(apply_button.is_enabled())
             apply_button.click()
 
@@ -2460,13 +2484,16 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self._login(ui_mode="advanced")
         self.page.goto(f"{self.base_url}/dashboard", wait_until="networkidle")
 
-        identifier = self.page.locator(".control-tower .identifier").first
+        self.page.locator("details").last.evaluate("element => { element.open = true; }")
+        identifier = self.page.locator(
+            "details .detail-item .identifier"
+        ).first
         self.assertTrue(identifier.is_visible())
         value = identifier.locator(".identifier__value")
         self.assertEqual(value.get_attribute("title"), long_job_id)
         self.assertLessEqual(
             float(identifier.bounding_box()["width"]),
-            float(self.page.locator(".control-metric").first.bounding_box()["width"]),
+            float(self.page.locator("details .detail-item").first.bounding_box()["width"]),
         )
         identifier_link = identifier.locator(".identifier__link")
         self.assertGreaterEqual(
@@ -2815,6 +2842,12 @@ class WebBrowserRegressionTests(unittest.TestCase):
     def test_z_unified_admin_visual_matrix_uses_exact_target_viewports(self):
         manager = DatabaseManager(db_path=str(self.db_path))
         manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        create_eligible_execution_plan(
+            manager,
+            job_id="visual-rollout-plan",
+            provider_id="wecom",
+            approved=True,
+        )
         source_repo = SourceDirectoryRepository(manager)
         snapshot_id = source_repo.start_refresh(
             org_id="default",
@@ -2942,6 +2975,54 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 self.page.screenshot(path=str(target), full_page=False)
                 self.assertTrue(target.exists())
                 self.assertGreater(target.stat().st_size, 0)
+
+        core_pages = (
+            ("control-tower", "/overview/control-tower"),
+            ("configuration-guide", "/getting-started"),
+            ("connectors", "/data-sources/connectors"),
+            ("data-quality", "/data-sources/data-quality"),
+            ("identity-workbench", "/identity-governance/identity-matching"),
+            ("identity-match-rules", "/identity-governance/match-rules"),
+            ("account-takeover", "/identity-governance/account-takeover"),
+            ("field-authority", "/sync-policies/field-authority"),
+            ("department-ou", "/sync-policies/department-ou-routing"),
+            ("lifecycle-security", "/sync-policies/lifecycle"),
+            ("policy-release", "/sync-policies/releases"),
+            ("dry-run", "/execution-center/dry-run"),
+            (
+                "plan-review",
+                "/execution-center/plan-review?plan_id=visual-rollout-plan",
+            ),
+            (
+                "apply",
+                "/execution-center/apply?plan_id=visual-rollout-plan",
+            ),
+        )
+        for width, height in ((1440, 900), (390, 844)):
+            self.page.set_viewport_size({"width": width, "height": height})
+            for page_name, route in core_pages:
+                with self.subTest(page=page_name, width=width, height=height):
+                    separator = "&" if "?" in route else "?"
+                    self.page.goto(
+                        f"{self.base_url}{route}{separator}lang=zh-CN",
+                        wait_until="networkidle",
+                    )
+                    self.assertTrue(
+                        self.page.locator(
+                            "[data-component='page-header']"
+                        ).is_visible()
+                    )
+                    self._assert_page_has_no_horizontal_overflow()
+                    page_content = self.page.content()
+                    self.assertNotIn("browser-execution-secret", page_content)
+                    self.assertNotIn("browser-directory-secret", page_content)
+                    target = (
+                        ARTIFACT_DIR
+                        / f"rollout-{page_name}-{width}x{height}.png"
+                    )
+                    self.page.screenshot(path=str(target), full_page=False)
+                    self.assertTrue(target.exists())
+                    self.assertGreater(target.stat().st_size, 0)
 
     def test_mappings_page_uses_search_selectors_instead_of_manual_ids(self):
         self._login(ui_mode="advanced")

@@ -164,6 +164,29 @@ def register_dashboard_routes(
                         else str(source_result.get("detail") or "")
                     ),
                 )
+        if normalized_connection_kind in {"all", "ldap"}:
+            ldap_result = next(
+                (
+                    item
+                    for item in list(snapshot.get("checks") or [])
+                    if str(item.get("key") or "") == "live_ldap"
+                ),
+                None,
+            )
+            if ldap_result is not None:
+                ldap_status = str(ldap_result.get("status") or "warning")
+                repositories.settings_repo.set_value(
+                    "ad_connection_status",
+                    "connected" if ldap_status == "success" else "failed",
+                    "string",
+                    org_id=current_org.org_id,
+                )
+                repositories.settings_repo.set_value(
+                    "ad_connection_tested_at",
+                    str(snapshot.get("generated_at") or ""),
+                    "string",
+                    org_id=current_org.org_id,
+                )
         repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,

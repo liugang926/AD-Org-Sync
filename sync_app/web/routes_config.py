@@ -291,13 +291,51 @@ def register_config_routes(
             if request.url.path.startswith(CANONICAL_ROUTE_PATHS["sync-policy-releases"])
             else "/config/releases"
         )
-        release_context = get_web_services(request).config.build_release_center_context(
-            current_org=get_current_org(request),
+        current_org = get_current_org(request)
+        services = get_web_services(request)
+        release_context = services.config.build_release_center_context(
+            current_org=current_org,
             current_snapshot_id=_parse_optional_int(request.query_params.get("current_snapshot_id")),
             baseline_snapshot_id=_parse_optional_int(request.query_params.get("baseline_snapshot_id")),
         )
+        try:
+            release_context["rollout_readiness"] = services.readiness.evaluate_organization(
+                organization=current_org,
+                config_path=get_web_runtime_state(request).config_path,
+            ).to_dict()
+        except Exception:
+            release_context["rollout_readiness"] = {}
+        readiness = dict(release_context.get("rollout_readiness") or {})
+        release_prerequisite_keys = {
+            "source_connector_ready",
+            "ad_connector_ready",
+            "source_snapshot_current",
+            "ad_snapshot_current",
+            "data_quality_reviewed",
+            "identity_rules_configured",
+            "identity_match_run_current",
+            "identity_blockers_resolved",
+            "account_takeover_resolved",
+            "account_naming_configured",
+            "field_authority_configured",
+            "attribute_mappings_configured",
+            "department_ou_routing_configured",
+            "lifecycle_safety_configured",
+            "sync_scope_current",
+        }
+        release_prerequisites = [
+            step
+            for step in list(readiness.get("steps") or [])
+            if str(step.get("key") or "") in release_prerequisite_keys
+            and bool(step.get("whether_required", True))
+        ]
+        release_context["release_prerequisites"] = release_prerequisites
+        release_context["release_publish_allowed"] = bool(release_prerequisites) and all(
+            str(step.get("status") or "") == "complete"
+            for step in release_prerequisites
+        )
         if release_base_path == CANONICAL_ROUTE_PATHS["sync-policy-releases"]:
-            release_context["page"] = "sync-account-naming"
+            release_context["page"] = "sync-policy-releases"
         return render(
             request,
             "config_release_center.html",
@@ -329,11 +367,17 @@ def register_config_routes(
         if csrf_error:
             return csrf_error
         current_org = get_current_org(request)
-        result = get_web_services(request).config.publish_release_snapshot(
-            org_id=current_org.org_id,
-            actor_username=user.username,
-            snapshot_name=snapshot_name,
-        )
+        try:
+            result = get_web_services(request).config.publish_release_snapshot(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                snapshot_name=snapshot_name,
+                current_org=current_org,
+                config_path=get_web_runtime_state(request).config_path,
+            )
+        except ValueError as exc:
+            flash(request, "error", str(exc))
+            return RedirectResponse(url=release_base_path, status_code=303)
         snapshot = result.get("snapshot")
         if not result.get("created"):
             flash(

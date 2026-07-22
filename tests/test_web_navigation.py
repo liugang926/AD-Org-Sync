@@ -27,25 +27,37 @@ class WebNavigationTests(WebAuthzBaseTestCase):
         self.assertEqual(
             hrefs,
             [
+                "/getting-started",
                 "/overview/control-tower",
                 "/data-sources/connectors",
                 "/data-sources/source-directory",
                 "/data-sources/data-quality",
                 "/identity-governance/identity-matching",
-                "/identity-governance/conflicts",
+                "/identity-governance/match-rules",
+                "/identity-governance/account-takeover",
+                "/sync-policies/account-naming",
+                "/sync-policies/field-authority",
+                "/sync-policies/attribute-mappings",
+                "/sync-policies/department-ou-routing",
+                "/sync-policies/group-rules",
+                "/sync-policies/lifecycle",
+                "/sync-policies/security",
                 "/sync-policies/scope",
+                "/sync-policies/releases",
                 "/execution-center/dry-run",
+                "/identity-governance/conflicts",
                 "/execution-center/plan-review",
                 "/execution-center/apply",
                 "/execution-center/jobs",
+                "/operations-center/audit-log",
             ],
         )
         self.assertEqual(navigation.count('aria-current="page"'), 1)
-        self.assertIn("Data Sources", navigation)
-        self.assertIn("Identity Governance", navigation)
-        self.assertIn("Execution Center", navigation)
-        self.assertNotIn("Policy Center", navigation)
-        self.assertNotIn("System Management", navigation)
+        self.assertIn("Data Sources &amp; AD", navigation)
+        self.assertIn("Identity Matching", navigation)
+        self.assertIn("Organization &amp; OU", navigation)
+        self.assertIn("Execution &amp; History", navigation)
+        self.assertNotIn("System Settings", navigation)
 
     def test_advanced_mode_exposes_target_sections_with_rbac_filtering(self):
         self._login("superadmin")
@@ -57,14 +69,15 @@ class WebNavigationTests(WebAuthzBaseTestCase):
         navigation = self._navigation_markup(self._text(response))
         for label in (
             "Connectors",
-            "Data Sources",
-            "Identity Governance",
-            "Sync Policies",
-            "Execution Center",
+            "Data Sources &amp; AD",
+            "Identity Matching",
+            "Organization &amp; OU",
+            "Sync Preview",
+            "Execution &amp; History",
             "Lifecycle Workbench",
-            "Automation",
-            "Operations Center",
-            "Employee Services",
+            "Automation &amp; Schedules",
+            "Advanced Operations",
+            "Employee Self-Service",
             "System Settings",
             "Platform Accounts",
         ):
@@ -77,7 +90,7 @@ class WebNavigationTests(WebAuthzBaseTestCase):
             with self.subTest(href=href):
                 self.assertIn(f'href="{href}"', navigation)
         self.assertNotIn('href="/sync-policies"', navigation)
-        self.assertNotIn('href="/sync-policies/releases"', navigation)
+        self.assertIn('href="/sync-policies/releases"', navigation)
 
         self._login("operator1")
         self.session["ui_mode"] = "advanced"
@@ -92,8 +105,8 @@ class WebNavigationTests(WebAuthzBaseTestCase):
     def test_basic_mode_keeps_advanced_pages_reachable_with_context_note(self):
         self._login("superadmin")
 
-        response = self._route(CANONICAL_ROUTE_PATHS["sync-security-policy"], "GET")(
-            self._request(CANONICAL_ROUTE_PATHS["sync-security-policy"])
+        response = self._route(CANONICAL_ROUTE_PATHS["mappings"], "GET")(
+            self._request(CANONICAL_ROUTE_PATHS["mappings"])
         )
 
         self.assertEqual(response.status_code, 200)
@@ -133,7 +146,14 @@ class WebNavigationTests(WebAuthzBaseTestCase):
                 else:
                     self.assertIs(canonical_endpoint, legacy_endpoint)
 
-        for page in ("snapshots", "binding-reconciliation", "sync-scope"):
+        for page in (
+            "snapshots",
+            "binding-reconciliation",
+            "sync-scope",
+            "identity-match-rules",
+            "account-takeover",
+            "sync-field-authority",
+        ):
             with self.subTest(page=page):
                 self.assertTrue(callable(self._route(CANONICAL_ROUTE_PATHS[page], "GET")))
 

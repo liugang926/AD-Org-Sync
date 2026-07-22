@@ -7,9 +7,15 @@ from sync_app.services.config_release import (
     publish_current_config_release_snapshot,
     rollback_config_release_snapshot,
 )
+from sync_app.services.config_bundle import (
+    export_organization_bundle,
+    import_organization_bundle,
+)
 from sync_app.storage.local_db import (
     ConfigReleaseSnapshotRepository,
     DatabaseManager,
+    FieldAuthorityRuleRepository,
+    IdentityMatchRuleRepository,
     OrganizationConfigRepository,
     OrganizationRepository,
     SourceDirectoryRepository,
@@ -251,6 +257,141 @@ class ConfigReleaseTests(unittest.TestCase):
         self.assertEqual(restored["scope_type"], "full")
         self.assertEqual(restored["selected_source_user_ids"], [])
         self.assertEqual(restored["source_field"], "employee_id")
+
+    def test_release_binds_the_configured_provider_scope_when_other_scopes_exist(self):
+        with TemporaryDirectory() as temp_dir:
+            db_manager, config_path = self._build_db(temp_dir)
+            OrganizationConfigRepository(db_manager).save_config(
+                "default",
+                {"source_provider": "wecom"},
+                config_path=config_path,
+            )
+            source_repo = SourceDirectoryRepository(db_manager)
+            snapshot_ids: dict[str, int] = {}
+            for provider_id in ("wecom", "dingtalk"):
+                snapshot_id = source_repo.start_refresh(
+                    org_id="default",
+                    provider_id=provider_id,
+                    created_by="tester",
+                )
+                source_repo.replace_snapshot(
+                    snapshot_id,
+                    departments=[],
+                    users=[],
+                    fields=[],
+                    fingerprint=f"release-scope-{provider_id}",
+                )
+                source_repo.save_scope_selection(
+                    org_id="default",
+                    provider_id=provider_id,
+                    scope_type="full",
+                    snapshot_id=snapshot_id,
+                    requested_by="tester",
+                )
+                snapshot_ids[provider_id] = snapshot_id
+
+            result = publish_current_config_release_snapshot(
+                db_manager,
+                "default",
+                created_by="tester",
+                snapshot_name="Configured provider release",
+            )
+
+        self.assertEqual(
+            result["snapshot"].source_snapshot_id,
+            snapshot_ids["wecom"],
+        )
+
+    def test_identity_and_field_authority_rules_are_versioned_and_restored(self):
+        with TemporaryDirectory() as temp_dir:
+            db_manager, _config_path = self._build_db(temp_dir)
+            match_repo = IdentityMatchRuleRepository(db_manager)
+            authority_repo = FieldAuthorityRuleRepository(db_manager)
+            match_repo.seed_defaults(org_id="default", created_by="tester")
+            authority_repo.seed_defaults(org_id="default", created_by="tester")
+            baseline = publish_current_config_release_snapshot(
+                db_manager,
+                "default",
+                created_by="tester",
+                snapshot_name="Identity policy baseline",
+            )
+
+            match_repo.upsert_rule(
+                org_id="default",
+                rule_order=5,
+                rule_name="employee_id_to_employee_id",
+                source_provider="*",
+                source_field="employee_id",
+                ad_field="employeeID",
+                allow_auto_link=True,
+                confidence_level="certain",
+                confidence_score=99,
+                created_by="tester",
+            )
+            authority_repo.upsert_rule(
+                org_id="default",
+                field_name="display_name",
+                source_provider="wecom",
+                source_priority=20,
+                sync_direction="ad_to_source",
+                sync_mode="fill_if_empty",
+                created_by="tester",
+            )
+            release_center = build_config_release_center_data(
+                db_manager,
+                "default",
+            )
+            rollback_config_release_snapshot(
+                db_manager,
+                baseline["snapshot"].id,
+                org_id="default",
+                created_by="tester",
+            )
+            restored_match = next(
+                rule
+                for rule in match_repo.list_rules(org_id="default")
+                if rule.rule_name == "employee_id_to_employee_id"
+            )
+            restored_authority = next(
+                rule
+                for rule in authority_repo.list_rules(org_id="default")
+                if rule.field_name == "display_name"
+                and rule.source_provider == "wecom"
+            )
+
+        self.assertTrue(release_center["has_unpublished_changes"])
+        self.assertEqual(
+            {group["title"] for group in release_center["comparison_diff"]["groups"]},
+            {"Identity Match Rules", "Field Authority Rules"},
+        )
+        self.assertEqual(restored_match.confidence_score, 100)
+        self.assertEqual(restored_authority.sync_direction, "source_to_ad")
+        self.assertEqual(restored_authority.sync_mode, "replace")
+
+    def test_legacy_bundle_without_identity_sections_preserves_current_rules(self):
+        with TemporaryDirectory() as temp_dir:
+            db_manager, _config_path = self._build_db(temp_dir)
+            match_repo = IdentityMatchRuleRepository(db_manager)
+            authority_repo = FieldAuthorityRuleRepository(db_manager)
+            match_repo.seed_defaults(org_id="default", created_by="tester")
+            authority_repo.seed_defaults(org_id="default", created_by="tester")
+            legacy_bundle = export_organization_bundle(db_manager, "default")
+            legacy_bundle.pop("identity_match_rules", None)
+            legacy_bundle.pop("field_authority_rules", None)
+
+            import_organization_bundle(
+                db_manager,
+                legacy_bundle,
+                target_org_id="default",
+                replace_existing=True,
+            )
+            match_rules_preserved = bool(match_repo.list_rules(org_id="default"))
+            authority_rules_preserved = bool(
+                authority_repo.list_rules(org_id="default")
+            )
+
+        self.assertTrue(match_rules_preserved)
+        self.assertTrue(authority_rules_preserved)
 
 
 if __name__ == "__main__":

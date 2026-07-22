@@ -3,24 +3,23 @@
 {% import "components/mode.html" as mode_ui %}
 
 {% block content %}
-{% set next_action_is_config = job_center_summary.next_action_url.startswith("/config") or job_center_summary.next_action_url.startswith("/sync-policies") or job_center_summary.next_action_url.startswith("/data-sources") %}
-{% set visible_next_action_url = job_center_summary.next_action_url if (not next_action_is_config or can("config.read")) else "/execution-center/jobs" %}
-{% set visible_next_action_label = job_center_summary.next_action_label_code if (not next_action_is_config or can("config.read")) else "Open Job History" %}
+{% set readiness = preflight_summary.rollout_readiness or {} %}
+{% set readiness_steps = readiness.step_map or {} %}
+{% set rollout_next = getting_started.next_step or {} %}
+{% set next_action_is_config = rollout_next.action_url.startswith("/config") or rollout_next.action_url.startswith("/sync-policies") or rollout_next.action_url.startswith("/data-sources") %}
+{% set visible_next_action_url = rollout_next.action_url if (not next_action_is_config or can("config.read")) else "/execution-center/jobs" %}
+{% set visible_next_action_label = rollout_next.action_label if (not next_action_is_config or can("config.read")) else "Open Job History" %}
 <div class="page-stack">
   {{ ui.page_header(t("Control Tower"), t("Summary, blockers, and the single next action for the current organization. Dry Run, plan review, Apply, and history remain separate execution steps."), eyebrow=t("Overview")) }}
   {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t(visible_next_action_label), t("Open next step"), visible_next_action_url) }}
 
-  <section class="control-tower control-tower--{{ job_center_summary.overall_status }}">
+  <section class="control-tower control-tower--{{ 'success' if readiness.apply_allowed else 'warning' }}">
     <div class="control-tower__layout">
       <div class="control-tower__summary">
-        <div class="control-tower__eyebrow">{{ t("Apply Gate") }}</div>
-        <h2 class="control-tower__title">{{ t(job_center_summary.overall_label_code) }}</h2>
+        <div class="control-tower__eyebrow">{{ t("Enterprise identity rollout") }}</div>
+        <h2 class="control-tower__title">{{ t(rollout_next.title) }}</h2>
         <p class="control-tower__description">
-          {% if job_center_summary.blocked_reasons %}
-          {{ t(job_center_summary.blocked_reasons[0].message_code, **job_center_summary.blocked_reasons[0].params) }}
-          {% else %}
-          {{ t("The latest checks show no blocking item. Review the selected Dry Run before Apply.") }}
-          {% endif %}
+          {{ t(rollout_next.blocker_reason or rollout_next.summary) }}
         </p>
         <div class="control-tower__actions">
           {{ ui.button(t(visible_next_action_label), href=visible_next_action_url) }}
@@ -33,29 +32,21 @@
         <div class="control-gate-card__status"><strong>{{ current_org.name if current_org else "-" }}</strong></div>
         <div class="control-gate-card__next">
           <span>{{ t("Blocking Reasons") }}</span>
-          <strong>{{ job_center_summary.blocked_reasons|length }}</strong>
+          <strong>{{ getting_started.blocker_count or 0 }}</strong>
         </div>
       </div>
     </div>
 
     <div class="control-metrics">
       <div class="control-metric">
-        <span>{{ t("Latest Successful Dry Run") }}</span>
-        <strong>
-          {% if job_center_summary.latest_successful_dry_run %}
-          {{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_successful_dry_run.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_successful_dry_run.job_id, t("View latest Dry Run"), "", t("Copy Dry Run ID"), t("Dry Run ID copied")) }}
-          {% else %}-{% endif %}
-        </strong>
+        <span>{{ t("Configuration completion") }}</span>
+        <strong>{{ getting_started.completion_percent or 0 }}%</strong>
       </div>
       <div class="control-metric">
-        <span>{{ t("Latest Apply") }}</span>
-        <strong>
-          {% if job_center_summary.latest_apply %}
-          {{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_apply.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id, t("View latest Apply"), "", t("Copy Apply ID"), t("Apply ID copied")) }}
-          {% else %}-{% endif %}
-        </strong>
+        <span>{{ t("Current phase") }}</span>
+        <strong>{{ t(getting_started.current_phase) }}</strong>
       </div>
-      <div class="control-metric"><span>{{ t("Open Conflicts") }}</span><strong>{{ open_conflicts_count or 0 }}</strong></div>
+      <div class="control-metric"><span>{{ t("Readiness blockers") }}</span><strong>{{ getting_started.blocker_count or 0 }}</strong></div>
       <div class="control-metric"><span>{{ t("Planned Changes") }}</span><strong>{{ job_center_summary.impact_preview.planned_operation_count }}</strong></div>
       <div class="control-metric"><span>{{ t("High-Risk Changes") }}</span><strong>{{ job_center_summary.impact_preview.high_risk_operation_count }}</strong></div>
     </div>
@@ -83,11 +74,7 @@
       <div class="stack-tight">
         <h2>{{ t(visible_next_action_label) }}</h2>
         <p class="muted">
-          {% if job_center_summary.blocked_reasons %}
-          {{ t(job_center_summary.blocked_reasons[0].message_code, **job_center_summary.blocked_reasons[0].params) }}
-          {% else %}
-          {{ t("Open the execution step to review the current evidence.") }}
-          {% endif %}
+          {{ t(rollout_next.blocker_reason or rollout_next.summary) }}
         </p>
         <div class="actions">
           {{ ui.button(t(visible_next_action_label), href=visible_next_action_url, variant="secondary") }}
@@ -114,6 +101,13 @@
       <span class="muted">{{ t("Last live check") }}: {{ ui.local_time(preflight_summary.live_ran_at) }}</span>
     </div>
     {% endif %}
+  {% endcall %}
+
+  {% call ui.detail_toggle(t("Execution history identifiers"), t("Job identifiers remain available for investigation after rollout readiness and business impact."), open=False) %}
+    <div class="detail-grid">
+      <div class="detail-item"><div class="label">{{ t("Latest Successful Dry Run") }}</div><div class="value">{% if job_center_summary.latest_successful_dry_run %}{{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_successful_dry_run.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_successful_dry_run.job_id, t("View latest Dry Run"), "", t("Copy Dry Run ID"), t("Dry Run ID copied")) }}{% else %}-{% endif %}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Latest Apply") }}</div><div class="value">{% if job_center_summary.latest_apply %}{{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_apply.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id, t("View latest Apply"), "", t("Copy Apply ID"), t("Apply ID copied")) }}{% else %}-{% endif %}</div></div>
+    </div>
   {% endcall %}
 </div>
 {% endblock %}

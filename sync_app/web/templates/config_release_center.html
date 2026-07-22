@@ -1,12 +1,19 @@
 {% extends "base.html" %}
 {% import "components/forms.html" as forms %}
 {% import "components/ui.html" as ui %}
+{% import "components/sync_policy.html" as policy with context %}
 {% set release_base_path = release_base_path|default('/config/releases') %}
 {% set release_back_path = release_back_path|default('/config') %}
 
 {% block content %}
 <div class="page-stack">
-  {% call ui.page_header(t("Config Release Center"), t("Publish the current organization configuration as a release snapshot, compare it with earlier snapshots, and roll back when needed."), eyebrow=t("Setup"), badge_text=(t("Unpublished") if has_unpublished_changes else t("Published")), badge_level=("warning" if has_unpublished_changes else "success")) %}
+  {% set readiness = rollout_readiness or {} %}
+  {% set readiness_steps = readiness.step_map or {} %}
+  {% set source_step = readiness_steps.source_snapshot_current or {} %}
+  {% set ad_step = readiness_steps.ad_snapshot_current or {} %}
+  {% set match_step = readiness_steps.identity_match_run_current or {} %}
+  {% set is_policy_release = release_base_path == '/sync-policies/releases' %}
+  {% call ui.page_header(t("Policy Summary & Release") if is_policy_release else t("Config Release Center"), t("Review every current rollout prerequisite, publish one immutable policy version, and keep tested rollback points."), eyebrow=(t("Sync Policies") if is_policy_release else t("Setup")), badge_text=(t("Unpublished") if has_unpublished_changes else t("Published")), badge_level=("warning" if has_unpublished_changes else "success")) %}
     {{ ui.button(t("Back"), href=release_back_path, variant="ghost", icon="arrow-left") }}
     {% if can("organizations.manage") %}
     {{ ui.button(t("Open Organizations"), href="/organizations", variant="secondary", icon="building-2") }}
@@ -38,6 +45,37 @@
       </div>
     </div>
   </section>
+
+  {% call ui.panel(t("Release readiness summary"), description=t("Publishing is allowed only when the current connectors, snapshots, review, identity match and business policies all pass."), class_name="toolbar-card") %}
+    <div class="compact-stats">
+      {{ ui.compact_stat(t("Source snapshot"), ("#" ~ source_step.related_snapshot_id) if source_step.related_snapshot_id else t("Not available"), t(source_step.status|replace("_", " ")|title)) }}
+      {{ ui.compact_stat(t("AD snapshot"), ("#" ~ ad_step.related_snapshot_id) if ad_step.related_snapshot_id else t("Not available"), t(ad_step.status|replace("_", " ")|title)) }}
+      {{ ui.compact_stat(t("Identity match run"), match_step.related_match_run_id or t("Not available"), t(match_step.status|replace("_", " ")|title)) }}
+      {{ ui.compact_stat(t("Estimated impacted identities"), source_step.metadata.user_count or 0, t("Current source snapshot")) }}
+      {{ ui.compact_stat(t("Group rules"), (current_bundle.group_exclusion_rules or [])|length, t("Included in release bundle")) }}
+      {{ ui.compact_stat(t("Unpublished changes"), comparison_diff.changed_item_count or 0, t("Changed items")) }}
+    </div>
+    <div class="rollout-release-checklist" data-release-readiness>
+      {% for step in release_prerequisites %}
+      {% set level = "success" if step.status == "complete" else ("danger" if step.status == "blocked" else "warning") %}
+      <article class="rollout-step rollout-step--{{ step.status }}">
+        <div class="rollout-step__body">
+          <strong>{{ t(step.title) }}</strong>
+          <span>{{ t(step.summary) }}</span>
+          {% if step.blocker_reason %}<small>{{ t(step.blocker_reason) }}</small>{% endif %}
+        </div>
+        <div class="rollout-step__action">
+          {{ ui.badge(t(step.status|replace("_", " ")|title), level) }}
+          {% if step.status != "complete" %}<a href="{{ step.action_url }}">{{ t(step.action_label) }}</a>{% endif %}
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    {% if not release_publish_allowed %}
+    <div class="panel-note warning" role="alert"><strong>{{ t("Publishing is blocked") }}</strong><span>{{ t("Resolve every required readiness item above. The server will reject publish attempts while any current prerequisite is incomplete or stale.") }}</span></div>
+    {% endif %}
+  {% endcall %}
+  {% if is_policy_release %}{{ policy.tabs('releases') }}{% endif %}
 
   {% call ui.helper_block(t("Promotion Path"), t("Release snapshots are scoped to the current organization. Use the organization bundle import and export flow when you want to promote settings between test and production organizations."), "info", t("Bundle Flow")) %}
     <div class="actions">
@@ -75,7 +113,7 @@
         {{ forms.input("snapshot_name", t("Snapshot Name"), "", placeholder=t("Optional release label such as April production baseline"), help_text=t("Leave blank to use an automatic release number."), class_name="field-span-full") }}
       </div>
       <div class="actions">
-        {{ ui.button(t("Publish Current Snapshot"), type="submit", variant="secondary", icon="save") }}
+        {{ ui.button(t("Publish Current Snapshot"), type="submit", variant="secondary", icon="save", disabled=(not release_publish_allowed)) }}
         {{ ui.button(t("Back"), href=release_back_path, variant="ghost", icon="arrow-left") }}
       </div>
     </form>

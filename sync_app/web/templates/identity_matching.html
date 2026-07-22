@@ -9,6 +9,12 @@
     {{ ui.button(t("Review Next Candidate"), icon="user-round-search", attrs="data-identity-drawer-open=identity-drawer-1") }}
     {% elif not snapshot %}
     {{ ui.button(t("Open Source Directory"), href="/data-sources/source-directory", variant="primary", icon="users-round") }}
+    {% elif can("mappings.write") %}
+    <form method="post" action="/identity-governance/match-runs" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="connector_id" value="{{ default_connector_id }}">
+      {{ ui.button(t("Run enterprise identity matching"), type="submit", variant="primary", icon="scan-search") }}
+    </form>
     {% endif %}
   {% endcall %}
   {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t("Start with the suggested action for the first pending identity. Open details only when the business conclusion needs more evidence."), t("Review next candidate"), "#identity-results") }}
@@ -98,34 +104,8 @@
     {% endif %}
   {% endcall %}
 
-  {% call ui.panel(t("Ordered identity matching rules"), description=t("Rules are versioned, evaluated in order, and stop on ambiguity. Automatic linking is accepted only for unique strong employee identifiers.")) %}
-    {% if can("mappings.write") %}
-    <details class="detail-toggle"><summary><strong>{{ t("Add or update a matching rule") }}</strong></summary>
-      <form method="post" action="/identity-governance/match-rules" class="page-stack">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div class="form-grid">
-          <label>{{ t("Rule order") }}<input type="number" name="rule_order" value="100" min="1" max="10000" required></label>
-          <label>{{ t("Rule name") }}<input type="text" name="rule_name" maxlength="120" placeholder="custom_employee_id" required></label>
-          <label>{{ t("Source platform") }}<select name="source_provider"><option value="*">{{ t("All platforms") }}</option><option value="dingtalk">{{ t("DingTalk") }}</option><option value="wecom">{{ t("WeCom") }}</option><option value="feishu">{{ t("Feishu") }}</option></select></label>
-          <label>{{ t("Source field") }}<input type="text" name="source_field" placeholder="employee_id" required></label>
-          <label>{{ t("AD field") }}<input type="text" name="ad_field" placeholder="employee_id" required></label>
-          <label>{{ t("Confidence level") }}<select name="confidence_level"><option value="low">{{ t("Low") }}</option><option value="medium" selected>{{ t("Medium") }}</option><option value="high">{{ t("High") }}</option><option value="certain">{{ t("Certain") }}</option></select></label>
-          <label>{{ t("Confidence score") }}<input type="number" name="confidence_score" value="50" min="0" max="100" required></label>
-        </div>
-        <div class="grid cols-3">
-          {% for name, label, checked in [("is_required", "Value required", false), ("case_sensitive", "Case sensitive", false), ("trim_whitespace", "Normalize whitespace", true), ("strip_phone_country_code", "Strip phone country code", false), ("lowercase_email", "Lowercase email", false), ("allow_fallback", "Allow fallback rules", true), ("allow_auto_link", "Allow automatic link", false), ("stop_on_conflict", "Stop on conflict", true), ("is_enabled", "Rule enabled", true)] %}
-          <label class="check-card"><input type="checkbox" name="{{ name }}" value="1" {% if checked %}checked{% endif %}><span><strong>{{ t(label) }}</strong></span></label>
-          {% endfor %}
-        </div>
-        <p class="muted">{{ t("Email, mobile, names, and custom fields can only produce suggestions or manual review even if automatic linking is requested.") }}</p>
-        <div class="form-actions">{{ ui.button(t("Save matching rule"), type="submit", variant="secondary", icon="save") }}</div>
-      </form>
-    </details>
-    {% endif %}
-    <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Identity matching rules') }}"><table><thead><tr><th>{{ t("Order") }}</th><th>{{ t("Rule") }}</th><th>{{ t("Platform") }}</th><th>{{ t("Source to AD") }}</th><th>{{ t("Normalization") }}</th><th>{{ t("Confidence") }}</th><th>{{ t("Conflict behavior") }}</th><th>{{ t("Revision") }}</th></tr></thead><tbody>
-      {% for rule in identity_match_rules %}<tr><td>{{ rule.rule_order }}</td><td><strong>{{ rule.rule_name }}</strong><small>{{ t("Enabled") if rule.is_enabled else t("Disabled") }}</small></td><td>{{ t("All platforms") if rule.source_provider == "*" else t(rule.source_provider) }}</td><td><code>{{ rule.source_field }}</code> → <code>{{ rule.ad_field }}</code><small>{{ t("Automatic") if rule.allow_auto_link else t("Review required") }}</small></td><td>{% if rule.trim_whitespace %}{{ t("Whitespace") }} {% endif %}{% if rule.lowercase_email %}{{ t("Email lowercase") }} {% endif %}{% if rule.strip_phone_country_code %}{{ t("Phone country code") }}{% endif %}</td><td>{{ t(rule.confidence_level|capitalize) }} · {{ rule.confidence_score }}</td><td>{{ t("Stop") if rule.stop_on_conflict else t("Continue") }}</td><td>{{ rule.rule_revision }}</td></tr>
-      {% else %}<tr><td colspan="8" class="empty-state">{{ t("No identity matching rules are configured") }}</td></tr>{% endfor %}
-    </tbody></table></div>
+  {% call ui.helper_block(t("Identity match rules are configured separately"), t("This workbench runs matching and resolves candidates. Open the dedicated rule page when the ordered rules or confidence policy must change."), "info") %}
+    {{ ui.button(t("Open Identity Match Rules"), href="/identity-governance/match-rules", variant="secondary", icon="list-checks") }}
   {% endcall %}
 
   {% if not snapshot %}

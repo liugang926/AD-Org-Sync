@@ -29,6 +29,10 @@ class WebJobService:
     conflict_repo: SyncConflictRepository
     source_directory_repo: SourceDirectoryRepository
     settings_repo: SettingsRepository
+    ad_directory_snapshot_repo: Any | None = None
+    identity_match_run_repo: Any | None = None
+    identity_match_rule_repo: Any | None = None
+    config_release_snapshot_repo: Any | None = None
 
     def _execution_center(self) -> ExecutionCenterService:
         return ExecutionCenterService(
@@ -36,6 +40,10 @@ class WebJobService:
             review_repo=self.review_repo,
             source_directory_repo=self.source_directory_repo,
             settings_repo=self.settings_repo,
+            ad_directory_snapshot_repo=self.ad_directory_snapshot_repo,
+            identity_match_run_repo=self.identity_match_run_repo,
+            identity_match_rule_repo=self.identity_match_rule_repo,
+            config_release_snapshot_repo=self.config_release_snapshot_repo,
         )
 
     @staticmethod

@@ -118,7 +118,7 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
         self._login("superadmin")
         self.session["ui_mode"] = "advanced"
         self._seed_identity_snapshot()
-        page_path = "/identity-governance/identity-matching"
+        page_path = "/identity-governance/match-rules"
         page = self._text(
             self._route(page_path, "GET")(self._request(page_path))
         )

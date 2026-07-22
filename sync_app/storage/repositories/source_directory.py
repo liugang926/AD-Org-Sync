@@ -522,6 +522,12 @@ class SourceDirectoryRepository(BaseRepository):
         config_fingerprint: str,
         selection: dict[str, Any],
         requested_by: str = "",
+        ad_snapshot_id: Optional[int] = None,
+        ad_snapshot_fingerprint: str = "",
+        identity_match_run_id: str = "",
+        identity_match_rules_fingerprint: str = "",
+        policy_release_id: Optional[int] = None,
+        policy_release_hash: str = "",
     ) -> None:
         with self.db.transaction() as conn:
             conn.execute(
@@ -530,8 +536,10 @@ class SourceDirectoryRepository(BaseRepository):
                   job_id, org_id, provider_id, connector_id, execution_mode, scope_type,
                   selected_department_ids_json, selected_source_user_ids_json, requested_by,
                   config_fingerprint, source_snapshot_fingerprint, selection_fingerprint,
-                  snapshot_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  snapshot_id, ad_snapshot_id, ad_snapshot_fingerprint,
+                  identity_match_run_id, identity_match_rules_fingerprint,
+                  policy_release_id, policy_release_hash, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id, selection["org_id"], selection["provider_id"], selection.get("connector_id") or "default",
@@ -539,7 +547,15 @@ class SourceDirectoryRepository(BaseRepository):
                     json.dumps(selection.get("selected_department_ids") or []),
                     json.dumps(selection.get("selected_source_user_ids") or []), requested_by,
                     config_fingerprint, selection.get("source_snapshot_fingerprint") or "",
-                    selection.get("selection_fingerprint") or "", selection.get("snapshot_id"), utcnow_iso(),
+                    selection.get("selection_fingerprint") or "",
+                    selection.get("snapshot_id"),
+                    int(ad_snapshot_id) if ad_snapshot_id is not None else None,
+                    str(ad_snapshot_fingerprint or "").strip(),
+                    str(identity_match_run_id or "").strip(),
+                    str(identity_match_rules_fingerprint or "").strip(),
+                    int(policy_release_id) if policy_release_id is not None else None,
+                    str(policy_release_hash or "").strip(),
+                    utcnow_iso(),
                 ),
             )
 

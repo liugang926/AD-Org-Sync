@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% import "components/forms.html" as forms %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack">
+  {% call ui.page_header(t("Existing Account Takeover"), t("Validate explicit source-to-AD relationships, review overwrite risk, obtain independent approval, then apply permanent links with audit evidence."), eyebrow=t("Identity Matching"), badge_text=current_org.name, badge_level="warning") %}
+    {{ ui.button(t("Return to Matching Workbench"), href="/identity-governance/identity-matching", variant="ghost", icon="arrow-left") }}
+  {% endcall %}
+
+  <div class="compact-stats">
+    {{ ui.compact_stat(t("Batches"), takeover_batches|length) }}
+    {{ ui.compact_stat(t("Rows"), selected_takeover_batch.row_count if selected_takeover_batch else 0) }}
+    {{ ui.compact_stat(t("Conflicts"), selected_takeover_batch.conflict_count if selected_takeover_batch else 0) }}
+    {{ ui.compact_stat(t("Would overwrite"), selected_takeover_batch.overwrite_count if selected_takeover_batch else 0) }}
+  </div>
+
+  {% if can("mappings.write") %}
+  {% call ui.panel(t("1. Upload or paste relationship data"), description=t("Use provider_id, connector_id, platform_account_id and ad_account_key. Preview validation never changes an active relationship.")) %}
+    <form method="post" action="/identity-governance/account-takeover/preview" class="page-stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid">
+        <label>{{ t("Upload CSV") }}<input type="file" accept=".csv,text/csv,text/plain" data-takeover-file><span class="form-help">{{ t("The file is read locally into the preview form and is not applied until validation, approval and Apply succeed.") }}</span></label>
+        {{ forms.input("original_filename", t("Original filename"), "takeover.csv", attrs="data-takeover-filename") }}
+        {{ forms.textarea("takeover_csv", t("Takeover CSV"), placeholder="provider_id,connector_id,platform_account_id,ad_account_key\ndingtalk,default,ding-user-001,ad-object-guid", class_name="field-span-full", attrs="data-takeover-csv") }}
+      </div>
+      <div class="actions">{{ ui.button(t("Validate takeover preview"), type="submit", variant="primary", icon="file-check") }}</div>
+    </form>
+  {% endcall %}
+  {% endif %}
+
+  {% if takeover_batches %}
+  <nav class="active-filter-chips" aria-label="{{ t('Takeover batches') }}">
+    {% for batch in takeover_batches %}<a href="?takeover_batch={{ batch.batch_id|urlencode }}"{% if selected_takeover_batch and selected_takeover_batch.batch_id == batch.batch_id %} aria-current="page"{% endif %}>{{ batch.batch_id }} · {{ t(batch.status|title) }}</a>{% endfor %}
+  </nav>
+  {% endif %}
+
+  {% if selected_takeover_batch %}
+  {% call ui.panel(t("2. Review validation and risk"), description=t("The preview checks source accounts, AD accounts, one-to-many, many-to-one, new links, conflicts and overwrite risk.")) %}
+    <div class="detail-grid">
+      <div class="detail-item"><div class="label">{{ t("Batch") }}</div><div class="value cell-mono">{{ selected_takeover_batch.batch_id }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Status") }}</div><div class="value">{{ ui.badge(t(selected_takeover_batch.status|title), "success" if selected_takeover_batch.status == "applied" else "warning") }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Valid") }}</div><div class="value">{{ selected_takeover_batch.valid_count }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Preview fingerprint") }}</div><div class="value cell-mono">{{ selected_takeover_batch.preview_fingerprint }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Approved by") }}</div><div class="value">{{ selected_takeover_batch.approved_by or "-" }}{% if selected_takeover_batch.approved_at %}<small>{{ ui.local_time(selected_takeover_batch.approved_at) }}</small>{% endif %}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Applied by") }}</div><div class="value">{{ selected_takeover_batch.applied_by or "-" }}{% if selected_takeover_batch.applied_at %}<small>{{ ui.local_time(selected_takeover_batch.applied_at) }}</small>{% endif %}</div></div>
+    </div>
+    {% call ui.table_shell() %}
+    <table data-takeover-preview-table>
+      <thead><tr><th>{{ t("Row") }}</th><th>{{ t("Platform account") }}</th><th>{{ t("AD account") }}</th><th>{{ t("Proposed action") }}</th><th>{{ t("Validation") }}</th></tr></thead>
+      <tbody>{% for row in takeover_rows %}<tr>
+        <td>{{ row.row_number }}</td>
+        <td><strong>{{ row.provider_id }}</strong><div class="muted cell-mono">{{ row.platform_account_id }}</div></td>
+        <td><strong>{{ row.normalized_payload.ad_sam_account_name or row.ad_account_key }}</strong><div class="muted cell-mono">{{ row.normalized_payload.ad_object_guid or "-" }}</div></td>
+        <td>{{ t(row.proposed_action|replace("_", " ")|title) }}</td>
+        <td>{{ ui.badge(t(row.validation_status|title), "success" if row.validation_status == "valid" else "danger") }}{% if row.conflict_codes %}<div class="muted">{{ row.conflict_codes|join(", ") }}</div>{% endif %}</td>
+      </tr>{% endfor %}</tbody>
+    </table>
+    {% endcall %}
+  {% endcall %}
+
+  {% call ui.panel(t("3. Approve and Apply"), description=t("Approval and execution remain separate capabilities. Apply revalidates the immutable preview fingerprint and never silently replaces an active conflicting link.")) %}
+    <div class="actions">
+      {% if selected_takeover_batch.status == "ready" and can("jobs.review") %}
+      <form method="post" action="/identity-governance/account-takeover/{{ selected_takeover_batch.batch_id }}/approve" data-confirm="{{ t('Approve this exact validated takeover preview.') }}" data-confirm-title="{{ t('Approve takeover') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="preview_fingerprint" value="{{ selected_takeover_batch.preview_fingerprint }}">
+        {{ ui.button(t("Approve takeover"), type="submit", variant="secondary", icon="shield-check") }}
+      </form>
+      {% endif %}
+      {% if selected_takeover_batch.status == "approved" and can("jobs.run") %}
+      <form method="post" action="/identity-governance/account-takeover/{{ selected_takeover_batch.batch_id }}/apply" data-confirm="{{ t('This writes permanent enterprise identity links and the compatibility binding. It never overwrites an active conflicting relationship.') }}" data-confirm-title="{{ t('Confirm takeover Apply') }}" data-confirm-require="{{ selected_takeover_batch.batch_id }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="preview_fingerprint" value="{{ selected_takeover_batch.preview_fingerprint }}">
+        {{ ui.button(t("Apply approved takeover"), type="submit", variant="primary", icon="link") }}
+      </form>
+      {% endif %}
+      {% if selected_takeover_batch.status == "applied" %}{{ ui.badge(t("Applied"), "success") }}{% endif %}
+    </div>
+  {% endcall %}
+  {% else %}
+    {{ ui.empty_state(t("No takeover preview"), t("Paste or upload reviewed relationship data to create a validation preview."), "info") }}
+  {% endif %}
+</div>
+{% endblock %}

@@ -40,6 +40,7 @@ from sync_app.storage.repositories.source_directory import SourceDirectoryReposi
 from sync_app.storage.repositories.source_connectors import SourceConnectorRepository
 from sync_app.storage.repositories.system import (
     ConfigReleaseSnapshotRepository,
+    DataQualityReviewRepository,
     DataQualitySnapshotRepository,
     IntegrationWebhookSubscriptionRepository,
     SettingsRepository,
@@ -84,6 +85,7 @@ __all__ = [
     "SyncReplayRequestRepository",
     "WebAuditLogRepository",
     "ConfigReleaseSnapshotRepository",
+    "DataQualityReviewRepository",
     "DataQualitySnapshotRepository",
     "IntegrationWebhookSubscriptionRepository",
 ]

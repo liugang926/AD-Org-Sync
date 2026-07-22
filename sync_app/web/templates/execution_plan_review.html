@@ -19,6 +19,7 @@
   {{ execution.progress("execution-plan-review", dry_run_state=("complete" if selected_item else "pending"), review_state=("complete" if selected_item and selected_item.review.status == "approved" else ("blocked" if blocker_code and selected_item else "current")), apply_state=("current" if selected_item and selected_item.review.status == "approved" else "pending")) }}
   {{ execution.scope_context(current_org, environment_label, selected_item.evaluation.context if selected_item else none) }}
   {{ execution.status(blocker_code, next_action_code, "The selected plan evidence is valid and ready for approval.") }}
+  {{ execution.rollout_evidence(execution_context, selected=True) }}
 
   {% if selected_item %}{% set job = selected_item.job %}{% set review = selected_item.review %}{% set summary = job.summary or {} %}
   {% call ui.panel(t("Selected Plan"), description=t("Approval applies only to this plan fingerprint and expires automatically.")) %}
@@ -33,6 +34,19 @@
     <details class="detail-toggle"><summary>{{ t("Technical evidence") }}</summary><div class="evidence-code"><div>{{ t("Plan Fingerprint") }}: <code>{{ review.plan_fingerprint }}</code></div><div>{{ t("Config Fingerprint") }}: <code>{{ review.config_snapshot_hash }}</code></div></div></details>
   {% endcall %}
   {% endif %}
+
+  {% call ui.panel(t("Business change and risk summary"), description=t("Approval covers these immutable plan outcomes and the exact evidence version shown above.")) %}
+    <div class="compact-stats">
+      {{ ui.compact_stat(t("Create"), plan_review_summary.create_count) }}
+      {{ ui.compact_stat(t("Update or move"), plan_review_summary.update_count) }}
+      {{ ui.compact_stat(t("Enable or rehire"), plan_review_summary.enable_count) }}
+      {{ ui.compact_stat(t("Disable"), plan_review_summary.disable_count) }}
+      {{ ui.compact_stat(t("Group relationships"), plan_review_summary.group_relation_count) }}
+      {{ ui.compact_stat(t("Conflicts"), plan_review_summary.conflict_count) }}
+      {{ ui.compact_stat(t("High-risk changes"), plan_review_summary.risk_count) }}
+      {{ ui.compact_stat(t("Errors"), plan_review_summary.error_count) }}
+    </div>
+  {% endcall %}
 
   {% call ui.panel(t("Review Queue"), description=t("Select a plan to inspect. Approval remains a separate, explicit action.")) %}
     {% if review_items %}<div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Review Queue') }}"><table>

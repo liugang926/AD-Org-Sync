@@ -43,18 +43,85 @@ def register_data_quality_routes(
             return user
         current_org = get_current_org(request)
         repositories = get_web_repositories(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path,
+        )
+        source_snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=config.source_provider,
+        )
+        source_snapshot_id = int(source_snapshot["id"] or 0) if source_snapshot else 0
+        quality_review = (
+            repositories.data_quality_review_repo.get_review_for_snapshot(
+                org_id=current_org.org_id,
+                source_snapshot_id=source_snapshot_id,
+            )
+            if source_snapshot_id
+            else None
+        )
         return render(
             request,
             "data_quality_center.html",
             page="data-quality",
             title="Data Quality Center",
             current_org=current_org,
+            source_snapshot=source_snapshot,
+            quality_review=quality_review,
             **build_data_quality_center_context(
                 repositories.db_manager,
                 current_org.org_id,
                 snapshot_id=_parse_optional_int(request.query_params.get("snapshot_id")),
             ),
         )
+
+    @app.post(f"{CANONICAL_ROUTE_PATHS['data-quality']}/review")
+    def data_quality_review_confirm(
+        request: Request,
+        csrf_token: str = Form(""),
+        source_snapshot_id: int = Form(0),
+        source_snapshot_fingerprint: str = Form(""),
+        review_notes: str = Form(""),
+        confirmed: str = Form(""),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        redirect_url = CANONICAL_ROUTE_PATHS["data-quality"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
+        if csrf_error:
+            return csrf_error
+        if str(confirmed or "").strip().lower() not in {"1", "true", "yes", "on"}:
+            flash(request, "error", "Confirm that the current source snapshot was reviewed.")
+            return RedirectResponse(url=redirect_url, status_code=303)
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        try:
+            review = repositories.data_quality_review_repo.confirm_snapshot(
+                org_id=current_org.org_id,
+                source_snapshot_id=int(source_snapshot_id),
+                source_snapshot_fingerprint=source_snapshot_fingerprint,
+                reviewer_username=user.username,
+                review_notes=review_notes,
+            )
+        except ValueError as exc:
+            flash(request, "error", str(exc))
+            return RedirectResponse(url=redirect_url, status_code=303)
+        repositories.audit_repo.add_log(
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            action_type="data_quality.review.confirm",
+            target_type="source_directory_snapshot",
+            target_id=str(review.source_snapshot_id),
+            result="success",
+            message="Confirmed data quality review for immutable source snapshot",
+            payload={
+                "source_snapshot_id": review.source_snapshot_id,
+                "source_snapshot_fingerprint": review.source_snapshot_fingerprint,
+            },
+        )
+        flash(request, "success", "Data quality review confirmed for the current source snapshot.")
+        return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post(f"{CANONICAL_ROUTE_PATHS['data-quality']}/run")
     @app.post("/data-quality/run")

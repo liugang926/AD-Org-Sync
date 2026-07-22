@@ -57,58 +57,8 @@
   </section>
 
   {% call mode_ui.advanced(ui_presentation) %}
-  {% call ui.detail_toggle(t("Existing account takeover"), t("Validate CSV relationships, review conflicts, obtain independent approval, then apply permanent identity links without silent overwrite."), open=(selected_takeover_batch is not none)) %}
-    <form method="post" action="/identity-governance/manual-overrides/takeover/preview" class="page-stack">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <div class="form-grid">
-        {{ forms.input("original_filename", t("Original filename"), "takeover.csv") }}
-        {{ forms.textarea("takeover_csv", t("Takeover CSV"), placeholder="provider_id,connector_id,platform_account_id,ad_account_key\ndingtalk,default,ding-user-001,ad-object-guid", class_name="field-span-full") }}
-      </div>
-      <div class="actions">{{ ui.button(t("Validate takeover preview"), type="submit", variant="secondary", icon="file-check") }}</div>
-    </form>
-
-    {% if takeover_batches %}
-    <nav class="active-filter-chips" aria-label="{{ t('Takeover batches') }}">
-      {% for batch in takeover_batches %}<a href="?takeover_batch={{ batch.batch_id|urlencode }}"{% if selected_takeover_batch and selected_takeover_batch.batch_id == batch.batch_id %} aria-current="page"{% endif %}>{{ batch.batch_id }} · {{ t(batch.status|title) }}</a>{% endfor %}
-    </nav>
-    {% endif %}
-
-    {% if selected_takeover_batch %}
-    <div class="compact-stats">
-      {{ ui.compact_stat(t("Rows"), selected_takeover_batch.row_count) }}
-      {{ ui.compact_stat(t("Valid"), selected_takeover_batch.valid_count) }}
-      {{ ui.compact_stat(t("Conflicts"), selected_takeover_batch.conflict_count) }}
-      {{ ui.compact_stat(t("Would overwrite"), selected_takeover_batch.overwrite_count) }}
-    </div>
-    <div class="muted cell-mono">{{ t("Preview fingerprint") }}: {{ selected_takeover_batch.preview_fingerprint }}</div>
-    {% call ui.table_shell() %}
-    <table data-takeover-preview-table>
-      <thead><tr><th>{{ t("Row") }}</th><th>{{ t("Platform account") }}</th><th>{{ t("AD account") }}</th><th>{{ t("Proposed action") }}</th><th>{{ t("Validation") }}</th></tr></thead>
-      <tbody>{% for row in takeover_rows %}<tr>
-        <td>{{ row.row_number }}</td>
-        <td><strong>{{ row.provider_id }}</strong><div class="muted cell-mono">{{ row.platform_account_id }}</div></td>
-        <td><strong>{{ row.normalized_payload.ad_sam_account_name or row.ad_account_key }}</strong><div class="muted cell-mono">{{ row.normalized_payload.ad_object_guid or "-" }}</div></td>
-        <td>{{ t(row.proposed_action|replace("_", " ")|title) }}</td>
-        <td>{{ ui.badge(t(row.validation_status|title), "success" if row.validation_status == "valid" else "danger") }}{% if row.conflict_codes %}<div class="muted">{{ row.conflict_codes|join(", ") }}</div>{% endif %}</td>
-      </tr>{% endfor %}</tbody>
-    </table>
-    {% endcall %}
-    <div class="actions">
-      {% if selected_takeover_batch.status == "ready" and can("jobs.review") %}
-      <form method="post" action="/identity-governance/manual-overrides/takeover/{{ selected_takeover_batch.batch_id }}/approve">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="preview_fingerprint" value="{{ selected_takeover_batch.preview_fingerprint }}">
-        {{ ui.button(t("Approve takeover"), type="submit", variant="secondary", icon="shield-check") }}
-      </form>
-      {% endif %}
-      {% if selected_takeover_batch.status == "approved" and can("jobs.run") %}
-      <form method="post" action="/identity-governance/manual-overrides/takeover/{{ selected_takeover_batch.batch_id }}/apply" data-confirm="{{ t('This writes permanent enterprise identity links and the compatibility binding. It never overwrites an active conflicting relationship.') }}" data-confirm-title="{{ t('Confirm takeover Apply') }}" data-confirm-require="{{ selected_takeover_batch.batch_id }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="preview_fingerprint" value="{{ selected_takeover_batch.preview_fingerprint }}">
-        {{ ui.button(t("Apply approved takeover"), type="submit", variant="secondary", icon="link") }}
-      </form>
-      {% endif %}
-      {% if selected_takeover_batch.status == "applied" %}{{ ui.badge(t("Applied"), "success") }}{% endif %}
-    </div>
-    {% endif %}
+  {% call ui.helper_block(t("Existing account takeover moved to a dedicated workflow"), t("Use the takeover page for preview, validation, independent approval, Apply and audit evidence."), "info") %}
+    {{ ui.button(t("Open Existing Account Takeover"), href="/identity-governance/account-takeover", variant="secondary", icon="link-2") }}
   {% endcall %}
 
   {% call ui.detail_toggle(t("Advanced: bulk import manual bindings"), t("Use reviewed CSV rows only. Every imported binding is audited.")) %}

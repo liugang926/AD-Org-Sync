@@ -1276,6 +1276,24 @@
     renderPreview();
   }
 
+  function initAccountTakeoverUpload() {
+    document.querySelectorAll("[data-takeover-file]").forEach((fileInput) => {
+      if (!(fileInput instanceof HTMLInputElement)) return;
+      fileInput.addEventListener("change", async () => {
+        const file = fileInput.files?.[0];
+        const form = fileInput.closest("form");
+        const csvInput = form?.querySelector("[data-takeover-csv]");
+        const filenameInput = form?.querySelector("[data-takeover-filename]");
+        if (!file || !(csvInput instanceof HTMLTextAreaElement)) return;
+        csvInput.value = await file.text();
+        csvInput.dispatchEvent(new Event("input", { bubbles: true }));
+        if (filenameInput instanceof HTMLInputElement) {
+          filenameInput.value = file.name;
+        }
+      });
+    });
+  }
+
   function boot() {
     initIcons();
     initAutoSubmit();
@@ -1297,6 +1315,7 @@
     initOuTrees();
     initScheduledApplyConfirmation();
     initOrganizationImportPreview();
+    initAccountTakeoverUpload();
     ADOrgSync.initAdvancedSyncPage?.();
     ADOrgSync.initConfigPage?.();
     ADOrgSync.initMappingsPage?.();

@@ -193,7 +193,11 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
         self.assertEqual(blocked.result, "blocked")
         self.assertEqual(
             blocked.payload["reason_code"],
-            "execution.blocker.scope_missing",
+            "execution.blocker.rollout_not_ready",
+        )
+        self.assertEqual(
+            blocked.payload["readiness_step"],
+            "source_connector_ready",
         )
 
     def test_dry_run_rejects_a_scope_bound_to_a_superseded_snapshot(
@@ -208,7 +212,8 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
         source_repo = self.app.state.source_directory_repo
         newer_snapshot_id = source_repo.start_refresh(
             org_id="default",
-            provider_id="test-provider",
+            provider_id=created["selection"]["provider_id"],
+            connector_id=created["selection"]["connector_id"],
             created_by="test",
         )
         source_repo.replace_snapshot(
@@ -246,7 +251,11 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(
             blocked.payload["reason_code"],
-            "execution.blocker.snapshot_superseded",
+            "execution.blocker.rollout_not_ready",
+        )
+        self.assertEqual(
+            blocked.payload["readiness_step"],
+            "data_quality_reviewed",
         )
 
     def test_review_then_apply_binds_the_exact_plan_and_writes_audit(self) -> None:

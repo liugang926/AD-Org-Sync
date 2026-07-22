@@ -313,6 +313,94 @@ def register_job_routes(
         selected_snapshot_id = int(
             selected_summary.get("source_snapshot_id") or 0
         )
+        selected_job_id = str(getattr(selected_job, "job_id", "") or "")
+        selected_scope = (
+            repositories.source_directory_repo.get_job_scope(
+                selected_job_id,
+                org_id=current_org.org_id,
+            )
+            if selected_job_id
+            else None
+        )
+        readiness = services.readiness.evaluate_organization(
+            organization=current_org,
+            config_path=get_web_runtime_state(request).config_path,
+        ).to_dict()
+        step_map = dict(readiness.get("step_map") or {})
+        source_step = dict(step_map.get("source_snapshot_current") or {})
+        ad_step = dict(step_map.get("ad_snapshot_current") or {})
+        match_step = dict(step_map.get("identity_match_run_current") or {})
+        release_step = dict(step_map.get("policy_release_current") or {})
+        dry_run_step = dict(step_map.get("dry_run_current") or {})
+        current_evidence = {
+            "source_snapshot_id": source_step.get("related_snapshot_id"),
+            "source_snapshot_fingerprint": dict(source_step.get("metadata") or {}).get(
+                "snapshot_fingerprint"
+            ),
+            "ad_snapshot_id": ad_step.get("related_snapshot_id"),
+            "ad_snapshot_fingerprint": dict(ad_step.get("metadata") or {}).get(
+                "snapshot_fingerprint"
+            ),
+            "identity_match_run_id": match_step.get("related_match_run_id"),
+            "identity_match_rules_fingerprint": dict(
+                match_step.get("metadata") or {}
+            ).get("rules_fingerprint"),
+            "policy_release_id": release_step.get("release_id"),
+            "policy_release_hash": dict(release_step.get("metadata") or {}).get(
+                "policy_release_hash"
+            ),
+            "config_fingerprint": config_fingerprint,
+        }
+        selected_evidence = {
+            "source_snapshot_id": int(selected_scope.get("snapshot_id") or 0)
+            if selected_scope
+            else None,
+            "source_snapshot_fingerprint": str(
+                selected_scope.get("source_snapshot_fingerprint") or ""
+            )
+            if selected_scope
+            else "",
+            "ad_snapshot_id": int(selected_scope.get("ad_snapshot_id") or 0)
+            if selected_scope
+            else None,
+            "ad_snapshot_fingerprint": str(
+                selected_scope.get("ad_snapshot_fingerprint") or ""
+            )
+            if selected_scope
+            else "",
+            "identity_match_run_id": str(
+                selected_scope.get("identity_match_run_id") or ""
+            )
+            if selected_scope
+            else "",
+            "identity_match_rules_fingerprint": str(
+                selected_scope.get("identity_match_rules_fingerprint") or ""
+            )
+            if selected_scope
+            else "",
+            "policy_release_id": int(selected_scope.get("policy_release_id") or 0)
+            if selected_scope
+            else None,
+            "policy_release_hash": str(
+                selected_scope.get("policy_release_hash") or ""
+            )
+            if selected_scope
+            else "",
+            "config_fingerprint": str(
+                selected_scope.get("config_fingerprint") or ""
+            )
+            if selected_scope
+            else selected_config_fingerprint,
+        }
+        selected_evidence_current = bool(
+            selected_job_id
+            and selected_scope
+            and all(
+                str(selected_evidence.get(key) or "")
+                == str(current_evidence.get(key) or "")
+                for key in current_evidence
+            )
+        )
         return {
             "scopes": scopes,
             "latest_source_snapshot": latest_source_snapshot,
@@ -334,6 +422,27 @@ def register_job_routes(
                 else "Not available"
             ),
             "used_policy_version": used_policy_version,
+            "rollout_readiness": readiness,
+            "current_evidence": current_evidence,
+            "selected_evidence": selected_evidence,
+            "selected_evidence_current": selected_evidence_current,
+            "selected_evidence_status": (
+                "complete"
+                if selected_evidence_current
+                else "stale"
+                if selected_job_id
+                else "not_started"
+            ),
+            "selected_evidence_reason": (
+                ""
+                if selected_evidence_current
+                else str(
+                    dry_run_step.get("blocker_reason")
+                    or "The selected plan does not use the current rollout evidence."
+                )
+                if selected_job_id
+                else "No Dry Run plan is selected."
+            ),
         }
 
     def dry_run_scope_blocker(
@@ -668,6 +777,21 @@ def register_job_routes(
         scopes = repositories.source_directory_repo.list_scope_selections(
             org_id=current_org.org_id
         )
+        recent_dry_runs = services.jobs.list_jobs_by_mode(
+            org_id=current_org.org_id,
+            execution_mode="dry_run",
+            limit=12,
+        )
+        execution_context = build_execution_context(
+            request,
+            current_org,
+            selected_job=(recent_dry_runs[0] if recent_dry_runs else None),
+        )
+        policy_release_step = dict(
+            dict(preflight_summary.get("rollout_readiness") or {})
+            .get("step_map", {})
+            .get("policy_release_current", {})
+        )
         blocker_code = ""
         next_action_url = CANONICAL_ROUTE_PATHS["execution-plan-review"]
         next_action_code = "execution.action.review_plan"
@@ -675,10 +799,19 @@ def register_job_routes(
             blocker_code = "execution.blocker.job_active"
             next_action_url = CANONICAL_ROUTE_PATHS["execution-jobs"]
             next_action_code = "execution.action.view_job_history"
-        elif str(preflight_summary.get("overall_status") or "") == "error":
-            blocker_code = "jobs.blocker.config_or_connectivity"
-            next_action_url = CANONICAL_ROUTE_PATHS["config"]
-            next_action_code = "jobs.action.fix_configuration"
+        elif str(policy_release_step.get("status") or "") != "complete":
+            blocker_code = str(
+                policy_release_step.get("blocker_reason")
+                or "A current policy release and rollout evidence are required."
+            )
+            next_action_url = str(
+                policy_release_step.get("action_url")
+                or CANONICAL_ROUTE_PATHS["sync-policy-releases"]
+            )
+            next_action_code = str(
+                policy_release_step.get("action_label")
+                or "Review and publish policy"
+            )
         else:
             blocker_code = dry_run_scope_blocker(
                 request,
@@ -701,10 +834,10 @@ def register_job_routes(
             blocker_code=blocker_code,
             next_action_url=next_action_url,
             next_action_code=next_action_code,
-            recent_dry_runs=services.jobs.list_jobs_by_mode(
-                org_id=current_org.org_id,
-                execution_mode="dry_run",
-                limit=12,
+            recent_dry_runs=recent_dry_runs,
+            execution_context=execution_context,
+            latest_plan_summary=services.jobs.build_plan_review_summary(
+                recent_dry_runs[0] if recent_dry_runs else None
             ),
             sync_runner_error=runtime_state.sync_runner.last_error,
         )
@@ -752,6 +885,11 @@ def register_job_routes(
             selected_item["evaluation"] if selected_item is not None else None
         )
         selected_review = selected_item["review"] if selected_item else None
+        execution_context = build_execution_context(
+            request,
+            current_org,
+            selected_job=(selected_item["job"] if selected_item else None),
+        )
         can_approve = bool(
             selected_review
             and str(selected_review.status or "").lower() == "pending"
@@ -792,6 +930,10 @@ def register_job_routes(
             blocker_code=blocker_code,
             next_action_url=next_action_url,
             next_action_code=next_action_code,
+            execution_context=execution_context,
+            plan_review_summary=services.jobs.build_plan_review_summary(
+                selected_item["job"] if selected_item else None
+            ),
         )
 
     def build_apply_page_state(
@@ -845,6 +987,31 @@ def register_job_routes(
                     "params": {"count": open_conflict_count},
                     "next_action_code": "jobs.action.review_conflicts",
                     "next_action_url": CANONICAL_ROUTE_PATHS["conflicts"],
+                }
+            )
+        apply_readiness_step = dict(
+            dict(preflight_summary.get("rollout_readiness") or {})
+            .get("step_map", {})
+            .get("apply_allowed", {})
+        )
+        if evaluation.allowed and str(
+            apply_readiness_step.get("status") or ""
+        ) not in {"ready", "complete"}:
+            blockers.append(
+                {
+                    "message_code": str(
+                        apply_readiness_step.get("blocker_reason")
+                        or "Apply is blocked because the selected rollout evidence is not current."
+                    ),
+                    "params": {},
+                    "next_action_code": str(
+                        apply_readiness_step.get("action_label")
+                        or "Review rollout readiness"
+                    ),
+                    "next_action_url": str(
+                        apply_readiness_step.get("action_url")
+                        or "/getting-started"
+                    ),
                 }
             )
         if active_job:
@@ -907,6 +1074,11 @@ def register_job_routes(
             plan_id=str(plan_id or "").strip(),
             current_org=current_org,
         )
+        execution_context = build_execution_context(
+            request,
+            current_org,
+            selected_job=state["evaluation"].job,
+        )
         return render(
             request,
             "execution_apply.html",
@@ -914,6 +1086,10 @@ def register_job_routes(
             title="Apply",
             current_org=current_org,
             environment_label=current_environment_label(request),
+            execution_context=execution_context,
+            plan_review_summary=get_web_services(request).jobs.build_plan_review_summary(
+                state["evaluation"].job
+            ),
             **state,
         )
 
@@ -1074,12 +1250,22 @@ def register_job_routes(
                 request,
                 current_org,
             )
+            rollout_readiness = dict(
+                preflight_summary.get("rollout_readiness") or {}
+            )
+            policy_release_step = dict(
+                rollout_readiness.get("step_map", {}).get(
+                    "policy_release_current", {}
+                )
+            )
             active_job = get_web_services(request).jobs.get_active_job(
                 org_id=current_org.org_id
             )
             blocker_code = ""
             if active_job:
                 blocker_code = "execution.blocker.job_active"
+            elif str(policy_release_step.get("status") or "") != "complete":
+                blocker_code = "execution.blocker.rollout_not_ready"
             elif str(
                 preflight_summary.get("overall_status") or ""
             ).lower() == "error":
@@ -1103,9 +1289,20 @@ def register_job_routes(
                         "active_job_id": str(
                             getattr(active_job, "job_id", "") or ""
                         ),
+                        "readiness_step": str(
+                            rollout_readiness.get("next_step", {}).get("key") or ""
+                        ),
                     },
                 )
-                flash_t(request, "error", blocker_code)
+                if blocker_code == "execution.blocker.rollout_not_ready":
+                    next_step = dict(rollout_readiness.get("next_step") or {})
+                    flash(
+                        request,
+                        "error",
+                        str(next_step.get("blocker_reason") or next_step.get("summary") or "Complete the current rollout prerequisite before Dry Run."),
+                    )
+                else:
+                    flash_t(request, "error", blocker_code)
                 return RedirectResponse(url=return_url, status_code=303)
         if normalized_mode == "apply":
             apply_state = build_apply_page_state(

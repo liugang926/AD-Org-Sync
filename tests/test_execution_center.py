@@ -5,8 +5,13 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from sync_app.services.execution_center import ExecutionCenterService
+from sync_app.services.config_release import publish_current_config_release_snapshot
 from sync_app.storage.local_db import (
+    ADDirectorySnapshotRepository,
+    ConfigReleaseSnapshotRepository,
     DatabaseManager,
+    IdentityMatchRuleRepository,
+    IdentityMatchRunRepository,
     SettingsRepository,
     SourceDirectoryRepository,
     SyncJobRepository,
@@ -26,11 +31,19 @@ class ExecutionCenterServiceTests(unittest.TestCase):
         self.job_repo = SyncJobRepository(self.db_manager)
         self.review_repo = SyncPlanReviewRepository(self.db_manager)
         self.source_repo = SourceDirectoryRepository(self.db_manager)
+        self.ad_snapshot_repo = ADDirectorySnapshotRepository(self.db_manager)
+        self.match_run_repo = IdentityMatchRunRepository(self.db_manager)
+        self.match_rule_repo = IdentityMatchRuleRepository(self.db_manager)
+        self.release_repo = ConfigReleaseSnapshotRepository(self.db_manager)
         self.service = ExecutionCenterService(
             job_repo=self.job_repo,
             review_repo=self.review_repo,
             source_directory_repo=self.source_repo,
             settings_repo=SettingsRepository(self.db_manager),
+            ad_directory_snapshot_repo=self.ad_snapshot_repo,
+            identity_match_run_repo=self.match_run_repo,
+            identity_match_rule_repo=self.match_rule_repo,
+            config_release_snapshot_repo=self.release_repo,
         )
 
     def _evaluate(self, job_id: str, **overrides):
@@ -197,6 +210,88 @@ class ExecutionCenterServiceTests(unittest.TestCase):
         self.assertEqual(
             evaluation.next_action_code,
             "execution.action.save_scope",
+        )
+
+    def test_new_ad_snapshot_invalidates_the_plan(self) -> None:
+        create_eligible_execution_plan(
+            self.db_manager,
+            job_id="plan-ad-snapshot",
+            approved=True,
+        )
+        replacement_id = self.ad_snapshot_repo.start_snapshot(
+            org_id="default",
+            connector_id="default",
+            created_by="test",
+        )
+        self.ad_snapshot_repo.complete_snapshot(
+            replacement_id,
+            org_id="default",
+            user_count=0,
+            ou_count=1,
+            duplicate_employee_id_count=0,
+            duplicate_employee_number_count=0,
+            snapshot_fingerprint="sha256:v2:ad-snapshot:replacement",
+            expires_at=(
+                datetime.now(timezone.utc) + timedelta(hours=4)
+            ).isoformat(timespec="seconds"),
+        )
+
+        evaluation = self._evaluate("plan-ad-snapshot")
+
+        self.assertFalse(evaluation.allowed)
+        self.assertEqual(
+            evaluation.reason_code,
+            "execution.blocker.ad_snapshot_changed",
+        )
+
+    def test_match_rule_change_invalidates_the_plan(self) -> None:
+        create_eligible_execution_plan(
+            self.db_manager,
+            job_id="plan-match-rules",
+            approved=True,
+        )
+        self.match_rule_repo.upsert_rule(
+            org_id="default",
+            rule_order=5,
+            rule_name="Employee ID exact",
+            source_provider="*",
+            source_field="employee_id",
+            ad_field="employeeID",
+            allow_auto_link=True,
+            confidence_level="certain",
+            confidence_score=99,
+            created_by="test",
+        )
+
+        evaluation = self._evaluate("plan-match-rules")
+
+        self.assertFalse(evaluation.allowed)
+        self.assertEqual(
+            evaluation.reason_code,
+            "execution.blocker.identity_match_changed",
+        )
+
+    def test_new_policy_release_invalidates_the_plan(self) -> None:
+        create_eligible_execution_plan(
+            self.db_manager,
+            job_id="plan-policy-release",
+            approved=True,
+        )
+        publish_current_config_release_snapshot(
+            self.db_manager,
+            "default",
+            created_by="test",
+            snapshot_name="Replacement release",
+            trigger_action="unit_test",
+            force=True,
+        )
+
+        evaluation = self._evaluate("plan-policy-release")
+
+        self.assertFalse(evaluation.allowed)
+        self.assertEqual(
+            evaluation.reason_code,
+            "execution.blocker.policy_release_changed",
         )
 
     def test_expired_or_consumed_plan_requires_a_new_dry_run(self) -> None:

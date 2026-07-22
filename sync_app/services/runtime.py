@@ -315,6 +315,22 @@ def _prepare_sync_environment(ctx: SyncContext) -> None:
     }
 
     if source_scope:
+        current_ad_snapshot = (
+            ctx.repositories.ad_directory_snapshot_repo.get_latest_successful_snapshot(
+                org_id=organization.org_id,
+                connector_id="default",
+            )
+        )
+        current_match_run = (
+            ctx.repositories.identity_match_run_repo.get_latest_completed_run(
+                org_id=organization.org_id
+            )
+        )
+        current_policy_release = (
+            ctx.repositories.config_release_snapshot_repo.get_latest_snapshot_record(
+                org_id=organization.org_id
+            )
+        )
         snapshot_departments = ctx.repositories.source_directory_repo.list_departments(
             int(source_scope['snapshot_id']),
             org_id=organization.org_id,
@@ -335,6 +351,28 @@ def _prepare_sync_environment(ctx: SyncContext) -> None:
             config_fingerprint=ctx.config_hash,
             selection=source_scope,
             requested_by=str(ctx.sync_stats.get('requested_by') or ''),
+            ad_snapshot_id=(
+                int(current_ad_snapshot['id']) if current_ad_snapshot else None
+            ),
+            ad_snapshot_fingerprint=(
+                str(current_ad_snapshot['snapshot_fingerprint'] or '')
+                if current_ad_snapshot else ''
+            ),
+            identity_match_run_id=(
+                str(current_match_run['run_id'] or '') if current_match_run else ''
+            ),
+            identity_match_rules_fingerprint=(
+                str(current_match_run['rules_fingerprint'] or '')
+                if current_match_run else ''
+            ),
+            policy_release_id=(
+                int(current_policy_release.id or 0) or None
+                if current_policy_release else None
+            ),
+            policy_release_hash=(
+                str(current_policy_release.bundle_hash or '')
+                if current_policy_release else ''
+            ),
         )
         ctx.plan.plan_fingerprint_items.append(
             {
@@ -650,6 +688,10 @@ def run_sync_job(
                 review_repo=repositories.review_repo,
                 source_directory_repo=repositories.source_directory_repo,
                 settings_repo=settings_repo,
+                ad_directory_snapshot_repo=repositories.ad_directory_snapshot_repo,
+                identity_match_run_repo=repositories.identity_match_run_repo,
+                identity_match_rule_repo=repositories.identity_match_rule_repo,
+                config_release_snapshot_repo=repositories.config_release_snapshot_repo,
             ).evaluate_plan(
                 org_id=organization.org_id,
                 organization_name=organization.name,
