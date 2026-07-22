@@ -390,3 +390,55 @@ class FakeADSyncPolicy(FakeADSyncLDAPS):
 
     def find_parent_groups_for_member(self, member_dn):
         return []
+
+
+class FakeADSyncPartialFailure(FakeADSyncPolicy):
+    """Stateful AD fake that fails one create and preserves successful accounts."""
+
+    create_attempts = []
+    failed_usernames_once = set()
+    fail_first_create_for = "bob"
+
+    @classmethod
+    def reset(cls):
+        super().reset()
+        cls.create_attempts = []
+        cls.failed_usernames_once = set()
+        cls.fail_first_create_for = "bob"
+
+    def create_user(
+        self,
+        username: str,
+        display_name: str,
+        email: str,
+        ou_dn: str,
+        *,
+        extra_attributes=None,
+    ) -> bool:
+        type(self).create_attempts.append(username)
+        if (
+            username == type(self).fail_first_create_for
+            and username not in type(self).failed_usernames_once
+        ):
+            type(self).failed_usernames_once.add(username)
+            return False
+        success = super().create_user(
+            username,
+            display_name,
+            email,
+            ou_dn,
+            extra_attributes=extra_attributes,
+        )
+        if success:
+            type(self).existing_users_by_domain.setdefault(self.domain, {})[
+                username
+            ] = DirectoryUserRecord(
+                username=username,
+                dn=f"CN={display_name},{ou_dn}",
+                display_name=display_name,
+                email=email,
+            )
+            enabled = type(self).enabled_users_by_domain.setdefault(self.domain, [])
+            if username not in enabled:
+                enabled.append(username)
+        return success

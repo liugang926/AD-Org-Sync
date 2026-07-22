@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import secrets
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode
@@ -16,6 +18,14 @@ from sync_app.services.identity_relationships import (
     classify_identity_relationship,
     filter_identity_workbench_rows,
     summarize_identity_workbench_rows,
+)
+from sync_app.services.directory_snapshot_ingestion import (
+    ADDirectorySnapshotService,
+    PlatformAccountIngestionService,
+)
+from sync_app.services.enterprise_identity_matching import (
+    EnterpriseIdentityDecisionService,
+    EnterpriseIdentityMatchingService,
 )
 from sync_app.services.binding_reconciliation import (
     BINDING_RECONCILIATION_CATEGORIES,
@@ -237,7 +247,12 @@ def register_source_directory_routes(
         created_by: str,
     ) -> None:
         from sync_app.storage.local_db import DatabaseManager
-        from sync_app.storage.repositories import OrganizationConfigRepository, SettingsRepository, SourceDirectoryRepository
+        from sync_app.storage.repositories import (
+            OrganizationConfigRepository,
+            SettingsRepository,
+            SourceConnectorRepository,
+            SourceDirectoryRepository,
+        )
 
         manager = DatabaseManager(db_path=db_path)
         manager.initialize(create_startup_snapshot=False, verify_integrity=False)
@@ -247,13 +262,54 @@ def register_source_directory_routes(
             provider.employee_id_attribute = SettingsRepository(manager).get_value(
                 "source_employee_id_attribute", "", org_id=org_id
             ) or ""
+        connector_repo = SourceConnectorRepository(manager)
+        connector = connector_repo.get_connector(
+            f"{provider_id}-default",
+            org_id=org_id,
+        )
         try:
-            SourceDirectoryService(SourceDirectoryRepository(manager), logger=LOGGER).refresh(
+            snapshot = SourceDirectoryService(
+                SourceDirectoryRepository(manager), logger=LOGGER
+            ).refresh(
                 org_id=org_id,
                 provider_id=provider_id,
                 provider=provider,
                 created_by=created_by,
             )
+            if connector is not None:
+                quality_issue_count = int(
+                    snapshot.get("missing_employee_id_count") or 0
+                ) + int(snapshot.get("duplicate_employee_id_count") or 0)
+                connector_repo.update_connection_status(
+                    org_id=org_id,
+                    connector_id=connector.connector_id,
+                    connection_status="connected",
+                    granted_permissions=connector.required_permissions,
+                    authorization_scope={
+                        **connector.authorization_scope,
+                        "verification": "successful_full_directory_snapshot",
+                        "provider_id": provider_id,
+                    },
+                )
+                connector_repo.update_snapshot_stats(
+                    org_id=org_id,
+                    connector_id=connector.connector_id,
+                    department_count=int(snapshot.get("department_count") or 0),
+                    account_count=int(snapshot.get("user_count") or 0),
+                    quality_issue_count=quality_issue_count,
+                    synced_at=str(snapshot.get("completed_at") or ""),
+                )
+        except Exception as exc:
+            if connector is not None:
+                connector_repo.update_connection_status(
+                    org_id=org_id,
+                    connector_id=connector.connector_id,
+                    connection_status="failed",
+                    granted_permissions=connector.granted_permissions,
+                    authorization_scope=connector.authorization_scope,
+                    error_summary=str(exc),
+                )
+            raise
         finally:
             provider.close()
 
@@ -628,6 +684,8 @@ def register_source_directory_routes(
             mapping_rule_repo=repositories.attribute_mapping_repo,
             department_ou_mapping_repo=repositories.department_ou_mapping_repo,
             connector_repo=repositories.connector_repo,
+            field_authority_rule_repo=repositories.field_authority_rule_repo,
+            identity_match_rule_repo=repositories.identity_match_rule_repo,
         )
         snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
             org_id=current_org.org_id,
@@ -1254,6 +1312,9 @@ def register_source_directory_routes(
         }:
             normalized_ad_status = ""
         repositories = get_web_repositories(request)
+        repositories.identity_match_rule_repo.seed_defaults(
+            org_id=current_org.org_id
+        )
         runtime_state = get_web_runtime_state(request)
         config = repositories.org_config_repo.get_app_config(
             current_org.org_id,
@@ -1301,6 +1362,51 @@ def register_source_directory_routes(
             include_workbench_summary=True,
             deferred_source_user_ids=deferred_source_user_ids,
         )
+        scope = dict(page_data.get("scope") or {})
+        default_connector_id = str(scope.get("connector_id") or "default")
+        latest_ad_snapshot = repositories.ad_directory_snapshot_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            connector_id=default_connector_id,
+        )
+        latest_match_run = repositories.identity_match_run_repo.get_latest_completed_run(
+            org_id=current_org.org_id
+        )
+        latest_match_summary: dict[str, Any] = {}
+        latest_match_candidates = []
+        latest_match_candidate_views: list[dict[str, Any]] = []
+        if latest_match_run:
+            try:
+                latest_match_summary = json.loads(
+                    str(latest_match_run["summary_json"] or "{}")
+                )
+            except (TypeError, ValueError, json.JSONDecodeError):
+                latest_match_summary = {}
+            latest_match_candidates = repositories.identity_match_run_repo.list_candidates(
+                org_id=current_org.org_id,
+                run_id=str(latest_match_run["run_id"] or ""),
+                limit=20,
+            )
+            for candidate in latest_match_candidates:
+                source_account = repositories.platform_account_repo.get_account(
+                    candidate.platform_account_id,
+                    org_id=current_org.org_id,
+                )
+                target_account = (
+                    repositories.ad_account_repo.get_account(
+                        candidate.ad_account_id,
+                        org_id=current_org.org_id,
+                    )
+                    if candidate.ad_account_id is not None
+                    else None
+                )
+                latest_match_candidate_views.append(
+                    {
+                        "candidate": candidate,
+                        "source_account": source_account,
+                        "target_account": target_account,
+                        "decision_request_id": secrets.token_urlsafe(18),
+                    }
+                )
 
         base_query = {
             "queue": normalized_queue,
@@ -1480,7 +1586,386 @@ def register_source_directory_routes(
                     if str(value or "").strip()
                 }
             ),
+            default_connector_id=default_connector_id,
+            latest_ad_snapshot=_row_dict(latest_ad_snapshot),
+            latest_match_run=_row_dict(latest_match_run),
+            latest_match_summary=latest_match_summary,
+            latest_match_candidates=latest_match_candidates,
+            latest_match_candidate_views=latest_match_candidate_views,
+            enterprise_identity_count=len(
+                repositories.enterprise_identity_repo.list_identities(
+                    org_id=current_org.org_id,
+                    status="all",
+                )
+            ),
+            identity_match_rules=repositories.identity_match_rule_repo.list_rules(
+                org_id=current_org.org_id
+            ),
         )
+
+    @app.post("/identity-governance/ad-snapshots/refresh")
+    def refresh_ad_identity_snapshot(
+        request: Request,
+        csrf_token: str = Form(""),
+        connector_id: str = Form("default"),
+    ):
+        user = require_capability(request, "ad.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        return_path = CANONICAL_ROUTE_PATHS["identity-matching"]
+        csrf_error = reject_invalid_csrf(
+            request,
+            csrf_token,
+            return_path,
+        )
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        normalized_connector_id = str(connector_id or "default").strip() or "default"
+        if build_target_provider_for_connector is None:
+            flash(request, "error", "AD target provider is unavailable.")
+            return RedirectResponse(url=return_path, status_code=303)
+        provider = None
+        try:
+            provider = build_target_provider_for_connector(
+                request,
+                normalized_connector_id,
+            )
+            snapshot = ADDirectorySnapshotService(
+                snapshot_repo=repositories.ad_directory_snapshot_repo,
+                ad_account_repo=repositories.ad_account_repo,
+            ).refresh(
+                org_id=current_org.org_id,
+                connector_id=normalized_connector_id,
+                provider=provider,
+                created_by=user.username,
+                directory_mode=(
+                    repositories.settings_repo.get_value(
+                        "ad_directory_mode",
+                        "writable",
+                        org_id=current_org.org_id,
+                    )
+                    or "writable"
+                ),
+                search_base=(
+                    repositories.settings_repo.get_value(
+                        "ad_user_search_base_dn", "", org_id=current_org.org_id
+                    )
+                    or ""
+                ),
+                ou_search_base=(
+                    repositories.settings_repo.get_value(
+                        "ad_ou_search_base_dn", "", org_id=current_org.org_id
+                    )
+                    or ""
+                ),
+            )
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="ad_directory.snapshot.refresh",
+                target_type="ad_directory_snapshot",
+                target_id=str(snapshot.get("id") or ""),
+                result="success",
+                message="Refreshed immutable AD identity snapshot",
+                payload={
+                    "connector_id": normalized_connector_id,
+                    "snapshot_fingerprint": snapshot.get("snapshot_fingerprint"),
+                    "user_count": snapshot.get("user_count"),
+                    "ou_count": snapshot.get("ou_count"),
+                },
+            )
+            flash(
+                request,
+                "success",
+                "AD identity snapshot refreshed. Review duplicate identifiers before matching.",
+            )
+        except Exception as exc:
+            LOGGER.exception("AD identity snapshot refresh failed")
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="ad_directory.snapshot.refresh",
+                target_type="ad_connector",
+                target_id=normalized_connector_id,
+                result="error",
+                message="AD identity snapshot refresh failed",
+                payload={"error_type": type(exc).__name__},
+            )
+            flash(request, "error", "AD identity snapshot refresh failed. Check the connector audit evidence.")
+        finally:
+            if provider is not None:
+                close_fn = getattr(provider, "close", None)
+                if callable(close_fn):
+                    close_fn()
+        return RedirectResponse(url=return_path, status_code=303)
+
+    @app.post("/identity-governance/match-rules")
+    def save_identity_match_rule(
+        request: Request,
+        csrf_token: str = Form(""),
+        rule_order: int = Form(100),
+        rule_name: str = Form(""),
+        source_provider: str = Form("*"),
+        source_field: str = Form(""),
+        ad_field: str = Form(""),
+        is_required: str = Form(""),
+        case_sensitive: str = Form(""),
+        trim_whitespace: str = Form("1"),
+        strip_phone_country_code: str = Form(""),
+        lowercase_email: str = Form(""),
+        allow_fallback: str = Form("1"),
+        allow_auto_link: str = Form(""),
+        confidence_level: str = Form("medium"),
+        confidence_score: int = Form(50),
+        stop_on_conflict: str = Form("1"),
+        is_enabled: str = Form("1"),
+    ):
+        user = require_capability(request, "mappings.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        return_path = CANONICAL_ROUTE_PATHS["identity-matching"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+
+        def checked(value: str) -> bool:
+            return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+        try:
+            rule = repositories.identity_match_rule_repo.upsert_rule(
+                org_id=current_org.org_id,
+                rule_order=int(rule_order),
+                rule_name=rule_name,
+                source_provider=source_provider,
+                source_field=source_field,
+                ad_field=ad_field,
+                is_required=checked(is_required),
+                case_sensitive=checked(case_sensitive),
+                trim_whitespace=checked(trim_whitespace),
+                strip_phone_country_code=checked(strip_phone_country_code),
+                lowercase_email=checked(lowercase_email),
+                allow_fallback=checked(allow_fallback),
+                allow_auto_link=checked(allow_auto_link),
+                confidence_level=confidence_level,
+                confidence_score=int(confidence_score),
+                stop_on_conflict=checked(stop_on_conflict),
+                is_enabled=checked(is_enabled),
+                created_by=user.username,
+            )
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="identity_match.rule.update",
+                target_type="identity_match_rule",
+                target_id=str(rule.id or rule.rule_name),
+                result="success",
+                message="Updated versioned enterprise identity matching rule",
+                payload={
+                    "rule_name": rule.rule_name,
+                    "rule_revision": rule.rule_revision,
+                    "source_provider": rule.source_provider,
+                    "source_field": rule.source_field,
+                    "ad_field": rule.ad_field,
+                    "allow_auto_link": rule.allow_auto_link,
+                    "stop_on_conflict": rule.stop_on_conflict,
+                },
+            )
+            flash(
+                request,
+                "success",
+                "Identity matching rule saved. Existing match previews and Dry Runs must be regenerated.",
+            )
+        except (TypeError, ValueError) as exc:
+            flash_t(
+                request,
+                "error",
+                "Failed to save identity matching rule: {error}",
+                error=str(exc),
+            )
+        return RedirectResponse(url=return_path, status_code=303)
+
+    @app.post("/identity-governance/match-runs")
+    def run_enterprise_identity_matching(
+        request: Request,
+        csrf_token: str = Form(""),
+        connector_id: str = Form("default"),
+    ):
+        user = require_capability(request, "mappings.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        return_path = CANONICAL_ROUTE_PATHS["identity-matching"]
+        csrf_error = reject_invalid_csrf(
+            request,
+            csrf_token,
+            return_path,
+        )
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        repositories.identity_match_rule_repo.seed_defaults(
+            org_id=current_org.org_id
+        )
+        runtime_state = get_web_runtime_state(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path or runtime_state.config_path,
+        )
+        provider_id = str(config.source_provider or "").strip().lower()
+        normalized_connector_id = str(connector_id or "default").strip() or "default"
+        source_snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=provider_id,
+        )
+        ad_snapshot = repositories.ad_directory_snapshot_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            connector_id=normalized_connector_id,
+        )
+        if not source_snapshot or not ad_snapshot:
+            flash(
+                request,
+                "error",
+                "A successful source snapshot and AD snapshot are required before matching.",
+            )
+            return RedirectResponse(url=return_path, status_code=303)
+        config_fingerprint = build_runtime_config_fingerprint(
+            config=config,
+            organization=current_org,
+            settings_repo=repositories.settings_repo,
+            exclusion_repo=repositories.exclusion_repo,
+            exception_rule_repo=repositories.exception_rule_repo,
+            mapping_rule_repo=repositories.attribute_mapping_repo,
+            department_ou_mapping_repo=repositories.department_ou_mapping_repo,
+            connector_repo=repositories.connector_repo,
+            field_authority_rule_repo=repositories.field_authority_rule_repo,
+            identity_match_rule_repo=repositories.identity_match_rule_repo,
+        )
+        PlatformAccountIngestionService(
+            source_directory_repo=repositories.source_directory_repo,
+            platform_account_repo=repositories.platform_account_repo,
+        ).ingest_snapshot(
+            org_id=current_org.org_id,
+            provider_id=provider_id,
+            connector_id=normalized_connector_id,
+            snapshot_id=int(source_snapshot["id"]),
+        )
+        result = EnterpriseIdentityMatchingService(
+            platform_account_repo=repositories.platform_account_repo,
+            ad_account_repo=repositories.ad_account_repo,
+            identity_repo=repositories.enterprise_identity_repo,
+            rule_repo=repositories.identity_match_rule_repo,
+            run_repo=repositories.identity_match_run_repo,
+        ).run(
+            org_id=current_org.org_id,
+            source_snapshot_ids=[int(source_snapshot["id"])],
+            ad_snapshot_id=int(ad_snapshot["id"]),
+            config_fingerprint=config_fingerprint,
+            created_by=user.username,
+        )
+        repositories.audit_repo.add_log(
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            action_type="identity_match.run",
+            target_type="identity_match_run",
+            target_id=str(result["run_id"]),
+            result="success",
+            message="Generated explainable enterprise identity match candidates",
+            payload=dict(result["summary"]),
+        )
+        flash(
+            request,
+            "success",
+            "Identity matching completed. Automatic, suggested, manual, and blocked results are separated below.",
+        )
+        return RedirectResponse(url=return_path, status_code=303)
+
+    @app.post("/identity-governance/match-candidates/{candidate_id}/decision")
+    def decide_enterprise_identity_match(
+        request: Request,
+        candidate_id: int,
+        csrf_token: str = Form(""),
+        candidate_fingerprint: str = Form(""),
+        decision: str = Form(""),
+        request_id: str = Form(""),
+        reason: str = Form(""),
+    ):
+        user = require_capability(request, "mappings.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        return_path = CANONICAL_ROUTE_PATHS["identity-matching"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        try:
+            result = EnterpriseIdentityDecisionService(
+                platform_account_repo=repositories.platform_account_repo,
+                ad_account_repo=repositories.ad_account_repo,
+                identity_repo=repositories.enterprise_identity_repo,
+                rule_repo=repositories.identity_match_rule_repo,
+                decision_repo=repositories.identity_match_decision_repo,
+            ).decide(
+                org_id=current_org.org_id,
+                candidate_id=candidate_id,
+                candidate_fingerprint=candidate_fingerprint,
+                decision=decision,
+                request_id=request_id,
+                decided_by=user.username,
+                reason=reason,
+            )
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="identity_match.decision",
+                target_type="identity_match_candidate",
+                target_id=str(candidate_id),
+                result="success",
+                message="Enterprise identity match decision saved",
+                payload={
+                    "decision": result.get("decision"),
+                    "decision_id": result.get("id"),
+                    "resulting_identity_id": result.get("resulting_identity_id"),
+                    "resulting_link_ids": result.get("resulting_link_ids"),
+                    "candidate_fingerprint": candidate_fingerprint,
+                    "request_id": request_id,
+                },
+            )
+            flash(request, "success", "Enterprise identity match decision saved.")
+        except ValueError as exc:
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="identity_match.decision",
+                target_type="identity_match_candidate",
+                target_id=str(candidate_id),
+                result="error",
+                message="Enterprise identity match decision rejected",
+                payload={
+                    "decision": str(decision or ""),
+                    "error": str(exc),
+                    "request_id": str(request_id or ""),
+                },
+            )
+            flash(request, "error", str(exc))
+        except Exception as exc:
+            LOGGER.exception("Enterprise identity match decision failed")
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="identity_match.decision",
+                target_type="identity_match_candidate",
+                target_id=str(candidate_id),
+                result="error",
+                message="Enterprise identity match decision failed",
+                payload={"error_type": type(exc).__name__},
+            )
+            flash(request, "error", "Enterprise identity match decision failed.")
+        return RedirectResponse(url=return_path, status_code=303)
 
     @app.post("/identity-governance/identity-matching/defer")
     def defer_identity_workbench_users(
@@ -1752,6 +2237,8 @@ def register_source_directory_routes(
                 mapping_rule_repo=repositories.attribute_mapping_repo,
                 department_ou_mapping_repo=repositories.department_ou_mapping_repo,
                 connector_repo=repositories.connector_repo,
+                field_authority_rule_repo=repositories.field_authority_rule_repo,
+                identity_match_rule_repo=repositories.identity_match_rule_repo,
             ),
             release=release,
         )
@@ -2133,11 +2620,34 @@ def register_source_directory_routes(
         if csrf_error:
             return csrf_error
         provider = None
+        config = None
+        connector = None
         try:
             config, provider = provider_for_current_config(request)
-            result = SourceDirectoryService(get_web_repositories(request).source_directory_repo).test_connection(provider)
-            get_web_repositories(request).audit_repo.add_log(
-                org_id=get_current_org(request).org_id,
+            repositories = get_web_repositories(request)
+            current_org = get_current_org(request)
+            connector = repositories.source_connector_repo.get_connector(
+                f"{config.source_provider}-default",
+                org_id=current_org.org_id,
+            )
+            result = SourceDirectoryService(
+                repositories.source_directory_repo
+            ).test_connection(provider)
+            if connector is not None:
+                repositories.source_connector_repo.update_connection_status(
+                    org_id=current_org.org_id,
+                    connector_id=connector.connector_id,
+                    connection_status="connected",
+                    granted_permissions=connector.required_permissions,
+                    authorization_scope={
+                        **connector.authorization_scope,
+                        "verification": "readable_department_and_user_page",
+                        "department_count": int(result["department_count"]),
+                        "sample_user_count": int(result["sample_user_count"]),
+                    },
+                )
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
                 actor_username=user.username,
                 action_type="source_directory.connection_test",
                 target_type="source_provider",
@@ -2148,6 +2658,18 @@ def register_source_directory_routes(
             )
             flash(request, "success", f"Connection verified: {result['department_count']} departments and a readable user page.")
         except Exception as exc:
+            if connector is not None and config is not None:
+                current_org = get_current_org(request)
+                get_web_repositories(
+                    request
+                ).source_connector_repo.update_connection_status(
+                    org_id=current_org.org_id,
+                    connector_id=connector.connector_id,
+                    connection_status="failed",
+                    granted_permissions=connector.granted_permissions,
+                    authorization_scope=connector.authorization_scope,
+                    error_summary=str(exc),
+                )
             flash(request, "error", str(exc)[:500])
         finally:
             if provider is not None:

@@ -62,7 +62,7 @@ def apply_user_actions(
                 target_department=dept_tree.get(action.target_department_id),
                 rules=connector_source_to_ad_rules,
             )
-            if action.operation_type == "update_user":
+            if action.operation_type in {"update_user", "move_user"}:
                 success = connector_ad_sync.update_user(
                     action.username,
                     action.display_name,
@@ -160,6 +160,8 @@ def apply_user_actions(
                         "protected": False,
                         "evidence": "successful_ad_operation",
                     },
+                    "before_state": dict(action.before_state),
+                    "rollback": dict(action.rollback_metadata),
                 },
             )
             connector_writeback_rules = (
@@ -285,6 +287,7 @@ def apply_disable_actions(
             if index % 5 == 0 and ctx.hooks.is_cancelled():
                 raise InterruptedError("sync cancelled by user")
             try:
+                before_state: dict[str, Any] = {}
                 if action.source_user_id and ctx.hooks.has_exception_rule("skip_user_sync", action.source_user_id):
                     record_exception_skip(
                         stage_name="apply",
@@ -316,6 +319,7 @@ def apply_disable_actions(
                 connector_ad_sync = get_ad_sync(action.connector_id)
                 user_details = connector_ad_sync.get_user_details(action.username)
                 if user_details:
+                    before_state = dict(user_details)
                     user_details["DisableTime"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     user_details["ConnectorID"] = action.connector_id
                     writer.writerow(user_details)
@@ -345,6 +349,12 @@ def apply_disable_actions(
                         "employment_type": action.employment_type,
                         "sponsor_userid": action.sponsor_userid,
                         "effective_at": action.effective_at,
+                        "before_state": before_state,
+                        "rollback": {
+                            "supported": bool(before_state),
+                            "action": "reactivate_user",
+                            "warning": "Reactivation must revalidate the stable AD identity before execution.",
+                        },
                     },
                 )
                 if action.reason == "contractor_expired" and action.source_user_id:
@@ -383,6 +393,7 @@ def apply_disable_actions(
                         "employment_type": action.employment_type,
                         "sponsor_userid": action.sponsor_userid,
                         "effective_at": action.effective_at,
+                        "before_state": before_state,
                     },
                 )
 

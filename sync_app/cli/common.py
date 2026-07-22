@@ -111,5 +111,7 @@ def _print_summary(summary: dict[str, Any]) -> None:
         print(f"db_backup_dir: {summary['db_backup_dir']}")
     if summary.get("db_startup_snapshot_path"):
         print(f"db_startup_snapshot_path: {summary['db_startup_snapshot_path']}")
+    if summary.get("pre_apply_backup_path"):
+        print(f"pre_apply_backup_path: {summary['pre_apply_backup_path']}")
     if summary.get("db_migration_source_path"):
         print(f"db_migration_source_path: {summary['db_migration_source_path']}")

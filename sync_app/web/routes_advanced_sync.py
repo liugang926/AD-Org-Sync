@@ -519,6 +519,11 @@ def register_advanced_sync_routes(
         user = require_capability(request, "config.read")
         if isinstance(user, RedirectResponse):
             return user
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        repositories.field_authority_rule_repo.seed_defaults(
+            org_id=current_org.org_id
+        )
         return render(
             request,
             "sync_policy_attribute_mappings.html",
@@ -534,6 +539,35 @@ def register_advanced_sync_routes(
             ],
             mapping_direction_labels=attribute_mapping_direction_labels,
             mapping_mode_options=[(value, value) for value in ATTRIBUTE_SYNC_MODES],
+            field_authority_rules=repositories.field_authority_rule_repo.list_rules(
+                org_id=current_org.org_id
+            ),
+            field_authority_fields=(
+                "employee_id",
+                "display_name",
+                "email",
+                "mobile",
+                "primary_department_id",
+                "manager_account_id",
+                "account_status",
+            ),
+            field_authority_providers=("dingtalk", "wecom", "feishu", "*"),
+            field_authority_directions=(
+                "source_to_ad",
+                "ad_to_source",
+                "bidirectional",
+                "compare_only",
+                "manual",
+                "create_only",
+            ),
+            field_authority_modes=(
+                "replace",
+                "fill_if_empty",
+                "preserve",
+                "compare_only",
+                "manual",
+                "create_only",
+            ),
         )
 
     @app.get(CANONICAL_ROUTE_PATHS["sync-department-ou-routing"], response_class=HTMLResponse)
@@ -542,6 +576,16 @@ def register_advanced_sync_routes(
         if isinstance(user, RedirectResponse):
             return user
         current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        selected_connector_id = str(
+            request.query_params.get("connector_id") or "default"
+        ).strip() or "default"
+        latest_ad_snapshot = (
+            repositories.ad_directory_snapshot_repo.get_latest_successful_snapshot(
+                org_id=current_org.org_id,
+                connector_id=selected_connector_id,
+            )
+        )
         return render(
             request,
             "sync_policy_department_ou_routing.html",
@@ -550,13 +594,23 @@ def register_advanced_sync_routes(
                 page="sync-department-ou-routing",
                 title="Department & OU Routing",
             ),
-            department_ou_mappings=get_web_repositories(
-                request
-            ).department_ou_mapping_repo.list_mapping_records(org_id=current_org.org_id),
+            department_ou_mappings=repositories.department_ou_mapping_repo.list_mapping_records(
+                org_id=current_org.org_id
+            ),
             department_ou_apply_mode_options=[
                 ("subtree", "Map subtree"),
                 ("exact", "Map exact department only"),
             ],
+            selected_connector_id=selected_connector_id,
+            latest_ad_snapshot=dict(latest_ad_snapshot) if latest_ad_snapshot else None,
+            ad_ou_nodes=(
+                repositories.ad_directory_snapshot_repo.list_ous(
+                    int(latest_ad_snapshot["id"]),
+                    org_id=current_org.org_id,
+                )
+                if latest_ad_snapshot
+                else []
+            ),
         )
 
     @app.get(CANONICAL_ROUTE_PATHS["sync-group-rules"], response_class=HTMLResponse)
@@ -986,6 +1040,75 @@ def register_advanced_sync_routes(
             request,
             "success",
             "Attribute mapping policy saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+        )
+        return RedirectResponse(url=redirect_url, status_code=303)
+
+    @app.post(CANONICAL_ROUTE_PATHS["sync-attribute-mappings"] + "/field-authority")
+    def field_authority_rule_submit(
+        request: Request,
+        csrf_token: str = Form(""),
+        field_name: str = Form(""),
+        source_provider: str = Form("*"),
+        source_priority: int = Form(100),
+        sync_direction: str = Form("source_to_ad"),
+        sync_mode: str = Form("replace"),
+        prevent_loop: Optional[str] = Form(None),
+        is_enabled: Optional[str] = Form(None),
+        notes: str = Form(""),
+    ):
+        user = require_capability(request, "config.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        redirect_url = CANONICAL_ROUTE_PATHS["sync-attribute-mappings"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        normalized_field_name = str(field_name or "").strip()
+        normalized_provider = str(source_provider or "*").strip().lower() or "*"
+        try:
+            rule = repositories.field_authority_rule_repo.upsert_rule(
+                org_id=current_org.org_id,
+                field_name=normalized_field_name,
+                source_provider=normalized_provider,
+                source_priority=int(source_priority),
+                sync_direction=str(sync_direction or "source_to_ad"),
+                sync_mode=str(sync_mode or "replace"),
+                prevent_loop=to_bool(prevent_loop, True),
+                is_enabled=to_bool(is_enabled, True),
+                notes=str(notes or "").strip(),
+                created_by=user.username,
+            )
+        except (TypeError, ValueError) as exc:
+            flash_t(
+                request,
+                "error",
+                "Failed to save field authority rule: {error}",
+                error=str(exc),
+            )
+            return RedirectResponse(url=redirect_url, status_code=303)
+        audit_policy_change(
+            request,
+            user=user,
+            section="field_authority",
+            target_type="field_authority_rule",
+            target_id=f"{normalized_field_name}:{normalized_provider}",
+            payload={
+                "field_name": rule.field_name,
+                "source_provider": rule.source_provider,
+                "source_priority": rule.source_priority,
+                "sync_direction": rule.sync_direction,
+                "sync_mode": rule.sync_mode,
+                "prevent_loop": rule.prevent_loop,
+                "is_enabled": rule.is_enabled,
+                "rule_revision": rule.rule_revision,
+            },
+        )
+        flash(
+            request,
+            "success",
+            "Field authority rule saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
         )
         return RedirectResponse(url=redirect_url, status_code=303)
 

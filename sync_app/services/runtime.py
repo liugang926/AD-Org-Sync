@@ -80,6 +80,31 @@ FIELD_OWNERSHIP_POLICY = {
     'disable_circuit_breaker': 'block_apply_when_disable_threshold_exceeds_policy',
 }
 
+
+def build_effective_field_ownership_policy(
+    field_authority_rule_repo,
+    *,
+    org_id: str,
+) -> dict[str, object]:
+    authority_by_field: dict[str, list[dict[str, object]]] = {}
+    for rule in field_authority_rule_repo.list_enabled_rules(org_id=org_id):
+        authority_by_field.setdefault(rule.field_name, []).append(
+            {
+                "provider_id": rule.source_provider,
+                "priority": rule.source_priority,
+                "sync_direction": rule.sync_direction,
+                "sync_mode": rule.sync_mode,
+                "prevent_loop": rule.prevent_loop,
+                "rule_revision": rule.rule_revision,
+            }
+        )
+    for rules in authority_by_field.values():
+        rules.sort(key=lambda item: (int(item["priority"]), str(item["provider_id"])))
+    return {
+        **FIELD_OWNERSHIP_POLICY,
+        "enterprise_field_authority": authority_by_field,
+    }
+
 IDENTITY_RULE_PRIORITY = (
     'manual_binding',
     'existing_binding',
@@ -541,7 +566,6 @@ def run_sync_job(
 
     sync_stats = SyncRunStats(execution_mode=execution_mode)
     sync_stats.requested_by = str(requested_by or '')
-    sync_stats['field_ownership_policy'] = dict(FIELD_OWNERSHIP_POLICY)
 
     bootstrap = bootstrap_sync_runtime(
         config_path=config_path,
@@ -551,6 +575,11 @@ def run_sync_job(
         load_sync_config_fn=load_sync_config,
     )
     logger = bootstrap.logger
+    field_ownership_policy = build_effective_field_ownership_policy(
+        bootstrap.repositories.field_authority_rule_repo,
+        org_id=bootstrap.organization.org_id,
+    )
+    sync_stats['field_ownership_policy'] = field_ownership_policy
     sync_stats['log_file'] = sync_logging.log_filename
 
     db_manager = bootstrap.db_manager
@@ -596,6 +625,25 @@ def run_sync_job(
         org_id=organization.org_id,
     )
     if execution_mode == 'apply':
+        if policy_settings.ad_directory_mode == 'read_only':
+            WebAuditLogRepository(db_manager).add_log(
+                org_id=organization.org_id,
+                actor_username=str(requested_by or trigger_type),
+                action_type='high_risk.apply.blocked',
+                target_type='sync_apply',
+                target_id=sync_stats.plan_source_job_id or job_id,
+                result='blocked',
+                message='Apply execution was blocked by read-only AD directory mode',
+                payload={
+                    'org_id': organization.org_id,
+                    'job_id': job_id,
+                    'reason_code': 'ad_directory_mode_read_only',
+                    'directory_mode': policy_settings.ad_directory_mode,
+                },
+            )
+            raise RuntimeError(
+                'Apply blocked: the AD directory is configured in read-only mode.'
+            )
         if sync_stats.plan_source_job_id:
             selected_plan = ExecutionCenterService(
                 job_repo=job_repo,
@@ -631,6 +679,30 @@ def run_sync_job(
                     'Apply blocked: the selected Dry Run plan is no longer eligible. '
                     f'Reason: {selected_plan.reason_code}'
                 )
+            reviewer_username = str(
+                getattr(selected_plan.review, 'reviewer_username', '') or ''
+            ).strip()
+            executor_username = str(requested_by or trigger_type or '').strip()
+            if (
+                reviewer_username
+                and executor_username
+                and reviewer_username.casefold() == executor_username.casefold()
+            ):
+                WebAuditLogRepository(db_manager).add_log(
+                    org_id=organization.org_id,
+                    actor_username=executor_username,
+                    action_type='high_risk.apply.blocked',
+                    target_type='sync_apply',
+                    target_id=sync_stats.plan_source_job_id,
+                    result='blocked',
+                    message='Apply approver and executor separation blocked the runtime request',
+                    payload={
+                        'reason_code': 'execution.blocker.approver_executor_same',
+                        'reviewer_username': reviewer_username,
+                        'executor_username': executor_username,
+                    },
+                )
+                raise RuntimeError('execution.blocker.approver_executor_same')
         high_risk_context = build_apply_operation_context(
             settings_repo=settings_repo,
             job_repo=job_repo,
@@ -660,6 +732,24 @@ def run_sync_job(
                 'Apply blocked: this runtime environment is unlabeled. '
                 'Set AD_ORG_SYNC_ENVIRONMENT_LABEL before retrying.'
             )
+        pre_apply_backup_path = db_manager.backup_database(
+            label=f'pre_apply_{job_id}'
+        )
+        sync_stats['pre_apply_backup_path'] = pre_apply_backup_path
+        WebAuditLogRepository(db_manager).add_log(
+            org_id=organization.org_id,
+            actor_username=str(requested_by or trigger_type),
+            action_type='high_risk.apply.pre_execution_snapshot',
+            target_type='sync_apply',
+            target_id=sync_stats.plan_source_job_id or job_id,
+            result='success',
+            message='Created the immutable database snapshot immediately before Apply',
+            payload={
+                'job_id': job_id,
+                'plan_source_job_id': sync_stats.plan_source_job_id,
+                'backup_path': pre_apply_backup_path,
+            },
+        )
     ctx = SyncContext(
         start_time=start_time,
         execution_mode=execution_mode,
@@ -947,7 +1037,7 @@ def run_sync_job(
             lambda: run_planning_phase(
                 ctx,
                 services=services,
-                field_ownership_policy=FIELD_OWNERSHIP_POLICY,
+                field_ownership_policy=field_ownership_policy,
                 display_separator=display_separator,
             ),
         )
@@ -964,7 +1054,7 @@ def run_sync_job(
             lambda: run_apply_phase(
                 ctx,
                 services=services,
-                field_ownership_policy=FIELD_OWNERSHIP_POLICY,
+                field_ownership_policy=field_ownership_policy,
                 display_separator=display_separator,
                 planned_hierarchy_pairs=planned_hierarchy_pairs,
             ),

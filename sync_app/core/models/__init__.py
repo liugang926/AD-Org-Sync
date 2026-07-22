@@ -47,7 +47,18 @@ from sync_app.core.models.directory import (
 from sync_app.core.models.integrations import (
     IntegrationWebhookOutboxRecord,
     IntegrationWebhookSubscriptionRecord,
+    SourceConnectorRecord,
     SyncConnectorRecord,
+)
+from sync_app.core.models.identity import (
+    ADAccountRecord,
+    EnterpriseIdentityRecord,
+    FieldAuthorityRuleRecord,
+    IdentityAccountLinkRecord,
+    IdentityMatchCandidateRecord,
+    IdentityMatchDecisionRecord,
+    IdentityMatchRuleRecord,
+    PlatformAccountRecord,
 )
 from sync_app.core.models.lifecycle import (
     CustomManagedGroupBindingRecord,
@@ -72,4 +83,4 @@ from sync_app.core.models.utils import (
 )
 from sync_app.core.models.web_admin import WebAdminUserRecord, WebAuditLogRecord
 
-__all__ = ['MappingLikeModel', '_normalize_mapping_direction_value', '_coerce_int_list', '_extract_department_ids', 'SourceConnectorConfig', 'SourceConfig', 'WeComConfig', 'LDAPConfig', 'AccountConfig', 'AppConfig', 'DepartmentNode', 'SourceDirectoryUser', 'SourceUser', 'WeComUser', 'UserDepartmentBundle', 'GroupPolicyEvaluation', 'DepartmentGroupInfo', 'DirectoryUserRecord', 'DirectoryGroupRecord', 'SkipOperationSummary', 'SyncErrorBuckets', 'SyncOperationCounters', 'SyncRunStats', 'SyncJobSummary', 'SyncJobRecord', 'SyncOperationRecord', 'SyncPlanReviewRecord', 'SyncReplayRequestRecord', 'ManagedGroupTarget', 'DepartmentAction', 'UserAction', 'GroupMembershipAction', 'GroupHierarchyAction', 'GroupCleanupAction', 'DisableUserAction', 'SyncConflictRecord', 'SyncExceptionRuleRecord', 'UserIdentityBindingRecord', 'UserDepartmentOverrideRecord', 'ExclusionRuleRecord', 'ManagedGroupBindingRecord', 'ConfigReleaseSnapshotRecord', 'DataQualitySnapshotRecord', 'AttributeMappingRuleRecord', 'OrganizationRecord', 'DepartmentOuMappingRecord', 'IntegrationWebhookSubscriptionRecord', 'IntegrationWebhookOutboxRecord', 'SyncConnectorRecord', 'OffboardingRecord', 'UserLifecycleRecord', 'CustomManagedGroupBindingRecord', 'WebAdminUserRecord', 'WebAuditLogRecord']
+__all__ = ['MappingLikeModel', '_normalize_mapping_direction_value', '_coerce_int_list', '_extract_department_ids', 'SourceConnectorConfig', 'SourceConfig', 'WeComConfig', 'LDAPConfig', 'AccountConfig', 'AppConfig', 'DepartmentNode', 'SourceDirectoryUser', 'SourceUser', 'WeComUser', 'UserDepartmentBundle', 'GroupPolicyEvaluation', 'DepartmentGroupInfo', 'DirectoryUserRecord', 'DirectoryGroupRecord', 'SkipOperationSummary', 'SyncErrorBuckets', 'SyncOperationCounters', 'SyncRunStats', 'SyncJobSummary', 'SyncJobRecord', 'SyncOperationRecord', 'SyncPlanReviewRecord', 'SyncReplayRequestRecord', 'ManagedGroupTarget', 'DepartmentAction', 'UserAction', 'GroupMembershipAction', 'GroupHierarchyAction', 'GroupCleanupAction', 'DisableUserAction', 'SyncConflictRecord', 'SyncExceptionRuleRecord', 'UserIdentityBindingRecord', 'UserDepartmentOverrideRecord', 'ExclusionRuleRecord', 'ManagedGroupBindingRecord', 'ConfigReleaseSnapshotRecord', 'DataQualitySnapshotRecord', 'AttributeMappingRuleRecord', 'OrganizationRecord', 'DepartmentOuMappingRecord', 'IntegrationWebhookSubscriptionRecord', 'IntegrationWebhookOutboxRecord', 'SyncConnectorRecord', 'SourceConnectorRecord', 'EnterpriseIdentityRecord', 'PlatformAccountRecord', 'ADAccountRecord', 'IdentityAccountLinkRecord', 'IdentityMatchRuleRecord', 'IdentityMatchCandidateRecord', 'IdentityMatchDecisionRecord', 'FieldAuthorityRuleRecord', 'OffboardingRecord', 'UserLifecycleRecord', 'CustomManagedGroupBindingRecord', 'WebAdminUserRecord', 'WebAuditLogRecord']

@@ -1167,6 +1167,35 @@
     });
   }
 
+  function initOuTrees() {
+    document.querySelectorAll("[data-ou-tree]").forEach((tree) => {
+      const search = tree.querySelector("[data-ou-tree-search]");
+      const nodes = Array.from(tree.querySelectorAll("[data-ou-tree-node]"));
+      if (search instanceof HTMLInputElement) {
+        search.addEventListener("input", () => {
+          const query = search.value.trim().toLocaleLowerCase();
+          nodes.forEach((node) => {
+            const searchText = node.getAttribute("data-ou-search-text") || "";
+            node.hidden = Boolean(query) && !searchText.includes(query);
+          });
+        });
+      }
+      nodes.forEach((node) => {
+        const selector = node.querySelector("[data-target-ou-path]");
+        if (!(selector instanceof HTMLInputElement)) {
+          return;
+        }
+        selector.addEventListener("change", () => {
+          const form = selector.closest("form");
+          const target = form?.querySelector("[data-target-ou-input]");
+          if (selector.checked && target instanceof HTMLInputElement) {
+            target.value = selector.getAttribute("data-target-ou-path") || "";
+          }
+        });
+      });
+    });
+  }
+
   function initScheduledApplyConfirmation() {
     const mode = document.querySelector("[data-scheduled-mode]");
     const confirmation = document.querySelector("[data-scheduled-apply-confirmation]");
@@ -1265,6 +1294,7 @@
     initMobileNav();
     initSharedTomSelectFields();
     initDepartmentTrees();
+    initOuTrees();
     initScheduledApplyConfirmation();
     initOrganizationImportPreview();
     ADOrgSync.initAdvancedSyncPage?.();

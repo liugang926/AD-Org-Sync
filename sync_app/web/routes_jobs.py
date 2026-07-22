@@ -1115,6 +1115,27 @@ def register_job_routes(
             )
             evaluation = apply_state["evaluation"]
             high_risk_context = evaluation.context
+            reviewer_username = str(
+                getattr(evaluation.review, "reviewer_username", "") or ""
+            ).strip()
+            if reviewer_username and reviewer_username.casefold() == user.username.casefold():
+                reason_code = "execution.blocker.approver_executor_same"
+                repositories.audit_repo.add_log(
+                    org_id=current_org.org_id,
+                    actor_username=user.username,
+                    action_type="high_risk.apply.blocked",
+                    target_type="sync_apply",
+                    target_id=str(preview_id or current_org.org_id),
+                    result="blocked",
+                    message="Apply approver and executor separation blocked the request",
+                    payload={
+                        "reason_code": reason_code,
+                        "reviewer_username": reviewer_username,
+                        "executor_username": user.username,
+                    },
+                )
+                flash_t(request, "error", reason_code)
+                return RedirectResponse(url=return_url, status_code=303)
             confirmation = HighRiskOperationPolicy.validate_confirmation(
                 high_risk_context,
                 {

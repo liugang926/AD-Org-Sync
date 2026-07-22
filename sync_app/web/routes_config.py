@@ -10,7 +10,10 @@ from sync_app.services.high_risk_operations import (
     HighRiskOperationContext,
     HighRiskOperationPolicy,
 )
-from sync_app.web.app_state import get_web_runtime_state, get_web_services
+from sync_app.web.app_state import (
+    get_web_runtime_state,
+    get_web_services,
+)
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 CONFIG_SUBMISSION_FIELD_NAMES = (
@@ -175,6 +178,9 @@ def register_config_routes(
         ldap_port: int = Form(636),
         ldap_validate_cert: str = Form("true"),
         ldap_ca_cert_path: str = Form(""),
+        ad_directory_mode: str = Form("writable"),
+        ad_user_search_base_dn: str = Form(""),
+        ad_ou_search_base_dn: str = Form(""),
     ):
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
@@ -185,6 +191,15 @@ def register_config_routes(
             return csrf_error
         current_org = get_current_org(request)
         runtime_state = get_web_runtime_state(request)
+        normalized_directory_mode = str(ad_directory_mode or "writable").strip().lower()
+        if normalized_directory_mode not in {"read_only", "writable"}:
+            flash_t(
+                request,
+                "error",
+                "Failed to save connector: {error}",
+                error="AD directory mode must be read_only or writable",
+            )
+            return RedirectResponse(url=redirect_url, status_code=303)
         try:
             get_web_services(request).data_sources.save_base_connections(
                 org_id=current_org.org_id,
@@ -202,6 +217,9 @@ def register_config_routes(
                 ldap_port=ldap_port,
                 ldap_validate_cert=ldap_validate_cert,
                 ldap_ca_cert_path=ldap_ca_cert_path,
+                ad_directory_mode=normalized_directory_mode,
+                ad_user_search_base_dn=ad_user_search_base_dn,
+                ad_ou_search_base_dn=ad_ou_search_base_dn,
             )
         except (TypeError, ValueError) as exc:
             flash_t(request, "error", "Failed to save connector: {error}", error=str(exc))

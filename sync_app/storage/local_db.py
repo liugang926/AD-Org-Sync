@@ -845,6 +845,7 @@ class BaseRepository:
 
 
 from sync_app.storage.repositories.organizations import OrganizationConfigRepository, OrganizationRepository
+from sync_app.storage.repositories.account_takeover import AccountTakeoverRepository
 from sync_app.storage.repositories.jobs import (
     PlannedOperationRepository,
     SyncEventRepository,
@@ -879,5 +880,16 @@ from sync_app.storage.repositories.groups import (
     ManagedGroupBindingRepository,
 )
 from sync_app.storage.repositories.lifecycle import OffboardingQueueRepository, UserLifecycleQueueRepository
+from sync_app.storage.repositories.identity_governance import (
+    ADAccountRepository,
+    ADDirectorySnapshotRepository,
+    EnterpriseIdentityRepository,
+    FieldAuthorityRuleRepository,
+    IdentityMatchDecisionRepository,
+    IdentityMatchRuleRepository,
+    IdentityMatchRunRepository,
+    PlatformAccountRepository,
+)
 from sync_app.storage.repositories.state import ObjectStateRepository
 from sync_app.storage.repositories.source_directory import SourceDirectoryRepository
+from sync_app.storage.repositories.source_connectors import SourceConnectorRepository

@@ -14,6 +14,30 @@
     <article class="setup-step" data-state="pending"><span>3</span><div><strong>{{ t("Refresh snapshot") }}</strong><small>{{ t("Create a source snapshot before data quality and scope review.") }}</small></div>{{ ui.badge(t("Next"), "warning") }}</article>
   </section>
 
+  <section class="grid cols-3 source-platform-cards" aria-label="{{ t('Organization platform connectors') }}">
+    {% for card in source_platform_cards %}
+    <article class="panel source-platform-card" data-provider-card="{{ card.provider_id }}">
+      <header class="source-platform-card__header">
+        <div><span class="eyebrow">{{ t("Organization platform") }}</span><h2>{{ t(card.display_name) }}</h2></div>
+        {{ ui.badge(t("Configured") if card.configured else t("Not configured"), "success" if card.configured else "warning") }}
+      </header>
+      <p class="muted">{{ t(card.description) }}</p>
+      <dl class="source-platform-card__facts">
+        <div><dt>{{ t("State") }}</dt><dd>{{ t("Enabled") if card.enabled else t("Disabled") }}</dd></div>
+        <div><dt>{{ t("Connection") }}</dt><dd>{{ t(card.connection_status|replace("_", " ")|title) }}</dd></div>
+        <div><dt>{{ t("Credential expiry") }}</dt><dd>{{ card.credentials_expires_at or t("Not reported") }}</dd></div>
+        <div><dt>{{ t("API permissions") }}</dt><dd>{{ t("Complete") if card.permissions_complete else (t("Incomplete") if card.permissions_known else t("Unknown")) }}</dd></div>
+        <div><dt>{{ t("Authorization scope") }}</dt><dd>{{ t("Recorded") if card.authorization_scope else t("Unknown") }}</dd></div>
+        <div><dt>{{ t("Last sync") }}</dt><dd>{{ card.last_sync_at or t("Never") }}</dd></div>
+        <div><dt>{{ t("Departments") }}</dt><dd>{{ card.department_count }}</dd></div>
+        <div><dt>{{ t("Accounts") }}</dt><dd>{{ card.account_count }}</dd></div>
+        <div><dt>{{ t("Quality issues") }}</dt><dd>{{ card.quality_issue_count }}</dd></div>
+      </dl>
+      {{ ui.button(t("Configure {provider}", provider=t(card.display_name)), href="#source-connection-form", variant="ghost", size="sm") }}
+    </article>
+    {% endfor %}
+  </section>
+
   <div class="stat-grid">
     <article class="stat-card"><span>{{ t("Organization") }}</span><strong>{{ current_org.name }}</strong></article>
     <article class="stat-card"><span>{{ t("Source Provider") }}</span><strong data-config-provider-current>{{ t(source_provider_name) }}</strong></article>
@@ -38,7 +62,7 @@
   {% endif %}
   {% endif %}
 
-  <form method="post" action="/data-sources/connectors/base" class="page-stack" data-connector-base-form>
+  <form id="source-connection-form" method="post" action="/data-sources/connectors/base" class="page-stack" data-connector-base-form>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="grid cols-2">
       {% call ui.panel(t("Source Directory Connector"), t("Upstream"), "info", t("Choose the Provider and save only the credentials used to read departments and employees.")) %}
@@ -63,6 +87,9 @@
           {{ forms.input("ldap_port", t("LDAP Port"), editable.ldap_port, type="number") }}
           {{ forms.select("ldap_use_ssl", t("Use SSL"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.ldap_use_ssl|lower) }}
           {{ forms.select("ldap_validate_cert", t("Certificate Validation"), [("true", t("Enabled")), ("false", t("Disabled"))], selected_value=editable.ldap_validate_cert|lower) }}
+          {{ forms.select("ad_directory_mode", t("AD Directory Mode"), [("read_only", t("Read only")), ("writable", t("Writable"))], selected_value=ad_directory_mode, help_text=t("Read-only mode permits snapshots and Dry Run but blocks Apply.")) }}
+          {{ forms.input("ad_user_search_base_dn", t("User Search Base DN"), ad_user_search_base_dn, placeholder="OU=Managed Users,DC=example,DC=com") }}
+          {{ forms.input("ad_ou_search_base_dn", t("OU Search Base DN"), ad_ou_search_base_dn, placeholder="OU=Managed Users,DC=example,DC=com") }}
           {{ forms.input("ldap_ca_cert_path", t("CA Certificate Path"), editable.ldap_ca_cert_path, help_text=t("Optional. Leave blank to use system trust store."), class_name="field-span-full") }}
         </div>
       {% endcall %}
@@ -85,6 +112,15 @@
     {% endcall %}
     {% endfor %}
   </div>
+
+  {% if ad_capability_report.capabilities %}
+  {% call ui.panel(t("AD Capability Matrix"), scope_label=(t("Read only") if ad_capability_report.directory_mode == "read_only" else t("Writable")), scope_level=("warning" if ad_capability_report.directory_mode == "read_only" else "info"), description=t("Read checks are verified by the immutable AD snapshot. Write checks require a dedicated disposable probe and never modify an employee account.")) %}
+    <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('AD capability matrix') }}"><table><thead><tr><th>{{ t("Capability") }}</th><th>{{ t("Status") }}</th><th>{{ t("Verified") }}</th><th>{{ t("Evidence") }}</th></tr></thead><tbody>
+      {% for capability_key, result in ad_capability_report.capabilities.items() %}<tr><td><strong>{{ t(capability_key) }}</strong></td><td>{{ ui.badge(t(result.status), "success" if result.status == "success" else ("danger" if result.status in ["failed", "blocked"] else "warning")) }}</td><td>{{ t("Yes") if result.verified else t("No") }}</td><td>{{ t(result.detail) }}</td></tr>{% endfor %}
+    </tbody></table></div>
+    {% if latest_ad_snapshot %}<p class="muted">{{ t("AD snapshot") }} #{{ latest_ad_snapshot.id }} · {{ latest_ad_snapshot.snapshot_fingerprint }}</p>{% endif %}
+  {% endcall %}
+  {% endif %}
 
   {{ mode_ui.basic_guidance(ui_presentation, t("Next step"), t("Test the saved base connections, then refresh Source Directory. Switch to Advanced mode only when this organization needs more than one target AD connection."), t("Open Source Directory"), "/data-sources/source-directory") }}
 

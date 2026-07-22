@@ -41,6 +41,7 @@ from tests.helpers.runtime_fakes import (
     FakeADSyncCleanup,
     FakeADSyncConflict,
     FakeADSyncLDAPS,
+    FakeADSyncPartialFailure,
     FakeADSyncPolicy,
     FakeADSyncProtectedDisable,
     FakeWeChatBot,
@@ -330,6 +331,11 @@ class RunSyncDryRunTests(unittest.TestCase):
         self.assertEqual(len(create_user_ops), 1)
         self.assertIn("OU=East,OU=China,OU=Managed Users,DC=example,DC=com", create_user_ops[0]["target_dn"])
         self.assertNotIn("OU=HQ", create_user_ops[0]["target_dn"])
+        self.assertFalse(create_user_ops[0]["desired_state"]["rollback"]["supported"])
+        self.assertIn(
+            "not automatically deleted",
+            create_user_ops[0]["desired_state"]["rollback"]["warning"],
+        )
 
     def test_run_sync_job_accepts_directory_root_ou_dn_input(self):
         config = AppConfig(
@@ -1309,6 +1315,138 @@ class RunSyncDryRunTests(unittest.TestCase):
             if item["domain"] == "example.com"
         }
         self.assertEqual(updated_usernames, {"zhangs2001", "zhangs2002"})
+
+    def test_partial_failure_retry_does_not_recreate_successful_account(self):
+        config = AppConfig(
+            wecom=WeComConfig(corpid="corp", corpsecret="secret", agentid="1001"),
+            ldap=LDAPConfig(
+                server="ldap.example.com",
+                domain="example.com",
+                username="EXAMPLE\\administrator",
+                password="password",
+                use_ssl=True,
+                port=636,
+            ),
+            domain="example.com",
+            account=AccountConfig(default_password="VeryStrong123!456"),
+            config_path="default.ini",
+        )
+        test_dir = os.path.join(os.getcwd(), "test_artifacts")
+        os.makedirs(test_dir, exist_ok=True)
+        db_path = os.path.join(test_dir, "runtime_partial_failure_retry_test.db")
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+
+        FakeWeComProgrammableAPI.reset()
+        FakeWeComProgrammableAPI.department_users = {
+            1: [
+                {"userid": "alice", "name": "Alice"},
+                {"userid": "bob", "name": "Bob"},
+            ]
+        }
+        FakeWeComProgrammableAPI.user_details = {
+            "alice": {
+                "userid": "alice",
+                "name": "Alice",
+                "email": "alice@example.com",
+                "department": [1],
+            },
+            "bob": {
+                "userid": "bob",
+                "name": "Bob",
+                "email": "bob@example.com",
+                "department": [1],
+            },
+        }
+        FakeADSyncPartialFailure.reset()
+
+        patches = [
+            patch.object(runtime, "load_sync_config", return_value=config),
+            patch.object(runtime, "validate_config", return_value=(True, [])),
+            patch.object(runtime, "test_source_connection", return_value=(True, "ok")),
+            patch.object(runtime, "test_ldap_connection", return_value=(True, "ok")),
+            patch.object(runtime, "run_config_security_self_check", return_value=[]),
+            patch("sync_app.providers.source.wecom.WeComAPI", FakeWeComProgrammableAPI),
+            patch.object(runtime, "ADSyncLDAPS", FakeADSyncPartialFailure),
+            patch.object(
+                runtime.sync_logging,
+                "setup_logging",
+                return_value=logging.getLogger("test-runtime"),
+            ),
+            patch.object(runtime.sync_logging, "log_filename", "test-runtime.log"),
+            patch.object(runtime, "_generate_skip_detail_report", return_value="skip-details.csv"),
+            patch.object(runtime, "_generate_sync_operation_log", return_value="ops.csv"),
+            patch.object(runtime, "_generate_sync_validation_report", return_value="validation.txt"),
+        ]
+
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+            patches[9],
+            patches[10],
+            patches[11],
+        ):
+            first_result = runtime.run_sync_job(
+                execution_mode="apply",
+                trigger_type="unit_test_partial_failure",
+                db_path=db_path,
+                config_path="default.ini",
+            )
+
+        self.assertEqual(first_result["error_count"], 1)
+        self.assertTrue(os.path.isfile(first_result["pre_apply_backup_path"]))
+        self.assertIn("pre_apply", os.path.basename(first_result["pre_apply_backup_path"]))
+        self.assertEqual(FakeADSyncPartialFailure.create_attempts, ["alice", "bob"])
+        self.assertEqual(
+            [item["username"] for item in FakeADSyncPartialFailure.created_users],
+            ["alice"],
+        )
+
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+            patches[9],
+            patches[10],
+            patches[11],
+        ):
+            second_result = runtime.run_sync_job(
+                execution_mode="apply",
+                trigger_type="unit_test_retry",
+                db_path=db_path,
+                config_path="default.ini",
+            )
+
+        self.assertEqual(second_result["error_count"], 0)
+        self.assertEqual(
+            FakeADSyncPartialFailure.create_attempts.count("alice"),
+            1,
+            "the account created successfully in the first batch must not be created again",
+        )
+        self.assertEqual(FakeADSyncPartialFailure.create_attempts.count("bob"), 2)
+        self.assertTrue(
+            any(item["username"] == "alice" for item in FakeADSyncPartialFailure.updated_users)
+        )
+        self.assertEqual(
+            [item["username"] for item in FakeADSyncPartialFailure.created_users],
+            ["alice", "bob"],
+        )
 
     def test_run_sync_job_applies_department_to_ou_mapping_for_subtree(self):
         config = AppConfig(

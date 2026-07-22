@@ -17,7 +17,7 @@
       <div class="form-grid">
         {{ forms.input("username", t("Username"), required=True, autocomplete="username") }}
         {{ forms.input("password", t("Password"), type="password", required=True, autocomplete="new-password") }}
-        {{ forms.select("role", t("Role"), [("super_admin", t("super_admin")), ("operator", t("operator")), ("auditor", t("auditor"))], selected_value="super_admin") }}
+        {{ forms.select("role", t("Role"), [("super_admin", t("super_admin")), ("connector_admin", t("connector_admin")), ("ad_admin", t("ad_admin")), ("mapping_reviewer", t("mapping_reviewer")), ("sync_executor", t("sync_executor")), ("operator", t("operator")), ("auditor", t("auditor"))], selected_value="super_admin") }}
       </div>
       <div class="actions">
         {{ ui.button(t("Create User"), type="submit") }}

@@ -23,8 +23,12 @@ class ADLDAPSTargetProvider(TargetDirectoryProvider):
     def get_ou_dn(self, ou_path: list[str]) -> str:
         return self.client.get_ou_dn(ou_path)
 
-    def list_organizational_units(self) -> list[dict[str, Any]]:
-        return self.client.list_organizational_units()
+    def list_organizational_units(
+        self, *, search_base: str = ""
+    ) -> list[dict[str, Any]]:
+        if not search_base:
+            return self.client.list_organizational_units()
+        return self.client.list_organizational_units(search_base=search_base)
 
     def ou_exists(self, ou_dn: str) -> bool:
         return bool(self.client.ou_exists(ou_dn))
@@ -40,6 +44,14 @@ class ADLDAPSTargetProvider(TargetDirectoryProvider):
 
     def get_user_account_state(self, username: str) -> dict[str, Any]:
         return self.client.get_user_account_state(username)
+
+    def list_directory_users(
+        self, *, search_base: str = "", page_size: int = 500
+    ) -> list[dict[str, Any]]:
+        return self.client.list_directory_users(
+            search_base=search_base,
+            page_size=page_size,
+        )
 
     def search_users(self, query: str, *, limit: int = 20):
         return self.client.search_users(query, limit=limit)

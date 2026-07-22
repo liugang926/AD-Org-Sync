@@ -1,4 +1,5 @@
 from sync_app.storage.repositories.admin import WebAdminUserRepository
+from sync_app.storage.repositories.account_takeover import AccountTakeoverRepository
 from sync_app.storage.repositories.conflicts import (
     SyncConflictRepository,
     SyncExceptionRuleRepository,
@@ -11,6 +12,16 @@ from sync_app.storage.repositories.jobs import (
     SyncEventRepository,
     SyncJobRepository,
     SyncOperationLogRepository,
+)
+from sync_app.storage.repositories.identity_governance import (
+    ADAccountRepository,
+    ADDirectorySnapshotRepository,
+    EnterpriseIdentityRepository,
+    FieldAuthorityRuleRepository,
+    IdentityMatchDecisionRepository,
+    IdentityMatchRuleRepository,
+    IdentityMatchRunRepository,
+    PlatformAccountRepository,
 )
 from sync_app.storage.repositories.organizations import OrganizationConfigRepository, OrganizationRepository
 from sync_app.storage.repositories.mappings import (
@@ -26,6 +37,7 @@ from sync_app.storage.repositories.groups import (
 from sync_app.storage.repositories.lifecycle import OffboardingQueueRepository, UserLifecycleQueueRepository
 from sync_app.storage.repositories.state import ObjectStateRepository
 from sync_app.storage.repositories.source_directory import SourceDirectoryRepository
+from sync_app.storage.repositories.source_connectors import SourceConnectorRepository
 from sync_app.storage.repositories.system import (
     ConfigReleaseSnapshotRepository,
     DataQualitySnapshotRepository,
@@ -37,6 +49,7 @@ from sync_app.storage.repositories.system import (
 
 __all__ = [
     "WebAdminUserRepository",
+    "AccountTakeoverRepository",
     "SyncConflictRepository",
     "SyncExceptionRuleRepository",
     "SyncPlanReviewRepository",
@@ -46,6 +59,14 @@ __all__ = [
     "SyncEventRepository",
     "SyncJobRepository",
     "SyncOperationLogRepository",
+    "EnterpriseIdentityRepository",
+    "FieldAuthorityRuleRepository",
+    "PlatformAccountRepository",
+    "ADAccountRepository",
+    "ADDirectorySnapshotRepository",
+    "IdentityMatchRuleRepository",
+    "IdentityMatchRunRepository",
+    "IdentityMatchDecisionRepository",
     "OrganizationConfigRepository",
     "OrganizationRepository",
     "UserIdentityBindingRepository",
@@ -58,6 +79,7 @@ __all__ = [
     "UserLifecycleQueueRepository",
     "ObjectStateRepository",
     "SourceDirectoryRepository",
+    "SourceConnectorRepository",
     "SettingsRepository",
     "SyncReplayRequestRepository",
     "WebAuditLogRepository",

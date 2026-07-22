@@ -16,12 +16,15 @@ from sync_app.storage.local_db import (
     CustomManagedGroupBindingRepository,
     DatabaseManager,
     DepartmentOuMappingRepository,
+    FieldAuthorityRuleRepository,
     GroupExclusionRuleRepository,
+    IdentityMatchRuleRepository,
     ManagedGroupBindingRepository,
     ObjectStateRepository,
     OffboardingQueueRepository,
     OrganizationConfigRepository,
     OrganizationRepository,
+    PlatformAccountRepository,
     PlannedOperationRepository,
     SettingsRepository,
     SyncConnectorRepository,
@@ -65,6 +68,9 @@ class RuntimeRepositories:
     exception_rule_repo: SyncExceptionRuleRepository
     state_manager: SyncStateManager
     source_directory_repo: SourceDirectoryRepository
+    platform_account_repo: PlatformAccountRepository
+    field_authority_rule_repo: FieldAuthorityRuleRepository
+    identity_match_rule_repo: IdentityMatchRuleRepository
 
 
 @dataclass(frozen=True)
@@ -109,6 +115,7 @@ class RuntimePolicySettings:
     global_group_mail_domain: str
     global_custom_group_ou_path: str
     display_separator: str
+    ad_directory_mode: str
 
 
 @dataclass(frozen=True)
@@ -154,6 +161,12 @@ def _normalize_ou_path(raw_value: Any, *, default: str = "") -> str:
         ]
     normalized = "/".join(segments)
     return normalized or default
+
+
+def normalize_ad_directory_mode(value: Any) -> str:
+    """Fail closed when persisted directory mode is missing or malformed."""
+
+    return "writable" if str(value or "").strip().lower() == "writable" else "read_only"
 
 
 def _build_policy_settings(
@@ -257,6 +270,9 @@ def _build_policy_settings(
         global_group_mail_domain=get_org_setting_value("managed_group_mail_domain", "") or "",
         global_custom_group_ou_path=get_org_setting_value("custom_group_ou_path", "Managed Groups") or "Managed Groups",
         display_separator=get_org_setting_value("group_display_separator", "-") or "-",
+        ad_directory_mode=normalize_ad_directory_mode(
+            get_org_setting_value("ad_directory_mode", "writable") or "writable"
+        ),
     )
 
 
@@ -266,6 +282,8 @@ def _build_config_hash(
     connector_repo: SyncConnectorRepository,
     enabled_mapping_rules: list[Any],
     enabled_department_ou_mappings: list[Any],
+    enabled_field_authority_rules: list[Any],
+    enabled_identity_match_rules: list[Any],
     organization: OrganizationRecord,
     policy_settings: RuntimePolicySettings,
 ) -> str:
@@ -278,6 +296,12 @@ def _build_config_hash(
         ],
         "attribute_mappings": [record.to_dict() for record in enabled_mapping_rules],
         "department_ou_mappings": [record.to_dict() for record in enabled_department_ou_mappings],
+        "field_authority_rules": [
+            record.to_dict() for record in enabled_field_authority_rules
+        ],
+        "identity_match_rules": [
+            record.to_dict() for record in enabled_identity_match_rules
+        ],
         "group_exclusion_rules": [
             record.to_dict() for record in policy_settings.enabled_group_rules
         ],
@@ -322,6 +346,7 @@ def _build_config_hash(
             "managed_group_mail_domain": policy_settings.global_group_mail_domain,
             "custom_group_ou_path": policy_settings.global_custom_group_ou_path,
             "group_display_separator": policy_settings.display_separator,
+            "ad_directory_mode": policy_settings.ad_directory_mode,
         },
     }
     return fingerprint_json(config_snapshot_payload, namespace="sync-config")
@@ -337,6 +362,8 @@ def build_runtime_config_fingerprint(
     mapping_rule_repo: AttributeMappingRuleRepository,
     department_ou_mapping_repo: DepartmentOuMappingRepository,
     connector_repo: SyncConnectorRepository,
+    field_authority_rule_repo: FieldAuthorityRuleRepository,
+    identity_match_rule_repo: IdentityMatchRuleRepository,
 ) -> str:
     """Build the same configuration fingerprint used by sync jobs.
 
@@ -357,6 +384,12 @@ def build_runtime_config_fingerprint(
         connector_repo=connector_repo,
         enabled_mapping_rules=policy_settings.enabled_mapping_rules,
         enabled_department_ou_mappings=policy_settings.enabled_department_ou_mappings,
+        enabled_field_authority_rules=field_authority_rule_repo.list_enabled_rules(
+            org_id=organization.org_id
+        ),
+        enabled_identity_match_rules=identity_match_rule_repo.list_enabled_rules(
+            org_id=organization.org_id
+        ),
         organization=organization,
         policy_settings=policy_settings,
     )
@@ -398,6 +431,8 @@ def resolve_runtime_config_fingerprint(
         mapping_rule_repo=AttributeMappingRuleRepository(db_manager),
         department_ou_mapping_repo=DepartmentOuMappingRepository(db_manager),
         connector_repo=SyncConnectorRepository(db_manager),
+        field_authority_rule_repo=FieldAuthorityRuleRepository(db_manager),
+        identity_match_rule_repo=IdentityMatchRuleRepository(db_manager),
     )
 
 
@@ -445,6 +480,15 @@ def bootstrap_sync_runtime(
     exception_rule_repo = SyncExceptionRuleRepository(db_manager, default_org_id=organization.org_id)
     state_manager = SyncStateManager(db_manager=db_manager, org_id=organization.org_id)
     source_directory_repo = SourceDirectoryRepository(db_manager, default_org_id=organization.org_id)
+    platform_account_repo = PlatformAccountRepository(db_manager, default_org_id=organization.org_id)
+    field_authority_rule_repo = FieldAuthorityRuleRepository(
+        db_manager, default_org_id=organization.org_id
+    )
+    field_authority_rule_repo.seed_defaults(org_id=organization.org_id)
+    identity_match_rule_repo = IdentityMatchRuleRepository(
+        db_manager, default_org_id=organization.org_id
+    )
+    identity_match_rule_repo.seed_defaults(org_id=organization.org_id)
 
     active_job = job_repo.get_execution_job_record()
     if active_job and str(active_job.job_id or "").strip() != str(active_job_guard_id or "").strip():
@@ -493,12 +537,21 @@ def bootstrap_sync_runtime(
         exception_rule_repo=exception_rule_repo,
         state_manager=state_manager,
         source_directory_repo=source_directory_repo,
+        platform_account_repo=platform_account_repo,
+        field_authority_rule_repo=field_authority_rule_repo,
+        identity_match_rule_repo=identity_match_rule_repo,
     )
     config_hash = _build_config_hash(
         config=config,
         connector_repo=connector_repo,
         enabled_mapping_rules=policy_settings.enabled_mapping_rules,
         enabled_department_ou_mappings=policy_settings.enabled_department_ou_mappings,
+        enabled_field_authority_rules=field_authority_rule_repo.list_enabled_rules(
+            org_id=organization.org_id
+        ),
+        enabled_identity_match_rules=identity_match_rule_repo.list_enabled_rules(
+            org_id=organization.org_id
+        ),
         organization=organization,
         policy_settings=policy_settings,
     )

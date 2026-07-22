@@ -114,6 +114,73 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Identity Matching", self._text(response))
 
+    def test_versioned_matching_rule_configuration_is_audited_and_fail_closed(self):
+        self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
+        self._seed_identity_snapshot()
+        page_path = "/identity-governance/identity-matching"
+        page = self._text(
+            self._route(page_path, "GET")(self._request(page_path))
+        )
+        self.assertIn('action="/identity-governance/match-rules"', page)
+        self.assertIn("Ordered identity matching rules", page)
+
+        save_path = "/identity-governance/match-rules"
+        response = self._route(save_path, "POST")(
+            self._request(save_path, "POST"),
+            csrf_token=self.session["_csrf_token"],
+            rule_order=15,
+            rule_name="employee_number_strong",
+            source_provider="dingtalk",
+            source_field="employee_number",
+            ad_field="employee_number",
+            is_required="1",
+            case_sensitive="",
+            trim_whitespace="1",
+            strip_phone_country_code="",
+            lowercase_email="",
+            allow_fallback="1",
+            allow_auto_link="1",
+            confidence_level="certain",
+            confidence_score=100,
+            stop_on_conflict="1",
+            is_enabled="1",
+        )
+
+        self.assertEqual(response.status_code, 303)
+        rules = self.app.state.identity_match_rule_repo.list_rules(org_id="default")
+        saved = next(rule for rule in rules if rule.rule_name == "employee_number_strong")
+        self.assertTrue(saved.allow_auto_link)
+        self.assertEqual(saved.rule_revision, 1)
+        self.assertTrue(
+            any(
+                row.action_type == "identity_match.rule.update"
+                for row in self.app.state.audit_repo.list_recent_logs(20)
+            )
+        )
+
+        rejected = self._route(save_path, "POST")(
+            self._request(save_path, "POST"),
+            csrf_token=self.session["_csrf_token"],
+            rule_order=25,
+            rule_name="unsafe_email_auto",
+            source_provider="*",
+            source_field="email",
+            ad_field="mail",
+            trim_whitespace="1",
+            allow_fallback="1",
+            allow_auto_link="1",
+            confidence_level="high",
+            confidence_score=80,
+            stop_on_conflict="1",
+            is_enabled="1",
+        )
+        self.assertEqual(rejected.status_code, 303)
+        self.assertFalse(
+            any(rule.rule_name == "unsafe_email_auto" for rule in self.app.state.identity_match_rule_repo.list_rules(org_id="default"))
+        )
+        self.assertIn("restricted to strong employee identifiers", str(self.session["_flash"]))
+
     def test_canonical_manual_overrides_show_only_manual_records_and_keep_legacy_page(self):
         self._login("superadmin")
         self.session["ui_mode"] = "advanced"

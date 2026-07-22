@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from fastapi import FastAPI, Form, Request
@@ -7,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from sync_app.storage.local_db import utcnow_iso
 from sync_app.services.source_directory import SourceDirectoryService
+from sync_app.services.account_takeover import AccountTakeoverService
 from sync_app.web.app_state import get_web_repositories
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 from sync_app.core.rule_governance import build_rule_governance_summary
@@ -116,6 +118,41 @@ def register_mapping_routes(
             overrides=repositories.department_override_repo.list_override_records(org_id=current_org.org_id),
             exception_rules=[] if is_canonical else repositories.exception_rule_repo.list_rule_records(org_id=current_org.org_id),
         )
+        takeover_batches = repositories.account_takeover_repo.list_batches(
+            org_id=current_org.org_id,
+            limit=20,
+        )
+        selected_takeover_batch_id = str(
+            request.query_params.get("takeover_batch")
+            or (takeover_batches[0]["batch_id"] if takeover_batches else "")
+        ).strip()
+        selected_takeover_batch = (
+            repositories.account_takeover_repo.get_batch(
+                selected_takeover_batch_id,
+                org_id=current_org.org_id,
+            )
+            if selected_takeover_batch_id
+            else None
+        )
+        takeover_rows = []
+        if selected_takeover_batch:
+            for row in repositories.account_takeover_repo.list_rows(
+                selected_takeover_batch_id,
+                org_id=current_org.org_id,
+            ):
+                try:
+                    row["conflict_codes"] = json.loads(
+                        str(row.get("conflict_codes_json") or "[]")
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    row["conflict_codes"] = ["invalid_conflict_evidence"]
+                try:
+                    row["normalized_payload"] = json.loads(
+                        str(row.get("normalized_payload_json") or "{}")
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    row["normalized_payload"] = {}
+                takeover_rows.append(row)
         config = repositories.org_config_repo.get_app_config(
             current_org.org_id,
             config_path=current_org.config_path,
@@ -350,6 +387,9 @@ def register_mapping_routes(
             or load_department_name_map(request),
             filters_are_remembered=True,
             rule_governance_summary=rule_governance_summary,
+            takeover_batches=takeover_batches,
+            selected_takeover_batch=selected_takeover_batch,
+            takeover_rows=takeover_rows,
         )
 
     @app.get(f"{canonical_path}/export")
@@ -441,6 +481,193 @@ def register_mapping_routes(
                 else "mappings-export.csv"
             ),
         )
+
+    @app.post(f"{canonical_path}/takeover/preview")
+    def takeover_preview(
+        request: Request,
+        csrf_token: str = Form(""),
+        takeover_csv: str = Form(""),
+        original_filename: str = Form("takeover.csv"),
+    ):
+        user = require_capability(request, "mappings.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        csrf_error = reject_invalid_csrf(request, csrf_token, canonical_path)
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        try:
+            result = AccountTakeoverService(
+                takeover_repo=repositories.account_takeover_repo,
+                platform_account_repo=repositories.platform_account_repo,
+                ad_account_repo=repositories.ad_account_repo,
+                identity_repo=repositories.enterprise_identity_repo,
+            ).preview(
+                org_id=current_org.org_id,
+                csv_text=takeover_csv,
+                original_filename=original_filename,
+                created_by=user.username,
+            )
+            batch = result["batch"]
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="account_takeover.preview",
+                target_type="account_takeover_batch",
+                target_id=str(batch["batch_id"]),
+                result="success" if not batch["conflict_count"] else "warning",
+                message="Validated existing account takeover import",
+                payload={
+                    "row_count": batch["row_count"],
+                    "valid_count": batch["valid_count"],
+                    "conflict_count": batch["conflict_count"],
+                    "overwrite_count": batch["overwrite_count"],
+                    "preview_fingerprint": batch["preview_fingerprint"],
+                },
+            )
+            flash(
+                request,
+                "success" if not batch["conflict_count"] else "error",
+                "Takeover preview is ready. Resolve every conflict before approval.",
+            )
+            return RedirectResponse(
+                url=f"{canonical_path}?takeover_batch={batch['batch_id']}",
+                status_code=303,
+            )
+        except ValueError as exc:
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="account_takeover.preview",
+                target_type="account_takeover_batch",
+                target_id="validation",
+                result="error",
+                message="Rejected existing account takeover import",
+                payload={"error": str(exc)},
+            )
+            flash(request, "error", str(exc))
+            return RedirectResponse(url=canonical_path, status_code=303)
+
+    @app.post(f"{canonical_path}/takeover/{{batch_id}}/approve")
+    def takeover_approve(
+        request: Request,
+        batch_id: str,
+        csrf_token: str = Form(""),
+        preview_fingerprint: str = Form(""),
+    ):
+        user = require_capability(request, "jobs.review")
+        if isinstance(user, RedirectResponse):
+            return user
+        return_url = f"{canonical_path}?takeover_batch={batch_id}"
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        try:
+            batch = AccountTakeoverService(
+                takeover_repo=repositories.account_takeover_repo,
+                platform_account_repo=repositories.platform_account_repo,
+                ad_account_repo=repositories.ad_account_repo,
+                identity_repo=repositories.enterprise_identity_repo,
+            ).approve(
+                org_id=current_org.org_id,
+                batch_id=batch_id,
+                preview_fingerprint=preview_fingerprint,
+                approved_by=user.username,
+            )
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="account_takeover.approve",
+                target_type="account_takeover_batch",
+                target_id=batch_id,
+                result="success",
+                message="Approved existing account takeover batch",
+                payload={
+                    "preview_fingerprint": batch["preview_fingerprint"],
+                    "row_count": batch["row_count"],
+                },
+            )
+            flash(request, "success", "Takeover batch approved by an independent reviewer.")
+        except ValueError as exc:
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="account_takeover.approve",
+                target_type="account_takeover_batch",
+                target_id=batch_id,
+                result="error",
+                message="Rejected existing account takeover approval",
+                payload={
+                    "preview_fingerprint": preview_fingerprint,
+                    "error": str(exc),
+                },
+            )
+            flash(request, "error", str(exc))
+        return RedirectResponse(url=return_url, status_code=303)
+
+    @app.post(f"{canonical_path}/takeover/{{batch_id}}/apply")
+    def takeover_apply(
+        request: Request,
+        batch_id: str,
+        csrf_token: str = Form(""),
+        preview_fingerprint: str = Form(""),
+    ):
+        user = require_capability(request, "jobs.run")
+        if isinstance(user, RedirectResponse):
+            return user
+        return_url = f"{canonical_path}?takeover_batch={batch_id}"
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_url)
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        try:
+            batch = AccountTakeoverService(
+                takeover_repo=repositories.account_takeover_repo,
+                platform_account_repo=repositories.platform_account_repo,
+                ad_account_repo=repositories.ad_account_repo,
+                identity_repo=repositories.enterprise_identity_repo,
+            ).apply(
+                org_id=current_org.org_id,
+                batch_id=batch_id,
+                preview_fingerprint=preview_fingerprint,
+                applied_by=user.username,
+            )
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="account_takeover.apply",
+                target_type="account_takeover_batch",
+                target_id=batch_id,
+                result="success",
+                message="Applied existing account takeover batch",
+                payload={
+                    "preview_fingerprint": batch["preview_fingerprint"],
+                    "row_count": batch["row_count"],
+                    "approved_by": batch["approved_by"],
+                    "applied_by": batch["applied_by"],
+                },
+            )
+            flash(request, "success", "Takeover relationships were applied atomically.")
+        except ValueError as exc:
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="account_takeover.apply",
+                target_type="account_takeover_batch",
+                target_id=batch_id,
+                result="error",
+                message="Rejected existing account takeover execution",
+                payload={
+                    "preview_fingerprint": preview_fingerprint,
+                    "error": str(exc),
+                },
+            )
+            flash(request, "error", str(exc))
+        return RedirectResponse(url=return_url, status_code=303)
 
     @app.post(f"{canonical_path}/bind")
     @app.post("/mappings/bind")

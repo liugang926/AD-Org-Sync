@@ -13,6 +13,58 @@ from sync_app.services.runtime_lifecycle import build_user_lifecycle_profile
 from sync_app.services.runtime_connectors import select_mapping_rules
 
 
+def _directory_user_dn(existing_user: Any) -> str:
+    if isinstance(existing_user, dict):
+        return str(
+            existing_user.get("dn")
+            or existing_user.get("distinguished_name")
+            or existing_user.get("distinguishedName")
+            or ""
+        ).strip()
+    return str(
+        getattr(existing_user, "dn", "")
+        or getattr(existing_user, "distinguished_name", "")
+        or ""
+    ).strip()
+
+
+def _parent_distinguished_name(distinguished_name: str) -> str:
+    escaped = False
+    for index, char in enumerate(str(distinguished_name or "")):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == ",":
+            return distinguished_name[index + 1 :].strip()
+    return ""
+
+
+def classify_user_operation(
+    existing_user: Any,
+    *,
+    target_ou_dn: str,
+    is_enabled: bool,
+    rehire_restore_enabled: bool,
+) -> str:
+    """Classify create/update/move/reactivation without mutating AD."""
+
+    if not existing_user:
+        return "create_user"
+    if rehire_restore_enabled and not is_enabled:
+        return "reactivate_user"
+    current_parent_dn = _parent_distinguished_name(_directory_user_dn(existing_user))
+    if (
+        current_parent_dn
+        and str(target_ou_dn or "").strip()
+        and current_parent_dn.casefold() != str(target_ou_dn).strip().casefold()
+    ):
+        return "move_user"
+    return "update_user"
+
+
 def _get_source_user_detail_cached(ctx: SyncContext, userid: str, *, user: Optional[Any] = None) -> dict[str, Any]:
     source_user_detail_cache = ctx.identity.source_user_detail_cache
     if userid not in source_user_detail_cache:
@@ -362,14 +414,47 @@ def plan_user_actions(
         ou_dn = connector_ad_sync.get_ou_dn(effective_ou_path)
         user.email = email
         user.departments = [dept.department_id for dept in departments_for_user]
-        if connector_existing_users.get(username):
-            operation_type = (
-                "reactivate_user"
-                if ctx.policy_settings.rehire_restore_enabled and username not in connector_enabled_usernames
-                else "update_user"
-            )
-        else:
-            operation_type = "create_user"
+        existing_user = connector_existing_users.get(username)
+        operation_type = classify_user_operation(
+            existing_user,
+            target_ou_dn=ou_dn,
+            is_enabled=username in connector_enabled_usernames,
+            rehire_restore_enabled=ctx.policy_settings.rehire_restore_enabled,
+        )
+        existing_before_state = {
+            "distinguished_name": _directory_user_dn(existing_user),
+            "display_name": str(
+                (
+                    existing_user.get("display_name")
+                    or existing_user.get("displayName")
+                    if isinstance(existing_user, dict)
+                    else getattr(existing_user, "display_name", "")
+                )
+                or ""
+            ),
+            "email": str(
+                (
+                    existing_user.get("email") or existing_user.get("mail")
+                    if isinstance(existing_user, dict)
+                    else getattr(existing_user, "email", "")
+                )
+                or ""
+            ),
+            "account_enabled": username in connector_enabled_usernames,
+        }
+        rollback_metadata = {
+            "supported": bool(existing_user),
+            "supported_fields": (
+                ["display_name", "mail", "distinguished_name", "account_enabled"]
+                if existing_user
+                else []
+            ),
+            "warning": (
+                "A newly created AD account is not automatically deleted during rollback."
+                if operation_type == "create_user"
+                else "Rollback must revalidate the current AD objectGUID and account state."
+            ),
+        }
         if is_protected_ad_account(username, connector_id):
             record_protected_account_skip(
                 stage_name="plan",
@@ -397,6 +482,8 @@ def plan_user_actions(
                 placement_reason=placement_reason,
                 user=user,
                 lifecycle_profile=user_lifecycle_profile,
+                before_state=existing_before_state,
+                rollback_metadata=rollback_metadata,
             )
         )
         ctx.hooks.add_planned_operation(
@@ -405,6 +492,7 @@ def plan_user_actions(
             source_id=userid,
             department_id=str(target_dept.department_id),
             target_dn=f"CN={display_name},{ou_dn}",
+            risk_level="high" if operation_type == "move_user" else "normal",
             desired_state={
                 "userid": userid,
                 "connector_id": connector_id,
@@ -412,9 +500,15 @@ def plan_user_actions(
                 "display_name": display_name,
                 "email": email,
                 "ou_path": effective_ou_path,
+                "current_parent_dn": _parent_distinguished_name(
+                    _directory_user_dn(existing_user)
+                ),
+                "target_ou_dn": ou_dn,
                 "placement_reason": placement_reason,
                 "binding_resolution": binding_resolution_details.get(userid, {}),
                 "field_ownership_policy": dict(field_ownership_policy),
+                "before_state": existing_before_state,
+                "rollback": rollback_metadata,
                 "lifecycle_profile": {
                     "employment_type": user_lifecycle_profile["employment_type"],
                     "start_value": user_lifecycle_profile["start_value"],
@@ -533,6 +627,36 @@ def plan_disable_actions(
     all_enabled_binding_records = ctx.repositories.user_binding_repo.list_enabled_binding_records(
         source_provider=str(getattr(ctx.config, "source_provider", "wecom") or "wecom")
     )
+    non_person_platform_accounts = {
+        (
+            account.provider_id.casefold(),
+            account.connector_id or "default",
+            account.platform_account_id,
+        ): account
+        for account in ctx.repositories.platform_account_repo.list_accounts(
+            org_id=ctx.organization.org_id
+        )
+        if account.account_type.casefold() != "person" or account.is_excluded
+    }
+    non_person_bindings = {
+        (record.connector_id or "default", record.ad_username): (
+            record,
+            non_person_platform_accounts[
+                (
+                    record.source_provider.casefold(),
+                    record.connector_id or "default",
+                    record.source_user_id,
+                )
+            ],
+        )
+        for record in all_enabled_binding_records
+        if (
+            record.source_provider.casefold(),
+            record.connector_id or "default",
+            record.source_user_id,
+        )
+        in non_person_platform_accounts
+    }
     all_enabled_binding_source_user_id_by_identity = {
         (record.connector_id or "default", record.ad_username): record.source_user_id
         for record in all_enabled_binding_records
@@ -551,9 +675,27 @@ def plan_disable_actions(
         if record.ad_username
         and record.source_user_id
         and (record.connector_id or "default", record.ad_username) not in skip_sync_ad_identities
+        and (record.connector_id or "default", record.ad_username) not in non_person_bindings
     }
     ctx.working.managed_ad_identities.clear()
     ctx.working.managed_ad_identities.update(set(managed_source_user_id_by_identity.keys()))
+
+    for (connector_id, ad_username), (binding, platform_account) in sorted(
+        non_person_bindings.items()
+    ):
+        ctx.hooks.add_planned_operation(
+            object_type="user",
+            operation_type="exclude_non_person_account",
+            source_id=binding.source_user_id,
+            target_dn=binding.target_object_dn,
+            risk_level="normal",
+            desired_state={
+                "connector_id": connector_id,
+                "ad_username": ad_username,
+                "account_type": platform_account.account_type,
+                "reason": "non_person_accounts_are_never_offboarded_from_source_absence",
+            },
+        )
 
     for _userid, resolution in ctx.identity.binding_resolution_details.items():
         if not resolution.get("ad_username"):
