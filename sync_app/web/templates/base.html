@@ -1,7 +1,7 @@
 {% import "components/ui.html" as ui %}
 {% import "components/mode.html" as mode_ui %}
 {% set is_lightweight_shell = lightweight_shell|default(False) %}
-{% set load_tom_select_assets = (not is_lightweight_shell) and page in ['advanced-sync', 'sync-account-naming', 'mappings'] %}
+{% set load_tom_select_assets = (not is_lightweight_shell) and page in ['advanced-sync', 'sync-account-naming', 'mappings', 'identity-match-rules'] %}
 {% set load_advanced_sync_page_script = (not is_lightweight_shell) and page in ['advanced-sync', 'sync-account-naming'] %}
 {% set load_config_page_script = (not is_lightweight_shell) and page == 'config' %}
 {% set load_mappings_page_script = (not is_lightweight_shell) and page == 'mappings' %}

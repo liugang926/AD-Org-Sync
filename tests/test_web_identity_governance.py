@@ -28,7 +28,11 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
                     "department_ids": ["1"],
                     "department_names": ["HQ"],
                     "is_active": True,
-                    "raw_payload": {"userid": "alice", "employee_id": "E001"},
+                    "raw_payload": {
+                        "userid": "alice",
+                        "employee_id": "E001",
+                        "job_number": "J001",
+                    },
                     "search_text": "Alice E001",
                 },
                 {
@@ -38,7 +42,11 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
                     "department_ids": ["1"],
                     "department_names": ["HQ"],
                     "is_active": True,
-                    "raw_payload": {"userid": "bob", "employee_id": "E002"},
+                    "raw_payload": {
+                        "userid": "bob",
+                        "employee_id": "E002",
+                        "job_number": "J002",
+                    },
                     "search_text": "Bob E002",
                 },
             ],
@@ -48,7 +56,13 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
                     "label": "Employee ID",
                     "coverage": 2,
                     "samples": ["E001", "E002"],
-                }
+                },
+                {
+                    "name": "job_number",
+                    "label": "Employee Number",
+                    "coverage": 2,
+                    "samples": ["J001", "J002"],
+                },
             ],
             fingerprint="identity-governance-v1",
         )
@@ -180,6 +194,37 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
             any(rule.rule_name == "unsafe_email_auto" for rule in self.app.state.identity_match_rule_repo.list_rules(org_id="default"))
         )
         self.assertIn("restricted to strong employee identifiers", str(self.session["_flash"]))
+
+    def test_match_rule_page_offers_snapshot_source_and_supported_ad_field_selectors(self):
+        self._login("superadmin")
+        self.session["ui_mode"] = "advanced"
+        self._seed_identity_snapshot()
+
+        path = "/identity-governance/match-rules"
+        response = self._route(path, "GET")(self._request(path))
+
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertNotIn('<input type="text" name="source_field"', body)
+        self.assertNotIn('<input type="text" name="ad_field"', body)
+        self.assertRegex(
+            body,
+            r'<select name="source_field"[^>]*data-match-field-select',
+        )
+        self.assertRegex(
+            body,
+            r'<select name="ad_field"[^>]*data-match-field-select',
+        )
+        self.assertIn("/static/vendor/tom-select.complete.min.js", body)
+        self.assertIn('value="platform_account_id"', body)
+        self.assertIn("Platform User ID", body)
+        self.assertIn("(userid)", body)
+        self.assertIn('value="job_number"', body)
+        self.assertIn("Coverage 2/2", body)
+        self.assertIn('value="sam_account_name"', body)
+        self.assertIn("AD logon name (sAMAccountName)", body)
+        self.assertIn('value="user_principal_name"', body)
+        self.assertIn('value="extensionAttribute15"', body)
 
     def test_canonical_manual_overrides_show_only_manual_records_and_keep_legacy_page(self):
         self._login("superadmin")

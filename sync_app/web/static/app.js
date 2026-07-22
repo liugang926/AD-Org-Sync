@@ -1117,6 +1117,22 @@
       return;
     }
 
+    document.querySelectorAll("select[data-match-field-select]").forEach((element) => {
+      if (element.tomselect) {
+        return;
+      }
+      new TomSelect(element, {
+        create: true,
+        createOnBlur: true,
+        persist: false,
+        maxItems: 1,
+        plugins: { dropdown_input: {} },
+        searchField: ["text", "value"],
+        selectOnTab: true,
+        placeholder: element.dataset.placeholder || "",
+      });
+    });
+
     bindTomSelectRemote("input[name='root_department_ids']", "/api/metadata/departments");
     bindTomSelectRemote("input[name='managed_tag_ids']", "/api/metadata/tags");
     bindTomSelectRemote("input[name='managed_external_chat_ids']", "/api/metadata/external-chats");

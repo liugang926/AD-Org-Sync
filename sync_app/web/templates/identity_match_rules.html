@@ -15,12 +15,49 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         <label>{{ t("Rule order") }}<input type="number" name="rule_order" value="100" min="1" max="10000" required></label>
-        <label>{{ t("Rule name") }}<input type="text" name="rule_name" maxlength="120" placeholder="custom_employee_id" required></label>
-        <label>{{ t("Source platform") }}<select name="source_provider"><option value="*">{{ t("All platforms") }}</option><option value="dingtalk">{{ t("DingTalk") }}</option><option value="wecom">{{ t("WeCom") }}</option><option value="feishu">{{ t("Feishu") }}</option></select></label>
-        <label>{{ t("Source field") }}<input type="text" name="source_field" placeholder="employee_id" required></label>
-        <label>{{ t("AD field") }}<input type="text" name="ad_field" placeholder="employee_id" required></label>
+        <label>{{ t("Rule name") }}<input type="text" name="rule_name" maxlength="120" placeholder="platform_id_to_ad_logon" required></label>
+        <label>{{ t("Source platform") }}
+          <select name="source_provider">
+            <option value="*">{{ t("All platforms") }}</option>
+            <option value="dingtalk" {% if current_source_provider == "dingtalk" %}selected{% endif %}>{{ t("DingTalk") }}</option>
+            <option value="wecom" {% if current_source_provider == "wecom" %}selected{% endif %}>{{ t("WeCom") }}</option>
+            <option value="feishu" {% if current_source_provider == "feishu" %}selected{% endif %}>{{ t("Feishu") }}</option>
+          </select>
+          <span class="form-help">{{ t("The configured source platform is selected by default.") }}</span>
+        </label>
+        <label>{{ t("Source field") }}
+          <select name="source_field" required data-match-field-select data-placeholder="{{ t('Search or enter a source field') }}">
+            {% for group_key, group_label in [("standard", "Common identity fields"), ("detected", "Fields detected in current snapshot"), ("existing", "Fields used by existing rules")] %}
+            <optgroup label="{{ t(group_label) }}">
+              {% for field in source_match_field_options if field.group == group_key %}
+              <option value="{{ field.value }}" {% if field.value == "platform_account_id" %}selected{% endif %}>
+                {% if field.value == "platform_account_id" %}{{ t(current_source_provider_name) }} · {% endif %}{{ t(field.label) }}
+                {% if field.api_hint %} ({{ field.api_hint }}){% else %} ({{ field.value }}){% endif %}
+                {% if field.coverage_count is not none and source_snapshot %} · {{ t("Coverage") }} {{ field.coverage_count }}/{{ source_snapshot.user_count }}{% endif %}
+              </option>
+              {% endfor %}
+            </optgroup>
+            {% endfor %}
+          </select>
+          <span class="form-help">{{ t("Choose the normalized platform user ID, a field detected in the current snapshot, or type an exact custom field code.") }}</span>
+        </label>
+        <label>{{ t("AD field") }}
+          <select name="ad_field" required data-match-field-select data-placeholder="{{ t('Search or enter an AD field') }}">
+            {% for group_key, group_label in [("standard", "Common AD identity fields"), ("extension", "AD extension attributes"), ("existing", "Fields used by existing rules")] %}
+            <optgroup label="{{ t(group_label) }}">
+              {% for field in ad_match_field_options if field.group == group_key %}
+              <option value="{{ field.value }}" {% if field.value == "sam_account_name" %}selected{% endif %}>{{ t(field.label) }}{% if ui_presentation.show_field_codes %} ({{ field.value }}){% endif %}</option>
+              {% endfor %}
+            </optgroup>
+            {% endfor %}
+          </select>
+          <span class="form-help">{{ t("Select the AD attribute to compare, such as sAMAccountName or userPrincipalName; this does not select a specific AD user.") }}</span>
+        </label>
         <label>{{ t("Confidence level") }}<select name="confidence_level"><option value="low">{{ t("Low") }}</option><option value="medium" selected>{{ t("Medium") }}</option><option value="high">{{ t("High") }}</option><option value="certain">{{ t("Certain") }}</option></select></label>
         <label>{{ t("Confidence score") }}<input type="number" name="confidence_score" value="50" min="0" max="100" required></label>
+      </div>
+      <div class="helper-block info">
+        <div><strong>{{ t("Account name comparison") }}</strong><p>{{ t("For DingTalk account matching, choose DingTalk Platform User ID (userid) and AD logon name (sAMAccountName). This produces a review candidate; keep automatic link disabled for account-name rules.") }}</p></div>
       </div>
       <div class="grid cols-3">
         {% for name, label, checked in [("is_required", "Value required", false), ("case_sensitive", "Case sensitive", false), ("trim_whitespace", "Normalize whitespace", true), ("strip_phone_country_code", "Strip phone country code", false), ("lowercase_email", "Lowercase email", false), ("allow_fallback", "Allow fallback rules", true), ("allow_auto_link", "Allow automatic link", false), ("stop_on_conflict", "Stop on conflict", true), ("is_enabled", "Rule enabled", true)] %}
@@ -38,7 +75,7 @@
       <thead><tr><th>{{ t("Order") }}</th><th>{{ t("Rule") }}</th><th>{{ t("Platform") }}</th><th>{{ t("Source to AD") }}</th><th>{{ t("Normalization") }}</th><th>{{ t("Confidence") }}</th><th>{{ t("Conflict behavior") }}</th><th>{{ t("Revision") }}</th></tr></thead>
       <tbody>
         {% for rule in identity_match_rules %}
-        <tr><td>{{ rule.rule_order }}</td><td><strong>{{ rule.rule_name }}</strong><small>{{ t("Enabled") if rule.is_enabled else t("Disabled") }}</small></td><td>{{ t("All platforms") if rule.source_provider == "*" else t(rule.source_provider) }}</td><td><code>{{ rule.source_field }}</code> → <code>{{ rule.ad_field }}</code><small>{{ t("Automatic") if rule.allow_auto_link else t("Review required") }}</small></td><td>{% if rule.trim_whitespace %}{{ t("Whitespace") }} {% endif %}{% if rule.lowercase_email %}{{ t("Email lowercase") }} {% endif %}{% if rule.strip_phone_country_code %}{{ t("Phone country code") }}{% endif %}</td><td>{{ t(rule.confidence_level|capitalize) }} · {{ rule.confidence_score }}</td><td>{{ t("Stop") if rule.stop_on_conflict else t("Continue") }}</td><td>{{ rule.rule_revision }}</td></tr>
+        <tr><td>{{ rule.rule_order }}</td><td><strong>{{ rule.rule_name }}</strong><small>{{ t("Enabled") if rule.is_enabled else t("Disabled") }}</small></td><td>{{ t("All platforms") if rule.source_provider == "*" else t(rule.source_provider) }}</td><td><strong>{{ t(source_match_field_labels.get(rule.source_field, rule.source_field)) }} → {{ t(ad_match_field_labels.get(rule.ad_field, rule.ad_field)) }}</strong><small><code>{{ rule.source_field }}</code> → <code>{{ rule.ad_field }}</code> · {{ t("Automatic") if rule.allow_auto_link else t("Review required") }}</small></td><td>{% if rule.trim_whitespace %}{{ t("Whitespace") }} {% endif %}{% if rule.lowercase_email %}{{ t("Email lowercase") }} {% endif %}{% if rule.strip_phone_country_code %}{{ t("Phone country code") }}{% endif %}</td><td>{{ t(rule.confidence_level|capitalize) }} · {{ rule.confidence_score }}</td><td>{{ t("Stop") if rule.stop_on_conflict else t("Continue") }}</td><td>{{ rule.rule_revision }}</td></tr>
         {% else %}<tr><td colspan="8" class="empty-state">{{ t("No identity matching rules are configured") }}</td></tr>{% endfor %}
       </tbody>
     </table>
