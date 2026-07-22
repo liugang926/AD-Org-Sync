@@ -39,6 +39,10 @@ from sync_app.services.high_risk_operations import (
     high_risk_audit_payload,
 )
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
+from sync_app.web.identity_match_fields import (
+    build_ad_match_field_options,
+    build_source_match_field_options,
+)
 from sync_app.services.runtime_connectors import (
     build_department_connector_map,
     load_connector_specs,
@@ -1610,18 +1614,54 @@ def register_source_directory_routes(
             return user
         current_org = get_current_org(request)
         repositories = get_web_repositories(request)
+        runtime_state = get_web_runtime_state(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path or runtime_state.config_path,
+        )
+        source_provider = str(config.source_provider or "wecom").strip().lower() or "wecom"
+        source_snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=source_provider,
+        )
         repositories.identity_match_rule_repo.seed_defaults(
             org_id=current_org.org_id
         )
+        identity_match_rules = repositories.identity_match_rule_repo.list_rules(
+            org_id=current_org.org_id
+        )
+        detected_source_fields = (
+            repositories.source_directory_repo.list_field_catalog(
+                int(source_snapshot["id"]),
+                org_id=current_org.org_id,
+            )
+            if source_snapshot
+            else []
+        )
+        source_match_field_options = build_source_match_field_options(
+            provider_id=source_provider,
+            detected_fields=detected_source_fields,
+            existing_rules=identity_match_rules,
+        )
+        ad_match_field_options = build_ad_match_field_options(identity_match_rules)
         return render(
             request,
             "identity_match_rules.html",
             page="identity-match-rules",
             title="Identity Match Rules",
             current_org=current_org,
-            identity_match_rules=repositories.identity_match_rule_repo.list_rules(
-                org_id=current_org.org_id
-            ),
+            current_source_provider=source_provider,
+            current_source_provider_name=get_source_provider_display_name(source_provider),
+            source_snapshot=_row_dict(source_snapshot),
+            source_match_field_options=source_match_field_options,
+            source_match_field_labels={
+                item["value"]: item["label"] for item in source_match_field_options
+            },
+            ad_match_field_options=ad_match_field_options,
+            ad_match_field_labels={
+                item["value"]: item["label"] for item in ad_match_field_options
+            },
+            identity_match_rules=identity_match_rules,
         )
 
     @app.post("/identity-governance/ad-snapshots/refresh")
