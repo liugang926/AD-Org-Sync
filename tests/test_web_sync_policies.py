@@ -393,6 +393,63 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
             )
         )
 
+    def test_field_authority_options_use_business_labels_in_chinese_basic_mode(self):
+        self._login("superadmin")
+        self.session["ui_language"] = "zh-CN"
+        path = "/sync-policies/field-authority"
+
+        basic_body = self._text(self._route(path, "GET")(self._request(path)))
+        field_select = re.search(
+            r'<select name="field_name"[^>]*>(.*?)</select>',
+            basic_body,
+            re.S,
+        )
+
+        self.assertIsNotNone(field_select)
+        # Basic mode must present business language without exposing storage keys.
+        self.assertIn('<optgroup label="联系方式">', field_select.group(1))
+        self.assertIn(
+            '<option value="alternate_email">备用邮箱</option>',
+            field_select.group(1),
+        )
+        self.assertNotIn("备用邮箱 · alternate_email", field_select.group(1))
+        self.assertIn(
+            'value="PROVIDER_PRIORITY" selected>按平台优先顺序取第一个有值的来源</option>',
+            basic_body,
+        )
+        self.assertIn(
+            'value="REJECT_ON_CONFLICT">值冲突时停止并要求处理</option>',
+            basic_body,
+        )
+        self.assertIn(
+            'value="PRESERVE_TARGET" selected>来源为空时保留目标现值</option>',
+            basic_body,
+        )
+        self.assertIn('<option value="dingtalk">钉钉</option>', basic_body)
+        self.assertIn(
+            '<option value="">仅使用权威来源（推荐）</option>',
+            basic_body,
+        )
+        self.assertIn(
+            '<option value="dingtalk,wecom,feishu">钉钉 → 企业微信 → 飞书</option>',
+            basic_body,
+        )
+        self.assertNotIn('placeholder="dingtalk,wecom,feishu"', basic_body)
+
+        self.session["ui_mode"] = "advanced"
+        advanced_body = self._text(
+            self._route(path, "GET")(self._request(path))
+        )
+        self.assertIn(
+            '<option value="alternate_email">备用邮箱 · alternate_email</option>',
+            advanced_body,
+        )
+        self.assertIn(
+            "按平台优先顺序取第一个有值的来源 · PROVIDER_PRIORITY",
+            advanced_body,
+        )
+        self.assertIn('placeholder="dingtalk,wecom,feishu"', advanced_body)
+
     def test_routing_and_group_pages_persist_existing_settings_keys(self):
         self._login("superadmin")
         self._seed_policy_fixture()
