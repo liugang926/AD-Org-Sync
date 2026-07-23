@@ -182,6 +182,23 @@ class ADLDAPSTargetProvider(TargetDirectoryProvider):
             )
         )
 
+    def update_manager(self, username: str, manager_dn: str) -> bool:
+        return bool(self.client.update_manager(username, manager_dn))
+
+    def update_proxy_addresses(
+        self,
+        username: str,
+        primary_address: str,
+        aliases: list[str],
+    ) -> bool:
+        return bool(
+            self.client.update_proxy_addresses(
+                username,
+                primary_address,
+                aliases,
+            )
+        )
+
     def add_group_to_group(self, child_group_dn: str, parent_group_dn: str) -> bool:
         return bool(self.client.add_group_to_group(child_group_dn, parent_group_dn))
 

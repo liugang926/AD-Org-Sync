@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Optional
 
 from fastapi import FastAPI, Form, Request
@@ -7,7 +8,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from sync_app.core.sync_policies import (
     ATTRIBUTE_SYNC_MODES,
+    FORBIDDEN_GENERIC_AD_ATTRIBUTES,
     MANAGED_GROUP_TYPES,
+    MAPPING_ROLES,
+    NULL_POLICIES,
     normalize_username_collision_policy,
     normalize_username_strategy,
 )
@@ -200,6 +204,10 @@ ADVANCED_SYNC_CLIENT_I18N_KEYS = (
 )
 
 
+def _submitted_text(value: Any, default: str = "") -> str:
+    return str(value).strip() if isinstance(value, str) else default
+
+
 def register_advanced_sync_routes(
     app: FastAPI,
     *,
@@ -342,6 +350,56 @@ def register_advanced_sync_routes(
                 and record.protection_level == "soft"
             ],
             **policy_release_context(request, current_org),
+        }
+
+    def field_registry_context(
+        request: Request,
+        *,
+        ad_connector_id: str = "default",
+    ) -> dict[str, Any]:
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        runtime_state = get_web_runtime_state(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path or runtime_state.config_path,
+        )
+        provider_id = str(config.source_provider or "wecom").strip().lower() or "wecom"
+        source_snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=provider_id,
+        )
+        ad_snapshot = repositories.ad_directory_snapshot_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            connector_id=ad_connector_id,
+        )
+        repositories.canonical_field_registry_repo.seed_defaults()
+        return {
+            "current_source_provider": provider_id,
+            "canonical_fields": repositories.canonical_field_registry_repo.list_fields(
+                org_id=current_org.org_id,
+            ),
+            "source_registry_fields": (
+                repositories.source_field_registry_repo.list_fields(
+                    org_id=current_org.org_id,
+                    provider_id=provider_id,
+                    source_connector_id=str(source_snapshot["connector_id"] or "default"),
+                    current_snapshot_id=int(source_snapshot["id"]),
+                )
+                if source_snapshot
+                else []
+            ),
+            "ad_target_attributes": (
+                repositories.ad_target_attribute_registry_repo.list_attributes(
+                    org_id=current_org.org_id,
+                    ad_connector_id=ad_connector_id,
+                    current_snapshot_id=int(ad_snapshot["id"]),
+                )
+                if ad_snapshot
+                else []
+            ),
+            "registry_source_snapshot": source_snapshot,
+            "registry_ad_snapshot": ad_snapshot,
         }
 
     def policy_redirect_path(request: Request, canonical_path: str) -> str:
@@ -524,32 +582,54 @@ def register_advanced_sync_routes(
         repositories.field_authority_rule_repo.seed_defaults(
             org_id=current_org.org_id
         )
+        registry_context = field_registry_context(request)
+        active_registry_view = str(
+            request.query_params.get("view") or "mappings"
+        ).strip().lower()
+        if active_registry_view not in {"mappings", "ad-capabilities"}:
+            active_registry_view = "mappings"
         return render(
             request,
             "sync_policy_attribute_mappings.html",
             **policy_page_context(
                 request,
                 page="sync-attribute-mappings",
-                title="Attribute Mappings",
+                title=(
+                    "AD Attribute Capability Catalog"
+                    if active_registry_view == "ad-capabilities"
+                    else "Attribute Mappings"
+                ),
             ),
+            active_registry_view=active_registry_view,
             attribute_mappings=list_org_attribute_mapping_rules(request),
+            **registry_context,
             mapping_direction_options=[
                 ("source_to_ad", attribute_mapping_direction_labels["source_to_ad"]),
                 ("ad_to_source", attribute_mapping_direction_labels["ad_to_source"]),
             ],
             mapping_direction_labels=attribute_mapping_direction_labels,
             mapping_mode_options=[(value, value) for value in ATTRIBUTE_SYNC_MODES],
+            mapping_role_options=MAPPING_ROLES,
+            mapping_null_policy_options=NULL_POLICIES,
+            mapping_conflict_policy_options=(
+                "REJECT_ON_CONFLICT",
+                "PRESERVE_TARGET",
+                "SOURCE_WINS",
+                "REQUIRE_REVIEW",
+            ),
+            mapping_write_policy_options=(
+                "REPLACE",
+                "FILL_IF_EMPTY",
+                "PRESERVE_TARGET",
+                "CREATE_ONLY",
+                "COMPARE_ONLY",
+            ),
             field_authority_rules=repositories.field_authority_rule_repo.list_rules(
                 org_id=current_org.org_id
             ),
-            field_authority_fields=(
-                "employee_id",
-                "display_name",
-                "email",
-                "mobile",
-                "primary_department_id",
-                "manager_account_id",
-                "account_status",
+            field_authority_fields=tuple(
+                field.canonical_field_key
+                for field in registry_context["canonical_fields"]
             ),
             field_authority_providers=("dingtalk", "wecom", "feishu", "*"),
             field_authority_directions=(
@@ -567,6 +647,33 @@ def register_advanced_sync_routes(
                 "compare_only",
                 "manual",
                 "create_only",
+            ),
+            authority_mode_options=(
+                "SINGLE_SOURCE",
+                "PROVIDER_PRIORITY",
+                "PRESERVE_AD",
+                "MANUAL_ONLY",
+                "FIRST_NON_EMPTY",
+                "REJECT_ON_CONFLICT",
+            ),
+            authority_conflict_policy_options=(
+                "REJECT_ON_CONFLICT",
+                "PRESERVE_AD",
+                "PROVIDER_PRIORITY",
+                "MANUAL_REVIEW",
+            ),
+            authority_null_policy_options=(
+                "IGNORE",
+                "PRESERVE_TARGET",
+                "CLEAR",
+                "USE_DEFAULT",
+                "BLOCK",
+            ),
+            manual_override_policy_options=(
+                "ALLOW",
+                "REQUIRE_REVIEW",
+                "PRESERVE",
+                "REJECT",
             ),
         )
 
@@ -658,6 +765,7 @@ def register_advanced_sync_routes(
         repositories.field_authority_rule_repo.seed_defaults(
             org_id=current_org.org_id
         )
+        registry_context = field_registry_context(request)
         return render(
             request,
             "sync_policy_field_authority.html",
@@ -669,14 +777,10 @@ def register_advanced_sync_routes(
             field_authority_rules=repositories.field_authority_rule_repo.list_rules(
                 org_id=current_org.org_id
             ),
-            field_authority_fields=(
-                "employee_id",
-                "display_name",
-                "email",
-                "mobile",
-                "primary_department_id",
-                "manager_account_id",
-                "account_status",
+            **registry_context,
+            field_authority_fields=tuple(
+                field.canonical_field_key
+                for field in registry_context["canonical_fields"]
             ),
             field_authority_providers=("dingtalk", "wecom", "feishu", "*"),
             field_authority_directions=(
@@ -694,6 +798,33 @@ def register_advanced_sync_routes(
                 "compare_only",
                 "manual",
                 "create_only",
+            ),
+            authority_mode_options=(
+                "SINGLE_SOURCE",
+                "PROVIDER_PRIORITY",
+                "PRESERVE_AD",
+                "MANUAL_ONLY",
+                "FIRST_NON_EMPTY",
+                "REJECT_ON_CONFLICT",
+            ),
+            authority_conflict_policy_options=(
+                "REJECT_ON_CONFLICT",
+                "PRESERVE_AD",
+                "PROVIDER_PRIORITY",
+                "MANUAL_REVIEW",
+            ),
+            authority_null_policy_options=(
+                "IGNORE",
+                "PRESERVE_TARGET",
+                "CLEAR",
+                "USE_DEFAULT",
+                "BLOCK",
+            ),
+            manual_override_policy_options=(
+                "ALLOW",
+                "REQUIRE_REVIEW",
+                "PRESERVE",
+                "REJECT",
             ),
         )
     @app.get(CANONICAL_ROUTE_PATHS["sync-group-rules"], response_class=HTMLResponse)
@@ -1045,6 +1176,12 @@ def register_advanced_sync_routes(
         sync_mode: str = Form("replace"),
         notes: str = Form(""),
         is_enabled: Optional[str] = Form(None),
+        provider_scope: str = Form("*"),
+        mapping_role: str = Form("ATTRIBUTE_SYNC"),
+        transform_pipeline_json: str = Form("[]"),
+        null_policy: str = Form("PRESERVE_TARGET"),
+        conflict_policy: str = Form("REJECT_ON_CONFLICT"),
+        write_policy: str = Form("REPLACE"),
     ):
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
@@ -1078,6 +1215,73 @@ def register_advanced_sync_routes(
             )
             return RedirectResponse(url=redirect_url, status_code=303)
         try:
+            resolved_provider_scope = _submitted_text(provider_scope, "*") or "*"
+            resolved_mapping_role = (
+                _submitted_text(mapping_role, "ATTRIBUTE_SYNC") or "ATTRIBUTE_SYNC"
+            )
+            resolved_null_policy = (
+                _submitted_text(null_policy, "PRESERVE_TARGET") or "PRESERVE_TARGET"
+            )
+            resolved_conflict_policy = (
+                _submitted_text(conflict_policy, "REJECT_ON_CONFLICT")
+                or "REJECT_ON_CONFLICT"
+            )
+            resolved_write_policy = (
+                _submitted_text(write_policy, "REPLACE") or "REPLACE"
+            )
+            try:
+                transform_pipeline = json.loads(
+                    _submitted_text(transform_pipeline_json, "[]") or "[]"
+                )
+            except json.JSONDecodeError as exc:
+                raise ValueError("transform pipeline must be valid JSON") from exc
+            if not isinstance(transform_pipeline, list) or not all(
+                isinstance(step, dict) for step in transform_pipeline
+            ):
+                raise ValueError("transform pipeline must be a JSON array of steps")
+            proxy_relationship = (
+                resolved_mapping_role.strip().upper() == "RELATIONSHIP"
+                and normalized_target_field.casefold() == "proxyaddresses"
+            )
+            if (
+                normalized_target_field.casefold() in FORBIDDEN_GENERIC_AD_ATTRIBUTES
+                and not proxy_relationship
+            ):
+                raise ValueError(
+                    "the selected AD attribute requires a dedicated relationship, lifecycle, or directory handler"
+                )
+            current_ad_attributes = (
+                repositories.ad_target_attribute_registry_repo.list_attributes(
+                    org_id=current_org.org_id,
+                    ad_connector_id=normalized_connector_id or "default",
+                )
+                if normalized_target_field
+                else []
+            )
+            matched_target = next(
+                (
+                    attribute
+                    for attribute in current_ad_attributes
+                    if attribute.ldap_attribute.casefold()
+                    == normalized_target_field.casefold()
+                ),
+                None,
+            )
+            if matched_target is not None and not matched_target.is_writable:
+                raise ValueError(
+                    "the selected AD attribute is not verified writable for the current connector"
+                )
+            if (
+                matched_target is not None
+                and matched_target.requires_special_handler
+                and not (
+                    proxy_relationship
+                    and matched_target.special_handler_type == "proxy_addresses"
+                )
+            ):
+                raise ValueError(
+                    "the selected AD attribute requires its dedicated handler"
+                )
             updated = persist_policy_settings_section(
                 request,
                 section="attribute_mappings",
@@ -1097,6 +1301,17 @@ def register_advanced_sync_routes(
                     notes=str(notes or "").strip(),
                     is_enabled=to_bool(is_enabled, True),
                     org_id=current_org.org_id,
+                    provider_scope=resolved_provider_scope,
+                    source_connector_id="default",
+                    canonical_source_field=normalized_source_field,
+                    raw_source_field_path=normalized_source_field,
+                    ad_connector_id=normalized_connector_id or "default",
+                    mapping_role=resolved_mapping_role,
+                    transform_pipeline=transform_pipeline,
+                    null_policy=resolved_null_policy,
+                    conflict_policy=resolved_conflict_policy,
+                    write_policy=resolved_write_policy,
+                    created_by=user.username,
                 )
         except (TypeError, ValueError) as exc:
             flash_t(request, "error", "Failed to save mapping rule: {error}", error=str(exc))
@@ -1117,6 +1332,12 @@ def register_advanced_sync_routes(
                 "direction": normalize_mapping_direction(direction),
                 "source_field": str(source_field or "").strip(),
                 "target_field": str(target_field or "").strip(),
+                "provider_scope": resolved_provider_scope,
+                "mapping_role": resolved_mapping_role,
+                "transform_pipeline": transform_pipeline,
+                "null_policy": resolved_null_policy,
+                "conflict_policy": resolved_conflict_policy,
+                "write_policy": resolved_write_policy,
             },
         )
         flash(
@@ -1139,6 +1360,12 @@ def register_advanced_sync_routes(
         prevent_loop: Optional[str] = Form(None),
         is_enabled: Optional[str] = Form(None),
         notes: str = Form(""),
+        authority_mode: str = Form("PROVIDER_PRIORITY"),
+        authoritative_connector_id: str = Form(""),
+        provider_priority: str = Form(""),
+        conflict_policy: str = Form("REJECT_ON_CONFLICT"),
+        null_policy: str = Form("PRESERVE_TARGET"),
+        manual_override_policy: str = Form("REQUIRE_REVIEW"),
     ):
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
@@ -1155,6 +1382,25 @@ def register_advanced_sync_routes(
         repositories = get_web_repositories(request)
         normalized_field_name = str(field_name or "").strip()
         normalized_provider = str(source_provider or "*").strip().lower() or "*"
+        resolved_authority_mode = (
+            _submitted_text(authority_mode, "PROVIDER_PRIORITY")
+            or "PROVIDER_PRIORITY"
+        )
+        resolved_authoritative_connector = _submitted_text(
+            authoritative_connector_id, ""
+        )
+        resolved_provider_priority = _submitted_text(provider_priority, "")
+        resolved_authority_conflict_policy = (
+            _submitted_text(conflict_policy, "PROVIDER_PRIORITY")
+            or "PROVIDER_PRIORITY"
+        )
+        resolved_authority_null_policy = (
+            _submitted_text(null_policy, "PRESERVE_TARGET") or "PRESERVE_TARGET"
+        )
+        resolved_manual_override_policy = (
+            _submitted_text(manual_override_policy, "REQUIRE_REVIEW")
+            or "REQUIRE_REVIEW"
+        )
         try:
             rule = repositories.field_authority_rule_repo.upsert_rule(
                 org_id=current_org.org_id,
@@ -1167,6 +1413,12 @@ def register_advanced_sync_routes(
                 is_enabled=to_bool(is_enabled, True),
                 notes=str(notes or "").strip(),
                 created_by=user.username,
+                authority_mode=resolved_authority_mode,
+                authoritative_connector_id=resolved_authoritative_connector,
+                provider_priority=split_csv_values(resolved_provider_priority),
+                conflict_policy=resolved_authority_conflict_policy,
+                null_policy=resolved_authority_null_policy,
+                manual_override_policy=resolved_manual_override_policy,
             )
         except (TypeError, ValueError) as exc:
             flash_t(
@@ -1191,6 +1443,13 @@ def register_advanced_sync_routes(
                 "prevent_loop": rule.prevent_loop,
                 "is_enabled": rule.is_enabled,
                 "rule_revision": rule.rule_revision,
+                "authority_mode": rule.authority_mode,
+                "authoritative_connector_id": rule.authoritative_connector_id,
+                "provider_priority": rule.provider_priority,
+                "conflict_policy": rule.conflict_policy,
+                "null_policy": rule.null_policy,
+                "manual_override_policy": rule.manual_override_policy,
+                "effective_version": rule.effective_version,
             },
         )
         flash(

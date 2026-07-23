@@ -6,6 +6,10 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sync_app.core.fingerprints import fingerprint_json
+from sync_app.core.sync_policies import (
+    FORBIDDEN_GENERIC_AD_ATTRIBUTES,
+    SAFE_TRANSFORM_OPERATIONS,
+)
 from sync_app.services.config_release import build_config_release_center_data
 from sync_app.services.runtime_bootstrap import resolve_runtime_config_fingerprint
 
@@ -43,6 +47,16 @@ def _json_list(value: Any) -> list[Any]:
     except (TypeError, ValueError, json.JSONDecodeError):
         return []
     return decoded if isinstance(decoded, list) else []
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    try:
+        decoded = json.loads(str(value or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
 
 
 def _is_expired(value: Any) -> bool:
@@ -163,6 +177,8 @@ class RolloutReadinessService:
     job_repo: Any
     review_repo: Any
     conflict_repo: Any
+    source_field_registry_repo: Any | None = None
+    ad_target_attribute_repo: Any | None = None
 
     def evaluate_organization(
         self,
@@ -304,6 +320,52 @@ class RolloutReadinessService:
         ad_snapshot_expired = bool(
             ad_snapshot and _is_expired(_row_value(ad_snapshot, "expires_at", ""))
         )
+        source_field_records = (
+            self.source_field_registry_repo.list_fields(
+                org_id=normalized_org_id,
+                provider_id=normalized_provider,
+                current_snapshot_id=source_snapshot_id,
+            )
+            if self.source_field_registry_repo is not None and source_snapshot_id
+            else []
+        )
+        all_source_field_records = (
+            self.source_field_registry_repo.list_fields(
+                org_id=normalized_org_id,
+                provider_id=normalized_provider,
+            )
+            if self.source_field_registry_repo is not None
+            else []
+        )
+        source_field_catalog_current = bool(
+            source_snapshot_id
+            and (
+                source_field_records
+                if self.source_field_registry_repo is not None
+                else True
+            )
+        )
+        ad_target_attributes = (
+            self.ad_target_attribute_repo.list_attributes(
+                org_id=normalized_org_id,
+                current_snapshot_id=ad_snapshot_id,
+            )
+            if self.ad_target_attribute_repo is not None and ad_snapshot_id
+            else []
+        )
+        all_ad_target_attributes = (
+            self.ad_target_attribute_repo.list_attributes(org_id=normalized_org_id)
+            if self.ad_target_attribute_repo is not None
+            else []
+        )
+        ad_capability_catalog_current = bool(
+            ad_snapshot_id
+            and (
+                ad_target_attributes
+                if self.ad_target_attribute_repo is not None
+                else True
+            )
+        )
 
         review = (
             self.data_quality_review_repo.get_review_for_snapshot(
@@ -407,6 +469,145 @@ class RolloutReadinessService:
             )
             if bool(getattr(item, "is_enabled", False))
         ]
+        source_fields_by_path = {
+            item.raw_field_path.casefold(): item for item in source_field_records
+        }
+        source_fields_by_canonical = {
+            item.canonical_field_key.casefold(): item
+            for item in source_field_records
+            if item.canonical_field_key
+        }
+        ad_attributes_by_name = {
+            item.ldap_attribute.casefold(): item for item in ad_target_attributes
+        }
+        mapping_validation_errors: list[dict[str, Any]] = []
+        scalar_attribute_mappings = []
+        for rule in attribute_mappings:
+            if _text(getattr(rule, "direction", "source_to_ad")) != "source_to_ad":
+                continue
+            target_field = _text(getattr(rule, "target_field", ""))
+            source_field = _text(
+                getattr(rule, "raw_source_field_path", "")
+                or getattr(rule, "canonical_source_field", "")
+                or getattr(rule, "source_field", "")
+            )
+            mapping_role = _text(
+                getattr(rule, "mapping_role", "ATTRIBUTE_SYNC")
+            ).upper()
+            if mapping_role != "ATTRIBUTE_SYNC":
+                if (
+                    mapping_role == "RELATIONSHIP"
+                    and target_field.casefold() == "proxyaddresses"
+                ):
+                    target_attribute = ad_attributes_by_name.get(
+                        target_field.casefold()
+                    )
+                    if (
+                        target_attribute is None
+                        or not target_attribute.is_writable
+                        or target_attribute.special_handler_type
+                        != "proxy_addresses"
+                    ):
+                        mapping_validation_errors.append(
+                            {
+                                "rule_id": getattr(rule, "id", None),
+                                "code": "proxy_addresses_capability_invalid",
+                                "target_field": target_field,
+                            }
+                        )
+                continue
+            scalar_attribute_mappings.append(rule)
+            if target_field.casefold() in FORBIDDEN_GENERIC_AD_ATTRIBUTES:
+                mapping_validation_errors.append(
+                    {
+                        "rule_id": getattr(rule, "id", None),
+                        "code": "dedicated_handler_required",
+                        "target_field": target_field,
+                    }
+                )
+                continue
+            target_attribute = ad_attributes_by_name.get(target_field.casefold())
+            if target_attribute is None and self.ad_target_attribute_repo is not None:
+                mapping_validation_errors.append(
+                    {
+                        "rule_id": getattr(rule, "id", None),
+                        "code": "ad_attribute_not_detected",
+                        "target_field": target_field,
+                    }
+                )
+                continue
+            if target_attribute is not None and not target_attribute.is_writable:
+                mapping_validation_errors.append(
+                    {
+                        "rule_id": getattr(rule, "id", None),
+                        "code": "ad_attribute_not_writable",
+                        "target_field": target_field,
+                    }
+                )
+            if target_attribute is not None and target_attribute.requires_special_handler:
+                mapping_validation_errors.append(
+                    {
+                        "rule_id": getattr(rule, "id", None),
+                        "code": "dedicated_handler_required",
+                        "target_field": target_field,
+                    }
+                )
+            pipeline = list(getattr(rule, "transform_pipeline", []) or [])
+            operations = [
+                _text(step.get("op") or step.get("type")).lower()
+                for step in pipeline
+            ]
+            if any(operation not in SAFE_TRANSFORM_OPERATIONS for operation in operations):
+                mapping_validation_errors.append(
+                    {
+                        "rule_id": getattr(rule, "id", None),
+                        "code": "unsafe_transform",
+                        "target_field": target_field,
+                    }
+                )
+            source_record = source_fields_by_path.get(
+                source_field.casefold()
+            ) or source_fields_by_canonical.get(source_field.casefold())
+            source_is_multi = bool(source_record and source_record.is_multi_value)
+            if (
+                target_attribute is not None
+                and source_is_multi
+                and not target_attribute.is_multi_value
+                and "join" not in operations
+            ):
+                mapping_validation_errors.append(
+                    {
+                        "rule_id": getattr(rule, "id", None),
+                        "code": "multi_to_scalar_requires_join",
+                        "target_field": target_field,
+                    }
+                )
+            if (
+                target_attribute is not None
+                and not source_is_multi
+                and target_attribute.is_multi_value
+                and "split" not in operations
+            ):
+                mapping_validation_errors.append(
+                    {
+                        "rule_id": getattr(rule, "id", None),
+                        "code": "scalar_to_multi_requires_split",
+                        "target_field": target_field,
+                    }
+                )
+        attribute_mappings_valid = bool(scalar_attribute_mappings) and not mapping_validation_errors
+        field_authority_valid = bool(field_authority_rules) and all(
+            _text(getattr(rule, "authority_mode", "PROVIDER_PRIORITY")).upper()
+            in {
+                "SINGLE_SOURCE",
+                "PROVIDER_PRIORITY",
+                "PRESERVE_AD",
+                "MANUAL_ONLY",
+                "FIRST_NON_EMPTY",
+                "REJECT_ON_CONFLICT",
+            }
+            for rule in field_authority_rules
+        )
         department_mappings = [
             item
             for item in self.department_ou_mapping_repo.list_mapping_records(
@@ -439,12 +640,47 @@ class RolloutReadinessService:
             normalized_org_id,
         )
         release = release_data.get("latest_snapshot")
+        source_catalog_fingerprint = fingerprint_json(
+            [item.to_dict() for item in source_field_records],
+            namespace="source-field-catalog",
+        )
+        ad_capability_fingerprint = fingerprint_json(
+            [item.to_dict() for item in ad_target_attributes],
+            namespace="ad-capability-catalog",
+        )
         release_current = bool(
             release
             and not release_data.get("has_unpublished_changes")
             and source_snapshot_id
             and int(getattr(release, "source_snapshot_id", 0) or 0)
             == source_snapshot_id
+            and _text(getattr(release, "source_snapshot_fingerprint", ""))
+            == source_snapshot_fingerprint
+            and ad_snapshot_id
+            and int(getattr(release, "ad_snapshot_id", 0) or 0) == ad_snapshot_id
+            and _text(getattr(release, "ad_snapshot_fingerprint", ""))
+            == ad_snapshot_fingerprint
+            and (
+                self.source_field_registry_repo is None
+                or _text(
+                    getattr(release, "source_field_catalog_fingerprint", "")
+                )
+                == source_catalog_fingerprint
+            )
+            and (
+                self.ad_target_attribute_repo is None
+                or _text(
+                    getattr(release, "ad_capability_catalog_fingerprint", "")
+                )
+                == ad_capability_fingerprint
+            )
+            and match_run_id
+            and _text(getattr(release, "identity_match_run_id", ""))
+            == match_run_id
+            and _text(
+                getattr(release, "identity_match_rules_fingerprint", "")
+            )
+            == rules_fingerprint
         )
         release_id = int(getattr(release, "id", 0) or 0)
         release_hash = _text(getattr(release, "bundle_hash", ""))
@@ -480,8 +716,8 @@ class RolloutReadinessService:
             and not unresolved_match_candidates
             and not unresolved_takeovers
             and naming_configured
-            and bool(field_authority_rules)
-            and bool(attribute_mappings)
+            and field_authority_valid
+            and attribute_mappings_valid
             and bool(department_mappings or default_ou)
             and bool(disabled_ou)
             and lifecycle_safety_configured
@@ -637,6 +873,59 @@ class RolloutReadinessService:
                 "expires_at": _text(_row_value(ad_snapshot, "expires_at", "")),
             },
         ))
+        source_catalog_status = (
+            "complete" if source_status == "complete" and source_field_catalog_current
+            else "stale" if all_source_field_records
+            else "action_required" if source_status == "complete"
+            else "blocked"
+        )
+        steps.append(self._step(
+            "source_field_catalog_current", source_catalog_status, "Source field registry",
+            "Discover standard, custom and canonical source fields for the current snapshot.",
+            blocker_reason=(
+                "" if source_catalog_status == "complete"
+                else "The field registry belongs to an older source snapshot."
+                if source_catalog_status == "stale"
+                else "Build the field registry from the current source snapshot."
+                if source_catalog_status == "action_required"
+                else "A current source snapshot is required before field discovery."
+            ),
+            action_url="/data-sources/source-directory?view=fields",
+            action_label="Review source fields", phase="Snapshots and quality",
+            related_snapshot_id=source_snapshot_id or None,
+            last_updated_at=max((item.last_detected_at for item in source_field_records), default=""),
+            metadata={
+                "field_count": len(source_field_records),
+                "schema_versions": sorted({item.schema_version for item in source_field_records}),
+            },
+        ))
+        ad_catalog_status = (
+            "complete" if ad_status == "complete" and ad_capability_catalog_current
+            else "stale" if all_ad_target_attributes
+            else "action_required" if ad_status == "complete"
+            else "blocked"
+        )
+        steps.append(self._step(
+            "ad_capability_catalog_current", ad_catalog_status, "AD attribute capability registry",
+            "Validate target attributes against the current AD schema and write capability evidence.",
+            blocker_reason=(
+                "" if ad_catalog_status == "complete"
+                else "The AD attribute registry belongs to an older AD snapshot."
+                if ad_catalog_status == "stale"
+                else "Build the AD attribute registry from the current AD snapshot."
+                if ad_catalog_status == "action_required"
+                else "A current AD snapshot is required before capability discovery."
+            ),
+            action_url="/sync-policies/attribute-mappings",
+            action_label="Review AD capabilities", phase="Snapshots and quality",
+            related_snapshot_id=ad_snapshot_id or None,
+            last_updated_at=max((item.last_checked_at for item in ad_target_attributes), default=""),
+            metadata={
+                "attribute_count": len(ad_target_attributes),
+                "writable_count": sum(1 for item in ad_target_attributes if item.is_writable),
+                "schema_versions": sorted({item.schema_version for item in ad_target_attributes}),
+            },
+        ))
         if quality_current:
             quality_status, quality_reason = "complete", ""
         elif latest_quality_review and source_snapshot:
@@ -715,16 +1004,22 @@ class RolloutReadinessService:
 
         config_steps = [
             ("account_naming_configured", naming_configured, "Account naming", "Configure account naming and collision handling.", "/sync-policies/account-naming", "Configure account naming"),
-            ("field_authority_configured", bool(field_authority_rules), "Field authority", "Define the authoritative source and direction for managed identity fields.", "/sync-policies/field-authority", "Configure field authority"),
-            ("attribute_mappings_configured", bool(attribute_mappings), "Attribute mappings", "Map authoritative enterprise identity fields to AD attributes.", "/sync-policies/attribute-mappings", "Configure attribute mappings"),
+            ("field_authority_configured", field_authority_valid, "Field authority", "Define the authoritative source and direction for managed identity fields.", "/sync-policies/field-authority", "Configure field authority"),
+            ("attribute_mappings_configured", attribute_mappings_valid, "Attribute mappings", "Map authoritative enterprise identity fields to AD attributes.", "/sync-policies/attribute-mappings", "Configure attribute mappings"),
             ("department_ou_routing_configured", bool((department_mappings or default_ou) and disabled_ou), "Department and OU routing", "Configure stable department-to-OU routing and disabled-user placement.", "/sync-policies/department-ou-routing", "Configure OU routing"),
             ("lifecycle_safety_configured", lifecycle_safety_configured, "Lifecycle and security", "Configure joiner, mover, leaver, rehire and disable safety gates.", "/sync-policies/lifecycle", "Configure lifecycle safety"),
         ]
         for key, configured, title, summary, url, label in config_steps:
+            validation_metadata = (
+                {"validation_errors": mapping_validation_errors}
+                if key == "attribute_mappings_configured"
+                else {}
+            )
             steps.append(self._step(
                 key, "complete" if configured else "action_required", title, summary,
                 blocker_reason="" if configured else "This required business policy is not fully configured.",
                 action_url=url, action_label=label, phase="Identity and directory policies",
+                metadata=validation_metadata,
             ))
         steps.append(self._step(
             "sync_scope_current", "complete" if scope_current else "stale" if scope else "action_required",
@@ -737,7 +1032,9 @@ class RolloutReadinessService:
 
         policy_prerequisite_keys = {
             "source_connector_ready", "ad_connector_ready",
-            "source_snapshot_current", "ad_snapshot_current", "data_quality_reviewed",
+            "source_snapshot_current", "ad_snapshot_current",
+            "source_field_catalog_current", "ad_capability_catalog_current",
+            "data_quality_reviewed",
             "identity_rules_configured", "identity_match_run_current", "identity_blockers_resolved",
             "account_takeover_resolved",
             "account_naming_configured", "field_authority_configured",

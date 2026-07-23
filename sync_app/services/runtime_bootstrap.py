@@ -13,6 +13,7 @@ from sync_app.services.state import SyncStateManager
 from sync_app.services.typed_settings import normalize_first_sync_identity_claim_mode
 from sync_app.storage.local_db import (
     ADDirectorySnapshotRepository,
+    ADTargetAttributeRegistryRepository,
     AttributeMappingRuleRepository,
     CustomManagedGroupBindingRepository,
     ConfigReleaseSnapshotRepository,
@@ -77,6 +78,7 @@ class RuntimeRepositories:
     identity_match_run_repo: IdentityMatchRunRepository
     ad_directory_snapshot_repo: ADDirectorySnapshotRepository
     config_release_snapshot_repo: ConfigReleaseSnapshotRepository
+    ad_target_attribute_registry_repo: ADTargetAttributeRegistryRepository | None = None
 
 
 @dataclass(frozen=True)
@@ -497,6 +499,7 @@ def bootstrap_sync_runtime(
     identity_match_run_repo = IdentityMatchRunRepository(db_manager)
     ad_directory_snapshot_repo = ADDirectorySnapshotRepository(db_manager)
     config_release_snapshot_repo = ConfigReleaseSnapshotRepository(db_manager)
+    ad_target_attribute_registry_repo = ADTargetAttributeRegistryRepository(db_manager)
     identity_match_rule_repo.seed_defaults(org_id=organization.org_id)
 
     active_job = job_repo.get_execution_job_record()
@@ -552,6 +555,7 @@ def bootstrap_sync_runtime(
         identity_match_run_repo=identity_match_run_repo,
         ad_directory_snapshot_repo=ad_directory_snapshot_repo,
         config_release_snapshot_repo=config_release_snapshot_repo,
+        ad_target_attribute_registry_repo=ad_target_attribute_registry_repo,
     )
     config_hash = _build_config_hash(
         config=config,

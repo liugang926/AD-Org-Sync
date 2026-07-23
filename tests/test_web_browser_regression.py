@@ -785,7 +785,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertTrue(self.page.get_by_role("button", name="Refresh Directory").is_visible())
         self.assertEqual(self.page.get_by_role("button", name="Test Connection").count(), 0)
         self.assertEqual(self.page.locator('select[name="scope_type"]').count(), 0)
-        self.assertEqual(self.page.locator(".source-directory-tabs a").count(), 4)
+        self.assertEqual(self.page.locator(".source-directory-tabs a").count(), 5)
         self.assertEqual(self.page.locator(".source-metric-card").count(), 9)
         self.assertEqual(
             self.page.locator(".page-header__actions .button:not(.secondary):not(.ghost)").count(),
@@ -834,7 +834,7 @@ class WebBrowserRegressionTests(unittest.TestCase):
             wait_until="networkidle",
         )
         self._assert_page_has_no_horizontal_overflow()
-        self.assertEqual(self.page.locator(".source-directory-tabs a").count(), 4)
+        self.assertEqual(self.page.locator(".source-directory-tabs a").count(), 5)
         self._capture("source-directory-overview-mobile-zh.png")
 
         self.page.set_viewport_size({"width": 1440, "height": 1100})

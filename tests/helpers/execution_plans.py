@@ -5,6 +5,7 @@ from typing import Any
 
 from sync_app.storage.local_db import (
     ADDirectorySnapshotRepository,
+    ADTargetAttributeRegistryRepository,
     AttributeMappingRuleRepository,
     DataQualityReviewRepository,
     DatabaseManager,
@@ -135,7 +136,14 @@ def create_eligible_execution_plan(
         snapshot_id,
         departments=[],
         users=[],
-        fields=[],
+        fields=[
+            {
+                "name": "name",
+                "canonical_field_key": "display_name",
+                "data_type": "string",
+                "coverage": 0,
+            }
+        ],
         fingerprint=snapshot_fingerprint,
         ttl_minutes=240,
     )
@@ -165,6 +173,17 @@ def create_eligible_execution_plan(
         expires_at=(datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(
             timespec="seconds"
         ),
+    )
+    ADTargetAttributeRegistryRepository(db_manager).sync_snapshot_catalog(
+        org_id=org_id,
+        ad_connector_id="default",
+        snapshot_id=ad_snapshot_id,
+        capability_report={
+            "schema_attributes": ["displayName"],
+            "capabilities": {
+                "update_user": {"status": "success", "verified": True}
+            },
+        },
     )
 
     match_rule_repo = IdentityMatchRuleRepository(db_manager)

@@ -70,6 +70,21 @@ class SourceDirectoryUser:
     primary_department_id: Optional[int] = None
     account_status: str = "active"
     is_active: bool = True
+    platform_union_id: str = ""
+    platform_open_id: str = ""
+    employee_number: str = ""
+    given_name: str = ""
+    family_name: str = ""
+    enterprise_email: str = ""
+    telephone: str = ""
+    job_title: str = ""
+    employee_type: str = ""
+    employment_status: str = ""
+    manager_account_id: str = ""
+    work_station: str = ""
+    city: str = ""
+    hire_date: str = ""
+    leave_date: str = ""
 
     @classmethod
     def from_wecom_payload(cls, payload: Dict[str, Any]) -> "SourceDirectoryUser":
@@ -92,7 +107,13 @@ class SourceDirectoryUser:
         if normalized_departments:
             self.departments = normalized_departments
         normalized = self.from_source_payload(payload)
-        for field_name in ("provider_id", "employee_id", "mobile", "position", "account_status"):
+        for field_name in (
+            "provider_id", "employee_id", "mobile", "position", "account_status",
+            "platform_union_id", "platform_open_id", "employee_number", "given_name",
+            "family_name", "enterprise_email", "telephone", "job_title", "employee_type",
+            "employment_status", "manager_account_id", "work_station", "city", "hire_date",
+            "leave_date",
+        ):
             value = getattr(normalized, field_name)
             if value not in (None, ""):
                 setattr(self, field_name, value)
@@ -119,6 +140,21 @@ class SourceDirectoryUser:
                 "primary_department_id": self.primary_department_id,
                 "account_status": self.account_status,
                 "is_active": self.is_active,
+                "platform_union_id": self.platform_union_id,
+                "platform_open_id": self.platform_open_id,
+                "employee_number": self.employee_number,
+                "given_name": self.given_name,
+                "family_name": self.family_name,
+                "enterprise_email": self.enterprise_email,
+                "telephone": self.telephone,
+                "job_title": self.job_title,
+                "employee_type": self.employee_type,
+                "employment_status": self.employment_status,
+                "manager_account_id": self.manager_account_id,
+                "work_station": self.work_station,
+                "city": self.city,
+                "hire_date": self.hire_date,
+                "leave_date": self.leave_date,
             }
         )
         return payload
@@ -156,6 +192,8 @@ class SourceDirectoryUser:
         userid = (
             payload_copy.get("userid")
             or payload_copy.get("userId")
+            or payload_copy.get("user_id")
+            or payload_copy.get("open_id")
             or payload_copy.get("staffid")
             or payload_copy.get("staffId")
             or payload_copy.get("unionid")
@@ -165,6 +203,7 @@ class SourceDirectoryUser:
         )
         email = (
             payload_copy.get("email")
+            or payload_copy.get("enterprise_email")
             or payload_copy.get("org_email")
             or payload_copy.get("orgEmail")
             or payload_copy.get("work_email")
@@ -223,10 +262,37 @@ class SourceDirectoryUser:
             primary_department_id=primary_department_id,
             account_status=account_status,
             is_active=is_active,
+            platform_union_id=str(payload_copy.get("union_id") or payload_copy.get("unionid") or ""),
+            platform_open_id=str(payload_copy.get("open_id") or payload_copy.get("openId") or ""),
+            employee_number=str(payload_copy.get("employee_number") or payload_copy.get("employeeNumber") or ""),
+            given_name=str(payload_copy.get("given_name") or payload_copy.get("givenName") or ""),
+            family_name=str(payload_copy.get("family_name") or payload_copy.get("familyName") or ""),
+            enterprise_email=str(
+                payload_copy.get("enterprise_email")
+                or payload_copy.get("biz_mail")
+                or payload_copy.get("org_email")
+                or ""
+            ),
+            telephone=str(payload_copy.get("telephone") or payload_copy.get("telephoneNumber") or ""),
+            job_title=str(payload_copy.get("job_title") or payload_copy.get("title") or payload_copy.get("position") or ""),
+            employee_type=str(payload_copy.get("employee_type") or payload_copy.get("employeeType") or ""),
+            employment_status=str(payload_copy.get("employment_status") or payload_copy.get("employmentStatus") or account_status),
+            manager_account_id=str(
+                payload_copy.get("manager_account_id")
+                or payload_copy.get("manager_userid")
+                or payload_copy.get("managerUserId")
+                or payload_copy.get("leader_user_id")
+                or ""
+            ),
+            work_station=str(payload_copy.get("work_station") or payload_copy.get("workStation") or payload_copy.get("office") or ""),
+            city=str(payload_copy.get("city") or ""),
+            hire_date=str(payload_copy.get("hire_date") or payload_copy.get("hireDate") or payload_copy.get("join_time") or ""),
+            leave_date=str(payload_copy.get("leave_date") or payload_copy.get("leaveDate") or payload_copy.get("resign_time") or ""),
         )
 
 SourceUser = SourceDirectoryUser
 WeComUser = SourceDirectoryUser
+CanonicalUserDTO = SourceDirectoryUser
 
 
 @dataclass(slots=True)

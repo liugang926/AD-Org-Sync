@@ -229,6 +229,7 @@ def instantiate_source_api_client(api_factory, *args: Any, logger=None):
 class SourceDirectoryProvider(ABC):
     provider_id = DEFAULT_SOURCE_PROVIDER
     display_name = "Source Provider"
+    employee_id_attribute = ""
 
     @abstractmethod
     def list_departments(self) -> list[DepartmentNode]:
@@ -297,6 +298,19 @@ class SourceDirectoryProvider(ABC):
 
     def normalize_user(self, payload: dict[str, Any]) -> SourceDirectoryUser:
         normalized = SourceDirectoryUser.from_source_payload(payload)
+        configured_path = str(self.employee_id_attribute or "").strip()
+        configured_value: Any = payload.get(configured_path)
+        if configured_value in (None, "") and configured_path:
+            configured_value = payload
+            for segment in configured_path.split("."):
+                if not isinstance(configured_value, dict):
+                    configured_value = None
+                    break
+                configured_value = configured_value.get(segment)
+        if configured_path and isinstance(configured_value, (list, tuple, set, dict)):
+            configured_value = None
+        if configured_value not in (None, ""):
+            normalized.employee_id = str(configured_value).strip()
         normalized.provider_id = self.provider_id
         normalized.raw_payload.setdefault("provider_id", self.provider_id)
         return normalized

@@ -17,9 +17,13 @@ from sync_app.core.sync_policies import (
     resolve_username_template,
 )
 from sync_app.storage.repositories.source_directory import SourceDirectoryRepository
+from sync_app.storage.repositories.field_registry import (
+    canonical_field_for_path,
+    category_for_canonical_field,
+    is_secret_field,
+    is_sensitive_field,
+)
 
-
-SENSITIVE_FIELD_MARKERS = ("secret", "token", "password", "credential", "mobile", "phone", "telephone")
 
 # These describe the normalized directory model, not provider-specific raw
 # field names. A discovered raw field receives one of these labels only when
@@ -48,14 +52,12 @@ def mask_mobile(value: Any) -> str:
 
 def bounded_scalar_payload(payload: dict[str, Any], *, max_fields: int = 50) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for key in sorted(payload):
+    for key, value in _flatten_catalog_payload(payload).items():
         if len(result) >= max_fields:
             break
         name = str(key or "").strip()
-        lowered = name.lower()
-        if not name or any(marker in lowered for marker in SENSITIVE_FIELD_MARKERS):
+        if not name or is_secret_field(name) or is_sensitive_field(name):
             continue
-        value = payload.get(key)
         if isinstance(value, (dict, list, tuple, set)) or value is None:
             continue
         rendered = str(value)
@@ -63,6 +65,55 @@ def bounded_scalar_payload(payload: dict[str, Any], *, max_fields: int = 50) -> 
             rendered = rendered[:256]
         result[name] = rendered
     return result
+
+
+def _flatten_catalog_payload(
+    payload: dict[str, Any],
+    *,
+    prefix: str = "",
+    max_fields: int = 200,
+    max_depth: int = 4,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+
+    def visit(value: Any, path: str, depth: int) -> None:
+        if len(result) >= max_fields or not path or is_secret_field(path):
+            return
+        if isinstance(value, dict) and depth < max_depth:
+            for child_key in sorted(value):
+                child_name = str(child_key or "").strip()
+                if child_name:
+                    visit(value[child_key], f"{path}.{child_name}" if path else child_name, depth + 1)
+            return
+        if isinstance(value, (list, tuple, set)):
+            scalar_values = [item for item in value if not isinstance(item, (dict, list, tuple, set))]
+            result[path] = scalar_values if len(scalar_values) == len(value) else list(value)
+            return
+        if value is not None:
+            result[path] = value
+
+    for key in sorted(payload):
+        name = str(key or "").strip()
+        if name:
+            visit(payload[key], f"{prefix}.{name}" if prefix else name, 0)
+    return result
+
+
+def _field_data_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, (list, tuple, set)):
+        return "array"
+    text = str(value or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[T ][^ ]+)?", text):
+        return "date"
+    return "string"
 
 
 def _comparable_scalar(value: Any) -> str:
@@ -172,6 +223,8 @@ class SourceDirectoryService:
             field_coverage: Counter[str] = Counter()
             field_samples: dict[str, list[str]] = {}
             field_semantic_matches: dict[str, Counter[str]] = {}
+            field_types: dict[str, set[str]] = {}
+            multi_value_fields: set[str] = set()
             for source_user_id in sorted(users_by_id):
                 user = users_by_id[source_user_id]
                 try:
@@ -197,16 +250,40 @@ class SourceDirectoryService:
                     "account_status": user.account_status,
                     "is_active": user.is_active,
                     "provider_id": user.provider_id,
+                    "platform_union_id": user.platform_union_id,
+                    "platform_open_id": user.platform_open_id,
+                    "employee_number": user.employee_number,
+                    "given_name": user.given_name,
+                    "family_name": user.family_name,
+                    "enterprise_email": user.enterprise_email,
+                    "mobile": user.mobile,
+                    "telephone": user.telephone,
+                    "job_title": user.job_title,
+                    "employee_type": user.employee_type,
+                    "employment_status": user.employment_status,
+                    "manager_account_id": user.manager_account_id,
+                    "work_station": user.work_station,
+                    "city": user.city,
+                    "hire_date": user.hire_date,
+                    "leave_date": user.leave_date,
+                    "department_ids": department_ids,
                 }
-                for name, value in {**safe_payload, **normalized_scalar_fields}.items():
-                    if value in (None, ""):
+                catalog_payload = _flatten_catalog_payload(user.to_state_payload())
+                for name, value in {**catalog_payload, **normalized_scalar_fields}.items():
+                    if value in (None, "", [], {}):
                         continue
                     field_coverage[name] += 1
-                    rendered = str(value)
+                    field_types.setdefault(name, set()).add(_field_data_type(value))
+                    if isinstance(value, (list, tuple, set)):
+                        multi_value_fields.add(name)
+                        sample_values = list(value)
+                    else:
+                        sample_values = [value]
                     samples = field_samples.setdefault(name, [])
-                    masked_sample = self._mask_field_sample(name, rendered)
-                    if masked_sample not in samples and len(samples) < 3:
-                        samples.append(masked_sample)
+                    for sample_value in sample_values:
+                        masked_sample = self._mask_field_sample(name, str(sample_value))
+                        if masked_sample not in samples and len(samples) < 3:
+                            samples.append(masked_sample)
                     comparable_value = _comparable_scalar(value)
                     semantic_matches = field_semantic_matches.setdefault(name, Counter())
                     for semantic_name, _label in NORMALIZED_FIELD_LABELS:
@@ -235,12 +312,31 @@ class SourceDirectoryService:
             fields = [
                 {
                     "name": name,
+                    "raw_field_path": name,
+                    "raw_field_name": name.rsplit(".", 1)[-1],
                     "label": _catalog_field_label(
                         name,
                         coverage_count=field_coverage[name],
                         semantic_matches=field_semantic_matches.get(name, Counter()),
                     ),
-                    "data_type": "string",
+                    "canonical_field_key": canonical_field_for_path(name),
+                    "category": category_for_canonical_field(canonical_field_for_path(name)),
+                    "data_type": (
+                        next(iter(field_types.get(name, {"string"})))
+                        if len(field_types.get(name, {"string"})) == 1
+                        else "mixed"
+                    ),
+                    "is_multi_value": name in multi_value_fields,
+                    "is_sensitive": is_sensitive_field(name),
+                    "is_identifier_candidate": canonical_field_for_path(name) in {
+                        "platform_account_id", "platform_union_id", "platform_open_id",
+                        "source_user_id", "employee_id", "employee_number", "personnel_number",
+                    },
+                    "is_custom": not bool(canonical_field_for_path(name)),
+                    "availability_status": (
+                        "type_conflict" if len(field_types.get(name, set())) > 1 else "available"
+                    ),
+                    "permission_status": "granted",
                     "coverage": field_coverage[name],
                     "samples": field_samples.get(name, []),
                 }
@@ -564,4 +660,8 @@ class SourceDirectoryService:
         }
 
 
-__all__ = ["SourceDirectoryService", "bounded_scalar_payload", "mask_mobile"]
+__all__ = [
+    "SourceDirectoryService",
+    "bounded_scalar_payload",
+    "mask_mobile",
+]

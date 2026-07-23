@@ -51,6 +51,10 @@ class CanonicalIdentityPreview:
     def requires_confirmation(self) -> bool:
         return bool(self.conflicts)
 
+    @property
+    def has_blocking_conflicts(self) -> bool:
+        return any(bool(item.get("blocking")) for item in self.conflicts.values())
+
 
 def build_canonical_identity_preview(
     identity: EnterpriseIdentityRecord,
@@ -69,7 +73,23 @@ def build_canonical_identity_preview(
     field_sources: dict[str, Any] = {}
     conflicts: dict[str, Any] = {}
     missing_fields: list[str] = []
-    for field_name in CANONICAL_IDENTITY_FIELDS:
+    managed_fields = tuple(
+        dict.fromkeys(
+            [*CANONICAL_IDENTITY_FIELDS, *(rule.field_name for rule in enabled_rules)]
+        )
+    )
+    existing_canonical_fields = dict(identity.canonical_fields or {})
+    for field_name in managed_fields:
+        field_rules = rules_by_field.get(field_name, [])
+        governing_rule = field_rules[0] if field_rules else None
+        authority_mode = str(
+            getattr(governing_rule, "authority_mode", "PROVIDER_PRIORITY")
+            or "PROVIDER_PRIORITY"
+        ).upper()
+        manual_override_policy = str(
+            getattr(governing_rule, "manual_override_policy", "REQUIRE_REVIEW")
+            or "REQUIRE_REVIEW"
+        ).upper()
         candidates: list[dict[str, Any]] = []
         for account in accounts:
             value = getattr(account, field_name, account.custom_fields.get(field_name, ""))
@@ -90,6 +110,12 @@ def build_canonical_identity_preview(
                     None,
                 ),
             )
+            if (
+                matching_rule
+                and matching_rule.authoritative_connector_id
+                and matching_rule.authoritative_connector_id != account.connector_id
+            ):
+                continue
             priority = matching_rule.source_priority if matching_rule else 1000
             candidates.append(
                 {
@@ -109,10 +135,61 @@ def build_canonical_identity_preview(
                     "prevent_loop": (
                         matching_rule.prevent_loop if matching_rule else True
                     ),
+                    "authority_mode": str(
+                        getattr(matching_rule, "authority_mode", authority_mode)
+                        or authority_mode
+                    ).upper(),
                 }
             )
-        if not candidates:
+        preserved_value = existing_canonical_fields.get(field_name)
+        if (
+            preserved_value not in (None, "")
+            and authority_mode in {"PRESERVE_AD", "MANUAL_ONLY"}
+            or (
+                preserved_value not in (None, "")
+                and manual_override_policy == "PRESERVE"
+            )
+        ):
+            selected_fields[field_name] = preserved_value
+            field_sources[field_name] = {
+                "provider_id": "enterprise_identity",
+                "connector_id": "",
+                "platform_account_id": "",
+                "account_id": 0,
+                "priority": 0,
+                "rule_id": governing_rule.id if governing_rule else None,
+                "sync_direction": "manual",
+                "prevent_loop": True,
+                "authority_mode": authority_mode,
+                "selection_reason": "preserved_manual_or_ad_value",
+            }
+            if authority_mode == "MANUAL_ONLY":
+                continue
+            if authority_mode == "PRESERVE_AD" or manual_override_policy == "PRESERVE":
+                continue
+        if authority_mode == "PRESERVE_AD":
             missing_fields.append(field_name)
+            continue
+        if authority_mode == "MANUAL_ONLY":
+            if candidates:
+                conflicts[field_name] = {
+                    "reason": "manual_only_field_has_provider_candidates",
+                    "blocking": True,
+                    "candidates": candidates,
+                    "authority_mode": authority_mode,
+                }
+            else:
+                missing_fields.append(field_name)
+            continue
+        if authority_mode == "SINGLE_SOURCE" and governing_rule:
+            candidates = [
+                item
+                for item in candidates
+                if governing_rule.source_provider in {"*", item["provider_id"]}
+            ]
+        if not candidates:
+            if field_name not in selected_fields:
+                missing_fields.append(field_name)
             continue
         candidates.sort(
             key=lambda item: (
@@ -136,12 +213,28 @@ def build_canonical_identity_preview(
                 "prevent_loop",
             )
         }
+        field_sources[field_name]["authority_mode"] = authority_mode
+        field_sources[field_name]["selection_reason"] = (
+            "first_non_empty"
+            if authority_mode == "FIRST_NON_EMPTY"
+            else "provider_priority"
+        )
         distinct_values = {
             item["comparable_value"] for item in candidates if item["comparable_value"]
         }
         if len(distinct_values) > 1:
             conflicts[field_name] = {
                 "reason": "platform_authority_value_conflict",
+                "blocking": authority_mode == "REJECT_ON_CONFLICT"
+                or str(
+                    getattr(
+                        governing_rule,
+                        "conflict_policy",
+                        "PROVIDER_PRIORITY",
+                    )
+                    or "PROVIDER_PRIORITY"
+                ).upper()
+                == "REJECT_ON_CONFLICT",
                 "selected": selected["value"],
                 "selected_provider": selected["provider_id"],
                 "alternatives": [
@@ -168,7 +261,12 @@ def build_canonical_identity_preview(
         "conflicts": conflicts,
         "account_ids": sorted(int(item.id or 0) for item in accounts),
         "rule_revisions": sorted(
-            (int(rule.id or 0), rule.rule_revision) for rule in enabled_rules
+            (
+                int(rule.id or 0),
+                rule.rule_revision,
+                int(getattr(rule, "effective_version", rule.rule_revision) or 1),
+            )
+            for rule in enabled_rules
         ),
     }
     return CanonicalIdentityPreview(
@@ -231,6 +329,8 @@ class IdentityCanonicalizationService:
         preview = self.preview(org_id=org_id, identity_id=identity_id)
         if preview.preview_fingerprint != str(expected_preview_fingerprint or ""):
             raise ValueError("canonical identity preview is stale")
+        if preview.has_blocking_conflicts:
+            raise ValueError("canonical identity authority conflict blocks update")
         if preview.requires_confirmation and not confirm_conflicts:
             raise ValueError("canonical identity field conflicts require confirmation")
         fields = dict(preview.selected_fields)

@@ -1037,8 +1037,14 @@ class FieldAuthorityRuleRepository(BaseRepository):
                     INSERT OR IGNORE INTO field_authority_rules (
                       org_id, field_name, source_provider, source_priority,
                       sync_direction, sync_mode, prevent_loop, is_enabled,
-                      rule_revision, notes, created_by, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, 'replace', 1, 1, 1, ?, ?, ?, ?)
+                      rule_revision, notes, created_by, created_at, updated_at,
+                      authority_mode, provider_priority_json, conflict_policy,
+                      null_policy, manual_override_policy, effective_version
+                    ) VALUES (
+                      ?, ?, ?, ?, ?, 'replace', 1, 1, 1, ?, ?, ?, ?,
+                      'PROVIDER_PRIORITY', ?, 'PROVIDER_PRIORITY',
+                      'PRESERVE_TARGET', 'REQUIRE_REVIEW', 1
+                    )
                     """,
                     (
                         normalized_org_id,
@@ -1050,6 +1056,7 @@ class FieldAuthorityRuleRepository(BaseRepository):
                         created_by,
                         now,
                         now,
+                        dumps_json([provider_id]) or "[]",
                     ),
                 )
 
@@ -1066,6 +1073,12 @@ class FieldAuthorityRuleRepository(BaseRepository):
         is_enabled: bool = True,
         notes: str = "",
         created_by: str = "",
+        authority_mode: str = "PROVIDER_PRIORITY",
+        authoritative_connector_id: str = "",
+        provider_priority: Iterable[str] = (),
+        conflict_policy: str = "PROVIDER_PRIORITY",
+        null_policy: str = "PRESERVE_TARGET",
+        manual_override_policy: str = "REQUIRE_REVIEW",
     ) -> FieldAuthorityRuleRecord:
         normalized_org_id = self._resolve_org_id(org_id) or "default"
         normalized_field_name = str(field_name or "").strip()
@@ -1079,6 +1092,53 @@ class FieldAuthorityRuleRepository(BaseRepository):
             raise ValueError("unsupported field authority sync mode")
         if not 1 <= int(source_priority) <= 10000:
             raise ValueError("source_priority must be between 1 and 10000")
+        normalized_provider = str(source_provider or "*").strip().lower() or "*"
+        normalized_authority_mode = str(
+            authority_mode or "PROVIDER_PRIORITY"
+        ).strip().upper()
+        normalized_conflict_policy = str(
+            conflict_policy or "PROVIDER_PRIORITY"
+        ).strip().upper()
+        normalized_null_policy = str(null_policy or "PRESERVE_TARGET").strip().upper()
+        normalized_override_policy = str(
+            manual_override_policy or "REQUIRE_REVIEW"
+        ).strip().upper()
+        if normalized_authority_mode not in {
+            "SINGLE_SOURCE",
+            "PROVIDER_PRIORITY",
+            "PRESERVE_AD",
+            "MANUAL_ONLY",
+            "FIRST_NON_EMPTY",
+            "REJECT_ON_CONFLICT",
+        }:
+            raise ValueError("unsupported authority_mode")
+        if normalized_conflict_policy not in {
+            "REJECT_ON_CONFLICT",
+            "PRESERVE_AD",
+            "PROVIDER_PRIORITY",
+            "MANUAL_REVIEW",
+        }:
+            raise ValueError("unsupported conflict_policy")
+        if normalized_null_policy not in {
+            "IGNORE",
+            "PRESERVE_TARGET",
+            "CLEAR",
+            "USE_DEFAULT",
+            "BLOCK",
+        }:
+            raise ValueError("unsupported null_policy")
+        if normalized_override_policy not in {
+            "ALLOW",
+            "REQUIRE_REVIEW",
+            "PRESERVE",
+            "REJECT",
+        }:
+            raise ValueError("unsupported manual_override_policy")
+        normalized_priority = [
+            str(value).strip().lower()
+            for value in provider_priority
+            if str(value).strip()
+        ] or [normalized_provider]
         now = utcnow_iso()
         with self.db.transaction() as conn:
             conn.execute(
@@ -1086,8 +1146,10 @@ class FieldAuthorityRuleRepository(BaseRepository):
                 INSERT INTO field_authority_rules (
                   org_id, field_name, source_provider, source_priority,
                   sync_direction, sync_mode, prevent_loop, is_enabled,
-                  rule_revision, notes, created_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                  rule_revision, notes, created_by, created_at, updated_at,
+                  authority_mode, authoritative_connector_id, provider_priority_json,
+                  conflict_policy, null_policy, manual_override_policy, effective_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 ON CONFLICT(org_id, field_name, source_provider)
                 DO UPDATE SET
                   source_priority = excluded.source_priority,
@@ -1096,13 +1158,20 @@ class FieldAuthorityRuleRepository(BaseRepository):
                   prevent_loop = excluded.prevent_loop,
                   is_enabled = excluded.is_enabled,
                   rule_revision = field_authority_rules.rule_revision + 1,
+                  authority_mode = excluded.authority_mode,
+                  authoritative_connector_id = excluded.authoritative_connector_id,
+                  provider_priority_json = excluded.provider_priority_json,
+                  conflict_policy = excluded.conflict_policy,
+                  null_policy = excluded.null_policy,
+                  manual_override_policy = excluded.manual_override_policy,
+                  effective_version = field_authority_rules.effective_version + 1,
                   notes = excluded.notes,
                   updated_at = excluded.updated_at
                 """,
                 (
                     normalized_org_id,
                     normalized_field_name,
-                    str(source_provider or "*").strip().lower() or "*",
+                    normalized_provider,
                     int(source_priority),
                     normalized_direction,
                     normalized_sync_mode,
@@ -1112,6 +1181,12 @@ class FieldAuthorityRuleRepository(BaseRepository):
                     str(created_by or ""),
                     now,
                     now,
+                    normalized_authority_mode,
+                    str(authoritative_connector_id or "").strip(),
+                    dumps_json(normalized_priority) or "[]",
+                    normalized_conflict_policy,
+                    normalized_null_policy,
+                    normalized_override_policy,
                 ),
             )
         row = self._fetchone(
@@ -1122,7 +1197,7 @@ class FieldAuthorityRuleRepository(BaseRepository):
             (
                 normalized_org_id,
                 normalized_field_name,
-                str(source_provider or "*").strip().lower() or "*",
+                normalized_provider,
             ),
         )
         if not row:

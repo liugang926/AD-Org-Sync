@@ -11,7 +11,9 @@ from sync_app.storage.local_db import (
     AccountTakeoverRepository,
     ADAccountRepository,
     ADDirectorySnapshotRepository,
+    ADTargetAttributeRegistryRepository,
     AttributeMappingRuleRepository,
+    CanonicalFieldRegistryRepository,
     ConfigReleaseSnapshotRepository,
     CustomManagedGroupBindingRepository,
     DataQualityReviewRepository,
@@ -41,6 +43,7 @@ from sync_app.storage.local_db import (
     SyncPlanReviewRepository,
     SyncReplayRequestRepository,
     SourceDirectoryRepository,
+    SourceFieldRegistryRepository,
     SourceConnectorRepository,
     UserDepartmentOverrideRepository,
     UserIdentityBindingRepository,
@@ -98,6 +101,9 @@ class WebRepositoryState:
     identity_match_run_repo: IdentityMatchRunRepository
     identity_match_decision_repo: IdentityMatchDecisionRepository
     field_authority_rule_repo: FieldAuthorityRuleRepository
+    source_field_registry_repo: SourceFieldRegistryRepository
+    canonical_field_registry_repo: CanonicalFieldRegistryRepository
+    ad_target_attribute_registry_repo: ADTargetAttributeRegistryRepository
 
 
 @dataclass(slots=True)
@@ -209,10 +215,14 @@ def initialize_web_app_state(
         identity_match_run_repo=IdentityMatchRunRepository(db_manager),
         identity_match_decision_repo=IdentityMatchDecisionRepository(db_manager),
         field_authority_rule_repo=FieldAuthorityRuleRepository(db_manager),
+        source_field_registry_repo=SourceFieldRegistryRepository(db_manager),
+        canonical_field_registry_repo=CanonicalFieldRegistryRepository(db_manager),
+        ad_target_attribute_registry_repo=ADTargetAttributeRegistryRepository(db_manager),
     )
 
     repositories.organization_repo.ensure_default(config_path=config_path)
     repositories.org_config_repo.ensure_loaded("default", config_path=config_path)
+    repositories.canonical_field_registry_repo.seed_defaults()
 
     session_secret = repositories.settings_repo.get_value("web_session_secret", "") or ""
     if not session_secret:

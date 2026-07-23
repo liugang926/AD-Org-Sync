@@ -419,6 +419,14 @@ class ConfigReleaseSnapshotRepository(BaseRepository):
         trigger_action: str = "manual_release",
         created_by: str = "",
         source_snapshot_id: Optional[int] = None,
+        source_snapshot_fingerprint: str = "",
+        ad_snapshot_id: Optional[int] = None,
+        ad_snapshot_fingerprint: str = "",
+        source_field_catalog_fingerprint: str = "",
+        ad_capability_catalog_fingerprint: str = "",
+        identity_match_run_id: str = "",
+        identity_match_rules_fingerprint: str = "",
+        evidence_fingerprint: str = "",
         bundle_hash: str = "",
         bundle: Dict[str, Any],
         summary: Optional[Dict[str, Any]] = None,
@@ -431,8 +439,12 @@ class ConfigReleaseSnapshotRepository(BaseRepository):
                 """
                 INSERT INTO config_release_snapshots (
                   org_id, snapshot_name, trigger_action, created_by, source_snapshot_id,
-                  bundle_hash, bundle_json, summary_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  bundle_hash, bundle_json, summary_json, created_at,
+                  source_snapshot_fingerprint, ad_snapshot_id,
+                  ad_snapshot_fingerprint, source_field_catalog_fingerprint,
+                  ad_capability_catalog_fingerprint, identity_match_run_id,
+                  identity_match_rules_fingerprint, evidence_fingerprint
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     normalized_org_id,
@@ -444,6 +456,14 @@ class ConfigReleaseSnapshotRepository(BaseRepository):
                     dumps_json(bundle),
                     dumps_json(summary),
                     timestamp,
+                    str(source_snapshot_fingerprint or "").strip(),
+                    int(ad_snapshot_id) if ad_snapshot_id is not None else None,
+                    str(ad_snapshot_fingerprint or "").strip(),
+                    str(source_field_catalog_fingerprint or "").strip(),
+                    str(ad_capability_catalog_fingerprint or "").strip(),
+                    str(identity_match_run_id or "").strip(),
+                    str(identity_match_rules_fingerprint or "").strip(),
+                    str(evidence_fingerprint or "").strip(),
                 ),
             )
             return int(cursor.lastrowid)

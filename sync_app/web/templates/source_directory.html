@@ -25,6 +25,7 @@
     <a href="/data-sources/source-directory?view=overview{{ snapshot_query }}" {% if active_view == "overview" %}aria-current="page"{% endif %}>{{ t("Overview") }}</a>
     <a href="/data-sources/source-directory?view=users{{ snapshot_query }}" {% if active_view == "users" %}aria-current="page"{% endif %}>{{ t("Users") }}</a>
     <a href="/data-sources/source-directory?view=departments{{ snapshot_query }}" {% if active_view == "departments" %}aria-current="page"{% endif %}>{{ t("Departments") }}</a>
+    <a href="/data-sources/source-directory?view=fields{{ snapshot_query }}" {% if active_view == "fields" %}aria-current="page"{% endif %}>{{ t("Source Field Catalog") }}</a>
     <a href="/data-sources/source-directory?view=history{% if selected_history_snapshot %}&snapshot_id={{ selected_history_snapshot.id }}{% endif %}" {% if active_view == "history" %}aria-current="page"{% endif %}>{{ t("Snapshot History") }}</a>
   </nav>
 
@@ -246,6 +247,52 @@
         </tbody>
       </table>
     {% endcall %}
+  {% endcall %}
+
+  {% elif active_view == "fields" %}
+  {% call ui.panel(t("Source Field Catalog"), description=t("Review fields discovered from the current immutable snapshot, including type, coverage, permission, sensitivity, and schema conflicts.")) %}
+    <div class="detail-grid compact-detail-grid">
+      <div class="detail-item"><dt class="label">{{ t("Provider") }}</dt><dd class="value">{{ t(provider_name) }}</dd></div>
+      <div class="detail-item"><dt class="label">{{ t("Snapshot") }}</dt><dd class="value">{{ "#" ~ snapshot.id if snapshot else "-" }}</dd></div>
+      <div class="detail-item"><dt class="label">{{ t("Detected fields") }}</dt><dd class="value">{{ source_registry_fields|length }}</dd></div>
+      <div class="detail-item"><dt class="label">{{ t("Canonical fields") }}</dt><dd class="value">{{ canonical_registry_fields|length }}</dd></div>
+    </div>
+    <div class="table-scroll registry-table-window" tabindex="0" role="region" aria-label="{{ t('Source field registry') }}">
+      <table>
+        <thead><tr><th>{{ t("Field") }}</th><th>{{ t("Category / canonical") }}</th><th>{{ t("Type") }}</th><th>{{ t("Coverage") }}</th><th>{{ t("Availability / permission") }}</th><th>{{ t("Data handling") }}</th><th>{{ t("Version") }}</th></tr></thead>
+        <tbody>
+          {% for field in source_registry_fields %}
+          <tr>
+            <td><strong>{{ field.display_label }}</strong><small><code>{{ field.raw_field_path }}</code>{% if field.is_custom %} · {{ t("Custom") }}{% elif field.is_derived %} · {{ t("Derived") }}{% endif %}</small></td>
+            <td>{{ t(field.category) }}<small><code>{{ field.canonical_field_key or "-" }}</code></small></td>
+            <td>{{ t(field.data_type) }}<small>{{ t("Multi-value") if field.is_multi_value else t("Single-value") }}</small></td>
+            <td>{{ (field.coverage_rate * 100)|round(1) }}%<small>{{ field.coverage_count }} / {{ snapshot.user_count if snapshot else 0 }}</small></td>
+            <td>{{ ui.badge(t(field.availability_status), "success" if field.availability_status == "available" else ("danger" if field.availability_status == "type_conflict" else "warning")) }}<small>{{ t(field.permission_status) }}</small></td>
+            <td>{{ t("Sensitive") if field.is_sensitive else t("Standard") }}<small>{% if field.masked_sample_values %}{{ field.masked_sample_values|join(", ") }}{% else %}{{ t("No sample retained") }}{% endif %}</small></td>
+            <td>v{{ field.schema_version }}<small>#{{ field.latest_snapshot_id or "-" }}</small></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" class="table-empty">{{ t("No source fields are available. Refresh the source directory to discover the current provider schema.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endcall %}
+
+  {% call ui.panel(t("Canonical Field Registry"), description=t("Provider fields normalize into this extensible business schema; custom fields use a governed namespace.")) %}
+    <details class="detail-toggle">
+      <summary><strong>{{ t("Show canonical field definitions") }}</strong> · {{ canonical_registry_fields|length }}</summary>
+    <div class="table-scroll registry-table-window" tabindex="0" role="region" aria-label="{{ t('Canonical field registry') }}">
+      <table>
+        <thead><tr><th>{{ t("Canonical field") }}</th><th>{{ t("Category") }}</th><th>{{ t("Type") }}</th><th>{{ t("Allowed roles") }}</th><th>{{ t("Status") }}</th></tr></thead>
+        <tbody>
+          {% for field in canonical_registry_fields %}
+          <tr><td><strong>{{ t(field.display_label) }}</strong><small><code>{{ field.canonical_field_key }}</code></small></td><td>{{ t(field.category) }}</td><td>{{ t(field.data_type) }}<small>{{ t("Multi-value") if field.is_multi_value else t("Single-value") }}</small></td><td>{{ field.allowed_mapping_roles|join(", ") }}</td><td>{{ ui.badge(t("Enabled") if field.is_active else t("Disabled"), "success" if field.is_active else "warning") }}{% if field.is_custom %}<small>{{ t("Custom") }}</small>{% endif %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    </details>
   {% endcall %}
 
   {% elif active_view == "history" %}

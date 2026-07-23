@@ -67,7 +67,7 @@ class RuntimeIdentityFinalizeTests(unittest.TestCase):
         )
         return context, binding_repo, marked_jobs
 
-    def test_only_error_free_apply_confirms_proposed_bindings(self):
+    def test_completed_apply_persists_each_successful_binding(self):
         success_ctx, success_repo, success_jobs = self._context(error_count=0)
         finalize_successful_sync(success_ctx)
         success_repo.apply_successful_identity_bindings.assert_called_once()
@@ -75,7 +75,11 @@ class RuntimeIdentityFinalizeTests(unittest.TestCase):
 
         partial_ctx, partial_repo, partial_jobs = self._context(error_count=1)
         finalize_successful_sync(partial_ctx)
-        partial_repo.apply_successful_identity_bindings.assert_not_called()
+        partial_repo.apply_successful_identity_bindings.assert_called_once_with(
+            partial_ctx.identity.successful_apply_bindings,
+            org_id="default",
+            source_provider="dingtalk",
+        )
         self.assertEqual(partial_jobs[-1][0], "COMPLETED_WITH_ERRORS")
 
     def test_failed_and_canceled_apply_never_confirm_bindings(self):

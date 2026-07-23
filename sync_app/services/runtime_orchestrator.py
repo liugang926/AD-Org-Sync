@@ -11,6 +11,8 @@ from sync_app.services.runtime_apply_phase import (
     apply_group_cleanup_actions,
     apply_group_hierarchy_actions,
     apply_group_membership_actions,
+    apply_manager_relationship_actions,
+    apply_proxy_addresses_actions,
     apply_user_actions,
 )
 from sync_app.services.runtime_context import SyncContext, SyncExecutionServices
@@ -26,6 +28,8 @@ from sync_app.services.runtime_source_phase import (
 from sync_app.services.runtime_user_phase import (
     evaluate_disable_circuit_breaker,
     plan_disable_actions,
+    plan_manager_relationship_actions,
+    plan_proxy_addresses_actions,
     plan_user_actions,
 )
 
@@ -51,6 +55,8 @@ def run_planning_phase(
     ctx.actions.department_actions.clear()
     ctx.actions.custom_group_actions.clear()
     ctx.actions.user_actions.clear()
+    ctx.actions.manager_relationship_actions.clear()
+    ctx.actions.proxy_addresses_actions.clear()
     ctx.actions.membership_actions.clear()
     ctx.actions.group_hierarchy_actions.clear()
     ctx.actions.group_cleanup_actions.clear()
@@ -81,6 +87,8 @@ def run_planning_phase(
         record_group_policy_skip=services.record_group_policy_skip,
         field_ownership_policy=field_ownership_policy,
     )
+    plan_manager_relationship_actions(ctx)
+    plan_proxy_addresses_actions(ctx)
     planned_hierarchy_pairs = plan_group_relationship_cleanup(
         ctx,
         is_department_excluded=services.is_department_excluded,
@@ -136,6 +144,16 @@ def run_apply_phase(
         ctx,
         get_ad_sync=services.get_ad_sync,
         field_ownership_policy=field_ownership_policy,
+    )
+
+    apply_manager_relationship_actions(
+        ctx,
+        get_ad_sync=services.get_ad_sync,
+    )
+
+    apply_proxy_addresses_actions(
+        ctx,
+        get_ad_sync=services.get_ad_sync,
     )
 
     apply_custom_group_actions(

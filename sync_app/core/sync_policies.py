@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import datetime
 from typing import Any, Iterable
 
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
@@ -20,6 +21,53 @@ ATTRIBUTE_MAPPING_DIRECTION_ALIASES = {
     "ad_to_source": "ad_to_source",
 }
 ATTRIBUTE_SYNC_MODES = ("replace", "fill_if_empty", "preserve")
+MAPPING_ROLES = (
+    "PRIMARY_ASSOCIATION",
+    "SUGGESTION",
+    "ATTRIBUTE_SYNC",
+    "RELATIONSHIP",
+    "LIFECYCLE",
+    "DIRECTORY_ROUTING",
+    "READ_ONLY_REFERENCE",
+)
+NULL_POLICIES = ("IGNORE", "PRESERVE_TARGET", "CLEAR", "USE_DEFAULT", "BLOCK")
+SAFE_TRANSFORM_OPERATIONS = frozenset(
+    {
+        "trim",
+        "uppercase",
+        "lowercase",
+        "normalize_whitespace",
+        "normalize_mobile",
+        "remove_country_code",
+        "normalize_email",
+        "enum_map",
+        "regex_replace",
+        "date_format",
+        "join",
+        "split",
+        "default_value",
+        "template",
+        "department_lookup",
+        "account_template",
+    }
+)
+FORBIDDEN_GENERIC_AD_ATTRIBUTES = frozenset(
+    {
+        "objectguid",
+        "objectsid",
+        "distinguishedname",
+        "whencreated",
+        "whenchanged",
+        "ntsecuritydescriptor",
+        "unicodepwd",
+        "useraccountcontrol",
+        "member",
+        "memberof",
+        "manager",
+        "proxyaddresses",
+        "cn",
+    }
+)
 MANAGED_GROUP_TYPES = ("security", "distribution", "mail_enabled_security")
 USERNAME_STRATEGIES = (
     "userid",
@@ -86,6 +134,8 @@ POSITION_FIELD_CANDIDATES = (
 )
 
 MANAGER_FIELD_CANDIDATES = (
+    "manager_account_id",
+    "manager_source_user_id",
     "direct_leader",
     "direct_leader_userid",
     "manager_userid",
@@ -321,6 +371,314 @@ def render_template(template: str, context: dict[str, Any]) -> str:
     rendered = re.sub(r"\{([^{}]+)\}", replace, raw_template)
     return rendered.strip()
 
+
+class MappingEvaluationError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _mapping_value_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (list, tuple, set)):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, (int, float)):
+        return "number"
+    return "string"
+
+
+def _is_empty_mapping_value(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == () or value == {}
+
+
+def _validate_transform_type(value: Any, expected: Any, *, stage: str) -> None:
+    normalized_expected = str(expected or "").strip().lower()
+    if not normalized_expected or normalized_expected == "any":
+        return
+    actual = _mapping_value_type(value)
+    if actual != normalized_expected:
+        raise MappingEvaluationError(
+            "transform_type_mismatch",
+            f"transform {stage} type must be {normalized_expected}, got {actual}",
+        )
+
+
+def apply_transform_pipeline(
+    value: Any,
+    pipeline: Iterable[dict[str, Any]],
+    *,
+    context: dict[str, Any] | None = None,
+) -> Any:
+    result = value
+    transform_context = dict(context or {})
+    for raw_step in pipeline:
+        step = dict(raw_step or {})
+        operation = str(step.get("op") or step.get("type") or "").strip().lower()
+        if operation not in SAFE_TRANSFORM_OPERATIONS:
+            raise MappingEvaluationError(
+                "unsafe_transform",
+                f"unsupported or unsafe transform operation: {operation or 'missing'}",
+            )
+        _validate_transform_type(result, step.get("input_type"), stage="input")
+        if operation == "trim":
+            result = str(result or "").strip()
+        elif operation == "uppercase":
+            result = str(result or "").upper()
+        elif operation == "lowercase":
+            result = str(result or "").lower()
+        elif operation == "normalize_whitespace":
+            result = " ".join(str(result or "").split())
+        elif operation in {"normalize_mobile", "remove_country_code"}:
+            digits = re.sub(r"\D", "", str(result or ""))
+            if digits.startswith("0086") and len(digits) > 11:
+                digits = digits[4:]
+            elif digits.startswith("86") and len(digits) > 11:
+                digits = digits[2:]
+            result = digits
+        elif operation == "normalize_email":
+            result = str(result or "").strip().casefold()
+        elif operation == "enum_map":
+            enum_values = dict(step.get("values") or step.get("map") or {})
+            lookup_key = str(result or "")
+            if lookup_key in enum_values:
+                result = enum_values[lookup_key]
+            elif bool(step.get("reject_unmapped", False)):
+                raise MappingEvaluationError(
+                    "enum_value_unmapped", f"enum value is not mapped: {lookup_key}"
+                )
+        elif operation == "regex_replace":
+            pattern = str(step.get("pattern") or "")
+            replacement = str(step.get("replacement") or step.get("replace") or "")
+            if not pattern or len(pattern) > 200 or len(replacement) > 500:
+                raise MappingEvaluationError(
+                    "invalid_regex_transform", "regex transform is missing or too large"
+                )
+            try:
+                result = re.sub(pattern, replacement, str(result or ""))
+            except re.error as exc:
+                raise MappingEvaluationError(
+                    "invalid_regex_transform", f"invalid regex transform: {exc}"
+                ) from exc
+        elif operation == "date_format":
+            source_format = str(step.get("source_format") or "").strip()
+            target_format = str(step.get("target_format") or "%Y-%m-%d").strip()
+            try:
+                parsed = (
+                    datetime.strptime(str(result), source_format)
+                    if source_format
+                    else datetime.fromisoformat(str(result).replace("Z", "+00:00"))
+                )
+                result = parsed.strftime(target_format)
+            except (TypeError, ValueError) as exc:
+                raise MappingEvaluationError(
+                    "invalid_date_transform", "date value does not match the declared format"
+                ) from exc
+        elif operation == "join":
+            if not isinstance(result, (list, tuple, set)):
+                raise MappingEvaluationError(
+                    "transform_type_mismatch", "join requires an array input"
+                )
+            result = str(step.get("separator") or ",").join(
+                str(item).strip() for item in result if str(item).strip()
+            )
+        elif operation == "split":
+            result = [
+                item.strip()
+                for item in str(result or "").split(str(step.get("separator") or ","))
+                if item.strip()
+            ]
+        elif operation == "default_value":
+            if _is_empty_mapping_value(result):
+                result = step.get("value")
+        elif operation in {"template", "account_template"}:
+            template_context = {**transform_context, "value": result}
+            result = render_template(str(step.get("template") or "{value}"), template_context)
+        elif operation == "department_lookup":
+            lookup = dict(step.get("values") or step.get("map") or {})
+            result = lookup.get(str(result or ""), step.get("default", result))
+        _validate_transform_type(result, step.get("output_type"), stage="output")
+    return result
+
+
+def _mapping_source_value(
+    user: SourceDirectoryUser,
+    field_name: str,
+    context: dict[str, Any],
+) -> Any:
+    normalized_key = _normalize_placeholder_key(field_name)
+    if normalized_key in context:
+        return context[normalized_key]
+    current: Any = user.to_state_payload()
+    for segment in str(field_name or "").split("."):
+        if not isinstance(current, dict) or segment not in current:
+            return ""
+        current = current[segment]
+    return current
+
+
+def _normalized_email_address(value: Any) -> str:
+    normalized = str(value or "").strip().casefold()
+    if (
+        not normalized
+        or "@" not in normalized
+        or normalized.startswith("@")
+        or normalized.endswith("@")
+        or any(character.isspace() for character in normalized)
+    ):
+        return ""
+    return normalized
+
+
+def merge_proxy_addresses(
+    current_addresses: Iterable[Any],
+    *,
+    primary_address: str,
+    aliases: Iterable[Any] = (),
+) -> list[str]:
+    """Merge SMTP aliases while preserving non-SMTP values and one primary."""
+
+    primary = _normalized_email_address(primary_address)
+    if not primary:
+        raise MappingEvaluationError(
+            "proxy_primary_email_missing",
+            "proxyAddresses requires a valid primary enterprise email",
+        )
+    merged = [f"SMTP:{primary}"]
+    seen = {merged[0].casefold()}
+
+    def add_alias(raw_value: Any) -> None:
+        rendered = str(raw_value or "").strip()
+        if not rendered:
+            return
+        if ":" in rendered:
+            prefix, address = rendered.split(":", 1)
+            if prefix.casefold() != "smtp":
+                candidate = rendered
+            else:
+                normalized_address = _normalized_email_address(address)
+                if not normalized_address or normalized_address == primary:
+                    return
+                candidate = f"smtp:{normalized_address}"
+        else:
+            normalized_address = _normalized_email_address(rendered)
+            if not normalized_address or normalized_address == primary:
+                return
+            candidate = f"smtp:{normalized_address}"
+        key = candidate.casefold()
+        if key not in seen:
+            seen.add(key)
+            merged.append(candidate)
+
+    for current in current_addresses:
+        add_alias(current)
+    for alias in aliases:
+        add_alias(alias)
+    return merged
+
+
+def build_proxy_address_values(
+    user: SourceDirectoryUser,
+    *,
+    connector_id: str,
+    primary_email: str,
+    rules: Iterable[Any],
+    attribute_capabilities: dict[str, Any] | None = None,
+    strict_capabilities: bool = False,
+) -> tuple[str, list[str]] | None:
+    """Evaluate governed proxyAddresses relationship rules without generic mapping."""
+
+    normalized_capabilities = {
+        str(key or "").strip().casefold(): value
+        for key, value in dict(attribute_capabilities or {}).items()
+    }
+    context = build_template_context(
+        user,
+        connector_id=connector_id,
+        email=primary_email,
+    )
+    aliases: list[str] = []
+    matched = False
+    for rule in rules:
+        role = str(getattr(rule, "mapping_role", "") or "").strip().upper()
+        target = str(getattr(rule, "target_field", "") or "").strip()
+        if role != "RELATIONSHIP" or target.casefold() != "proxyaddresses":
+            continue
+        raw_connector_id = str(getattr(rule, "connector_id", "") or "").strip()
+        ad_connector_id = str(
+            getattr(rule, "ad_connector_id", "") or raw_connector_id
+        ).strip()
+        if ad_connector_id and ad_connector_id != "default" and ad_connector_id != connector_id:
+            continue
+        provider_scope = str(
+            getattr(rule, "provider_scope", "*") or "*"
+        ).strip().lower()
+        if provider_scope not in {"*", str(user.provider_id or "").strip().lower()}:
+            continue
+        matched = True
+        capability = normalized_capabilities.get("proxyaddresses")
+        if strict_capabilities:
+            if capability is None:
+                raise MappingEvaluationError(
+                    "ad_attribute_capability_missing",
+                    "proxyAddresses is missing from the current AD capability catalog",
+                )
+            capability_value = (
+                capability.get
+                if isinstance(capability, dict)
+                else lambda key, default=None: getattr(capability, key, default)
+            )
+            if (
+                not bool(capability_value("schema_detected", False))
+                or not bool(capability_value("is_writable", False))
+                or str(capability_value("special_handler_type", "")).strip()
+                != "proxy_addresses"
+            ):
+                raise MappingEvaluationError(
+                    "proxy_addresses_capability_invalid",
+                    "proxyAddresses is not writable through its dedicated handler",
+                )
+        source_field = str(
+            getattr(rule, "raw_source_field_path", "")
+            or getattr(rule, "canonical_source_field", "")
+            or getattr(rule, "source_field", "")
+            or ""
+        ).strip()
+        value = _mapping_source_value(user, source_field, context)
+        pipeline = list(getattr(rule, "transform_pipeline", []) or [])
+        if pipeline:
+            value = apply_transform_pipeline(value, pipeline, context=context)
+        if _is_empty_mapping_value(value):
+            null_policy = str(
+                getattr(rule, "null_policy", "PRESERVE_TARGET")
+                or "PRESERVE_TARGET"
+            ).strip().upper()
+            if null_policy == "BLOCK":
+                raise MappingEvaluationError(
+                    "mapping_null_blocked",
+                    f"empty source value is blocked by mapping policy: {source_field}",
+                )
+            continue
+        values = value if isinstance(value, (list, tuple, set)) else [value]
+        aliases.extend(
+            normalized
+            for normalized in (_normalized_email_address(item) for item in values)
+            if normalized
+        )
+    if not matched:
+        return None
+    primary = _normalized_email_address(primary_email or user.enterprise_email or user.email)
+    if not primary:
+        raise MappingEvaluationError(
+            "proxy_primary_email_missing",
+            "proxyAddresses requires a valid primary enterprise email",
+        )
+    return primary, list(dict.fromkeys(alias for alias in aliases if alias != primary))
+
 def build_managed_username_candidates(
     user: SourceDirectoryUser,
     *,
@@ -484,14 +842,8 @@ def build_identity_candidates(
             }
         )
 
-    add_candidate(
-        "existing_ad_userid",
-        user.userid,
-        "Source user ID maps directly to an existing AD username",
-        allow_existing_match=True,
-        managed=False,
-    )
-    employee_id = template_context.get("employee_id", "")
+    employee_id = str(user.employee_id or template_context.get("employee_id", "")).strip()
+    employee_number = str(user.employee_number or "").strip()
     if employee_id:
         add_candidate(
             "existing_ad_employee_id",
@@ -500,17 +852,14 @@ def build_identity_candidates(
             allow_existing_match=True,
             managed=False,
         )
-    email = (user.email or user.raw_payload.get("email") or "").strip()
-    if "@" in email:
-        localpart = email.split("@", 1)[0].strip()
+    if employee_number:
         add_candidate(
-            "existing_ad_email_localpart",
-            localpart,
-            "Source email local part maps to an existing AD username",
+            "existing_ad_employee_number",
+            employee_number,
+            "Employee number maps directly to an existing AD username",
             allow_existing_match=True,
             managed=False,
         )
-
     for managed_candidate in build_managed_username_candidates(
         user,
         username_strategy=username_strategy,
@@ -545,7 +894,9 @@ def build_source_to_ad_mapping_payload(
     email: str,
     target_department: DepartmentNode | None,
     rules: Iterable[Any],
-) -> dict[str, dict[str, str]]:
+    attribute_capabilities: dict[str, Any] | None = None,
+    strict_capabilities: bool = False,
+) -> dict[str, dict[str, Any]]:
     context = build_template_context(
         user,
         connector_id=connector_id,
@@ -553,24 +904,141 @@ def build_source_to_ad_mapping_payload(
         email=email,
         target_department=target_department,
     )
-    mapped: dict[str, dict[str, str]] = {}
+    mapped: dict[str, dict[str, Any]] = {}
+    normalized_capabilities = {
+        str(key or "").strip().casefold(): value
+        for key, value in dict(attribute_capabilities or {}).items()
+    }
     for rule in rules:
         raw_connector_id = str(getattr(rule, "connector_id", "") or "").strip()
-        if raw_connector_id and raw_connector_id != connector_id:
+        ad_connector_id = str(
+            getattr(rule, "ad_connector_id", "") or raw_connector_id
+        ).strip()
+        if ad_connector_id and ad_connector_id != "default" and ad_connector_id != connector_id:
             continue
-        source_field = str(getattr(rule, "source_field", "") or "").strip()
+        provider_scope = str(getattr(rule, "provider_scope", "*") or "*").strip().lower()
+        if provider_scope not in {"*", str(user.provider_id or "").strip().lower()}:
+            continue
+        mapping_role = str(
+            getattr(rule, "mapping_role", "ATTRIBUTE_SYNC") or "ATTRIBUTE_SYNC"
+        ).strip().upper()
+        if mapping_role != "ATTRIBUTE_SYNC":
+            continue
+        source_field = str(
+            getattr(rule, "raw_source_field_path", "")
+            or getattr(rule, "canonical_source_field", "")
+            or getattr(rule, "source_field", "")
+            or ""
+        ).strip()
         target_field = str(getattr(rule, "target_field", "") or "").strip()
         if not source_field or not target_field:
             continue
+        if target_field.casefold() in FORBIDDEN_GENERIC_AD_ATTRIBUTES:
+            raise MappingEvaluationError(
+                "forbidden_ad_attribute",
+                f"AD attribute requires a dedicated handler and cannot use scalar mapping: {target_field}",
+            )
+        capability = normalized_capabilities.get(target_field.casefold())
+        if strict_capabilities:
+            if capability is None:
+                raise MappingEvaluationError(
+                    "ad_attribute_capability_missing",
+                    f"AD attribute is not present in the current capability catalog: {target_field}",
+                )
+            capability_value = (
+                capability.get if isinstance(capability, dict) else lambda key, default=None: getattr(capability, key, default)
+            )
+            if not bool(capability_value("schema_detected", False)):
+                raise MappingEvaluationError(
+                    "ad_attribute_not_detected",
+                    f"AD schema does not expose target attribute: {target_field}",
+                )
+            if bool(capability_value("is_read_only", True)) or not bool(
+                capability_value("is_writable", False)
+            ):
+                raise MappingEvaluationError(
+                    "ad_attribute_not_writable",
+                    f"AD target attribute is not verified writable: {target_field}",
+                )
+            if bool(capability_value("requires_special_handler", False)):
+                raise MappingEvaluationError(
+                    "ad_attribute_special_handler_required",
+                    f"AD attribute requires its dedicated handler: {target_field}",
+                )
         template = str(getattr(rule, "transform_template", "") or "").strip()
-        value = render_template(template, context) if template else context.get(_normalize_placeholder_key(source_field), "")
-        if value == "":
-            continue
+        value = _mapping_source_value(user, source_field, context)
+        pipeline = list(getattr(rule, "transform_pipeline", []) or [])
+        if pipeline:
+            value = apply_transform_pipeline(value, pipeline, context=context)
+        elif template:
+            value = render_template(template, {**context, "value": value})
+        null_policy = str(
+            getattr(rule, "null_policy", "PRESERVE_TARGET") or "PRESERVE_TARGET"
+        ).strip().upper()
+        if _is_empty_mapping_value(value):
+            if null_policy in {"IGNORE", "PRESERVE_TARGET"}:
+                continue
+            if null_policy == "BLOCK":
+                raise MappingEvaluationError(
+                    "mapping_null_blocked",
+                    f"empty source value is blocked by mapping policy: {source_field}",
+                )
+            if null_policy == "USE_DEFAULT":
+                raise MappingEvaluationError(
+                    "mapping_default_missing",
+                    f"USE_DEFAULT requires a default_value transform: {source_field}",
+                )
+            if null_policy == "CLEAR":
+                mapped[target_field] = {
+                    "value": None,
+                    "mode": "clear",
+                    "clear": True,
+                    "source_field": source_field,
+                    "mapping_role": mapping_role,
+                    "null_policy": null_policy,
+                    "version": int(getattr(rule, "version", 1) or 1),
+                }
+                continue
+        if capability is not None:
+            capability_value = (
+                capability.get if isinstance(capability, dict) else lambda key, default=None: getattr(capability, key, default)
+            )
+            target_is_multi = bool(capability_value("is_multi_value", False))
+            source_is_multi = isinstance(value, (list, tuple, set))
+            if source_is_multi and not target_is_multi:
+                raise MappingEvaluationError(
+                    "mapping_cardinality_mismatch",
+                    f"multi-value source requires an explicit join before {target_field}",
+                )
+            if target_is_multi and not source_is_multi:
+                raise MappingEvaluationError(
+                    "mapping_cardinality_mismatch",
+                    f"multi-value AD target requires an explicit split before {target_field}",
+                )
+        write_policy = str(
+            getattr(rule, "write_policy", "") or ""
+        ).strip().upper()
+        mode = {
+            "REPLACE": "replace",
+            "FILL_IF_EMPTY": "fill_if_empty",
+            "PRESERVE_TARGET": "preserve",
+            "CREATE_ONLY": "create_only",
+            "COMPARE_ONLY": "compare_only",
+        }.get(write_policy, normalize_sync_mode(getattr(rule, "sync_mode", "replace")))
         mapped[target_field] = {
             "value": value,
-            "mode": normalize_sync_mode(getattr(rule, "sync_mode", "replace")),
+            "mode": mode,
             "source_field": source_field,
             "template": template,
+            "transform_pipeline": pipeline,
+            "mapping_role": mapping_role,
+            "null_policy": null_policy,
+            "conflict_policy": str(
+                getattr(rule, "conflict_policy", "REJECT_ON_CONFLICT")
+                or "REJECT_ON_CONFLICT"
+            ).strip().upper(),
+            "write_policy": write_policy or mode.upper(),
+            "version": int(getattr(rule, "version", 1) or 1),
         }
     return mapped
 

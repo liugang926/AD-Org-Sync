@@ -46,7 +46,7 @@
     </div>
   </section>
 
-  {% call ui.panel(t("Release readiness summary"), description=t("Publishing is allowed only when the current connectors, snapshots, review, identity match and business policies all pass."), class_name="toolbar-card") %}
+  {% call ui.panel(t("Release readiness summary"), description=t("Publishing is allowed only when the current connectors, snapshots, review, identity match and business policies all pass."), class_name="toolbar-card release-readiness-panel") %}
     <div class="compact-stats">
       {{ ui.compact_stat(t("Source snapshot"), ("#" ~ source_step.related_snapshot_id) if source_step.related_snapshot_id else t("Not available"), t(source_step.status|replace("_", " ")|title)) }}
       {{ ui.compact_stat(t("AD snapshot"), ("#" ~ ad_step.related_snapshot_id) if ad_step.related_snapshot_id else t("Not available"), t(ad_step.status|replace("_", " ")|title)) }}
@@ -55,22 +55,32 @@
       {{ ui.compact_stat(t("Group rules"), (current_bundle.group_exclusion_rules or [])|length, t("Included in release bundle")) }}
       {{ ui.compact_stat(t("Unpublished changes"), comparison_diff.changed_item_count or 0, t("Changed items")) }}
     </div>
-    <div class="rollout-release-checklist" data-release-readiness>
-      {% for step in release_prerequisites %}
-      {% set level = "success" if step.status == "complete" else ("danger" if step.status == "blocked" else "warning") %}
-      <article class="rollout-step rollout-step--{{ step.status }}">
-        <div class="rollout-step__body">
-          <strong>{{ t(step.title) }}</strong>
-          <span>{{ t(step.summary) }}</span>
-          {% if step.blocker_reason %}<small>{{ t(step.blocker_reason) }}</small>{% endif %}
-        </div>
-        <div class="rollout-step__action">
-          {{ ui.badge(t(step.status|replace("_", " ")|title), level) }}
-          {% if step.status != "complete" %}<a href="{{ step.action_url }}">{{ t(step.action_label) }}</a>{% endif %}
-        </div>
-      </article>
-      {% endfor %}
-    </div>
+    {% set pending_release_steps = release_prerequisites|rejectattr("status", "equalto", "complete")|list %}
+    {% if pending_release_steps %}{% set next_step = pending_release_steps|first %}
+    <article class="rollout-step rollout-step--recommended rollout-step--{{ next_step.status }}">
+      <div class="rollout-step__body"><strong>{{ t("Next required action") }}: {{ t(next_step.title) }}</strong><span>{{ t(next_step.summary) }}</span>{% if next_step.blocker_reason %}<small>{{ t(next_step.blocker_reason) }}</small>{% endif %}</div>
+      <div class="rollout-step__action">{{ ui.badge(t(next_step.status|replace("_", " ")|title), "danger" if next_step.status == "blocked" else "warning") }}<a href="{{ next_step.action_url }}">{{ t(next_step.action_label) }}</a></div>
+    </article>
+    {% endif %}
+    <details class="detail-toggle release-readiness-details">
+      <summary><strong>{{ t("Review all release prerequisites") }}</strong> · {{ release_prerequisites|length }}</summary>
+      <div class="rollout-release-checklist" data-release-readiness>
+        {% for step in release_prerequisites %}
+        {% set level = "success" if step.status == "complete" else ("danger" if step.status == "blocked" else "warning") %}
+        <article class="rollout-step rollout-step--{{ step.status }}">
+          <div class="rollout-step__body">
+            <strong>{{ t(step.title) }}</strong>
+            <span>{{ t(step.summary) }}</span>
+            {% if step.blocker_reason %}<small>{{ t(step.blocker_reason) }}</small>{% endif %}
+          </div>
+          <div class="rollout-step__action">
+            {{ ui.badge(t(step.status|replace("_", " ")|title), level) }}
+            {% if step.status != "complete" %}<a href="{{ step.action_url }}">{{ t(step.action_label) }}</a>{% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+    </details>
     {% if not release_publish_allowed %}
     <div class="panel-note warning" role="alert"><strong>{{ t("Publishing is blocked") }}</strong><span>{{ t("Resolve every required readiness item above. The server will reject publish attempts while any current prerequisite is incomplete or stale.") }}</span></div>
     {% endif %}
@@ -86,7 +96,7 @@
     </div>
   {% endcall %}
 
-  {% call ui.panel(t("Current Release State"), description=t("The release center compares the live organization settings with published snapshots so you can decide when to publish, compare, or roll back."), class_name="toolbar-card") %}
+  {% call ui.panel(t("Current Release State"), description=t("The release center compares the live organization settings with published snapshots so you can decide when to publish, compare, or roll back."), class_name="toolbar-card release-current-panel") %}
     <div class="surface-inline">
       {{ ui.badge(t("Unpublished") if has_unpublished_changes else t("Published"), ("warning" if has_unpublished_changes else "success")) }}
       <span class="muted">{{ t("Current organization") }}:</span>
@@ -120,7 +130,7 @@
     {% endif %}
   {% endcall %}
 
-  {% call ui.panel(t(comparison_title), description=t("Current") ~ ": " ~ t(comparison_current_label) ~ " / " ~ t("Baseline") ~ ": " ~ t(comparison_baseline_label)) %}
+  {% call ui.panel(t(comparison_title), description=t("Current") ~ ": " ~ t(comparison_current_label) ~ " / " ~ t("Baseline") ~ ": " ~ t(comparison_baseline_label), class_name="release-diff-panel") %}
     {% if comparison_diff.changed %}
     <div class="compact-stats">
       {{ ui.compact_stat(t("Added"), comparison_diff.added_count) }}
@@ -131,7 +141,7 @@
 
     <div class="stack-md">
       {% for group in comparison_diff.groups %}
-      {% call ui.detail_toggle(t(group.title), t("{count} changed items", count=group["items"]|length), open=(loop.first)) %}
+      {% call ui.detail_toggle(t(group.title), t("{count} changed items", count=group["items"]|length), open=False) %}
         {% call ui.table_shell() %}
           <table>
             <thead>

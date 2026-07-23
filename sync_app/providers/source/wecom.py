@@ -58,7 +58,6 @@ class WeComSourceProvider(SourceDirectoryProvider):
         self.corpid = corpid
         self.corpsecret = corpsecret
         self.agentid = agentid
-        self.employee_id_attribute = ""
         self._api_factory = api_factory or WeComAPI
         self._api = instantiate_source_api_client(
             self._api_factory,

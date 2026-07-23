@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Iterable, Optional
 
 from sync_app.core.models import (
@@ -1336,6 +1337,18 @@ class AttributeMappingRuleRepository(BaseRepository):
         sync_mode: str = "replace",
         is_enabled: bool = True,
         notes: str = "",
+        provider_scope: str = "*",
+        source_connector_id: str = "default",
+        canonical_source_field: str = "",
+        raw_source_field_path: str = "",
+        ad_connector_id: str = "default",
+        mapping_role: str = "ATTRIBUTE_SYNC",
+        authority_mode: str = "PROVIDER_PRIORITY",
+        transform_pipeline: Iterable[dict[str, Any]] = (),
+        null_policy: str = "PRESERVE_TARGET",
+        conflict_policy: str = "REJECT_ON_CONFLICT",
+        write_policy: str = "",
+        created_by: str = "",
         org_id: Optional[str] = None,
     ) -> None:
         normalized_org_id = self._resolve_org_id(org_id) or "default"
@@ -1350,6 +1363,63 @@ class AttributeMappingRuleRepository(BaseRepository):
             raise ValueError("unsupported mapping sync_mode")
         if not normalized_source or not normalized_target:
             raise ValueError("source_field and target_field are required")
+        normalized_role = str(mapping_role or "ATTRIBUTE_SYNC").strip().upper()
+        normalized_null_policy = str(null_policy or "PRESERVE_TARGET").strip().upper()
+        normalized_conflict_policy = str(
+            conflict_policy or "REJECT_ON_CONFLICT"
+        ).strip().upper()
+        normalized_write_policy = str(
+            write_policy
+            or {
+                "replace": "REPLACE",
+                "fill_if_empty": "FILL_IF_EMPTY",
+                "preserve": "PRESERVE_TARGET",
+            }.get(normalized_mode, "REPLACE")
+        ).strip().upper()
+        if normalized_role not in {
+            "PRIMARY_ASSOCIATION",
+            "SUGGESTION",
+            "ATTRIBUTE_SYNC",
+            "RELATIONSHIP",
+            "LIFECYCLE",
+            "DIRECTORY_ROUTING",
+            "READ_ONLY_REFERENCE",
+        }:
+            raise ValueError("unsupported mapping_role")
+        if normalized_null_policy not in {
+            "IGNORE",
+            "PRESERVE_TARGET",
+            "CLEAR",
+            "USE_DEFAULT",
+            "BLOCK",
+        }:
+            raise ValueError("unsupported null_policy")
+        if normalized_conflict_policy not in {
+            "REJECT_ON_CONFLICT",
+            "PRESERVE_TARGET",
+            "SOURCE_WINS",
+            "REQUIRE_REVIEW",
+        }:
+            raise ValueError("unsupported conflict_policy")
+        if normalized_write_policy not in {
+            "REPLACE",
+            "FILL_IF_EMPTY",
+            "PRESERVE_TARGET",
+            "CREATE_ONLY",
+            "COMPARE_ONLY",
+        }:
+            raise ValueError("unsupported write_policy")
+        normalized_pipeline = [dict(step) for step in transform_pipeline]
+        allowed_transforms = {
+            "trim", "uppercase", "lowercase", "normalize_whitespace",
+            "normalize_mobile", "remove_country_code", "normalize_email",
+            "enum_map", "regex_replace", "date_format", "join", "split",
+            "default_value", "template", "department_lookup", "account_template",
+        }
+        for step in normalized_pipeline:
+            operation = str(step.get("op") or step.get("type") or "").strip().lower()
+            if operation not in allowed_transforms:
+                raise ValueError(f"unsupported or unsafe transform operation: {operation or 'missing'}")
 
         now = utcnow_iso()
         with self.db.transaction() as conn:
@@ -1357,13 +1427,29 @@ class AttributeMappingRuleRepository(BaseRepository):
                 """
                 INSERT INTO attribute_mapping_rules (
                   org_id, connector_id, direction, source_field, target_field, transform_template,
-                  sync_mode, is_enabled, notes, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  sync_mode, is_enabled, notes, created_at, updated_at,
+                  provider_scope, source_connector_id, canonical_source_field,
+                  raw_source_field_path, ad_connector_id, mapping_role, authority_mode,
+                  transform_pipeline_json, null_policy, conflict_policy, write_policy,
+                  version, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                 ON CONFLICT(org_id, connector_id, direction, source_field, target_field) DO UPDATE SET
                   transform_template = excluded.transform_template,
                   sync_mode = excluded.sync_mode,
                   is_enabled = excluded.is_enabled,
                   notes = excluded.notes,
+                  provider_scope = excluded.provider_scope,
+                  source_connector_id = excluded.source_connector_id,
+                  canonical_source_field = excluded.canonical_source_field,
+                  raw_source_field_path = excluded.raw_source_field_path,
+                  ad_connector_id = excluded.ad_connector_id,
+                  mapping_role = excluded.mapping_role,
+                  authority_mode = excluded.authority_mode,
+                  transform_pipeline_json = excluded.transform_pipeline_json,
+                  null_policy = excluded.null_policy,
+                  conflict_policy = excluded.conflict_policy,
+                  write_policy = excluded.write_policy,
+                  version = attribute_mapping_rules.version + 1,
                   updated_at = excluded.updated_at
                 """,
                 (
@@ -1378,6 +1464,19 @@ class AttributeMappingRuleRepository(BaseRepository):
                     str(notes or "").strip(),
                     now,
                     now,
+                    str(provider_scope or "*").strip().lower() or "*",
+                    str(source_connector_id or "default").strip() or "default",
+                    str(canonical_source_field or normalized_source).strip(),
+                    str(raw_source_field_path or normalized_source).strip(),
+                    str(ad_connector_id or normalized_connector or "default").strip()
+                    or "default",
+                    normalized_role,
+                    str(authority_mode or "PROVIDER_PRIORITY").strip().upper(),
+                    json.dumps(normalized_pipeline, ensure_ascii=False),
+                    normalized_null_policy,
+                    normalized_conflict_policy,
+                    normalized_write_policy,
+                    str(created_by or "").strip(),
                 ),
             )
 

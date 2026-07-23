@@ -25,6 +25,7 @@ class FakeWeComAPI:
             "userid": username,
             "name": "Alice",
             "email": "alice@example.com",
+            "employee_id": "alice",
             "department": [1],
         }
 
@@ -75,6 +76,8 @@ class FakeWeComConflictAPI(FakeWeComAPI):
             "userid": username,
             "name": "Alice",
             "email": "alice.alt@example.com",
+            "employee_id": "alice",
+            "employee_number": "alice.alt",
             "department": [1],
         }
 

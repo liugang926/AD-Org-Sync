@@ -46,6 +46,8 @@ class SyncActionState:
     department_actions: list[Any] = field(default_factory=list)
     custom_group_actions: list[Any] = field(default_factory=list)
     user_actions: list[Any] = field(default_factory=list)
+    manager_relationship_actions: list[Any] = field(default_factory=list)
+    proxy_addresses_actions: list[Any] = field(default_factory=list)
     membership_actions: list[Any] = field(default_factory=list)
     group_hierarchy_actions: list[Any] = field(default_factory=list)
     group_cleanup_actions: list[Any] = field(default_factory=list)

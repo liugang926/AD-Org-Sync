@@ -65,7 +65,7 @@ LOGGER = logging.getLogger(__name__)
 BINDING_CLEANUP_PREVIEW_SESSION_KEY = "_binding_reconciliation_scan"
 BINDING_CLEANUP_PREVIEW_MAX_AGE_SECONDS = 900
 IDENTITY_WORKBENCH_DEFERRED_SESSION_KEY = "_identity_workbench_deferred"
-SOURCE_DIRECTORY_VIEWS = {"overview", "users", "departments", "history"}
+SOURCE_DIRECTORY_VIEWS = {"overview", "users", "departments", "fields", "history"}
 SOURCE_DIRECTORY_QUALITY_FILTERS = {
     "missing_employee_id",
     "duplicate_employee_id",
@@ -1162,6 +1162,18 @@ def register_source_directory_routes(
             latest_refresh_context["error_summary"] = redact_sensitive_text(
                 latest_refresh_context.get("error_summary")
             )
+        repositories = get_web_repositories(request)
+        repositories.canonical_field_registry_repo.seed_defaults()
+        source_registry_fields = (
+            repositories.source_field_registry_repo.list_fields(
+                org_id=current_org.org_id,
+                provider_id=provider_id,
+                source_connector_id=str(snapshot["connector_id"] or "default"),
+                current_snapshot_id=int(snapshot["id"]),
+            )
+            if snapshot
+            else []
+        )
         return render(
             request,
             "source_directory.html",
@@ -1208,6 +1220,12 @@ def register_source_directory_routes(
             ),
             selected_history_status=history_status,
             selected_history_snapshot=selected_history_snapshot,
+            source_registry_fields=source_registry_fields,
+            canonical_registry_fields=(
+                repositories.canonical_field_registry_repo.list_fields(
+                    org_id=current_org.org_id,
+                )
+            ),
         )
 
     @app.get(CANONICAL_ROUTE_PATHS["source-directory"], response_class=HTMLResponse)
@@ -1607,6 +1625,85 @@ def register_source_directory_routes(
             ),
         )
 
+    @app.get(CANONICAL_ROUTE_PATHS["enterprise-identities"], response_class=HTMLResponse)
+    def enterprise_identities_page(request: Request):
+        user = require_capability(request, "mappings.read")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        identities = repositories.enterprise_identity_repo.list_identities(
+            org_id=current_org.org_id,
+            status="all",
+        )
+        links = repositories.enterprise_identity_repo.list_links(
+            org_id=current_org.org_id,
+            status="all",
+        )
+        platform_accounts = repositories.platform_account_repo.list_accounts(
+            org_id=current_org.org_id,
+        )
+        ad_accounts = repositories.ad_account_repo.list_accounts(
+            org_id=current_org.org_id,
+        )
+        platform_by_id = {
+            int(account.id): account
+            for account in platform_accounts
+            if account.id is not None
+        }
+        ad_by_id = {
+            int(account.id): account
+            for account in ad_accounts
+            if account.id is not None
+        }
+        active_links = [link for link in links if link.status == "active"]
+        relationship_rows: list[dict[str, Any]] = []
+        for identity in identities:
+            identity_links = [
+                link for link in links if link.identity_id == identity.identity_id
+            ]
+            relationship_rows.append(
+                {
+                    "identity": identity,
+                    "platform_links": [
+                        {
+                            "link": link,
+                            "account": platform_by_id.get(int(link.platform_account_id)),
+                        }
+                        for link in identity_links
+                        if link.account_kind == "platform"
+                        and link.platform_account_id is not None
+                    ],
+                    "ad_links": [
+                        {
+                            "link": link,
+                            "account": ad_by_id.get(int(link.ad_account_id)),
+                        }
+                        for link in identity_links
+                        if link.account_kind == "ad" and link.ad_account_id is not None
+                    ],
+                }
+            )
+        return render(
+            request,
+            "enterprise_identities.html",
+            page="enterprise-identities",
+            title="Multi-Platform Identity Relationships",
+            current_org=current_org,
+            relationship_rows=relationship_rows,
+            identity_count=len(identities),
+            active_link_count=len(active_links),
+            platform_account_count=len(platform_accounts),
+            ad_account_count=len(ad_accounts),
+            provider_count=len(
+                {
+                    account.provider_id
+                    for account in platform_accounts
+                    if account.provider_id
+                }
+            ),
+        )
+
     @app.get(CANONICAL_ROUTE_PATHS["identity-match-rules"], response_class=HTMLResponse)
     def identity_match_rules_page(request: Request):
         user = require_capability(request, "mappings.read")
@@ -1624,6 +1721,10 @@ def register_source_directory_routes(
             org_id=current_org.org_id,
             provider_id=source_provider,
         )
+        ad_snapshot = repositories.ad_directory_snapshot_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            connector_id="default",
+        )
         repositories.identity_match_rule_repo.seed_defaults(
             org_id=current_org.org_id
         )
@@ -1631,11 +1732,22 @@ def register_source_directory_routes(
             org_id=current_org.org_id
         )
         detected_source_fields = (
-            repositories.source_directory_repo.list_field_catalog(
-                int(source_snapshot["id"]),
+            repositories.source_field_registry_repo.list_fields(
                 org_id=current_org.org_id,
+                provider_id=source_provider,
+                source_connector_id=str(source_snapshot["connector_id"] or "default"),
+                current_snapshot_id=int(source_snapshot["id"]),
             )
             if source_snapshot
+            else []
+        )
+        detected_ad_attributes = (
+            repositories.ad_target_attribute_registry_repo.list_attributes(
+                org_id=current_org.org_id,
+                ad_connector_id=str(ad_snapshot["connector_id"] or "default"),
+                current_snapshot_id=int(ad_snapshot["id"]),
+            )
+            if ad_snapshot
             else []
         )
         source_match_field_options = build_source_match_field_options(
@@ -1643,7 +1755,10 @@ def register_source_directory_routes(
             detected_fields=detected_source_fields,
             existing_rules=identity_match_rules,
         )
-        ad_match_field_options = build_ad_match_field_options(identity_match_rules)
+        ad_match_field_options = build_ad_match_field_options(
+            identity_match_rules,
+            detected_ad_attributes,
+        )
         return render(
             request,
             "identity_match_rules.html",
@@ -1653,6 +1768,7 @@ def register_source_directory_routes(
             current_source_provider=source_provider,
             current_source_provider_name=get_source_provider_display_name(source_provider),
             source_snapshot=_row_dict(source_snapshot),
+            ad_snapshot=_row_dict(ad_snapshot),
             source_match_field_options=source_match_field_options,
             source_match_field_labels={
                 item["value"]: item["label"] for item in source_match_field_options

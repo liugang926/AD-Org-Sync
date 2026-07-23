@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<div class="page-stack enterprise-identity-page">
+  {% call ui.page_header(t("Multi-Platform Identity Relationships"), t("Review durable links from platform technical accounts through one enterprise employee identity to the primary AD directory identity."), eyebrow=t("Identity Matching"), badge_text=current_org.name, badge_level="info") %}
+    {{ ui.button(t("Return to Matching Workbench"), href="/identity-governance/identity-matching", variant="secondary", icon="arrow-left") }}
+  {% endcall %}
+
+  {% call ui.helper_block(t("Durable identity boundary"), t("A platform account and an AD object can each belong to only one active enterprise identity. Email, phone, name, and account-name similarity never create a permanent relationship on their own."), "warning") %}{% endcall %}
+
+  <div class="stat-grid">
+    <article class="stat-card"><span>{{ t("Enterprise identities") }}</span><strong>{{ identity_count }}</strong></article>
+    <article class="stat-card"><span>{{ t("Source platforms") }}</span><strong>{{ provider_count }}</strong></article>
+    <article class="stat-card"><span>{{ t("Platform accounts") }}</span><strong>{{ platform_account_count }}</strong></article>
+    <article class="stat-card"><span>{{ t("AD accounts") }}</span><strong>{{ ad_account_count }}</strong></article>
+    <article class="stat-card"><span>{{ t("Active durable links") }}</span><strong>{{ active_link_count }}</strong></article>
+  </div>
+
+  {% call ui.panel(t("Enterprise Identity Graph"), description=t("Each row shows one employee identity and every platform or AD account currently linked to it. Historical links remain auditable but are clearly marked inactive.")) %}
+    <div class="table-scroll registry-table-window" tabindex="0" role="region" aria-label="{{ t('Multi-platform enterprise identity relationships') }}">
+      <table>
+        <thead><tr><th>{{ t("Enterprise identity") }}</th><th>{{ t("Platform technical identities") }}</th><th>{{ t("AD directory identities") }}</th><th>{{ t("Relationship evidence") }}</th><th>{{ t("Action") }}</th></tr></thead>
+        <tbody>
+          {% for row in relationship_rows %}{% set identity = row.identity %}
+          <tr>
+            <td><strong>{{ identity.display_name or t("Unnamed user") }}</strong><small><code>{{ identity.identity_id }}</code></small><small>{{ identity.canonical_employee_id or t("No employee ID") }} · r{{ identity.identity_revision }}</small></td>
+            <td>
+              <div class="identity-link-stack">
+                {% for item in row.platform_links %}{% set account = item.account %}{% set link = item.link %}
+                <span class="identity-link-chip"><strong>{{ t(account.provider_id) if account else t("Unknown platform") }}</strong><code>{{ account.platform_account_id if account else "-" }}</code>{{ ui.badge(t(link.status|capitalize), "success" if link.status == "active" else "warning") }}</span>
+                {% else %}<span class="muted">{{ t("No linked platform account") }}</span>{% endfor %}
+              </div>
+            </td>
+            <td>
+              <div class="identity-link-stack">
+                {% for item in row.ad_links %}{% set account = item.account %}{% set link = item.link %}
+                <span class="identity-link-chip"><strong>{{ account.sam_account_name if account else t("Unknown AD account") }}</strong><code>{{ account.object_guid if account else "-" }}</code>{{ ui.badge(t(link.account_role), "info") }}</span>
+                {% else %}<span class="muted">{{ t("No linked AD account") }}</span>{% endfor %}
+              </div>
+            </td>
+            <td>
+              {% for item in row.platform_links + row.ad_links %}<div><strong>{{ t(item.link.association_type) }}</strong><small>{{ item.link.source or t("Unspecified source") }} · {{ item.link.confidence }}%</small></div>{% else %}<span class="muted">{{ t("No active relationship evidence") }}</span>{% endfor %}
+            </td>
+            <td><a href="/identity-governance/manual-overrides?q={{ identity.canonical_employee_id|urlencode }}">{{ t("Review relationship") }}</a></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="table-empty">{{ t("No enterprise identities exist yet. Run identity matching or apply an approved existing-account takeover to create durable relationships.") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endcall %}
+
+  {% call ui.helper_block(t("Relationship workflow"), t("Use matching rules to create explainable candidates, resolve them in the workbench, and use Existing Account Takeover only for reviewed bulk relationships."), "info") %}
+    <div class="actions">
+      {{ ui.button(t("Open Identity Match Rules"), href="/identity-governance/match-rules", variant="secondary", icon="list-checks") }}
+      {{ ui.button(t("Open Existing Account Takeover"), href="/identity-governance/account-takeover", variant="ghost", icon="link-2") }}
+    </div>
+  {% endcall %}
+</div>
+{% endblock %}

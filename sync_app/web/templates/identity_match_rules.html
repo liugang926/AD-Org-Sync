@@ -30,10 +30,13 @@
             {% for group_key, group_label in [("standard", "Common identity fields"), ("detected", "Fields detected in current snapshot"), ("existing", "Fields used by existing rules")] %}
             <optgroup label="{{ t(group_label) }}">
               {% for field in source_match_field_options if field.group == group_key %}
-              <option value="{{ field.value }}" {% if field.value == "platform_account_id" %}selected{% endif %}>
+              <option value="{{ field.value }}" {% if field.value == "platform_account_id" %}selected{% endif %} {% if field.disabled %}disabled{% endif %}>
                 {% if field.value == "platform_account_id" %}{{ t(current_source_provider_name) }} · {% endif %}{{ t(field.label) }}
                 {% if field.api_hint %} ({{ field.api_hint }}){% else %} ({{ field.value }}){% endif %}
                 {% if field.coverage_count is not none and source_snapshot %} · {{ t("Coverage") }} {{ field.coverage_count }}/{{ source_snapshot.user_count }}{% endif %}
+                {% if field.is_multi_value %} · {{ t("Multi-value") }}{% endif %}
+                {% if field.availability_status != "available" %} · {{ t(field.availability_status) }}{% endif %}
+                {% if field.permission_status not in ["granted", "unknown"] %} · {{ t(field.permission_status) }}{% endif %}
               </option>
               {% endfor %}
             </optgroup>
@@ -43,10 +46,10 @@
         </label>
         <label>{{ t("AD field") }}
           <select name="ad_field" required data-match-field-select data-placeholder="{{ t('Search or enter an AD field') }}">
-            {% for group_key, group_label in [("standard", "Common AD identity fields"), ("extension", "AD extension attributes"), ("existing", "Fields used by existing rules")] %}
+            {% for group_key, group_label in [("standard", "Common AD identity fields"), ("detected", "Attributes detected in current AD snapshot"), ("extension", "AD extension attributes"), ("existing", "Fields used by existing rules")] %}
             <optgroup label="{{ t(group_label) }}">
               {% for field in ad_match_field_options if field.group == group_key %}
-              <option value="{{ field.value }}" {% if field.value == "sam_account_name" %}selected{% endif %}>{{ t(field.label) }}{% if ui_presentation.show_field_codes %} ({{ field.value }}){% endif %}</option>
+              <option value="{{ field.value }}" {% if field.value == "sam_account_name" %}selected{% endif %} {% if field.disabled %}disabled{% endif %}>{{ t(field.label) }}{% if field.ldap_attribute %} ({{ field.ldap_attribute }}){% elif ui_presentation.show_field_codes %} ({{ field.value }}){% endif %}{% if field.capability_status != "available" %} · {{ t(field.capability_status) }}{% endif %}</option>
               {% endfor %}
             </optgroup>
             {% endfor %}

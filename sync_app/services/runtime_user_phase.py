@@ -5,8 +5,21 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
-from sync_app.core.models import DepartmentNode, DisableUserAction, GroupMembershipAction, ManagedGroupTarget, UserAction
-from sync_app.core.sync_policies import extract_manager_userids
+from sync_app.core.models import (
+    DepartmentNode,
+    DisableUserAction,
+    GroupMembershipAction,
+    ManagedGroupTarget,
+    ManagerRelationshipAction,
+    ProxyAddressesAction,
+    UserAction,
+)
+from sync_app.core.sync_policies import (
+    MappingEvaluationError,
+    build_source_to_ad_mapping_payload,
+    build_proxy_address_values,
+    extract_manager_userids,
+)
 from sync_app.services.runtime_context import SyncContext
 from sync_app.services.runtime_identity import resolve_target_department
 from sync_app.services.runtime_lifecycle import build_user_lifecycle_profile
@@ -127,6 +140,34 @@ def plan_user_actions(
     exception_skipped_userids = ctx.identity.exception_skipped_userids
     existing_users_map_by_connector = ctx.identity.existing_users_map_by_connector
     enabled_ad_users_by_connector = ctx.working.enabled_ad_users_by_connector
+    ad_capability_cache: dict[str, dict[str, Any]] = {}
+
+    def current_ad_capabilities(connector_id: str) -> dict[str, Any]:
+        if connector_id in ad_capability_cache:
+            return ad_capability_cache[connector_id]
+        registry_repo = getattr(
+            ctx.repositories, "ad_target_attribute_registry_repo", None
+        )
+        if registry_repo is None:
+            ad_capability_cache[connector_id] = {}
+            return {}
+        snapshot = ctx.repositories.ad_directory_snapshot_repo.get_latest_successful_snapshot(
+            org_id=ctx.organization.org_id,
+            connector_id=connector_id,
+        )
+        attributes = (
+            registry_repo.list_attributes(
+                org_id=ctx.organization.org_id,
+                ad_connector_id=connector_id,
+                current_snapshot_id=int(snapshot["id"]),
+            )
+            if snapshot
+            else []
+        )
+        ad_capability_cache[connector_id] = {
+            attribute.ldap_attribute: attribute for attribute in attributes
+        }
+        return ad_capability_cache[connector_id]
 
     for userid, info in user_departments.items():
         user = info.user
@@ -455,6 +496,59 @@ def plan_user_actions(
                 else "Rollback must revalidate the current AD objectGUID and account state."
             ),
         }
+        connector_source_to_ad_rules = (
+            select_mapping_rules(
+                ctx.policy_settings.enabled_mapping_rules,
+                direction="source_to_ad",
+                connector_id=connector_id,
+            )
+            if ctx.policy_settings.attribute_mapping_enabled
+            else []
+        )
+        try:
+            mapped_attribute_preview = build_source_to_ad_mapping_payload(
+                user,
+                connector_id=connector_id,
+                ad_username=username,
+                email=email,
+                target_department=target_dept,
+                rules=connector_source_to_ad_rules,
+                attribute_capabilities=current_ad_capabilities(connector_id),
+                strict_capabilities=bool(
+                    connector_source_to_ad_rules
+                    and current_ad_capabilities(connector_id)
+                ),
+            )
+        except MappingEvaluationError as exc:
+            ctx.hooks.record_conflict(
+                conflict_type="attribute_mapping_blocked",
+                source_id=userid,
+                target_key=connector_id,
+                severity="error",
+                message=str(exc),
+                resolution_hint=(
+                    "Refresh AD capabilities and correct the field mapping before Apply"
+                ),
+                details={
+                    "error_code": exc.code,
+                    "connector_id": connector_id,
+                    "ad_username": username,
+                },
+            )
+
+
+            ctx.hooks.record_operation(
+                stage_name="plan",
+                object_type="user",
+                operation_type=operation_type,
+                status="blocked",
+                message=f"attribute mapping blocked for {username}: {exc}",
+                source_id=userid,
+                target_id=username,
+                reason_code=exc.code,
+                details={"connector_id": connector_id},
+            )
+            continue
         if is_protected_ad_account(username, connector_id):
             record_protected_account_skip(
                 stage_name="plan",
@@ -492,7 +586,15 @@ def plan_user_actions(
             source_id=userid,
             department_id=str(target_dept.department_id),
             target_dn=f"CN={display_name},{ou_dn}",
-            risk_level="high" if operation_type == "move_user" else "normal",
+            risk_level=(
+                "high"
+                if operation_type == "move_user"
+                or any(
+                    bool(value.get("clear", False))
+                    for value in mapped_attribute_preview.values()
+                )
+                else "normal"
+            ),
             desired_state={
                 "userid": userid,
                 "connector_id": connector_id,
@@ -507,6 +609,7 @@ def plan_user_actions(
                 "placement_reason": placement_reason,
                 "binding_resolution": binding_resolution_details.get(userid, {}),
                 "field_ownership_policy": dict(field_ownership_policy),
+                "mapped_attributes": mapped_attribute_preview,
                 "before_state": existing_before_state,
                 "rollback": rollback_metadata,
                 "lifecycle_profile": {
@@ -605,6 +708,242 @@ def plan_user_actions(
                     "binding_resolution": binding_resolution_details.get(userid, {}),
                 },
             )
+
+
+def plan_manager_relationship_actions(ctx: SyncContext) -> None:
+    """Resolve source manager IDs through durable bindings into current AD DNs."""
+
+    ctx.actions.manager_relationship_actions.clear()
+    planned_users = {
+        action.source_user_id: action for action in ctx.actions.user_actions
+    }
+    resolutions = ctx.identity.binding_resolution_details
+    existing_by_connector = ctx.identity.existing_users_map_by_connector
+    for source_user_id, info in ctx.identity.user_departments.items():
+        if source_user_id not in planned_users:
+            continue
+        manager_ids = list(dict.fromkeys(extract_manager_userids(info.user)))
+        if not manager_ids:
+            continue
+        subject_action = planned_users[source_user_id]
+        if len(manager_ids) > 1:
+            ctx.hooks.record_conflict(
+                conflict_type="manager_relationship_ambiguous",
+                source_id=source_user_id,
+                target_key=subject_action.username,
+                severity="error",
+                message=(
+                    f"source identity {source_user_id} has multiple manager identifiers"
+                ),
+                resolution_hint="Resolve the source manager relationship and rerun Dry Run",
+                details={"manager_source_user_ids": manager_ids},
+            )
+            continue
+        manager_source_user_id = manager_ids[0]
+        if manager_source_user_id == source_user_id:
+            ctx.hooks.record_conflict(
+                conflict_type="manager_relationship_cycle",
+                source_id=source_user_id,
+                target_key=subject_action.username,
+                severity="error",
+                message="an identity cannot be its own manager",
+                resolution_hint="Correct the source manager relationship",
+                details={"manager_source_user_id": manager_source_user_id},
+            )
+            continue
+        manager_resolution = resolutions.get(manager_source_user_id, {})
+        manager_username = str(manager_resolution.get("ad_username") or "").strip()
+        manager_connector_id = str(
+            manager_resolution.get("connector_id") or subject_action.connector_id
+        ).strip() or "default"
+        if not manager_username:
+            ctx.hooks.record_conflict(
+                conflict_type="manager_binding_missing",
+                source_id=source_user_id,
+                target_key=subject_action.username,
+                severity="error",
+                message=f"manager {manager_source_user_id} has no durable AD binding",
+                resolution_hint="Resolve and bind the manager identity before Apply",
+                details={"manager_source_user_id": manager_source_user_id},
+            )
+            continue
+        if manager_connector_id != subject_action.connector_id:
+            ctx.hooks.record_conflict(
+                conflict_type="manager_connector_mismatch",
+                source_id=source_user_id,
+                target_key=subject_action.username,
+                severity="error",
+                message="manager and employee resolve to different AD connectors",
+                resolution_hint="Review connector routing for both enterprise identities",
+                details={
+                    "employee_connector_id": subject_action.connector_id,
+                    "manager_connector_id": manager_connector_id,
+                },
+            )
+            continue
+        manager_action = planned_users.get(manager_source_user_id)
+        manager_dn = (
+            f"CN={manager_action.display_name},{manager_action.ou_dn}"
+            if manager_action
+            else _directory_user_dn(
+                existing_by_connector.get(manager_connector_id, {}).get(
+                    manager_username
+                )
+            )
+        )
+        if not manager_dn:
+            ctx.hooks.record_conflict(
+                conflict_type="manager_ad_object_missing",
+                source_id=source_user_id,
+                target_key=subject_action.username,
+                severity="error",
+                message=f"manager {manager_source_user_id} has no current AD object DN",
+                resolution_hint="Refresh the AD snapshot or create the manager account first",
+                details={
+                    "manager_source_user_id": manager_source_user_id,
+                    "manager_username": manager_username,
+                },
+            )
+            continue
+        current_subject = existing_by_connector.get(
+            subject_action.connector_id, {}
+        ).get(subject_action.username)
+        current_manager_dn = (
+            str(
+                current_subject.get("manager_dn")
+                or current_subject.get("manager")
+                or ""
+            ).strip()
+            if isinstance(current_subject, dict)
+            else ""
+        )
+        if current_manager_dn.casefold() == manager_dn.casefold():
+            continue
+        ctx.actions.manager_relationship_actions.append(
+            ManagerRelationshipAction(
+                connector_id=subject_action.connector_id,
+                source_user_id=source_user_id,
+                username=subject_action.username,
+                manager_source_user_id=manager_source_user_id,
+                manager_username=manager_username,
+                manager_dn=manager_dn,
+            )
+        )
+        ctx.hooks.add_planned_operation(
+            object_type="user_relationship",
+            operation_type="set_manager",
+            source_id=source_user_id,
+            target_dn=manager_dn,
+            desired_state={
+                "connector_id": subject_action.connector_id,
+                "ad_username": subject_action.username,
+                "manager_source_user_id": manager_source_user_id,
+                "manager_username": manager_username,
+                "manager_dn": manager_dn,
+                "mapping_role": "RELATIONSHIP",
+                "before_manager_dn": current_manager_dn,
+            },
+        )
+
+
+def plan_proxy_addresses_actions(ctx: SyncContext) -> None:
+    """Plan proxyAddresses through the dedicated primary/alias handler."""
+
+    ctx.actions.proxy_addresses_actions.clear()
+    capability_cache: dict[str, dict[str, Any]] = {}
+
+    def current_capabilities(connector_id: str) -> dict[str, Any]:
+        if connector_id in capability_cache:
+            return capability_cache[connector_id]
+        registry_repo = getattr(
+            ctx.repositories, "ad_target_attribute_registry_repo", None
+        )
+        snapshot = ctx.repositories.ad_directory_snapshot_repo.get_latest_successful_snapshot(
+            org_id=ctx.organization.org_id,
+            connector_id=connector_id,
+        )
+        attributes = (
+            registry_repo.list_attributes(
+                org_id=ctx.organization.org_id,
+                ad_connector_id=connector_id,
+                current_snapshot_id=int(snapshot["id"]),
+            )
+            if registry_repo is not None and snapshot
+            else []
+        )
+        capability_cache[connector_id] = {
+            attribute.ldap_attribute: attribute for attribute in attributes
+        }
+        return capability_cache[connector_id]
+
+    for user_action in ctx.actions.user_actions:
+        relationship_rules = select_mapping_rules(
+            ctx.policy_settings.enabled_mapping_rules,
+            direction="source_to_ad",
+            connector_id=user_action.connector_id,
+        )
+        proxy_rules = [
+            rule
+            for rule in relationship_rules
+            if str(getattr(rule, "mapping_role", "") or "").strip().upper()
+            == "RELATIONSHIP"
+            and str(getattr(rule, "target_field", "") or "").strip().casefold()
+            == "proxyaddresses"
+        ]
+        if not proxy_rules:
+            continue
+        capabilities = current_capabilities(user_action.connector_id)
+        try:
+            values = build_proxy_address_values(
+                user_action.user,
+                connector_id=user_action.connector_id,
+                primary_email=user_action.email,
+                rules=proxy_rules,
+                attribute_capabilities=capabilities,
+                strict_capabilities=bool(capabilities),
+            )
+        except MappingEvaluationError as exc:
+            ctx.hooks.record_conflict(
+                conflict_type="proxy_addresses_mapping_blocked",
+                source_id=user_action.source_user_id,
+                target_key=user_action.username,
+                severity="error",
+                message=str(exc),
+                resolution_hint=(
+                    "Correct the proxyAddresses relationship mapping and refresh AD capabilities"
+                ),
+                details={
+                    "connector_id": user_action.connector_id,
+                    "error_code": exc.code,
+                },
+            )
+            continue
+        if values is None:
+            continue
+        primary_address, aliases = values
+        ctx.actions.proxy_addresses_actions.append(
+            ProxyAddressesAction(
+                connector_id=user_action.connector_id,
+                source_user_id=user_action.source_user_id,
+                username=user_action.username,
+                primary_address=primary_address,
+                aliases=aliases,
+            )
+        )
+        ctx.hooks.add_planned_operation(
+            object_type="user_relationship",
+            operation_type="merge_proxy_addresses",
+            source_id=user_action.source_user_id,
+            target_dn=f"CN={user_action.display_name},{user_action.ou_dn}",
+            desired_state={
+                "connector_id": user_action.connector_id,
+                "ad_username": user_action.username,
+                "primary_address": primary_address,
+                "aliases": aliases,
+                "mapping_role": "RELATIONSHIP",
+                "special_handler": "proxy_addresses",
+            },
+        )
 
 
 def plan_disable_actions(

@@ -115,6 +115,18 @@ def export_organization_bundle(db_manager: DatabaseManager, org_id: str) -> Dict
             "sync_mode": record.sync_mode,
             "is_enabled": record.is_enabled,
             "notes": record.notes,
+            "provider_scope": record.provider_scope,
+            "source_connector_id": record.source_connector_id,
+            "canonical_source_field": record.canonical_source_field,
+            "raw_source_field_path": record.raw_source_field_path,
+            "ad_connector_id": record.ad_connector_id,
+            "mapping_role": record.mapping_role,
+            "authority_mode": record.authority_mode,
+            "transform_pipeline": list(record.transform_pipeline),
+            "null_policy": record.null_policy,
+            "conflict_policy": record.conflict_policy,
+            "write_policy": record.write_policy,
+            "version": record.version,
         }
         for record in mapping_repo.list_rule_records(org_id=organization.org_id)
     ]
@@ -177,6 +189,13 @@ def export_organization_bundle(db_manager: DatabaseManager, org_id: str) -> Dict
             "prevent_loop": record.prevent_loop,
             "is_enabled": record.is_enabled,
             "notes": record.notes,
+            "authority_mode": record.authority_mode,
+            "authoritative_connector_id": record.authoritative_connector_id,
+            "provider_priority": list(record.provider_priority),
+            "conflict_policy": record.conflict_policy,
+            "null_policy": record.null_policy,
+            "manual_override_policy": record.manual_override_policy,
+            "effective_version": record.effective_version,
         }
         for record in field_authority_rule_repo.list_rules(org_id=organization.org_id)
     ]
@@ -314,6 +333,40 @@ def import_organization_bundle(
             sync_mode=str(mapping.get("sync_mode") or "replace").strip(),
             is_enabled=bool(mapping.get("is_enabled", True)),
             notes=str(mapping.get("notes") or "").strip(),
+            provider_scope=str(mapping.get("provider_scope") or "*").strip(),
+            source_connector_id=str(
+                mapping.get("source_connector_id") or "default"
+            ).strip(),
+            canonical_source_field=str(
+                mapping.get("canonical_source_field")
+                or mapping.get("source_field")
+                or ""
+            ).strip(),
+            raw_source_field_path=str(
+                mapping.get("raw_source_field_path")
+                or mapping.get("source_field")
+                or ""
+            ).strip(),
+            ad_connector_id=str(
+                mapping.get("ad_connector_id")
+                or mapping.get("connector_id")
+                or "default"
+            ).strip(),
+            mapping_role=str(
+                mapping.get("mapping_role") or "ATTRIBUTE_SYNC"
+            ).strip(),
+            authority_mode=str(
+                mapping.get("authority_mode") or "PROVIDER_PRIORITY"
+            ).strip(),
+            transform_pipeline=list(mapping.get("transform_pipeline") or []),
+            null_policy=str(
+                mapping.get("null_policy") or "PRESERVE_TARGET"
+            ).strip(),
+            conflict_policy=str(
+                mapping.get("conflict_policy") or "REJECT_ON_CONFLICT"
+            ).strip(),
+            write_policy=str(mapping.get("write_policy") or "").strip(),
+            created_by="config_bundle_import",
         )
         imported_mappings += 1
 
@@ -386,6 +439,22 @@ def import_organization_bundle(
             is_enabled=bool(rule.get("is_enabled", True)),
             notes=str(rule.get("notes") or "").strip(),
             created_by="config_bundle_import",
+            authority_mode=str(
+                rule.get("authority_mode") or "PROVIDER_PRIORITY"
+            ).strip(),
+            authoritative_connector_id=str(
+                rule.get("authoritative_connector_id") or ""
+            ).strip(),
+            provider_priority=list(rule.get("provider_priority") or []),
+            conflict_policy=str(
+                rule.get("conflict_policy") or "PROVIDER_PRIORITY"
+            ).strip(),
+            null_policy=str(
+                rule.get("null_policy") or "PRESERVE_TARGET"
+            ).strip(),
+            manual_override_policy=str(
+                rule.get("manual_override_policy") or "REQUIRE_REVIEW"
+            ).strip(),
         )
         imported_field_authority_rules += 1
 
