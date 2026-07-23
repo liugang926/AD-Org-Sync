@@ -406,6 +406,7 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
         )
 
         self.assertIsNotNone(field_select)
+        # Basic mode must present business language without exposing storage keys.
         self.assertIn('<optgroup label="联系方式">', field_select.group(1))
         self.assertIn(
             '<option value="alternate_email">备用邮箱</option>',
