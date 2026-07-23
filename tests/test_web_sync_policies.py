@@ -145,6 +145,39 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
             "/sync-policies/scope",
         )
 
+    def test_ad_attribute_capability_catalog_is_a_direct_snapshot_bound_view(self):
+        self._login("superadmin")
+        snapshot_id = self._seed_ad_ou_snapshot(connector_id="default")
+        self.app.state.ad_target_attribute_registry_repo.sync_snapshot_catalog(
+            org_id="default",
+            ad_connector_id="default",
+            snapshot_id=snapshot_id,
+            capability_report={
+                "capabilities": {
+                    "update_user": {"status": "success", "verified": True}
+                },
+                "schema_attributes": ["displayName", "manager", "objectGUID"],
+            },
+            discovered_attributes=["displayName", "manager", "objectGUID"],
+        )
+
+        response = self._route("/sync-policies/attribute-mappings", "GET")(
+            self._request(
+                "/sync-policies/attribute-mappings",
+                query={"view": "ad-capabilities"},
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("AD Attribute Capability Catalog", body)
+        self.assertIn('aria-label="AD attribute capability registry"', body)
+        self.assertIn("displayName", body)
+        self.assertIn("manager_dn", body)
+        self.assertIn("objectGUID", body)
+        self.assertIn("read_only", body)
+        self.assertNotIn("Attribute Mapping Policy", body)
+
     def test_department_routing_renders_source_and_ad_ou_snapshot_trees(self):
         self._login("superadmin")
         self.session["ui_mode"] = "advanced"

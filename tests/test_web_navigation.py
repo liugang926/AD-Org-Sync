@@ -34,6 +34,7 @@ class WebNavigationTests(WebAuthzBaseTestCase):
                 "/data-sources/data-quality",
                 "/identity-governance/identity-matching",
                 "/identity-governance/match-rules",
+                "/identity-governance/enterprise-identities",
                 "/identity-governance/account-takeover",
                 "/sync-policies/account-naming",
                 "/sync-policies/field-authority",

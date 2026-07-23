@@ -69,9 +69,22 @@ class SourceDirectoryRepository(BaseRepository):
         warning_summary: str = "",
         ttl_minutes: int = 60,
     ) -> None:
+        from sync_app.storage.repositories.field_registry import (
+            CanonicalFieldRegistryRepository,
+            SourceFieldRegistryRepository,
+            is_secret_field,
+        )
+
         department_rows = list(departments)
         user_rows = list(users)
-        field_rows = list(fields)
+        field_rows = [
+            dict(row)
+            for row in fields
+            if str(dict(row).get("raw_field_path") or dict(row).get("name") or "").strip()
+            and not is_secret_field(
+                str(dict(row).get("raw_field_path") or dict(row).get("name") or "")
+            )
+        ]
         employee_counts: dict[str, int] = {}
         for user in user_rows:
             employee_id = str(user.get("employee_id") or "").strip().lower()
@@ -82,13 +95,14 @@ class SourceDirectoryRepository(BaseRepository):
         expires_at = (now + timedelta(minutes=max(int(ttl_minutes or 60), 1))).isoformat(timespec="seconds")
         with self.db.transaction() as conn:
             snapshot = conn.execute(
-                "SELECT org_id, provider_id FROM source_directory_snapshots WHERE id = ?",
+                "SELECT org_id, provider_id, connector_id FROM source_directory_snapshots WHERE id = ?",
                 (int(snapshot_id),),
             ).fetchone()
             if not snapshot:
                 raise ValueError("source directory snapshot not found")
             org_id = str(snapshot["org_id"])
             provider_id = str(snapshot["provider_id"])
+            connector_id = str(snapshot["connector_id"] or "default")
             conn.execute("DELETE FROM source_department_snapshots WHERE snapshot_id = ?", (snapshot_id,))
             conn.execute("DELETE FROM source_user_snapshots WHERE snapshot_id = ?", (snapshot_id,))
             conn.execute("DELETE FROM source_field_catalogs WHERE snapshot_id = ?", (snapshot_id,))
@@ -151,6 +165,16 @@ class SourceDirectoryRepository(BaseRepository):
                     )
                     for row in field_rows
                 ],
+            )
+            CanonicalFieldRegistryRepository(self.db).seed_defaults(connection=conn)
+            SourceFieldRegistryRepository(self.db).sync_snapshot_catalog(
+                org_id=org_id,
+                provider_id=provider_id,
+                source_connector_id=connector_id,
+                snapshot_id=int(snapshot_id),
+                user_count=len(user_rows),
+                fields=field_rows,
+                connection=conn,
             )
             conn.execute(
                 """

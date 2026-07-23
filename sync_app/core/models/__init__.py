@@ -7,6 +7,8 @@ from sync_app.core.models.actions import (
     GroupCleanupAction,
     GroupHierarchyAction,
     GroupMembershipAction,
+    ManagerRelationshipAction,
+    ProxyAddressesAction,
     ManagedGroupTarget,
     UserAction,
 )
@@ -35,6 +37,7 @@ from sync_app.core.models.conflicts import (
     UserIdentityBindingRecord,
 )
 from sync_app.core.models.directory import (
+    CanonicalUserDTO,
     DepartmentGroupInfo,
     DepartmentNode,
     DirectoryGroupRecord,
@@ -61,6 +64,11 @@ from sync_app.core.models.identity import (
     IdentityMatchRuleRecord,
     PlatformAccountRecord,
 )
+from sync_app.core.models.field_registry import (
+    ADTargetAttributeRecord,
+    CanonicalFieldRecord,
+    SourceFieldRecord,
+)
 from sync_app.core.models.lifecycle import (
     CustomManagedGroupBindingRecord,
     OffboardingRecord,
@@ -85,3 +93,6 @@ from sync_app.core.models.utils import (
 from sync_app.core.models.web_admin import WebAdminUserRecord, WebAuditLogRecord
 
 __all__ = ['MappingLikeModel', '_normalize_mapping_direction_value', '_coerce_int_list', '_extract_department_ids', 'SourceConnectorConfig', 'SourceConfig', 'WeComConfig', 'LDAPConfig', 'AccountConfig', 'AppConfig', 'DepartmentNode', 'SourceDirectoryUser', 'SourceUser', 'WeComUser', 'UserDepartmentBundle', 'GroupPolicyEvaluation', 'DepartmentGroupInfo', 'DirectoryUserRecord', 'DirectoryGroupRecord', 'SkipOperationSummary', 'SyncErrorBuckets', 'SyncOperationCounters', 'SyncRunStats', 'SyncJobSummary', 'SyncJobRecord', 'SyncOperationRecord', 'SyncPlanReviewRecord', 'SyncReplayRequestRecord', 'ManagedGroupTarget', 'DepartmentAction', 'UserAction', 'GroupMembershipAction', 'GroupHierarchyAction', 'GroupCleanupAction', 'DisableUserAction', 'SyncConflictRecord', 'SyncExceptionRuleRecord', 'UserIdentityBindingRecord', 'UserDepartmentOverrideRecord', 'ExclusionRuleRecord', 'ManagedGroupBindingRecord', 'ConfigReleaseSnapshotRecord', 'DataQualityReviewRecord', 'DataQualitySnapshotRecord', 'AttributeMappingRuleRecord', 'OrganizationRecord', 'DepartmentOuMappingRecord', 'IntegrationWebhookSubscriptionRecord', 'IntegrationWebhookOutboxRecord', 'SyncConnectorRecord', 'SourceConnectorRecord', 'EnterpriseIdentityRecord', 'PlatformAccountRecord', 'ADAccountRecord', 'IdentityAccountLinkRecord', 'IdentityMatchRuleRecord', 'IdentityMatchCandidateRecord', 'IdentityMatchDecisionRecord', 'FieldAuthorityRuleRecord', 'OffboardingRecord', 'UserLifecycleRecord', 'CustomManagedGroupBindingRecord', 'WebAdminUserRecord', 'WebAuditLogRecord']
+__all__ += ['SourceFieldRecord', 'CanonicalFieldRecord', 'ADTargetAttributeRecord']
+__all__ += ['CanonicalUserDTO']
+__all__ += ['ManagerRelationshipAction', 'ProxyAddressesAction']

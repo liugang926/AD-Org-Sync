@@ -391,6 +391,13 @@ class FieldAuthorityRuleRecord(MappingLikeModel):
     prevent_loop: bool = True
     is_enabled: bool = True
     rule_revision: int = 1
+    authority_mode: str = "PROVIDER_PRIORITY"
+    authoritative_connector_id: str = ""
+    provider_priority: list[str] = field(default_factory=list)
+    conflict_policy: str = "PROVIDER_PRIORITY"
+    null_policy: str = "PRESERVE_TARGET"
+    manual_override_policy: str = "REQUIRE_REVIEW"
+    effective_version: int = 1
     notes: str = ""
     created_by: str = ""
     created_at: str = ""
@@ -398,6 +405,7 @@ class FieldAuthorityRuleRecord(MappingLikeModel):
 
     @classmethod
     def from_row(cls, row: Any) -> "FieldAuthorityRuleRecord":
+        keys = set(row.keys())
         return cls(
             id=_optional_int(row["id"]),
             org_id=str(row["org_id"] or "default"),
@@ -409,6 +417,20 @@ class FieldAuthorityRuleRecord(MappingLikeModel):
             prevent_loop=bool(row["prevent_loop"]),
             is_enabled=bool(row["is_enabled"]),
             rule_revision=int(row["rule_revision"] or 1),
+            authority_mode=str(row["authority_mode"] or "PROVIDER_PRIORITY") if "authority_mode" in keys else "PROVIDER_PRIORITY",
+            authoritative_connector_id=str(row["authoritative_connector_id"] or "") if "authoritative_connector_id" in keys else "",
+            provider_priority=[
+                str(value)
+                for value in _json_value(
+                    row["provider_priority_json"] if "provider_priority_json" in keys else "[]",
+                    [],
+                )
+                if str(value).strip()
+            ],
+            conflict_policy=str(row["conflict_policy"] or "PROVIDER_PRIORITY") if "conflict_policy" in keys else "PROVIDER_PRIORITY",
+            null_policy=str(row["null_policy"] or "PRESERVE_TARGET") if "null_policy" in keys else "PRESERVE_TARGET",
+            manual_override_policy=str(row["manual_override_policy"] or "REQUIRE_REVIEW") if "manual_override_policy" in keys else "REQUIRE_REVIEW",
+            effective_version=max(int(row["effective_version"] or 1), 1) if "effective_version" in keys else int(row["rule_revision"] or 1),
             notes=str(row["notes"] or ""),
             created_by=str(row["created_by"] or ""),
             created_at=str(row["created_at"] or ""),

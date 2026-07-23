@@ -255,7 +255,7 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(
             blocked.payload["readiness_step"],
-            "data_quality_reviewed",
+            "source_field_catalog_current",
         )
 
     def test_review_then_apply_binds_the_exact_plan_and_writes_audit(self) -> None:

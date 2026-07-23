@@ -68,7 +68,15 @@ def platform_field(account: PlatformAccountRecord, field_name: str) -> Any:
         return _email_localpart(account.email)
     if hasattr(account, field_name):
         return getattr(account, field_name)
-    return account.custom_fields.get(field_name, account.raw_payload.get(field_name, ""))
+    direct = account.custom_fields.get(field_name, account.raw_payload.get(field_name, ""))
+    if direct not in (None, "") or "." not in field_name:
+        return direct
+    current: Any = account.raw_payload
+    for segment in field_name.split("."):
+        if not isinstance(current, dict) or segment not in current:
+            return ""
+        current = current[segment]
+    return current
 
 
 def ad_field(account: ADAccountRecord, field_name: str) -> Any:

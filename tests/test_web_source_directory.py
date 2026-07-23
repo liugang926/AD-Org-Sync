@@ -373,6 +373,49 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         self.assertNotIn("13812340000", duplicate_body)
         self.assertIn("View identity details", duplicate_body)
 
+    def test_source_field_catalog_is_a_direct_snapshot_bound_view(self):
+        self._login("superadmin")
+        snapshot_id = self._seed_source_views()
+        self.app.state.source_field_registry_repo.sync_snapshot_catalog(
+            org_id="default",
+            provider_id="wecom",
+            source_connector_id="default",
+            snapshot_id=snapshot_id,
+            user_count=3,
+            fields=[
+                {
+                    "raw_field_path": "extattr.cost_center",
+                    "display_label": "Cost Center",
+                    "data_type": "string",
+                    "coverage_count": 2,
+                    "is_custom": True,
+                    "permission_status": "granted",
+                    "samples": ["FIN-001"],
+                },
+                {
+                    "raw_field_path": "mobile",
+                    "display_label": "Mobile",
+                    "data_type": "string",
+                    "coverage_count": 3,
+                    "samples": ["13812340000"],
+                },
+            ],
+        )
+
+        response = self._route("/source-directory", "GET")(
+            self._request("/source-directory", query={"view": "fields"}),
+            view="fields",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn('href="/data-sources/source-directory?view=fields"', body)
+        self.assertIn('aria-label="Source field registry"', body)
+        self.assertIn("extattr.cost_center", body)
+        self.assertIn("66.7%", body)
+        self.assertIn("Canonical Field Registry", body)
+        self.assertNotIn("13812340000", body)
+
     def test_department_tree_has_counts_parents_and_read_only_scope_status(self):
         self._login("superadmin")
         self._seed_source_views()

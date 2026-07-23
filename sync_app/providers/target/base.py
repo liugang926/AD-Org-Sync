@@ -147,6 +147,21 @@ class TargetDirectoryProvider(ABC):
     ) -> bool:
         raise NotImplementedError
 
+    def update_manager(self, username: str, manager_dn: str) -> bool:
+        raise NotImplementedError(
+            "target provider does not support dedicated manager updates"
+        )
+
+    def update_proxy_addresses(
+        self,
+        username: str,
+        primary_address: str,
+        aliases: list[str],
+    ) -> bool:
+        raise NotImplementedError(
+            "target provider does not support dedicated proxy address updates"
+        )
+
     @abstractmethod
     def add_group_to_group(self, child_group_dn: str, parent_group_dn: str) -> bool:
         raise NotImplementedError

@@ -6,9 +6,11 @@ from sync_app.services.external_integrations import build_approve_plan_use_case
 from sync_app.services.rollout_readiness import RolloutReadinessService
 from sync_app.storage.local_db import (
     AccountTakeoverRepository,
+    ADTargetAttributeRegistryRepository,
     ADDirectorySnapshotRepository,
     AttributeMappingRuleRepository,
     ConfigReleaseSnapshotRepository,
+    CanonicalFieldRegistryRepository,
     DataQualityReviewRepository,
     DatabaseManager,
     DepartmentOuMappingRepository,
@@ -18,6 +20,7 @@ from sync_app.storage.local_db import (
     OrganizationConfigRepository,
     SettingsRepository,
     SourceConnectorRepository,
+    SourceFieldRegistryRepository,
     IdentityMatchRuleRepository,
     IdentityMatchRunRepository,
     SyncConnectorRepository,
@@ -87,7 +90,10 @@ def build_web_service_state(
         job_repo=job_repo,
         review_repo=review_repo,
         conflict_repo=conflict_repo,
+        source_field_registry_repo=SourceFieldRegistryRepository(db_manager),
+        ad_target_attribute_repo=ADTargetAttributeRegistryRepository(db_manager),
     )
+    CanonicalFieldRegistryRepository(db_manager).seed_defaults()
     return WebServiceState(
         jobs=WebJobService(
             approve_plan_use_case=approve_plan_use_case,

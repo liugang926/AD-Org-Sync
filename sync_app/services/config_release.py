@@ -5,12 +5,18 @@ import hashlib
 import json
 from typing import Any, Callable, Optional
 
+from sync_app.core.fingerprints import fingerprint_json
 from sync_app.core.models import ConfigReleaseSnapshotRecord
 from sync_app.services.config_bundle import export_organization_bundle, import_organization_bundle
 from sync_app.storage.local_db import (
+    ADDirectorySnapshotRepository,
+    ADTargetAttributeRegistryRepository,
     ConfigReleaseSnapshotRepository,
     DatabaseManager,
+    IdentityMatchRuleRepository,
+    IdentityMatchRunRepository,
     SourceDirectoryRepository,
+    SourceFieldRegistryRepository,
 )
 from sync_app.storage.secret_store import CONNECTOR_SECRET_FIELDS, ORGANIZATION_SECRET_FIELDS
 
@@ -93,6 +99,22 @@ FIELD_LABELS = {
     "target_field": "Target Field",
     "transform_template": "Transform Template",
     "sync_mode": "Sync Mode",
+    "provider_scope": "Provider Scope",
+    "source_connector_id": "Source Connector ID",
+    "canonical_source_field": "Canonical Source Field",
+    "raw_source_field_path": "Raw Source Field Path",
+    "ad_connector_id": "AD Connector ID",
+    "mapping_role": "Mapping Role",
+    "authority_mode": "Authority Mode",
+    "transform_pipeline": "Transform Pipeline",
+    "null_policy": "Null Policy",
+    "conflict_policy": "Conflict Policy",
+    "write_policy": "Write Policy",
+    "version": "Version",
+    "authoritative_connector_id": "Authoritative Connector ID",
+    "provider_priority": "Provider Priority",
+    "manual_override_policy": "Manual Override Policy",
+    "effective_version": "Effective Version",
     "notes": "Notes",
     "source_department_id": "Source Department ID",
     "source_department_name": "Source Department Name",
@@ -176,6 +198,18 @@ FIELD_ORDER = {
         "target_field",
         "transform_template",
         "sync_mode",
+        "provider_scope",
+        "source_connector_id",
+        "canonical_source_field",
+        "raw_source_field_path",
+        "ad_connector_id",
+        "mapping_role",
+        "authority_mode",
+        "transform_pipeline",
+        "null_policy",
+        "conflict_policy",
+        "write_policy",
+        "version",
         "is_enabled",
         "notes",
     ),
@@ -227,6 +261,13 @@ FIELD_ORDER = {
         "source_priority",
         "sync_direction",
         "sync_mode",
+        "authority_mode",
+        "authoritative_connector_id",
+        "provider_priority",
+        "conflict_policy",
+        "null_policy",
+        "manual_override_policy",
+        "effective_version",
         "prevent_loop",
         "is_enabled",
         "notes",
@@ -811,14 +852,6 @@ def publish_current_config_release_snapshot(
     current_bundle = _build_current_release_bundle(db_manager, normalized_org_id)
     current_hash = build_config_release_bundle_hash(current_bundle)
     latest_snapshot = repo.get_latest_snapshot_record(org_id=normalized_org_id)
-    if latest_snapshot and latest_snapshot.bundle_hash == current_hash and not force:
-        return {
-            "created": False,
-            "snapshot": latest_snapshot,
-            "bundle_hash": current_hash,
-            "baseline_snapshot": latest_snapshot,
-            "diff": latest_snapshot.summary or {},
-        }
 
     diff = build_config_release_diff(
         current_bundle,
@@ -854,12 +887,114 @@ def publish_current_config_release_snapshot(
             )
         elif len(current_scope_snapshot_ids) == 1:
             resolved_source_snapshot_id = next(iter(current_scope_snapshot_ids))
+    configured_provider = str(
+        dict(current_bundle.get("organization_config") or {}).get("source_provider")
+        or "wecom"
+    ).strip().lower() or "wecom"
+    source_repo = SourceDirectoryRepository(db_manager)
+    source_snapshot = (
+        source_repo.get_snapshot(
+            int(resolved_source_snapshot_id), org_id=normalized_org_id
+        )
+        if resolved_source_snapshot_id
+        else source_repo.get_latest_successful_snapshot(
+            org_id=normalized_org_id,
+            provider_id=configured_provider,
+        )
+    )
+    if source_snapshot and resolved_source_snapshot_id is None:
+        resolved_source_snapshot_id = int(source_snapshot["id"])
+    ad_snapshot = ADDirectorySnapshotRepository(
+        db_manager
+    ).get_latest_successful_snapshot(
+        org_id=normalized_org_id,
+        connector_id="default",
+    )
+    resolved_ad_snapshot_id = int(ad_snapshot["id"] or 0) if ad_snapshot else 0
+    source_fields = (
+        SourceFieldRegistryRepository(db_manager).list_fields(
+            org_id=normalized_org_id,
+            provider_id=configured_provider,
+            current_snapshot_id=int(resolved_source_snapshot_id),
+        )
+        if resolved_source_snapshot_id
+        else []
+    )
+    ad_attributes = (
+        ADTargetAttributeRegistryRepository(db_manager).list_attributes(
+            org_id=normalized_org_id,
+            ad_connector_id="default",
+            current_snapshot_id=resolved_ad_snapshot_id,
+        )
+        if resolved_ad_snapshot_id
+        else []
+    )
+    source_catalog_fingerprint = fingerprint_json(
+        [item.to_dict() for item in source_fields],
+        namespace="source-field-catalog",
+    )
+    ad_capability_fingerprint = fingerprint_json(
+        [item.to_dict() for item in ad_attributes],
+        namespace="ad-capability-catalog",
+    )
+    identity_rules = IdentityMatchRuleRepository(db_manager).list_enabled_rules(
+        org_id=normalized_org_id
+    )
+    identity_rules_fingerprint = fingerprint_json(
+        [rule.to_dict() for rule in identity_rules],
+        namespace="identity-match-rules",
+    )
+    match_run = IdentityMatchRunRepository(db_manager).get_latest_completed_run(
+        org_id=normalized_org_id
+    )
+    identity_match_run_id = str(match_run["run_id"] or "") if match_run else ""
+    evidence_payload = {
+        "source_snapshot_id": resolved_source_snapshot_id,
+        "source_snapshot_fingerprint": str(
+            source_snapshot["snapshot_fingerprint"] or ""
+        ) if source_snapshot else "",
+        "ad_snapshot_id": resolved_ad_snapshot_id or None,
+        "ad_snapshot_fingerprint": str(
+            ad_snapshot["snapshot_fingerprint"] or ""
+        ) if ad_snapshot else "",
+        "source_field_catalog_fingerprint": source_catalog_fingerprint,
+        "ad_capability_catalog_fingerprint": ad_capability_fingerprint,
+        "identity_match_run_id": identity_match_run_id,
+        "identity_match_rules_fingerprint": identity_rules_fingerprint,
+    }
+    evidence_fingerprint = fingerprint_json(
+        evidence_payload,
+        namespace="config-release-evidence",
+    )
+    if (
+        latest_snapshot
+        and latest_snapshot.bundle_hash == current_hash
+        and latest_snapshot.evidence_fingerprint == evidence_fingerprint
+        and not force
+    ):
+        return {
+            "created": False,
+            "snapshot": latest_snapshot,
+            "bundle_hash": current_hash,
+            "baseline_snapshot": latest_snapshot,
+            "diff": latest_snapshot.summary or {},
+        }
     snapshot_id = repo.add_snapshot(
         org_id=normalized_org_id,
         snapshot_name=str(snapshot_name or "").strip(),
         trigger_action=str(trigger_action or "manual_release").strip() or "manual_release",
         created_by=str(created_by or "").strip(),
         source_snapshot_id=resolved_source_snapshot_id,
+        source_snapshot_fingerprint=evidence_payload[
+            "source_snapshot_fingerprint"
+        ],
+        ad_snapshot_id=resolved_ad_snapshot_id or None,
+        ad_snapshot_fingerprint=evidence_payload["ad_snapshot_fingerprint"],
+        source_field_catalog_fingerprint=source_catalog_fingerprint,
+        ad_capability_catalog_fingerprint=ad_capability_fingerprint,
+        identity_match_run_id=identity_match_run_id,
+        identity_match_rules_fingerprint=identity_rules_fingerprint,
+        evidence_fingerprint=evidence_fingerprint,
         bundle_hash=current_hash,
         bundle=current_bundle,
         summary=summary,
@@ -1034,7 +1169,6 @@ def rollback_config_release_snapshot(
             created_by=created_by,
             snapshot_name=f"Pre-rollback backup before #{target_snapshot.id}",
             trigger_action="rollback_safety",
-            source_snapshot_id=target_snapshot.id,
             force=False,
         )
         safety_snapshot = safety_result.get("snapshot")
@@ -1057,7 +1191,6 @@ def rollback_config_release_snapshot(
         created_by=created_by,
         snapshot_name=f"Rollback to {build_config_release_snapshot_title(target_snapshot)}",
         trigger_action="rollback",
-        source_snapshot_id=target_snapshot.id,
         force=True,
     )
     return {

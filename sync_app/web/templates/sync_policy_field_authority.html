@@ -19,9 +19,15 @@
       <div class="form-grid">
         <label>{{ t("Enterprise identity field") }}<select name="field_name" required>{% for field_name in field_authority_fields %}<option value="{{ field_name }}">{{ t(field_name) }}{% if ui_presentation.show_field_codes %} · {{ field_name }}{% endif %}</option>{% endfor %}</select></label>
         <label>{{ t("Authoritative source") }}<select name="source_provider" required>{% for provider_id in field_authority_providers %}<option value="{{ provider_id }}">{{ t("Organization default") if provider_id == "*" else t(provider_id) }}</option>{% endfor %}</select></label>
+        <label>{{ t("Authority mode") }}<select name="authority_mode">{% for value in authority_mode_options %}<option value="{{ value }}" {% if value == "PROVIDER_PRIORITY" %}selected{% endif %}>{{ t(value) }}</option>{% endfor %}</select></label>
+        <label>{{ t("Authoritative connector") }}<select name="authoritative_connector_id"><option value="">{{ t("Any connector for provider") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}">{{ connector.name }} · {{ connector.connector_id }}</option>{% endfor %}</select></label>
+        <label>{{ t("Provider priority") }}<input type="text" name="provider_priority" placeholder="dingtalk,wecom,feishu"><span class="form-help">{{ t("Comma-separated provider order; the authoritative source remains the default first choice.") }}</span></label>
         <label>{{ t("Priority") }}<input type="number" name="source_priority" value="100" min="1" max="10000" required></label>
         <label>{{ t("Synchronization direction") }}<select name="sync_direction">{% for value in field_authority_directions %}<option value="{{ value }}">{{ t(value) }}</option>{% endfor %}</select></label>
         <label>{{ t("Update mode") }}<select name="sync_mode">{% for value in field_authority_modes %}<option value="{{ value }}">{{ t(value) }}</option>{% endfor %}</select></label>
+        <label>{{ t("Conflict policy") }}<select name="conflict_policy">{% for value in authority_conflict_policy_options %}<option value="{{ value }}">{{ t(value) }}</option>{% endfor %}</select></label>
+        <label>{{ t("Null policy") }}<select name="null_policy">{% for value in authority_null_policy_options %}<option value="{{ value }}" {% if value == "PRESERVE_TARGET" %}selected{% endif %}>{{ t(value) }}</option>{% endfor %}</select></label>
+        <label>{{ t("Manual override policy") }}<select name="manual_override_policy">{% for value in manual_override_policy_options %}<option value="{{ value }}" {% if value == "REQUIRE_REVIEW" %}selected{% endif %}>{{ t(value) }}</option>{% endfor %}</select></label>
         <label>{{ t("Notes") }}<input type="text" name="notes" maxlength="500"></label>
       </div>
       <div class="grid cols-2">
@@ -36,10 +42,10 @@
   {% call ui.panel(t("Current field authority"), description=t("Every managed field must have an explicit owner before policy release.")) %}
     {% call ui.table_shell() %}
     <table>
-      <thead><tr><th>{{ t("Field") }}</th><th>{{ t("Authoritative source") }}</th><th>{{ t("Priority") }}</th><th>{{ t("Direction") }}</th><th>{{ t("Mode") }}</th><th>{{ t("Loop prevention") }}</th><th>{{ t("Revision") }}</th><th>{{ t("Status") }}</th></tr></thead>
+      <thead><tr><th>{{ t("Field") }}</th><th>{{ t("Authoritative source") }}</th><th>{{ t("Authority mode") }}</th><th>{{ t("Provider priority") }}</th><th>{{ t("Conflict / null") }}</th><th>{{ t("Direction / write") }}</th><th>{{ t("Override") }}</th><th>{{ t("Revision") }}</th><th>{{ t("Status") }}</th></tr></thead>
       <tbody>
-      {% for rule in field_authority_rules %}<tr><td><strong>{{ t(rule.field_name) }}</strong>{% if ui_presentation.show_field_codes %}<div class="muted">{{ rule.field_name }}</div>{% endif %}</td><td>{{ t("Organization default") if rule.source_provider == "*" else t(rule.source_provider) }}</td><td>{{ rule.source_priority }}</td><td>{{ t(rule.sync_direction) }}</td><td>{{ t(rule.sync_mode) }}</td><td>{{ t("Enabled") if rule.prevent_loop else t("Disabled") }}</td><td>{{ rule.rule_revision }}</td><td>{{ ui.badge(t("Enabled") if rule.is_enabled else t("Disabled"), "success" if rule.is_enabled else "neutral") }}</td></tr>
-      {% else %}<tr><td colspan="8" class="empty-state">{{ t("No field authority rules are configured") }}</td></tr>{% endfor %}
+      {% for rule in field_authority_rules %}<tr><td><strong>{{ t(rule.field_name) }}</strong>{% if ui_presentation.show_field_codes %}<div class="muted">{{ rule.field_name }}</div>{% endif %}</td><td>{{ t("Organization default") if rule.source_provider == "*" else t(rule.source_provider) }}<small>{{ rule.authoritative_connector_id or t("Any connector") }}</small></td><td>{{ t(rule.authority_mode) }}</td><td>{{ rule.provider_priority|join(" → ") if rule.provider_priority else rule.source_provider }}<small>{{ t("Priority") }} {{ rule.source_priority }}</small></td><td>{{ t(rule.conflict_policy) }}<small>{{ t(rule.null_policy) }}</small></td><td>{{ t(rule.sync_direction) }}<small>{{ t(rule.sync_mode) }} · {{ t("Loop protected") if rule.prevent_loop else t("Loop allowed") }}</small></td><td>{{ t(rule.manual_override_policy) }}</td><td>{{ rule.effective_version }}<small>{{ t("Rule") }} {{ rule.rule_revision }}</small></td><td>{{ ui.badge(t("Enabled") if rule.is_enabled else t("Disabled"), "success" if rule.is_enabled else "neutral") }}</td></tr>
+      {% else %}<tr><td colspan="9" class="empty-state">{{ t("No field authority rules are configured") }}</td></tr>{% endfor %}
       </tbody>
     </table>
     {% endcall %}

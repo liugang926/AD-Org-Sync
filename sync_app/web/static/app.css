@@ -1791,6 +1791,33 @@ form.inline { display: inline-flex; margin: 0; }
   scrollbar-width: thin;
 }
 
+.registry-table-window {
+  max-height: min(38rem, 70vh);
+  overflow: auto;
+}
+
+.registry-table-window thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel);
+}
+
+.identity-link-stack {
+  display: grid;
+  gap: 8px;
+  min-width: 12rem;
+}
+
+.identity-link-chip {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
 .page-heading,
 .page-actions,
 .card-header,
@@ -6307,6 +6334,26 @@ button.small {
   .identity-workbench-table th:nth-child(8),
   .identity-workbench-table td:nth-child(8) {
     width: 128px;
+  }
+
+  .release-readiness-panel .compact-stats,
+  .release-current-panel .compact-stats,
+  .release-diff-panel .compact-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .release-readiness-panel .compact-stat,
+  .release-current-panel .compact-stat,
+  .release-diff-panel .compact-stat {
+    padding: 12px;
+  }
+
+  .release-readiness-panel .compact-stat__value,
+  .release-current-panel .compact-stat__value,
+  .release-diff-panel .compact-stat__value {
+    font-size: 18px;
+    overflow-wrap: anywhere;
   }
 }
 

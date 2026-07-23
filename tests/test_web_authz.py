@@ -763,7 +763,8 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         )
         self.assertTrue(
             any(
-                item["username"] == "asmith" and item["rule"] == "existing_ad_userid"
+                item["username"] == "10018"
+                and item["rule"] == "existing_ad_employee_id"
                 for item in explanation["identity_claim_policy"]["claim_candidates"]
             )
         )

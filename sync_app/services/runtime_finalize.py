@@ -264,7 +264,6 @@ def finalize_successful_sync(ctx: SyncContext) -> dict[str, Any]:
     )
     if (
         ctx.execution_mode == "apply"
-        and ctx.sync_stats["error_count"] == 0
         and ctx.identity.successful_apply_bindings
     ):
         ctx.repositories.user_binding_repo.apply_successful_identity_bindings(

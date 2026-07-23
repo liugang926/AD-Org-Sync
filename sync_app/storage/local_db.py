@@ -860,6 +860,11 @@ from sync_app.storage.repositories.conflicts import (
 )
 from sync_app.storage.repositories.connectors import SyncConnectorRepository
 from sync_app.storage.repositories.exclusions import GroupExclusionRuleRepository
+from sync_app.storage.repositories.field_registry import (
+    ADTargetAttributeRegistryRepository,
+    CanonicalFieldRegistryRepository,
+    SourceFieldRegistryRepository,
+)
 from sync_app.storage.repositories.system import (
     ConfigReleaseSnapshotRepository,
     DataQualityReviewRepository,

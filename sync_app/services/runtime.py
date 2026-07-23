@@ -108,8 +108,8 @@ def build_effective_field_ownership_policy(
 IDENTITY_RULE_PRIORITY = (
     'manual_binding',
     'existing_binding',
-    'existing_ad_userid',
-    'existing_ad_email_localpart',
+    'existing_ad_employee_id',
+    'existing_ad_employee_number',
     'derived_default_userid',
 )
 

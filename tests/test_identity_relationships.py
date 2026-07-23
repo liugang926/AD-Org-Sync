@@ -872,18 +872,19 @@ class IdentityRelationshipTests(unittest.TestCase):
             },
         )[0]
         self.assertEqual(safe_match.candidate_mapping["ad_username"], "TJ001")
-        self.assertEqual(safe_match.effective_ad_username, "ding-001")
-        self.assertEqual(safe_match.effective_resolution_source, "existing_ad_match")
-        self.assertEqual(
-            safe_match.before_state["checked_ad_username"], "ding-001"
-        )
-        self.assertFalse(safe_match.creation_eligibility["eligible"])
-        self.assertEqual(
-            safe_match.creation_eligibility["status"], "existing_identity_match"
-        )
+        self.assertEqual(safe_match.effective_ad_username, "TJ001")
+        self.assertEqual(safe_match.effective_resolution_source, "employee_id")
+        self.assertEqual(safe_match.before_state["checked_ad_username"], "TJ001")
+        self.assertTrue(safe_match.creation_eligibility["eligible"])
+        self.assertEqual(safe_match.creation_eligibility["status"], "eligible")
 
+        ambiguous_user_row = dict(user_row)
+        ambiguous_user_row["raw_payload"] = {
+            **dict(user_row.get("raw_payload") or {}),
+            "employee_number": "ding-001",
+        }
         ambiguous = self.service.build_relationships(
-            [user_row],
+            [ambiguous_user_row],
             org_id="default",
             source_provider="dingtalk",
             snapshot=snapshot,

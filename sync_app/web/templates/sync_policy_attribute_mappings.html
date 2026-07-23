@@ -3,10 +3,50 @@
 {% import "components/sync_policy.html" as policy with context %}
 
 {% block content %}
-{% call ui.page_header(t("Attribute Mappings"), t("Map source business fields to AD attributes with transformations and explicit empty-value behavior."), eyebrow=t("Sync Policies"), badge_text=t("Organization Scope"), badge_level="info") %}
+{% call ui.page_header(t("AD Attribute Capability Catalog") if active_registry_view == "ad-capabilities" else t("Attribute Mappings"), t("Review the current AD schema, permissions, write capability, and dedicated-handler requirements.") if active_registry_view == "ad-capabilities" else t("Map source business fields to AD attributes with transformations and explicit empty-value behavior."), eyebrow=t("Sync Policies"), badge_text=t("Organization Scope"), badge_level="info") %}
   {{ ui.button(t("Release History"), href="/sync-policies/releases", variant="secondary", icon="history") }}
 {% endcall %}
 {{ policy.tabs('attribute-mappings') }}
+<nav class="source-directory-tabs" aria-label="{{ t('Attribute mapping views') }}">
+  <a href="/sync-policies/attribute-mappings" {% if active_registry_view == "mappings" %}aria-current="page"{% endif %}>{{ t("Mapping Rules") }}</a>
+  <a href="/sync-policies/attribute-mappings?view=ad-capabilities" {% if active_registry_view == "ad-capabilities" %}aria-current="page"{% endif %}>{{ t("AD Attribute Capability Catalog") }}</a>
+</nav>
+
+{% if active_registry_view == "ad-capabilities" %}
+{% call ui.panel(t("AD Attribute Capability Catalog"), description=t("Capabilities are bound to the current immutable AD snapshot. Read-only, permission-blocked, and dedicated-handler attributes cannot silently enter generic scalar mappings.")) %}
+  <div class="detail-grid compact-detail-grid">
+    <div class="detail-item"><dt class="label">{{ t("AD connector") }}</dt><dd class="value">{{ registry_ad_snapshot.connector_id if registry_ad_snapshot else "default" }}</dd></div>
+    <div class="detail-item"><dt class="label">{{ t("Snapshot") }}</dt><dd class="value">{{ "#" ~ registry_ad_snapshot.id if registry_ad_snapshot else "-" }}</dd></div>
+    <div class="detail-item"><dt class="label">{{ t("Discovered attributes") }}</dt><dd class="value">{{ ad_target_attributes|length }}</dd></div>
+    <div class="detail-item"><dt class="label">{{ t("Writable attributes") }}</dt><dd class="value">{{ ad_target_attributes|selectattr("is_writable")|list|length }}</dd></div>
+  </div>
+  <div class="table-scroll registry-table-window" tabindex="0" role="region" aria-label="{{ t('AD attribute capability registry') }}">
+    <table>
+      <thead><tr><th>{{ t("AD Attribute") }}</th><th>{{ t("Category") }}</th><th>{{ t("Type") }}</th><th>{{ t("Schema") }}</th><th>{{ t("Write capability") }}</th><th>{{ t("Handler") }}</th><th>{{ t("Required permissions") }}</th><th>{{ t("Version") }}</th></tr></thead>
+      <tbody>
+        {% for attribute in ad_target_attributes %}
+        <tr>
+          <td><strong>{{ attribute.display_label }}</strong><small><code>{{ attribute.ldap_attribute }}</code></small></td>
+          <td>{{ t(attribute.category) }}</td>
+          <td>{{ t(attribute.data_type) }}<small>{{ t("Multi-value") if attribute.is_multi_value else t("Single-value") }}</small></td>
+          <td>{{ ui.badge(t("Detected") if attribute.schema_detected else t("Not detected"), "success" if attribute.schema_detected else "warning") }}</td>
+          <td>{{ ui.badge(t(attribute.capability_status), "success" if attribute.is_writable else ("info" if attribute.is_read_only else "warning")) }}<small>{{ t("Writable") if attribute.is_writable else t("Blocked") }}</small></td>
+          <td>{% if attribute.requires_special_handler %}<strong>{{ t("Dedicated handler") }}</strong><small><code>{{ attribute.special_handler_type }}</code></small>{% else %}{{ t("Scalar mapping") }}{% endif %}</td>
+          <td>{% if attribute.required_permissions %}{{ attribute.required_permissions|join(", ") }}{% else %}{{ t("Not applicable") }}{% endif %}</td>
+          <td>v{{ attribute.schema_version }}<small>#{{ attribute.latest_snapshot_id or "-" }}</small></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="table-empty">{{ t("No AD capability catalog is available. Refresh the AD snapshot and verify connector permissions first.") }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endcall %}
+
+{% call ui.helper_block(t("Mapping safety boundary"), t("manager, OU placement, group membership, lifecycle, password, ACL, and security descriptors never use the generic scalar mapping path."), "warning") %}
+  {{ ui.button(t("Return to Attribute Mappings"), href="/sync-policies/attribute-mappings", variant="secondary", icon="arrow-left") }}
+{% endcall %}
+{% else %}
 {{ policy.status(has_unpublished_changes, latest_snapshot_title, '', t('Save this section, then verify field differences in a new Dry Run'), policy_version, policy_last_modified_by, estimated_affected_users, dry_run_invalidated, latest_policy_dry_run) }}
 
 {% call ui.panel(t("Attribute Mapping Policy"), scope_label=t("Organization Scope"), scope_level="info", description=t("Enable mapping and optionally add one rule. Leaving both field names blank updates only the organization switches.")) %}
@@ -37,17 +77,38 @@
       <summary><strong>{{ t("Add or update one mapping rule") }}</strong></summary>
       <div class="form-grid">
         <label>{{ t("Rule Scope") }}<select name="connector_id"><option value="">{{ t("Organization default") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}">{{ connector.name }}{% if ui_presentation.show_provider_connector_details %} · {{ connector.connector_id }}{% endif %}</option>{% endfor %}</select></label>
+        <label>{{ t("Provider scope") }}<select name="provider_scope"><option value="*">{{ t("All platforms") }}</option><option value="dingtalk">{{ t("DingTalk") }}</option><option value="wecom">{{ t("WeCom") }}</option><option value="feishu">{{ t("Feishu") }}</option></select></label>
         <label>{{ t("Direction") }}<select name="direction">{% for value, label in mapping_direction_options %}<option value="{{ value }}">{{ t(label) }}{% if ui_presentation.show_field_codes %} · {{ value }}{% endif %}</option>{% endfor %}</select></label>
+        <label>{{ t("Mapping role") }}<select name="mapping_role">{% for value in mapping_role_options %}<option value="{{ value }}" {% if value == "ATTRIBUTE_SYNC" %}selected{% endif %}>{{ t(value) }}</option>{% endfor %}</select><span class="form-help">{{ t("Relationship, lifecycle and directory-routing roles use dedicated handlers and are not written as scalar AD attributes.") }}</span></label>
+        <label>{{ t("Source Field") }}
+          <select name="source_field">
+            <option value="">{{ t("No new rule") }}</option>
+            <optgroup label="{{ t('Canonical fields') }}">
+              {% for field in canonical_fields %}<option value="{{ field.canonical_field_key }}">{{ t(field.display_label) }}{% if ui_presentation.show_field_codes %} · {{ field.canonical_field_key }}{% endif %} · {{ t(field.data_type) }}{% if field.is_multi_value %} · {{ t("Multi-value") }}{% endif %}</option>{% endfor %}
+            </optgroup>
+            <optgroup label="{{ t(current_source_provider) }} · {{ t('Fields detected in current snapshot') }}">
+              {% for field in source_registry_fields %}<option value="{{ field.raw_field_path }}" {% if field.availability_status not in ["available", "type_conflict"] or field.permission_status in ["denied", "unavailable"] %}disabled{% endif %}>{{ field.display_label }} · {{ field.raw_field_path }} · {{ t(field.data_type) }} · {{ (field.coverage_rate * 100)|round(1) }}%{% if field.availability_status != "available" %} · {{ t(field.availability_status) }}{% endif %}</option>{% endfor %}
+            </optgroup>
+          </select>
+        </label>
+        <label>{{ t("AD Attribute") }}
+          <select name="target_field">
+            <option value="">{{ t("No new rule") }}</option>
+            {% for attribute in ad_target_attributes %}<option value="{{ attribute.ldap_attribute }}" {% if not attribute.is_writable or (attribute.requires_special_handler and attribute.special_handler_type != "proxy_addresses") %}disabled{% endif %}>{{ attribute.display_label }} · {{ attribute.ldap_attribute }} · {{ t(attribute.data_type) }}{% if attribute.is_multi_value %} · {{ t("Multi-value") }}{% endif %}{% if attribute.requires_special_handler %} · {{ t("Dedicated handler") }}{% elif not attribute.is_writable %} · {{ t(attribute.capability_status) }}{% endif %}</option>{% endfor %}
+          </select>
+          <span class="form-help">{{ t("Only attributes verified writable for the current AD schema and connector can be selected.") }}</span>
+        </label>
         {% if ui_presentation.is_advanced %}
-        <label>{{ t("Source Field Code") }}<input type="text" name="source_field" placeholder="position"></label>
-        <label>{{ t("AD Attribute Code") }}<input type="text" name="target_field" placeholder="title"></label>
         <label>{{ t("Transform Template") }}<input type="text" name="transform_template" placeholder="{value}"></label>
+        <label>{{ t("Transform pipeline") }}<textarea name="transform_pipeline_json" rows="4" placeholder='[{"op":"trim"},{"op":"lowercase"}]'>[]</textarea><span class="form-help">{{ t("Only the documented declarative transforms are accepted; scripts and commands are rejected.") }}</span></label>
         {% else %}
-        <label>{{ t("Source Field") }}<select name="source_field"><option value="">{{ t("No new rule") }}</option><option value="display_name">{{ t("Display Name") }}</option><option value="employee_id">{{ t("Employee ID") }}</option><option value="email">{{ t("Email") }}</option><option value="mobile">{{ t("Mobile") }}</option><option value="position">{{ t("Position") }}</option></select></label>
-        <label>{{ t("AD Attribute") }}<select name="target_field"><option value="">{{ t("No new rule") }}</option><option value="displayName">{{ t("Display Name") }}</option><option value="employeeID">{{ t("Employee ID") }}</option><option value="mail">{{ t("Email") }}</option><option value="mobile">{{ t("Mobile") }}</option><option value="title">{{ t("Job Title") }}</option></select></label>
         <input type="hidden" name="transform_template" value="">
+        <input type="hidden" name="transform_pipeline_json" value="[]">
         {% endif %}
-        <label>{{ t("Empty Value Behavior") }}<select name="sync_mode">{% for value, label in mapping_mode_options %}<option value="{{ value }}">{{ t(label) }}{% if ui_presentation.show_field_codes %} · {{ value }}{% endif %}</option>{% endfor %}</select><span class="form-help">{{ t("Empty source values are skipped. Fill-if-empty and preserve protect existing target values.") }}</span></label>
+        <label>{{ t("Null policy") }}<select name="null_policy">{% for value in mapping_null_policy_options %}<option value="{{ value }}" {% if value == "PRESERVE_TARGET" %}selected{% endif %}>{{ t(value) }}</option>{% endfor %}</select><span class="form-help">{{ t("Empty values never clear AD unless CLEAR is explicitly selected and the resulting high-risk plan is approved.") }}</span></label>
+        <label>{{ t("Conflict policy") }}<select name="conflict_policy">{% for value in mapping_conflict_policy_options %}<option value="{{ value }}">{{ t(value) }}</option>{% endfor %}</select></label>
+        <label>{{ t("Write policy") }}<select name="write_policy">{% for value in mapping_write_policy_options %}<option value="{{ value }}">{{ t(value) }}</option>{% endfor %}</select></label>
+        <input type="hidden" name="sync_mode" value="replace">
       </div>
       <label>{{ t("Business Notes") }}<textarea name="notes" placeholder="{{ t('Explain the owner, transformation, and intended empty-value behavior.') }}"></textarea></label>
       <label class="checkbox-row"><input type="checkbox" name="is_enabled" value="1" checked><span>{{ t("Rule Enabled") }}</span></label>
@@ -61,8 +122,8 @@
 {% endcall %}
 
 {% call ui.panel(t("Attribute Mapping Rules"), description=t("Basic mode shows business fields; Advanced mode adds field codes, templates, and connector details.")) %}
-  <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Attribute mapping rules') }}"><table data-policy-table><thead><tr><th>{{ t("Scope") }}</th><th>{{ t("Direction") }}</th><th>{{ t("Source Field") }}</th><th>{{ t("AD Attribute") }}</th><th>{{ t("Empty Value Behavior") }}</th>{% if ui_presentation.is_advanced %}<th>{{ t("Transform") }}</th>{% endif %}<th>{{ t("Status") }}</th><th>{{ t("Action") }}</th></tr></thead><tbody>
-    {% for rule in attribute_mappings %}<tr><td>{{ t("Organization") }}{% if rule.connector_id %} / {{ rule.connector_id }}{% endif %}</td><td>{{ t(mapping_direction_labels.get(rule.direction, rule.direction)) }}</td><td>{{ rule.source_field }}</td><td>{{ rule.target_field }}</td><td>{{ t(rule.sync_mode) }}</td>{% if ui_presentation.is_advanced %}<td><code>{{ rule.transform_template or '-' }}</code></td>{% endif %}<td>{{ t("Enabled") if rule.is_enabled else t("Disabled") }}</td><td>{% if can("config.write") %}<form method="post" action="/sync-policies/attribute-mappings/{{ rule.id }}/delete" class="inline" data-confirm="{{ t('Deleting this mapping invalidates the previous Dry Run and stops the transformation on future runs.') }}" data-confirm-title="{{ t('Review Attribute Mapping Deletion') }}" data-confirm-detail-1-label="{{ t('Old value') }}" data-confirm-detail-1-value="{{ rule.source_field }} → {{ rule.target_field }}" data-confirm-detail-2-label="{{ t('New value') }}" data-confirm-detail-2-value="{{ t('Not configured') }}" data-confirm-detail-3-label="{{ t('Scope') }}" data-confirm-detail-3-value="{{ t('Organization') }}{% if rule.connector_id %} / {{ rule.connector_id }}{% endif %}" data-confirm-detail-4-label="{{ t('Estimated impact') }}" data-confirm-detail-4-value="{{ estimated_affected_users }} {{ t('users') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ ui.button(t("Delete"), type="submit", variant="danger", size="sm") }}</form>{% endif %}</td></tr>
+  <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Attribute mapping rules') }}"><table data-policy-table><thead><tr><th>{{ t("Scope") }}</th><th>{{ t("Role / direction") }}</th><th>{{ t("Source Field") }}</th><th>{{ t("AD Attribute") }}</th><th>{{ t("Null / conflict / write") }}</th>{% if ui_presentation.is_advanced %}<th>{{ t("Transform") }}</th>{% endif %}<th>{{ t("Version / status") }}</th><th>{{ t("Action") }}</th></tr></thead><tbody>
+    {% for rule in attribute_mappings %}<tr><td>{{ t(rule.provider_scope) }} · {{ t("Organization") }}{% if rule.ad_connector_id %} / {{ rule.ad_connector_id }}{% endif %}</td><td>{{ t(rule.mapping_role) }}<small>{{ t(mapping_direction_labels.get(rule.direction, rule.direction)) }}</small></td><td>{{ rule.canonical_source_field or rule.source_field }}{% if rule.raw_source_field_path and rule.raw_source_field_path != rule.canonical_source_field %}<small>{{ rule.raw_source_field_path }}</small>{% endif %}</td><td>{{ rule.target_field }}</td><td>{{ t(rule.null_policy) }}<small>{{ t(rule.conflict_policy) }} · {{ t(rule.write_policy) }}</small></td>{% if ui_presentation.is_advanced %}<td><code>{{ rule.transform_pipeline if rule.transform_pipeline else (rule.transform_template or '-') }}</code></td>{% endif %}<td>{{ rule.version }}<small>{{ t("Enabled") if rule.is_enabled else t("Disabled") }}</small></td><td>{% if can("config.write") %}<form method="post" action="/sync-policies/attribute-mappings/{{ rule.id }}/delete" class="inline" data-confirm="{{ t('Deleting this mapping invalidates the previous Dry Run and stops the transformation on future runs.') }}" data-confirm-title="{{ t('Review Attribute Mapping Deletion') }}" data-confirm-detail-1-label="{{ t('Old value') }}" data-confirm-detail-1-value="{{ rule.source_field }} → {{ rule.target_field }}" data-confirm-detail-2-label="{{ t('New value') }}" data-confirm-detail-2-value="{{ t('Not configured') }}" data-confirm-detail-3-label="{{ t('Scope') }}" data-confirm-detail-3-value="{{ t('Organization') }}{% if rule.connector_id %} / {{ rule.connector_id }}{% endif %}" data-confirm-detail-4-label="{{ t('Estimated impact') }}" data-confirm-detail-4-value="{{ estimated_affected_users }} {{ t('users') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ ui.button(t("Delete"), type="submit", variant="danger", size="sm") }}</form>{% endif %}</td></tr>
     {% else %}<tr><td colspan="{{ ui_presentation.choose(7, 8) }}" class="empty-state">{{ t("No attribute mapping rules are configured") }}</td></tr>{% endfor %}
   </tbody></table></div>
 {% endcall %}
@@ -70,4 +131,5 @@
 {% call ui.helper_block(t("Next step"), t("Saving invalidates the previous Dry Run. Inspect field-level differences in a fresh plan before Apply."), "warning") %}
   {{ ui.button(t("Run a new Dry Run"), href="/execution-center/dry-run", variant="secondary", icon="play-circle") }}
 {% endcall %}
+{% endif %}
 {% endblock %}

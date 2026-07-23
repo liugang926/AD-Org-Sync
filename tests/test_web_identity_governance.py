@@ -85,6 +85,72 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
         )
         return snapshot_id
 
+    def test_multi_platform_relationship_page_shows_one_durable_identity_graph(self):
+        ding = self.app.state.platform_account_repo.upsert_account(
+            org_id="default",
+            provider_id="dingtalk",
+            connector_id="ding-main",
+            platform_account_id="ding-alice",
+            display_name="Alice",
+            employee_id="E001",
+        )
+        feishu = self.app.state.platform_account_repo.upsert_account(
+            org_id="default",
+            provider_id="feishu",
+            connector_id="feishu-main",
+            platform_account_id="fs-alice",
+            display_name="Alice",
+            employee_id="E001",
+        )
+        ad_account = self.app.state.ad_account_repo.upsert_account(
+            org_id="default",
+            connector_id="default",
+            object_guid="guid-alice",
+            sam_account_name="alice",
+            employee_id="E001",
+        )
+        identity = self.app.state.enterprise_identity_repo.create_identity(
+            org_id="default",
+            display_name="Alice",
+            canonical_employee_id="E001",
+            created_by="superadmin",
+        )
+        for platform in (ding, feishu):
+            self.app.state.enterprise_identity_repo.link_account(
+                org_id="default",
+                identity_id=identity.identity_id,
+                account_kind="platform",
+                platform_account_id=platform.id,
+                association_type="manual",
+                source="reviewed-test",
+                confidence=100,
+                created_by="superadmin",
+            )
+        self.app.state.enterprise_identity_repo.link_account(
+            org_id="default",
+            identity_id=identity.identity_id,
+            account_kind="ad",
+            ad_account_id=ad_account.id,
+            account_role="primary_ad",
+            association_type="manual",
+            source="reviewed-test",
+            confidence=100,
+            created_by="superadmin",
+        )
+        self._login("superadmin")
+
+        path = "/identity-governance/enterprise-identities"
+        response = self._route(path, "GET")(self._request(path))
+
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn("Multi-Platform Identity Relationships", body)
+        self.assertIn("ding-alice", body)
+        self.assertIn("fs-alice", body)
+        self.assertIn("guid-alice", body)
+        self.assertIn(identity.identity_id, body)
+        self.assertEqual(body.count("reviewed-test"), 3)
+
     def test_identity_matching_is_read_only_eight_column_evidence_with_shared_timeline(self):
         self._login("superadmin")
         self.session["ui_mode"] = "advanced"

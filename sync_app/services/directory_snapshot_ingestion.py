@@ -5,6 +5,7 @@ from typing import Any, Iterable
 
 from sync_app.core.fingerprints import fingerprint_json
 from sync_app.services.ad_capabilities import build_ad_capability_report
+from sync_app.storage.repositories.field_registry import ADTargetAttributeRegistryRepository
 
 
 def _duplicate_value_count(values: Iterable[Any]) -> int:
@@ -118,9 +119,11 @@ class ADDirectorySnapshotService:
         *,
         snapshot_repo: Any,
         ad_account_repo: Any,
+        ad_target_attribute_repo: Any | None = None,
     ) -> None:
         self.snapshot_repo = snapshot_repo
         self.ad_account_repo = ad_account_repo
+        self.ad_target_attribute_repo = ad_target_attribute_repo
 
     def refresh(
         self,
@@ -255,6 +258,46 @@ class ADDirectorySnapshotService:
             duplicate_employee_numbers = _duplicate_value_count(
                 item.get("employee_number") for item in normalized_rows
             )
+            attribute_name_map = {
+                "object_guid": "objectGUID",
+                "object_sid": "objectSid",
+                "distinguished_name": "distinguishedName",
+                "sam_account_name": "sAMAccountName",
+                "user_principal_name": "userPrincipalName",
+                "employee_id": "employeeID",
+                "employee_number": "employeeNumber",
+                "mail": "mail",
+                "telephone_number": "telephoneNumber",
+                "mobile": "mobile",
+                "display_name": "displayName",
+                "manager_dn": "manager",
+                "group_membership": "memberOf",
+                "when_created": "whenCreated",
+                "when_changed": "whenChanged",
+            }
+            discovered_attributes = {
+                attribute_name_map[key]
+                for row in normalized_rows
+                for key in attribute_name_map
+                if row.get(key) not in (None, "", [], {})
+            }
+            for row in normalized_rows:
+                discovered_attributes.update(
+                    str(key).strip()
+                    for key in dict(row.get("extension_attributes") or {})
+                    if str(key).strip()
+                )
+            attribute_repo = self.ad_target_attribute_repo
+            if attribute_repo is None and getattr(self.snapshot_repo, "db", None) is not None:
+                attribute_repo = ADTargetAttributeRegistryRepository(self.snapshot_repo.db)
+            if attribute_repo is not None:
+                attribute_repo.sync_snapshot_catalog(
+                    org_id=org_id,
+                    ad_connector_id=connector_id,
+                    snapshot_id=snapshot_id,
+                    capability_report=resolved_capability_report,
+                    discovered_attributes=discovered_attributes,
+                )
             self.snapshot_repo.complete_snapshot(
                 snapshot_id,
                 org_id=org_id,

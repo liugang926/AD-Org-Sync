@@ -207,6 +207,63 @@ class SourceProviderTests(unittest.TestCase):
         finally:
             provider.close()
 
+    def test_all_providers_use_configured_employee_id_field_path(self):
+        cases = (
+            (
+                "wecom",
+                FakeWeComClient,
+                "extattr.badge",
+                {"userid": "w1", "name": "WeCom", "extattr": {"badge": "W100"}},
+                "W100",
+            ),
+            (
+                "dingtalk",
+                FakeDingTalkClient,
+                "custom.job_number",
+                {
+                    "userid": "d1",
+                    "name": "DingTalk",
+                    "custom": {"job_number": "D100"},
+                },
+                "D100",
+            ),
+            (
+                "feishu",
+                FakeWeComClient,
+                "custom.employee_no",
+                {
+                    "user_id": "f1",
+                    "name": "Feishu",
+                    "custom": {"employee_no": "F100"},
+                },
+                "F100",
+            ),
+        )
+        for provider_id, api_factory, field_path, payload, expected in cases:
+            with self.subTest(provider_id=provider_id):
+                config = AppConfig(
+                    wecom=WeComConfig(corpid="app-id", corpsecret="secret"),
+                    ldap=LDAPConfig(
+                        server="dc.example.com",
+                        domain="example.com",
+                        username="svc",
+                        password="secret",
+                    ),
+                    domain="example.com",
+                    source_provider=provider_id,
+                )
+                provider = build_source_provider(
+                    app_config=config,
+                    api_factory=api_factory,
+                )
+                try:
+                    provider.employee_id_attribute = field_path
+                    user = provider.normalize_user(payload)
+                finally:
+                    provider.close()
+                self.assertEqual(user.employee_id, expected)
+                self.assertEqual(user.provider_id, provider_id)
+
     def test_dingtalk_provider_verifies_employee_identity_from_auth_code(self):
         config = AppConfig(
             wecom=WeComConfig(corpid="ding-app-key", corpsecret="ding-app-secret"),

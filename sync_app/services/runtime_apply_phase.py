@@ -33,6 +33,34 @@ def apply_user_actions(
     stats_callback = ctx.hooks.stats_callback
     state_manager = ctx.repositories.state_manager
     lifecycle_repo = ctx.repositories.lifecycle_repo
+    ad_capability_cache: dict[str, dict[str, Any]] = {}
+
+    def current_ad_capabilities(connector_id: str) -> dict[str, Any]:
+        if connector_id in ad_capability_cache:
+            return ad_capability_cache[connector_id]
+        registry_repo = getattr(
+            ctx.repositories, "ad_target_attribute_registry_repo", None
+        )
+        if registry_repo is None:
+            ad_capability_cache[connector_id] = {}
+            return {}
+        snapshot = ctx.repositories.ad_directory_snapshot_repo.get_latest_successful_snapshot(
+            org_id=ctx.organization.org_id,
+            connector_id=connector_id,
+        )
+        attributes = (
+            registry_repo.list_attributes(
+                org_id=ctx.organization.org_id,
+                ad_connector_id=connector_id,
+                current_snapshot_id=int(snapshot["id"]),
+            )
+            if snapshot
+            else []
+        )
+        ad_capability_cache[connector_id] = {
+            attribute.ldap_attribute: attribute for attribute in attributes
+        }
+        return ad_capability_cache[connector_id]
 
     processed_users: set[str] = set()
     for index, action in enumerate(user_actions, start=1):
@@ -61,6 +89,11 @@ def apply_user_actions(
                 email=action.email,
                 target_department=dept_tree.get(action.target_department_id),
                 rules=connector_source_to_ad_rules,
+                attribute_capabilities=current_ad_capabilities(action.connector_id),
+                strict_capabilities=bool(
+                    connector_source_to_ad_rules
+                    and current_ad_capabilities(action.connector_id)
+                ),
             )
             if action.operation_type in {"update_user", "move_user"}:
                 success = connector_ad_sync.update_user(
@@ -240,6 +273,120 @@ def apply_user_actions(
             )
 
     sync_stats["processed_users"] = len(processed_users)
+
+
+def apply_manager_relationship_actions(
+    ctx: SyncContext,
+    *,
+    get_ad_sync: Callable[[str], Any],
+) -> None:
+    """Apply manager links after all account create/update operations complete."""
+
+    for action in ctx.actions.manager_relationship_actions:
+        try:
+            target_provider = get_ad_sync(action.connector_id)
+            update_manager = getattr(target_provider, "update_manager", None)
+            if not callable(update_manager):
+                raise NotImplementedError(
+                    "target provider does not support dedicated manager updates"
+                )
+            if not update_manager(action.username, action.manager_dn):
+                raise RuntimeError("LDAP manager update returned failure")
+            ctx.hooks.record_operation(
+                stage_name="apply",
+                object_type="user_relationship",
+                operation_type="set_manager",
+                status="succeeded",
+                message=(
+                    f"set manager {action.manager_username} for {action.username}"
+                ),
+                source_id=action.source_user_id,
+                target_id=action.username,
+                target_dn=action.manager_dn,
+                details={
+                    "connector_id": action.connector_id,
+                    "manager_source_user_id": action.manager_source_user_id,
+                    "manager_username": action.manager_username,
+                },
+            )
+            ctx.executed_count += 1
+            ctx.sync_stats["executed_operation_count"] = ctx.executed_count
+        except Exception as exc:
+            ctx.sync_stats["error_count"] += 1
+            ctx.hooks.record_operation(
+                stage_name="apply",
+                object_type="user_relationship",
+                operation_type="set_manager",
+                status="error",
+                message=f"failed to set manager for {action.username}: {exc}",
+                source_id=action.source_user_id,
+                target_id=action.username,
+                target_dn=action.manager_dn,
+                details={
+                    "connector_id": action.connector_id,
+                    "manager_source_user_id": action.manager_source_user_id,
+                    "manager_username": action.manager_username,
+                    "error": str(exc),
+                },
+            )
+
+
+def apply_proxy_addresses_actions(
+    ctx: SyncContext,
+    *,
+    get_ad_sync: Callable[[str], Any],
+) -> None:
+    """Apply proxy address relationships through their dedicated AD handler."""
+
+    for action in ctx.actions.proxy_addresses_actions:
+        try:
+            target_provider = get_ad_sync(action.connector_id)
+            update_proxy_addresses = getattr(
+                target_provider, "update_proxy_addresses", None
+            )
+            if not callable(update_proxy_addresses):
+                raise NotImplementedError(
+                    "target provider does not support dedicated proxy address updates"
+                )
+            if not update_proxy_addresses(
+                action.username,
+                action.primary_address,
+                action.aliases,
+            ):
+                raise RuntimeError("LDAP proxyAddresses update returned failure")
+            ctx.hooks.record_operation(
+                stage_name="apply",
+                object_type="user_relationship",
+                operation_type="merge_proxy_addresses",
+                status="succeeded",
+                message=f"updated proxy addresses for {action.username}",
+                source_id=action.source_user_id,
+                target_id=action.username,
+                details={
+                    "connector_id": action.connector_id,
+                    "primary_address": action.primary_address,
+                    "alias_count": len(action.aliases),
+                },
+            )
+            ctx.executed_count += 1
+            ctx.sync_stats["executed_operation_count"] = ctx.executed_count
+        except Exception as exc:
+            ctx.sync_stats["error_count"] += 1
+            ctx.hooks.record_operation(
+                stage_name="apply",
+                object_type="user_relationship",
+                operation_type="merge_proxy_addresses",
+                status="error",
+                message=f"failed to update proxy addresses for {action.username}: {exc}",
+                source_id=action.source_user_id,
+                target_id=action.username,
+                details={
+                    "connector_id": action.connector_id,
+                    "primary_address": action.primary_address,
+                    "alias_count": len(action.aliases),
+                    "error": str(exc),
+                },
+            )
 
 
 def apply_disable_actions(

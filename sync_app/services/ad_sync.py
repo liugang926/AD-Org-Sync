@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sync_app.core.config import build_tls_config
 from sync_app.core.directory_protection import is_protected_ad_account_name
-from sync_app.core.sync_policies import normalize_group_type
+from sync_app.core.sync_policies import merge_proxy_addresses, normalize_group_type
 from sync_app.core.models import DepartmentGroupInfo, DirectoryGroupRecord, DirectoryUserRecord
 from sync_app.infra.ldap_compat import (
     ALL,
@@ -832,6 +832,7 @@ class ADSyncLDAPS:
                 desired_attributes[attribute_name] = {
                     'value': raw_value.get('value'),
                     'mode': raw_value.get('mode') or 'replace',
+                    'clear': bool(raw_value.get('clear', False)),
                 }
             else:
                 desired_attributes[attribute_name] = {
@@ -843,23 +844,43 @@ class ADSyncLDAPS:
         changes: Dict[str, List[Tuple[int, List[Any]]]] = {}
         for attribute_name, config in desired_attributes.items():
             value = config.get('value')
-            if value in (None, ''):
-                continue
             mode = str(config.get('mode') or 'replace').strip().lower()
             current_value = current_values.get(attribute_name)
+            if bool(config.get('clear', False)) or mode == 'clear':
+                if current_value not in (None, '', [], ()):
+                    changes[attribute_name] = [(MODIFY_DELETE, [])]
+                continue
+            if value in (None, '') or mode in {'compare_only', 'create_only'}:
+                continue
             normalized_current = ''
             if isinstance(current_value, (list, tuple)):
                 normalized_current = ",".join(str(item).strip() for item in current_value if str(item).strip())
             elif current_value not in (None, ''):
                 normalized_current = str(current_value).strip()
-            normalized_value = str(value).strip()
+            normalized_value = (
+                [str(item).strip() for item in value if str(item).strip()]
+                if isinstance(value, (list, tuple, set))
+                else str(value).strip()
+            )
             if mode == 'preserve' and normalized_current:
                 continue
             if mode == 'fill_if_empty' and normalized_current:
                 continue
-            if normalized_current == normalized_value:
+            comparable_value = (
+                ",".join(normalized_value)
+                if isinstance(normalized_value, list)
+                else normalized_value
+            )
+            if normalized_current == comparable_value:
                 continue
-            changes[attribute_name] = [(MODIFY_REPLACE, [normalized_value])]
+            changes[attribute_name] = [
+                (
+                    MODIFY_REPLACE,
+                    normalized_value
+                    if isinstance(normalized_value, list)
+                    else [normalized_value],
+                )
+            ]
         return changes
 
     def _set_user_password(self, user_dn: str, password: str) -> bool:
@@ -1472,6 +1493,13 @@ class ADSyncLDAPS:
             }
             for attribute_name, raw_value in dict(extra_attributes or {}).items():
                 attribute_value = raw_value.get('value') if isinstance(raw_value, dict) else raw_value
+                attribute_mode = (
+                    str(raw_value.get('mode') or 'replace').strip().lower()
+                    if isinstance(raw_value, dict)
+                    else 'replace'
+                )
+                if attribute_mode == 'compare_only':
+                    continue
                 if attribute_value in (None, ''):
                     continue
                 user_attributes[attribute_name] = attribute_value
@@ -1569,6 +1597,82 @@ class ADSyncLDAPS:
             return True
         except Exception as exc:
             self.logger.error(f"failed to reactivate AD user {username}: {exc}")
+            return False
+
+    def update_manager(self, username: str, manager_dn: str) -> bool:
+        """Update the AD manager relationship through its dedicated LDAP handler."""
+
+        try:
+            if self._is_protected_account(username):
+                self.logger.warning(
+                    f"refusing to update manager for protected AD account: {username}"
+                )
+                return False
+            normalized_manager_dn = str(manager_dn or "").strip()
+            if not normalized_manager_dn:
+                self.logger.error(f"manager DN is empty for AD user: {username}")
+                return False
+            user = self.get_user(username)
+            if not user:
+                self.logger.error(f"user not found in AD: {username}")
+                return False
+            if not self.connection.modify(
+                user["dn"],
+                {"manager": [(MODIFY_REPLACE, [normalized_manager_dn])]},
+            ):
+                self.logger.error(
+                    f"failed to update AD manager for {username}: {self.connection.result}"
+                )
+                return False
+            self.logger.info(f"updated AD manager for {username}")
+            return True
+        except Exception as exc:
+            self.logger.error(f"failed to update AD manager for {username}: {exc}")
+            return False
+
+    def update_proxy_addresses(
+        self,
+        username: str,
+        primary_address: str,
+        aliases: List[str],
+    ) -> bool:
+        """Merge SMTP aliases while preserving X500 and other proxy address types."""
+
+        try:
+            if self._is_protected_account(username):
+                self.logger.warning(
+                    f"refusing to update proxy addresses for protected AD account: {username}"
+                )
+                return False
+            user = self.get_user(username)
+            if not user:
+                self.logger.error(f"user not found in AD: {username}")
+                return False
+            current_value = self.get_user_attribute_values(
+                username, ["proxyAddresses"]
+            ).get("proxyAddresses", [])
+            current_addresses = (
+                list(current_value)
+                if isinstance(current_value, (list, tuple, set))
+                else [current_value]
+            )
+            desired_addresses = merge_proxy_addresses(
+                current_addresses,
+                primary_address=primary_address,
+                aliases=aliases,
+            )
+            if not self.connection.modify(
+                user["dn"],
+                {"proxyAddresses": [(MODIFY_REPLACE, desired_addresses)]},
+            ):
+                self.logger.error(
+                    f"failed to update AD proxy addresses for {username}: {self.connection.result}"
+                )
+                return False
+            self.logger.info(f"updated AD proxy addresses for {username}")
+            return True
+        except Exception as exc:
+            self.logger.error(f"failed to update AD proxy addresses for {username}: {exc}")
             return False
 
     def remove_user_from_group(self, username: str, group_name: str) -> bool:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from sync_app.core.models.base import MappingLikeModel
@@ -74,6 +74,14 @@ class ConfigReleaseSnapshotRecord(MappingLikeModel):
     trigger_action: str = "manual_release"
     created_by: str = ""
     source_snapshot_id: Optional[int] = None
+    source_snapshot_fingerprint: str = ""
+    ad_snapshot_id: Optional[int] = None
+    ad_snapshot_fingerprint: str = ""
+    source_field_catalog_fingerprint: str = ""
+    ad_capability_catalog_fingerprint: str = ""
+    identity_match_run_id: str = ""
+    identity_match_rules_fingerprint: str = ""
+    evidence_fingerprint: str = ""
     bundle_hash: str = ""
     bundle: Optional[Dict[str, Any]] = None
     summary: Optional[Dict[str, Any]] = None
@@ -94,6 +102,8 @@ class ConfigReleaseSnapshotRecord(MappingLikeModel):
             except json.JSONDecodeError:
                 summary = {"raw": summary}
         source_snapshot_id = row["source_snapshot_id"] if "source_snapshot_id" in row.keys() else None
+        ad_snapshot_id = row["ad_snapshot_id"] if "ad_snapshot_id" in row.keys() else None
+        keys = set(row.keys())
         return cls(
             id=int(row["id"]) if row["id"] is not None else None,
             org_id=str(row["org_id"] or ""),
@@ -101,6 +111,14 @@ class ConfigReleaseSnapshotRecord(MappingLikeModel):
             trigger_action=str(row["trigger_action"] or "manual_release"),
             created_by=str(row["created_by"] or ""),
             source_snapshot_id=int(source_snapshot_id) if source_snapshot_id not in (None, "") else None,
+            source_snapshot_fingerprint=str(row["source_snapshot_fingerprint"] or "") if "source_snapshot_fingerprint" in keys else "",
+            ad_snapshot_id=int(ad_snapshot_id) if ad_snapshot_id not in (None, "") else None,
+            ad_snapshot_fingerprint=str(row["ad_snapshot_fingerprint"] or "") if "ad_snapshot_fingerprint" in keys else "",
+            source_field_catalog_fingerprint=str(row["source_field_catalog_fingerprint"] or "") if "source_field_catalog_fingerprint" in keys else "",
+            ad_capability_catalog_fingerprint=str(row["ad_capability_catalog_fingerprint"] or "") if "ad_capability_catalog_fingerprint" in keys else "",
+            identity_match_run_id=str(row["identity_match_run_id"] or "") if "identity_match_run_id" in keys else "",
+            identity_match_rules_fingerprint=str(row["identity_match_rules_fingerprint"] or "") if "identity_match_rules_fingerprint" in keys else "",
+            evidence_fingerprint=str(row["evidence_fingerprint"] or "") if "evidence_fingerprint" in keys else "",
             bundle_hash=str(row["bundle_hash"] or ""),
             bundle=bundle if isinstance(bundle, dict) or bundle is None else {"raw": bundle},
             summary=summary if isinstance(summary, dict) or summary is None else {"raw": summary},
@@ -180,11 +198,33 @@ class AttributeMappingRuleRecord(MappingLikeModel):
     sync_mode: str = "replace"
     is_enabled: bool = True
     notes: str = ""
+    provider_scope: str = "*"
+    source_connector_id: str = "default"
+    canonical_source_field: str = ""
+    raw_source_field_path: str = ""
+    ad_connector_id: str = "default"
+    mapping_role: str = "ATTRIBUTE_SYNC"
+    authority_mode: str = "PROVIDER_PRIORITY"
+    transform_pipeline: list[dict[str, Any]] = field(default_factory=list)
+    null_policy: str = "PRESERVE_TARGET"
+    conflict_policy: str = "REJECT_ON_CONFLICT"
+    write_policy: str = "REPLACE"
+    version: int = 1
+    created_by: str = ""
     created_at: str = ""
     updated_at: str = ""
 
     @classmethod
     def from_row(cls, row: Any) -> "AttributeMappingRuleRecord":
+        keys = set(row.keys())
+        try:
+            transform_pipeline = json.loads(
+                str(row["transform_pipeline_json"] or "[]")
+            ) if "transform_pipeline_json" in keys else []
+        except (TypeError, ValueError, json.JSONDecodeError):
+            transform_pipeline = []
+        if not isinstance(transform_pipeline, list):
+            transform_pipeline = []
         return cls(
             id=int(row["id"]) if row["id"] is not None else None,
             org_id=str(row["org_id"] or "default") if "org_id" in row.keys() else "default",
@@ -196,6 +236,35 @@ class AttributeMappingRuleRecord(MappingLikeModel):
             sync_mode=str(row["sync_mode"] or "replace"),
             is_enabled=bool(row["is_enabled"]),
             notes=str(row["notes"] or ""),
+            provider_scope=str(row["provider_scope"] or "*") if "provider_scope" in keys else "*",
+            source_connector_id=(
+                str(row["source_connector_id"] or "default")
+                if "source_connector_id" in keys
+                else str(row["connector_id"] or "default")
+            ),
+            canonical_source_field=(
+                str(row["canonical_source_field"] or row["source_field"] or "")
+                if "canonical_source_field" in keys
+                else str(row["source_field"] or "")
+            ),
+            raw_source_field_path=(
+                str(row["raw_source_field_path"] or row["source_field"] or "")
+                if "raw_source_field_path" in keys
+                else str(row["source_field"] or "")
+            ),
+            ad_connector_id=(
+                str(row["ad_connector_id"] or "default")
+                if "ad_connector_id" in keys
+                else str(row["connector_id"] or "default")
+            ),
+            mapping_role=str(row["mapping_role"] or "ATTRIBUTE_SYNC") if "mapping_role" in keys else "ATTRIBUTE_SYNC",
+            authority_mode=str(row["authority_mode"] or "PROVIDER_PRIORITY") if "authority_mode" in keys else "PROVIDER_PRIORITY",
+            transform_pipeline=[dict(item) for item in transform_pipeline if isinstance(item, dict)],
+            null_policy=str(row["null_policy"] or "PRESERVE_TARGET") if "null_policy" in keys else "PRESERVE_TARGET",
+            conflict_policy=str(row["conflict_policy"] or "REJECT_ON_CONFLICT") if "conflict_policy" in keys else "REJECT_ON_CONFLICT",
+            write_policy=str(row["write_policy"] or "REPLACE") if "write_policy" in keys else str(row["sync_mode"] or "replace").upper(),
+            version=max(int(row["version"] or 1), 1) if "version" in keys else 1,
+            created_by=str(row["created_by"] or "") if "created_by" in keys else "",
             created_at=str(row["created_at"] or ""),
             updated_at=str(row["updated_at"] or ""),
         )

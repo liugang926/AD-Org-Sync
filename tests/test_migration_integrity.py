@@ -99,7 +99,7 @@ class MigrationIntegrityTests(unittest.TestCase):
             audit_count = connection.execute(
                 "SELECT COUNT(*) FROM web_audit_logs WHERE action_type = 'test.before_upgrade'"
             ).fetchone()[0]
-        self.assertEqual(applied, 35)
+        self.assertEqual(applied, 38)
         self.assertEqual((binding["source_provider"], binding["source_user_id"], binding["ad_username"]), ("wecom", "alice", "alice"))
         self.assertIn("source_directory_snapshots", tables)
         self.assertIn("sync_scope_selections", tables)
@@ -118,6 +118,9 @@ class MigrationIntegrityTests(unittest.TestCase):
         self.assertIn("field_authority_rules", tables)
         self.assertIn("account_takeover_batches", tables)
         self.assertIn("rollout_data_quality_reviews", tables)
+        self.assertIn("source_field_registry", tables)
+        self.assertIn("canonical_field_registry", tables)
+        self.assertIn("ad_target_attribute_registry", tables)
         self.assertEqual(
             index_columns,
             ["org_id", "source_provider", "connector_id", "source_user_id"],

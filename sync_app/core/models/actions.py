@@ -80,6 +80,26 @@ class UserAction:
     def source_user_id(self) -> str:
         return self.user.source_user_id
 
+
+@dataclass(slots=True)
+class ManagerRelationshipAction:
+    connector_id: str
+    source_user_id: str
+    username: str
+    manager_source_user_id: str
+    manager_username: str
+    manager_dn: str
+
+
+@dataclass(slots=True)
+class ProxyAddressesAction:
+    connector_id: str
+    source_user_id: str
+    username: str
+    primary_address: str
+    aliases: list[str] = field(default_factory=list)
+
+
 @dataclass(slots=True)
 class GroupMembershipAction:
     connector_id: str

@@ -2097,4 +2097,204 @@ MIGRATIONS = [
         );
         """,
     ),
+    (
+        36,
+        "add durable source canonical and AD target field registries",
+        """
+        CREATE TABLE source_field_registry (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          source_connector_id TEXT NOT NULL DEFAULT 'default',
+          raw_field_path TEXT NOT NULL,
+          raw_field_name TEXT NOT NULL,
+          canonical_field_key TEXT NOT NULL DEFAULT '',
+          display_label TEXT NOT NULL DEFAULT '',
+          category TEXT NOT NULL DEFAULT 'custom',
+          data_type TEXT NOT NULL DEFAULT 'string',
+          is_multi_value INTEGER NOT NULL DEFAULT 0,
+          is_sensitive INTEGER NOT NULL DEFAULT 0,
+          is_identifier_candidate INTEGER NOT NULL DEFAULT 0,
+          is_custom INTEGER NOT NULL DEFAULT 0,
+          is_derived INTEGER NOT NULL DEFAULT 0,
+          availability_status TEXT NOT NULL DEFAULT 'unknown',
+          permission_status TEXT NOT NULL DEFAULT 'unknown',
+          coverage_count INTEGER NOT NULL DEFAULT 0,
+          coverage_rate REAL NOT NULL DEFAULT 0,
+          masked_sample_values_json TEXT NOT NULL DEFAULT '[]',
+          first_detected_at TEXT NOT NULL,
+          last_detected_at TEXT NOT NULL,
+          schema_version INTEGER NOT NULL DEFAULT 1,
+          latest_snapshot_id INTEGER,
+          UNIQUE (org_id, provider_id, source_connector_id, raw_field_path)
+        );
+        CREATE INDEX idx_source_field_registry_catalog
+        ON source_field_registry (
+          org_id, provider_id, source_connector_id, availability_status,
+          category, raw_field_path
+        );
+        CREATE INDEX idx_source_field_registry_snapshot
+        ON source_field_registry (org_id, latest_snapshot_id, schema_version);
+
+        CREATE TABLE canonical_field_registry (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL DEFAULT '*',
+          canonical_field_key TEXT NOT NULL,
+          display_label TEXT NOT NULL,
+          category TEXT NOT NULL,
+          data_type TEXT NOT NULL DEFAULT 'string',
+          is_multi_value INTEGER NOT NULL DEFAULT 0,
+          is_sensitive INTEGER NOT NULL DEFAULT 0,
+          is_identifier INTEGER NOT NULL DEFAULT 0,
+          is_custom INTEGER NOT NULL DEFAULT 0,
+          is_derived INTEGER NOT NULL DEFAULT 0,
+          allowed_mapping_roles_json TEXT NOT NULL DEFAULT '[]',
+          description TEXT NOT NULL DEFAULT '',
+          schema_version INTEGER NOT NULL DEFAULT 1,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (org_id, canonical_field_key)
+        );
+        CREATE INDEX idx_canonical_field_registry_catalog
+        ON canonical_field_registry (org_id, is_active, category, canonical_field_key);
+
+        CREATE TABLE ad_target_attribute_registry (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          org_id TEXT NOT NULL,
+          ad_connector_id TEXT NOT NULL DEFAULT 'default',
+          ldap_attribute TEXT NOT NULL,
+          display_label TEXT NOT NULL,
+          category TEXT NOT NULL,
+          data_type TEXT NOT NULL DEFAULT 'string',
+          is_multi_value INTEGER NOT NULL DEFAULT 0,
+          is_writable INTEGER NOT NULL DEFAULT 0,
+          is_read_only INTEGER NOT NULL DEFAULT 1,
+          requires_special_handler INTEGER NOT NULL DEFAULT 0,
+          special_handler_type TEXT NOT NULL DEFAULT '',
+          required_permissions_json TEXT NOT NULL DEFAULT '[]',
+          supported_object_classes_json TEXT NOT NULL DEFAULT '["user"]',
+          schema_detected INTEGER NOT NULL DEFAULT 0,
+          capability_status TEXT NOT NULL DEFAULT 'unknown',
+          validation_rules_json TEXT NOT NULL DEFAULT '{}',
+          schema_version INTEGER NOT NULL DEFAULT 1,
+          latest_snapshot_id INTEGER,
+          last_checked_at TEXT NOT NULL,
+          UNIQUE (org_id, ad_connector_id, ldap_attribute)
+        );
+        CREATE INDEX idx_ad_target_attribute_registry_catalog
+        ON ad_target_attribute_registry (
+          org_id, ad_connector_id, schema_detected, is_writable,
+          category, ldap_attribute
+        );
+        CREATE INDEX idx_ad_target_attribute_registry_snapshot
+        ON ad_target_attribute_registry (org_id, latest_snapshot_id, schema_version);
+        """,
+    ),
+    (
+        37,
+        "version attribute mappings and field authority policies",
+        """
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN provider_scope TEXT NOT NULL DEFAULT '*';
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN source_connector_id TEXT NOT NULL DEFAULT 'default';
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN canonical_source_field TEXT NOT NULL DEFAULT '';
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN raw_source_field_path TEXT NOT NULL DEFAULT '';
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN ad_connector_id TEXT NOT NULL DEFAULT 'default';
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN mapping_role TEXT NOT NULL DEFAULT 'ATTRIBUTE_SYNC';
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN authority_mode TEXT NOT NULL DEFAULT 'PROVIDER_PRIORITY';
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN transform_pipeline_json TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN null_policy TEXT NOT NULL DEFAULT 'PRESERVE_TARGET';
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN conflict_policy TEXT NOT NULL DEFAULT 'REJECT_ON_CONFLICT';
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN write_policy TEXT NOT NULL DEFAULT 'REPLACE';
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE attribute_mapping_rules
+        ADD COLUMN created_by TEXT NOT NULL DEFAULT '';
+
+        UPDATE attribute_mapping_rules
+        SET canonical_source_field = source_field,
+            raw_source_field_path = source_field,
+            source_connector_id = CASE
+              WHEN connector_id = '' THEN 'default' ELSE connector_id END,
+            ad_connector_id = CASE
+              WHEN connector_id = '' THEN 'default' ELSE connector_id END,
+            write_policy = CASE
+              WHEN sync_mode = 'fill_if_empty' THEN 'FILL_IF_EMPTY'
+              WHEN sync_mode = 'preserve' THEN 'PRESERVE_TARGET'
+              ELSE 'REPLACE' END,
+            null_policy = 'PRESERVE_TARGET'
+        WHERE canonical_source_field = '';
+
+        CREATE INDEX idx_attribute_mapping_rules_governed
+        ON attribute_mapping_rules (
+          org_id, provider_scope, ad_connector_id, mapping_role,
+          is_enabled, version, updated_at DESC
+        );
+
+        ALTER TABLE field_authority_rules
+        ADD COLUMN authority_mode TEXT NOT NULL DEFAULT 'PROVIDER_PRIORITY';
+        ALTER TABLE field_authority_rules
+        ADD COLUMN authoritative_connector_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE field_authority_rules
+        ADD COLUMN provider_priority_json TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE field_authority_rules
+        ADD COLUMN conflict_policy TEXT NOT NULL DEFAULT 'PROVIDER_PRIORITY';
+        ALTER TABLE field_authority_rules
+        ADD COLUMN null_policy TEXT NOT NULL DEFAULT 'PRESERVE_TARGET';
+        ALTER TABLE field_authority_rules
+        ADD COLUMN manual_override_policy TEXT NOT NULL DEFAULT 'REQUIRE_REVIEW';
+        ALTER TABLE field_authority_rules
+        ADD COLUMN effective_version INTEGER NOT NULL DEFAULT 1;
+
+        UPDATE field_authority_rules
+        SET provider_priority_json = json_array(source_provider),
+            conflict_policy = 'PROVIDER_PRIORITY',
+            effective_version = rule_revision;
+
+        CREATE INDEX idx_field_authority_rules_governed
+        ON field_authority_rules (
+          org_id, field_name, authority_mode, is_enabled,
+          effective_version, updated_at DESC
+        );
+        """,
+    ),
+    (
+        38,
+        "bind policy releases to directory and identity evidence versions",
+        """
+        ALTER TABLE config_release_snapshots
+        ADD COLUMN source_snapshot_fingerprint TEXT NOT NULL DEFAULT '';
+        ALTER TABLE config_release_snapshots
+        ADD COLUMN ad_snapshot_id INTEGER;
+        ALTER TABLE config_release_snapshots
+        ADD COLUMN ad_snapshot_fingerprint TEXT NOT NULL DEFAULT '';
+        ALTER TABLE config_release_snapshots
+        ADD COLUMN source_field_catalog_fingerprint TEXT NOT NULL DEFAULT '';
+        ALTER TABLE config_release_snapshots
+        ADD COLUMN ad_capability_catalog_fingerprint TEXT NOT NULL DEFAULT '';
+        ALTER TABLE config_release_snapshots
+        ADD COLUMN identity_match_run_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE config_release_snapshots
+        ADD COLUMN identity_match_rules_fingerprint TEXT NOT NULL DEFAULT '';
+        ALTER TABLE config_release_snapshots
+        ADD COLUMN evidence_fingerprint TEXT NOT NULL DEFAULT '';
+
+        CREATE INDEX idx_config_release_snapshots_evidence
+        ON config_release_snapshots (
+          org_id, source_snapshot_id, ad_snapshot_id, identity_match_run_id,
+          evidence_fingerprint, created_at DESC
+        );
+        """,
+    ),
 ]
