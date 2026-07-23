@@ -2519,6 +2519,68 @@ class WebBrowserRegressionTests(unittest.TestCase):
                     44,
                 )
 
+    def test_field_authority_business_labels_are_readable_and_responsive(self):
+        self._login()
+        path = "/sync-policies/field-authority?lang=zh-CN"
+        viewports = ((390, 900), (1024, 900), (1440, 1100))
+
+        for width, height in viewports:
+            with self.subTest(width=width, height=height):
+                self.page.set_viewport_size({"width": width, "height": height})
+                self.page.goto(f"{self.base_url}{path}", wait_until="networkidle")
+
+                field_select = self.page.locator('select[name="field_name"]')
+                self.assertEqual(field_select.count(), 1)
+                field_labels = field_select.locator("option").all_text_contents()
+                self.assertIn("备用邮箱", field_labels)
+                self.assertNotIn("alternate_email", field_labels)
+                self.assertIn("工号 / 员工 ID", field_labels)
+                field_select.select_option("alternate_email")
+                self.assertEqual(
+                    field_select.locator("option:checked").text_content().strip(),
+                    "备用邮箱",
+                )
+
+                authority_labels = self.page.locator(
+                    'select[name="authority_mode"] option'
+                ).all_text_contents()
+                self.assertIn("按平台优先顺序取第一个有值的来源", authority_labels)
+                self.assertNotIn("PROVIDER_PRIORITY", authority_labels)
+                self.assertIn(
+                    "值冲突时停止并要求处理",
+                    self.page.locator(
+                        'select[name="conflict_policy"] option'
+                    ).all_text_contents(),
+                )
+                self.assertIn(
+                    "来源为空时保留目标现值",
+                    self.page.locator(
+                        'select[name="null_policy"] option'
+                    ).all_text_contents(),
+                )
+
+                priority_select = self.page.locator(
+                    'select[name="provider_priority"]'
+                )
+                self.assertEqual(priority_select.count(), 1)
+                self.assertIn(
+                    "钉钉 → 企业微信 → 飞书",
+                    priority_select.locator("option").all_text_contents(),
+                )
+                dimensions = self.page.evaluate(
+                    "() => ({clientWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth})"
+                )
+                self.assertLessEqual(
+                    dimensions["scrollWidth"], dimensions["clientWidth"] + 1
+                )
+                self.page.screenshot(
+                    path=str(
+                        ARTIFACT_DIR
+                        / f"field-authority-readable-{width}.png"
+                    ),
+                    full_page=True,
+                )
+
     def test_z_responsive_evidence_covers_critical_operating_pages(self):
         self._login()
         viewports = ((390, 844), (768, 900), (1024, 768), (1440, 900))

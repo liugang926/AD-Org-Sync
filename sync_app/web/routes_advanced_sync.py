@@ -374,11 +374,49 @@ def register_advanced_sync_routes(
             connector_id=ad_connector_id,
         )
         repositories.canonical_field_registry_repo.seed_defaults()
+        canonical_fields = repositories.canonical_field_registry_repo.list_fields(
+            org_id=current_org.org_id,
+        )
+        field_category_labels = {
+            "person_identifier": "Employee identifiers",
+            "name": "Name",
+            "contact": "Contact details",
+            "employment": "Employment details",
+            "organization": "Organization details",
+            "relationship": "Reporting relationships",
+            "location": "Work location",
+            "lifecycle": "Lifecycle",
+            "personal": "Personal information",
+            "technical_identity": "Technical identity",
+            "custom": "Custom fields",
+        }
+        fields_by_category = {
+            category: [] for category in field_category_labels
+        }
+        for field in canonical_fields:
+            category = (
+                field.category
+                if field.category in fields_by_category
+                else "custom"
+            )
+            fields_by_category[category].append(field)
+        field_groups = tuple(
+            {
+                "category": category,
+                "label": field_category_labels[category],
+                "fields": tuple(fields_by_category[category]),
+            }
+            for category in field_category_labels
+            if fields_by_category[category]
+        )
         return {
             "current_source_provider": provider_id,
-            "canonical_fields": repositories.canonical_field_registry_repo.list_fields(
-                org_id=current_org.org_id,
-            ),
+            "canonical_fields": canonical_fields,
+            "canonical_field_labels": {
+                field.canonical_field_key: field.display_label
+                for field in canonical_fields
+            },
+            "canonical_field_groups": field_groups,
             "source_registry_fields": (
                 repositories.source_field_registry_repo.list_fields(
                     org_id=current_org.org_id,
