@@ -7,7 +7,11 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from sync_app.web.app_state import get_web_repositories
-from sync_app.web.dashboard_state import count_check_statuses, summarize_check_status
+from sync_app.web.dashboard_state import (
+    compact_preflight_snapshot_for_session,
+    count_check_statuses,
+    summarize_check_status,
+)
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
@@ -128,7 +132,9 @@ def register_dashboard_routes(
                     snapshot["checks"] = list(snapshot.get("checks") or []) + retained_checks
                     snapshot["overall_status"] = summarize_check_status(snapshot["checks"])
                     snapshot["status_counts"] = count_check_statuses(snapshot["checks"])
-        request.session["_preflight_snapshot"] = snapshot
+        request.session["_preflight_snapshot"] = compact_preflight_snapshot_for_session(
+            snapshot
+        )
         current_org = get_current_org(request)
         repositories = get_web_repositories(request)
         if normalized_connection_kind in {"all", "source"}:
