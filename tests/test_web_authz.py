@@ -5021,6 +5021,75 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertIn("Live WeCom connection", dashboard_text)
         self.assertIn("Last live check", dashboard_text)
 
+    def test_preflight_run_keeps_signed_session_cookie_below_proxy_header_limit(self):
+        with TestClient(self.app, base_url="https://testserver") as client:
+            login_page = client.get("/login")
+            login_csrf = re.search(
+                r'name="csrf_token" value="([^"]+)"', login_page.text
+            )
+            self.assertIsNotNone(login_csrf)
+            login_response = client.post(
+                "/login",
+                data={
+                    "csrf_token": login_csrf.group(1),
+                    "username": "superadmin",
+                    "password": "Admin123!",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(login_response.status_code, 303)
+
+            connector_page = client.get("/data-sources/connectors")
+            preflight_csrf = re.search(
+                r'name="csrf_token" value="([^"]+)"', connector_page.text
+            )
+            self.assertIsNotNone(preflight_csrf)
+            with patch(
+                "sync_app.web.app.test_source_connection",
+                return_value=(False, "Source connection failed: " + "x" * 10000),
+            ):
+                source_response = client.post(
+                    "/preflight/run",
+                    data={
+                        "csrf_token": preflight_csrf.group(1),
+                        "return_url": "/data-sources/connectors",
+                        "connection_kind": "source",
+                    },
+                    follow_redirects=False,
+                )
+
+            connector_page = client.get("/data-sources/connectors")
+            preflight_csrf = re.search(
+                r'name="csrf_token" value="([^"]+)"', connector_page.text
+            )
+            self.assertIsNotNone(preflight_csrf)
+            with patch(
+                "sync_app.web.app.test_ldap_connection",
+                return_value=(False, "LDAP connection failed: " + "y" * 10000),
+            ):
+                ldap_response = client.post(
+                    "/preflight/run",
+                    data={
+                        "csrf_token": preflight_csrf.group(1),
+                        "return_url": "/data-sources/connectors",
+                        "connection_kind": "ldap",
+                    },
+                    follow_redirects=False,
+                )
+
+            result_page = client.get("/data-sources/connectors")
+            self.assertIn("Source directory test", result_page.text)
+            self.assertIn("Target AD test", result_page.text)
+
+        for response in (source_response, ldap_response):
+            self.assertEqual(response.status_code, 303)
+            set_cookie_headers = response.headers.get_list("set-cookie")
+            self.assertTrue(set_cookie_headers)
+            self.assertLess(
+                max(len(value.encode("latin-1")) for value in set_cookie_headers),
+                4096,
+            )
+
     def test_preflight_and_getting_started_use_selected_provider_context_for_dingtalk(
         self,
     ):

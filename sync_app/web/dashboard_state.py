@@ -5,6 +5,26 @@ from typing import Any
 from sync_app.web.ui_mode import get_ui_mode_presentation
 
 
+_SESSION_LIVE_CHECK_KEYS = {"live_source", "live_wecom", "live_ldap"}
+_SESSION_CHECK_TEXT_LIMIT = 512
+
+
+def _bounded_session_text(value: Any, *, limit: int = _SESSION_CHECK_TEXT_LIMIT) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 1]}…"
+
+
+def _bounded_session_params(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        _bounded_session_text(key, limit=64): _bounded_session_text(item, limit=128)
+        for key, item in list(value.items())[:8]
+    }
+
+
 def summarize_check_status(checks: list[dict[str, Any]]) -> str:
     if any(str(item.get("status") or "") == "error" for item in checks):
         return "error"
@@ -20,6 +40,42 @@ def count_check_statuses(checks: list[dict[str, Any]]) -> dict[str, int]:
         if status in counts:
             counts[status] += 1
     return counts
+
+
+def compact_preflight_snapshot_for_session(
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep only bounded live-check data in the signed cookie session."""
+    live_checks: list[dict[str, Any]] = []
+    for item in list(snapshot.get("checks") or []):
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "")
+        if key not in _SESSION_LIVE_CHECK_KEYS:
+            continue
+        status = str(item.get("status") or "warning")
+        if status not in {"success", "warning", "error"}:
+            status = "warning"
+        live_checks.append(
+            {
+                "key": key,
+                "label": _bounded_session_text(item.get("label"), limit=160),
+                "label_params": _bounded_session_params(item.get("label_params")),
+                "status": status,
+                "detail": _bounded_session_text(item.get("detail")),
+                "detail_params": _bounded_session_params(item.get("detail_params")),
+                "action_url": "/data-sources/connectors",
+            }
+        )
+
+    return {
+        "org_id": _bounded_session_text(snapshot.get("org_id"), limit=128),
+        "generated_at": _bounded_session_text(snapshot.get("generated_at"), limit=64),
+        "checks": live_checks,
+        "overall_status": summarize_check_status(live_checks),
+        "status_counts": count_check_statuses(live_checks),
+        "has_live_checks": bool(live_checks),
+    }
 
 
 def merge_saved_preflight_snapshot(

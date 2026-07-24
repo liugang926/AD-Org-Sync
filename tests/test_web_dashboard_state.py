@@ -2,6 +2,7 @@ import unittest
 
 from sync_app.web.dashboard_state import (
     build_getting_started_data,
+    compact_preflight_snapshot_for_session,
     count_check_statuses,
     merge_saved_preflight_snapshot,
     summarize_check_status,
@@ -48,6 +49,32 @@ class WebDashboardStateTests(unittest.TestCase):
         self.assertEqual(merged["status_counts"], {"success": 1, "warning": 1, "error": 0})
         self.assertTrue(merged["has_live_checks"])
         self.assertEqual(merged["live_ran_at"], "2026-04-08T10:00:00+00:00")
+
+    def test_compact_preflight_snapshot_keeps_only_bounded_live_results(self):
+        compact = compact_preflight_snapshot_for_session(
+            {
+                "org_id": "org-1",
+                "generated_at": "2026-07-24T09:00:00+00:00",
+                "checks": [
+                    {"key": "config", "status": "error", "detail": "not saved"},
+                    {
+                        "key": "live_source",
+                        "label": "Live source connection",
+                        "status": "success",
+                        "detail": "x" * 2000,
+                        "detail_params": {"provider": "DingTalk"},
+                    },
+                ],
+                "rollout_readiness": {"steps": [{"summary": "y" * 20000}]},
+            }
+        )
+
+        self.assertEqual(compact["org_id"], "org-1")
+        self.assertEqual([item["key"] for item in compact["checks"]], ["live_source"])
+        self.assertEqual(compact["overall_status"], "success")
+        self.assertEqual(compact["status_counts"]["success"], 1)
+        self.assertLessEqual(len(compact["checks"][0]["detail"]), 512)
+        self.assertNotIn("rollout_readiness", compact)
 
     def test_build_getting_started_data_marks_current_step(self):
         preflight_snapshot = {
