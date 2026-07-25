@@ -16,6 +16,7 @@ from sync_app.services.enterprise_identity_matching import (
     EnterpriseIdentityDecisionService,
     EnterpriseIdentityMatchingService,
     assess_identity_matches,
+    identity_candidate_requires_decision,
 )
 from sync_app.services.directory_snapshot_ingestion import (
     ADDirectorySnapshotService,
@@ -266,6 +267,25 @@ def test_name_only_never_creates_a_match() -> None:
     assert result[0].result_level == RESULT_MANUAL
     assert result[0].ad_account_id is None
     assert result[0].recommended_action == "create_new_ad_account"
+    assert not identity_candidate_requires_decision(
+        result[0].to_candidate(run_id="run-1", org_id="acme")
+    )
+
+
+def test_ambiguous_or_suggested_identity_candidates_still_block_rollout() -> None:
+    assert identity_candidate_requires_decision(
+        {"status": "pending", "result_level": RESULT_BLOCKED}
+    )
+    assert identity_candidate_requires_decision(
+        {"status": "pending", "result_level": RESULT_SUGGESTED}
+    )
+    assert identity_candidate_requires_decision(
+        {
+            "status": "pending",
+            "result_level": RESULT_MANUAL,
+            "recommended_action": "confirm_target_manually",
+        }
+    )
 
 
 def test_unique_email_is_suggested_and_never_default_auto_linked() -> None:

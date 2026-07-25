@@ -261,6 +261,73 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
         )
         self.assertIn("restricted to strong employee identifiers", str(self.session["_flash"]))
 
+    def test_primary_identity_setup_saves_one_source_to_ad_identifier_pair(self):
+        self._login("superadmin")
+        self._seed_identity_snapshot()
+        ad_snapshot_id = self.app.state.ad_directory_snapshot_repo.start_snapshot(
+            org_id="default",
+            connector_id="default",
+            created_by="superadmin",
+        )
+        self.app.state.ad_directory_snapshot_repo.complete_snapshot(
+            ad_snapshot_id,
+            org_id="default",
+            user_count=2,
+            ou_count=0,
+            duplicate_employee_id_count=0,
+            duplicate_employee_number_count=0,
+            snapshot_fingerprint="primary-identity-ad-v1",
+        )
+
+        page_path = "/identity-governance/match-rules"
+        page = self._text(self._route(page_path, "GET")(self._request(page_path)))
+        self.assertIn("Primary Identity Fields", page)
+        self.assertIn('action="/identity-governance/match-rules/primary"', page)
+        self.assertNotIn("Confidence score", page)
+        self.assertNotIn("Current identity pairing", page)
+
+        save_path = "/identity-governance/match-rules/primary"
+        response = self._route(save_path, "POST")(
+            self._request(save_path, "POST"),
+            csrf_token=self.session["_csrf_token"],
+            source_field="employee_id",
+            ad_field="sam_account_name",
+        )
+
+        self.assertEqual(response.status_code, 303)
+        saved = next(
+            rule
+            for rule in self.app.state.identity_match_rule_repo.list_rules(
+                org_id="default"
+            )
+            if rule.rule_name == "primary_identity"
+        )
+        self.assertEqual(saved.rule_order, 1)
+        self.assertEqual(saved.source_field, "employee_id")
+        self.assertEqual(saved.ad_field, "sam_account_name")
+        self.assertTrue(saved.is_required)
+        self.assertTrue(saved.allow_auto_link)
+        self.assertFalse(saved.allow_fallback)
+        self.assertEqual(
+            [
+                rule.rule_name
+                for rule in self.app.state.identity_match_rule_repo.list_enabled_rules(
+                    org_id="default"
+                )
+            ],
+            ["primary_identity"],
+        )
+        saved_page = self._text(
+            self._route(page_path, "GET")(self._request(page_path))
+        )
+        self.assertIn("Current identity pairing", saved_page)
+        self.assertTrue(
+            any(
+                row.action_type == "identity_match.primary.update"
+                for row in self.app.state.audit_repo.list_recent_logs(20)
+            )
+        )
+
     def test_match_rule_page_offers_snapshot_source_and_supported_ad_field_selectors(self):
         self._login("superadmin")
         self.session["ui_mode"] = "advanced"

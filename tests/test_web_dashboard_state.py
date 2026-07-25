@@ -129,6 +129,37 @@ class WebDashboardStateTests(unittest.TestCase):
         self.assertEqual(data["completed_steps"], 2)
         self.assertEqual(data["next_step"]["title"], "Refresh Source Directory")
 
+    def test_simple_setup_requires_explicit_identity_and_root_relationship(self):
+        data = build_getting_started_data(
+            current_org_name="HQ",
+            preflight_snapshot={
+                "rollout_readiness": {
+                    "steps": [
+                        {
+                            "key": "identity_rules_configured",
+                            "status": "complete",
+                            "metadata": {"primary_identity_configured": False},
+                        },
+                        {
+                            "key": "department_ou_routing_configured",
+                            "status": "complete",
+                            "metadata": {"root_relationship_configured": False},
+                        },
+                    ],
+                    "next_step": {},
+                }
+            },
+            source_provider_name="DingTalk",
+            ui_mode="basic",
+        )
+
+        identity_step = data["simple_steps"][2]
+        routing_step = data["simple_steps"][4]
+        self.assertEqual(identity_step["status"], "action_required")
+        self.assertFalse(identity_step["done"])
+        self.assertEqual(routing_step["status"], "action_required")
+        self.assertFalse(routing_step["done"])
+
 
 if __name__ == "__main__":
     unittest.main()

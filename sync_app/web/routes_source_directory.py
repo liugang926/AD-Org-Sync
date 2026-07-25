@@ -40,6 +40,7 @@ from sync_app.services.high_risk_operations import (
 )
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 from sync_app.web.identity_match_fields import (
+    SOURCE_PRIMARY_ID_FIELDS,
     build_ad_match_field_options,
     build_source_match_field_options,
 )
@@ -1759,6 +1760,14 @@ def register_source_directory_routes(
             identity_match_rules,
             detected_ad_attributes,
         )
+        primary_identity_rule = next(
+            (
+                rule
+                for rule in identity_match_rules
+                if str(rule.rule_name or "") == "primary_identity"
+            ),
+            None,
+        )
         return render(
             request,
             "identity_match_rules.html",
@@ -1778,6 +1787,17 @@ def register_source_directory_routes(
                 item["value"]: item["label"] for item in ad_match_field_options
             },
             identity_match_rules=identity_match_rules,
+            primary_identity_rule=primary_identity_rule,
+            source_primary_id_options=[
+                item
+                for item in source_match_field_options
+                if item.get("is_primary_id_candidate")
+            ],
+            ad_primary_id_options=[
+                item
+                for item in ad_match_field_options
+                if item.get("is_primary_id_candidate")
+            ],
         )
 
     @app.post("/identity-governance/ad-snapshots/refresh")
@@ -1876,6 +1896,171 @@ def register_source_directory_routes(
                 close_fn = getattr(provider, "close", None)
                 if callable(close_fn):
                     close_fn()
+        return RedirectResponse(url=return_path, status_code=303)
+
+    @app.post("/identity-governance/match-rules/primary")
+    def save_primary_identity_rule(
+        request: Request,
+        csrf_token: str = Form(""),
+        source_field: str = Form(""),
+        ad_field: str = Form(""),
+    ):
+        user = require_capability(request, "mappings.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        return_path = CANONICAL_ROUTE_PATHS["identity-match-rules"]
+        csrf_error = reject_invalid_csrf(request, csrf_token, return_path)
+        if csrf_error:
+            return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        runtime_state = get_web_runtime_state(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=current_org.config_path or runtime_state.config_path,
+        )
+        source_provider = str(config.source_provider or "wecom").strip().lower() or "wecom"
+        source_snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=source_provider,
+        )
+        ad_snapshot = repositories.ad_directory_snapshot_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            connector_id="default",
+        )
+        if not source_snapshot or not ad_snapshot:
+            flash(
+                request,
+                "error",
+                "Refresh both the source directory and AD directory before selecting identity fields.",
+            )
+            return RedirectResponse(url=return_path, status_code=303)
+        detected_source_fields = (
+            repositories.source_field_registry_repo.list_fields(
+                org_id=current_org.org_id,
+                provider_id=source_provider,
+                source_connector_id=str(source_snapshot["connector_id"] or "default"),
+                current_snapshot_id=int(source_snapshot["id"]),
+            )
+            if source_snapshot
+            else []
+        )
+        detected_ad_attributes = (
+            repositories.ad_target_attribute_registry_repo.list_attributes(
+                org_id=current_org.org_id,
+                ad_connector_id=str(ad_snapshot["connector_id"] or "default"),
+                current_snapshot_id=int(ad_snapshot["id"]),
+            )
+            if ad_snapshot
+            else []
+        )
+        repositories.identity_match_rule_repo.seed_defaults(org_id=current_org.org_id)
+        existing_rules = repositories.identity_match_rule_repo.list_rules(
+            org_id=current_org.org_id
+        )
+        source_options = build_source_match_field_options(
+            provider_id=source_provider,
+            detected_fields=detected_source_fields,
+            existing_rules=existing_rules,
+        )
+        ad_options = build_ad_match_field_options(
+            existing_rules,
+            detected_ad_attributes,
+        )
+        normalized_source_field = str(source_field or "").strip()
+        normalized_ad_field = str(ad_field or "").strip()
+        source_option = next(
+            (
+                item
+                for item in source_options
+                if item["value"] == normalized_source_field
+                and item.get("is_primary_id_candidate")
+                and not item.get("disabled")
+            ),
+            None,
+        )
+        ad_option = next(
+            (
+                item
+                for item in ad_options
+                if item["value"] == normalized_ad_field
+                and item.get("is_primary_id_candidate")
+                and not item.get("disabled")
+            ),
+            None,
+        )
+        if source_option is None or ad_option is None:
+            flash(
+                request,
+                "error",
+                "Select one available source identifier and one available AD identifier.",
+            )
+            return RedirectResponse(url=return_path, status_code=303)
+
+        canonical_source_field = str(
+            source_option.get("canonical_field_key") or normalized_source_field
+        ).strip()
+        resolved_source_field = (
+            canonical_source_field
+            if canonical_source_field in SOURCE_PRIMARY_ID_FIELDS
+            else normalized_source_field
+        )
+        allow_auto_link = resolved_source_field in {"employee_id", "employee_number"}
+        try:
+            rule = repositories.identity_match_rule_repo.upsert_rule(
+                org_id=current_org.org_id,
+                rule_order=1,
+                rule_name="primary_identity",
+                source_provider=source_provider,
+                source_field=resolved_source_field,
+                ad_field=normalized_ad_field,
+                is_required=True,
+                case_sensitive=False,
+                trim_whitespace=True,
+                strip_phone_country_code=False,
+                lowercase_email=False,
+                allow_fallback=False,
+                allow_auto_link=allow_auto_link,
+                confidence_level="certain" if allow_auto_link else "high",
+                confidence_score=100 if allow_auto_link else 90,
+                stop_on_conflict=True,
+                is_enabled=True,
+                created_by=user.username,
+            )
+            repositories.identity_match_rule_repo.enable_only_rule(
+                org_id=current_org.org_id,
+                rule_name="primary_identity",
+            )
+        except (TypeError, ValueError) as exc:
+            flash_t(
+                request,
+                "error",
+                "Failed to save identity matching rule: {error}",
+                error=str(exc),
+            )
+            return RedirectResponse(url=return_path, status_code=303)
+        repositories.audit_repo.add_log(
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            action_type="identity_match.primary.update",
+            target_type="identity_match_rule",
+            target_id=str(rule.id or rule.rule_name),
+            result="success",
+            message="Updated the primary source-to-AD identity fields",
+            payload={
+                "source_provider": source_provider,
+                "selected_source_field": normalized_source_field,
+                "resolved_source_field": resolved_source_field,
+                "ad_field": normalized_ad_field,
+                "automatic_link": allow_auto_link,
+                "exclusive_identity_rule": True,
+            },
+        )
+        flash_t(
+            request,
+            "success",
+            "Primary identity fields saved. This is now the only field pair used to recognize existing AD accounts.",
+        )
         return RedirectResponse(url=return_path, status_code=303)
 
     @app.post("/identity-governance/match-rules")

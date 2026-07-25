@@ -31,33 +31,19 @@ class WebNavigationTests(WebAuthzBaseTestCase):
                 "/overview/control-tower",
                 "/data-sources/connectors",
                 "/data-sources/source-directory",
-                "/data-sources/data-quality",
-                "/identity-governance/identity-matching",
                 "/identity-governance/match-rules",
-                "/identity-governance/enterprise-identities",
-                "/identity-governance/account-takeover",
-                "/sync-policies/account-naming",
-                "/sync-policies/field-authority",
                 "/sync-policies/attribute-mappings",
                 "/sync-policies/department-ou-routing",
-                "/sync-policies/group-rules",
-                "/sync-policies/lifecycle",
-                "/sync-policies/security",
-                "/sync-policies/scope",
-                "/sync-policies/releases",
                 "/execution-center/dry-run",
-                "/identity-governance/conflicts",
-                "/execution-center/plan-review",
-                "/execution-center/apply",
-                "/execution-center/jobs",
-                "/operations-center/audit-log",
             ],
         )
         self.assertEqual(navigation.count('aria-current="page"'), 1)
         self.assertIn("Data Sources &amp; AD", navigation)
         self.assertIn("Identity Matching", navigation)
         self.assertIn("Organization &amp; OU", navigation)
-        self.assertIn("Execution &amp; History", navigation)
+        self.assertIn("Primary Identity Fields", navigation)
+        self.assertIn("Field Mappings", navigation)
+        self.assertIn("Root Department &amp; OU", navigation)
         self.assertNotIn("System Settings", navigation)
 
     def test_advanced_mode_exposes_target_sections_with_rbac_filtering(self):

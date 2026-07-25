@@ -3,12 +3,13 @@
 {% import "components/sync_policy.html" as policy with context %}
 
 {% block content %}
-{% call ui.page_header(t("Department & OU Routing"), t("Define default OU placement, department routes, connector routing, and disabled-user placement."), eyebrow=t("Sync Policies"), badge_text=t("Organization Scope"), badge_level="info") %}
-  {{ ui.button(t("Release History"), href="/sync-policies/releases", variant="secondary", icon="history") }}
+{% call ui.page_header(t("Department & OU Routing") if ui_presentation.is_advanced else t("Root Department and OU"), t("Define default OU placement, department routes, connector routing, and disabled-user placement.") if ui_presentation.is_advanced else t("Link the source organization root to the AD root OU. Child departments follow this root relationship."), eyebrow=t("Sync Policies") if ui_presentation.is_advanced else t("Sync Setup"), badge_text=t("Organization Scope"), badge_level="info") %}
+  {% if ui_presentation.is_advanced %}{{ ui.button(t("Release History"), href="/sync-policies/releases", variant="secondary", icon="history") }}{% else %}{{ ui.button(t("Back to field mappings"), href="/sync-policies/attribute-mappings", variant="ghost", icon="arrow-left") }}{% endif %}
 {% endcall %}
+
+{% if ui_presentation.is_advanced %}
 {{ policy.tabs('department-ou-routing') }}
 {{ policy.status(has_unpublished_changes, latest_snapshot_title, (t('No target connectors are configured') if not connectors else ''), t('Save this section, then verify OU placement in a new Dry Run'), policy_version, policy_last_modified_by, estimated_affected_users, dry_run_invalidated, latest_policy_dry_run) }}
-
 <section class="compact-stats" aria-label="{{ t('Department routing summary') }}">
   {{ ui.compact_stat(t("Source departments"), source_departments|length) }}
   {{ ui.compact_stat(t("AD OUs"), ad_ou_nodes|length) }}
@@ -16,76 +17,72 @@
   {{ ui.compact_stat(t("Unmapped departments"), unmapped_department_count) }}
   {{ ui.compact_stat(t("Routing conflicts"), routing_conflict_count) }}
 </section>
+{% endif %}
 
-{% call ui.panel(t("Organization Routing Defaults"), scope_label=t("Organization Scope"), scope_level="info", description=t("These values use the existing organization settings keys, so runtime and database compatibility are preserved.")) %}
+{% call ui.panel(t("Organization Routing Defaults") if ui_presentation.is_advanced else t("Root organization relationship"), scope_label=t("Organization Scope"), scope_level="info", description=t("These values use the existing organization settings keys, so runtime and database compatibility are preserved.") if ui_presentation.is_advanced else t("Select one source root department and the AD OU under which its department tree should be created or synchronized.")) %}
   <form method="post" action="/sync-policies/department-ou-routing/defaults" class="page-stack" data-policy-change-form data-policy-impact="{{ estimated_affected_users }}" data-policy-scope="{{ current_org.name }}" data-confirm="{{ t('Review old values, new values, organization scope, and estimated impact before saving routing defaults.') }}" data-confirm-title="{{ t('Review Routing Defaults') }}" data-confirm-detail-1-label="{{ t('Old values') }}" data-confirm-detail-1-value="{policy_old_values}" data-confirm-detail-2-label="{{ t('New values') }}" data-confirm-detail-2-value="{policy_new_values}" data-confirm-detail-3-label="{{ t('Scope') }}" data-confirm-detail-3-value="{policy_scope}" data-confirm-detail-4-label="{{ t('Estimated impact') }}" data-confirm-detail-4-value="{policy_impact} {{ t('users') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="form-grid">
-      <label>{{ t("Default OU") }}<input type="text" name="directory_root_ou_path" value="{{ directory_policy_settings.directory_root_ou_path }}" placeholder="Managed Users / China"><span class="form-help">{{ t("Organization-wide destination when no department rule overrides it.") }}</span></label>
-      <label>{{ t("Disabled Users OU") }}<input type="text" name="disabled_users_ou_path" value="{{ directory_policy_settings.disabled_users_ou_path }}" placeholder="Disabled Users"></label>
-      <label>{{ t("Department Placement") }}<select name="user_ou_placement_strategy">{% for value, label in [("source_primary_department", "Prefer source primary department"), ("first_valid", "Pick the first valid department in source order"), ("shortest_path", "Pick the shortest department path"), ("lowest_id", "Pick the lowest department ID")] %}<option value="{{ value }}" {% if directory_policy_settings.user_ou_placement_strategy == value %}selected{% endif %}>{{ t(label) }}{% if ui_presentation.show_field_codes %} ({{ value }}){% endif %}</option>{% endfor %}</select></label>
-      <label class="check-card"><input type="checkbox" name="advanced_connector_routing_enabled" value="1" {% if policy_settings.advanced_connector_routing_enabled %}checked{% endif %}><span><strong>{{ t("Connector Routing") }}</strong><small>{{ t("Require one unambiguous connector route for every managed identity.") }}</small></span></label>
-      <div class="check-card" role="status"><span><strong>{{ t("Create missing OUs") }}: {{ t("Enabled") }}</strong><small>{{ t("Missing reviewed OU paths are created during Apply; Dry Run shows the planned OU changes first.") }}</small></span></div>
-      <div class="check-card" role="status"><span><strong>{{ t("Move existing accounts") }}: {{ t("Enabled with review") }}</strong><small>{{ t("Existing managed accounts move only when the current Dry Run contains the OU move and the plan is approved.") }}</small></span></div>
-    </div>
     {% if ui_presentation.is_advanced %}
-    <details class="detail-toggle" open><summary><strong>{{ t("Advanced source root details") }}</strong></summary><div class="form-grid">
-      <label>{{ t("Source Root Unit IDs") }}<input type="text" name="source_root_unit_ids" value="{{ directory_policy_settings.source_root_unit_ids }}" placeholder="2, 8"><span class="form-help">{{ t("Existing settings key") }}: <code>source_root_unit_ids</code></span></label>
-      <label>{{ t("Source Root Display Text") }}<input type="text" name="source_root_unit_display_text" value="{{ directory_policy_settings.source_root_unit_display_text }}"><span class="form-help">{{ t("Connector and source-provider details are visible only in Advanced mode.") }}</span></label>
-    </div></details>
+    <div class="form-grid">
+      <label>{{ t("Default OU") }}<input type="text" name="directory_root_ou_path" value="{{ directory_policy_settings.directory_root_ou_path }}" placeholder="Managed Users / China"></label>
+      <label>{{ t("Disabled Users OU") }}<input type="text" name="disabled_users_ou_path" value="{{ directory_policy_settings.disabled_users_ou_path }}" placeholder="Disabled Users"></label>
+      <label>{{ t("Department Placement") }}<select name="user_ou_placement_strategy">{% for value, label in [("source_primary_department", "Prefer source primary department"), ("first_valid", "Pick the first valid department in source order"), ("shortest_path", "Pick the shortest department path"), ("lowest_id", "Pick the lowest department ID")] %}<option value="{{ value }}" {% if directory_policy_settings.user_ou_placement_strategy == value %}selected{% endif %}>{{ t(label) }} ({{ value }})</option>{% endfor %}</select></label>
+      <label class="check-card"><input type="checkbox" name="advanced_connector_routing_enabled" value="1" {% if policy_settings.advanced_connector_routing_enabled %}checked{% endif %}><span><strong>{{ t("Connector Routing") }}</strong><small>{{ t("Require one unambiguous connector route for every managed identity.") }}</small></span></label>
+      <label>{{ t("Source Root Unit IDs") }}<input type="text" name="source_root_unit_ids" value="{{ directory_policy_settings.source_root_unit_ids }}" placeholder="2, 8"></label>
+      <label>{{ t("Source Root Display Text") }}<input type="text" name="source_root_unit_display_text" value="{{ directory_policy_settings.source_root_unit_display_text }}"></label>
+    </div>
     {% else %}
-    <input type="hidden" name="source_root_unit_ids" value="{{ directory_policy_settings.source_root_unit_ids }}">
-    <input type="hidden" name="source_root_unit_display_text" value="{{ directory_policy_settings.source_root_unit_display_text }}">
+    <div class="identity-pair-grid root-routing-grid">
+      <label class="identity-field-card">
+        <span class="eyebrow">1 · {{ t("Source platform") }}</span>
+        <strong>{{ t("Source root department") }}</strong>
+        <select name="source_root_unit_ids" required>
+          <option value="">{{ t("Select the source root department") }}</option>
+          {% for department in source_root_departments %}
+          {% set department_path = department.path_names|join(" / ") %}
+          <option value="{{ department.source_department_id }}" {% if department.source_department_id in selected_source_root_unit_ids %}selected{% endif %}>{{ department.name }}{% if department_path %} · {{ department_path }}{% endif %}</option>
+          {% endfor %}
+        </select>
+        <small><strong>{{ t("Connector Route") }}</strong> · {{ t("This is the top source department included in synchronization.") }}</small>
+      </label>
+      <div class="identity-pair-arrow" aria-hidden="true">→</div>
+      <label class="identity-field-card">
+        <span class="eyebrow">2 · AD</span>
+        <strong>{{ t("AD root OU") }}</strong>
+        <select name="directory_root_ou_path" required>
+          <option value="">{{ t("Select the AD root OU") }}</option>
+          {% if directory_policy_settings.directory_root_ou_path and directory_policy_settings.directory_root_ou_path not in (ad_ou_nodes|map(attribute='path')|list) %}<option value="{{ directory_policy_settings.directory_root_ou_path }}" selected>{{ directory_policy_settings.directory_root_ou_path }}</option>{% endif %}
+          {% for ou in ad_ou_nodes %}<option value="{{ ou.path }}" {% if ou.path == directory_policy_settings.directory_root_ou_path %}selected{% endif %}>{{ ou.name or ou.path }} · {{ ou.path or ou.distinguished_name }}</option>{% endfor %}
+        </select>
+        <small>{{ t("Missing child OUs are shown in Dry Run and created only during an approved Apply.") }}</small>
+      </label>
+    </div>
+    <input type="hidden" name="source_root_unit_display_text" value="">
+    <input type="hidden" name="disabled_users_ou_path" value="{{ directory_policy_settings.disabled_users_ou_path or 'Disabled Users' }}">
+    <input type="hidden" name="user_ou_placement_strategy" value="source_primary_department">
+    <input type="hidden" name="advanced_connector_routing_enabled" value="">
+    <div class="helper-block info"><div><strong>{{ t("Child department behavior") }}</strong><p>{{ t("The source hierarchy is reproduced beneath the selected AD root. The Dry Run previews every OU creation and account move before Apply.") }}</p></div></div>
     {% endif %}
-    {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Routing Defaults"), type="submit", icon="save") }}</div>{% endif %}
+    {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Routing Defaults") if ui_presentation.is_advanced else t("Save root relationship"), type="submit", icon="save") }}</div>{% endif %}
   </form>
 {% endcall %}
 
+{% if ui_presentation.is_advanced %}
 {% call ui.panel(t("Department to OU Mapping"), scope_label=t("Organization / Connector Scope"), scope_level="info", description=t("Choose a source department from the searchable tree and route either the exact node or its descendants.")) %}
   <form method="post" action="/sync-policies/department-ou-routing" class="page-stack" data-policy-change-form data-policy-impact="{{ estimated_affected_users }}" data-policy-scope="{{ current_org.name }}" data-confirm="{{ t('Review the previous default route, new department route, scope, and estimated impact before saving.') }}" data-confirm-title="{{ t('Review Department Route') }}" data-confirm-detail-1-label="{{ t('Old value') }}" data-confirm-detail-1-value="{policy_old_values}" data-confirm-detail-2-label="{{ t('New value') }}" data-confirm-detail-2-value="{policy_new_values}" data-confirm-detail-3-label="{{ t('Scope') }}" data-confirm-detail-3-value="{policy_scope}" data-confirm-detail-4-label="{{ t('Estimated impact') }}" data-confirm-detail-4-value="{policy_impact} {{ t('users') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="source_department_name" value="" data-selected-department-name>
-    <div class="form-grid">
-      <label>{{ t("Connector Route") }}<select name="connector_id" required><option value="">{{ t("Select Connector") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}" {% if connector.connector_id == selected_connector_id %}selected{% endif %}>{{ connector.name }}{% if ui_presentation.show_provider_connector_details %} ({{ connector.connector_id }}){% endif %}</option>{% endfor %}</select></label>
-      <label>{{ t("Target OU") }}<input type="text" name="target_ou_path" required placeholder="Managed Users / China" data-target-ou-input><span class="form-help">{{ t("Choose from the AD OU snapshot or enter a reviewed path.") }}</span></label>
-      <label>{{ t("Apply Mode") }}<select name="apply_mode">{% for value, label in department_ou_apply_mode_options %}<option value="{{ value }}">{{ t(label) }}{% if ui_presentation.show_field_codes %} ({{ value }}){% endif %}</option>{% endfor %}</select></label>
-    </div>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="source_department_name" value="" data-selected-department-name>
+    <div class="form-grid"><label>{{ t("Connector Route") }}<select name="connector_id" required><option value="">{{ t("Select Connector") }}</option>{% for connector in connectors %}<option value="{{ connector.connector_id }}" {% if connector.connector_id == selected_connector_id %}selected{% endif %}>{{ connector.name }} ({{ connector.connector_id }})</option>{% endfor %}</select></label><label>{{ t("Target OU") }}<input type="text" name="target_ou_path" required data-target-ou-input></label><label>{{ t("Apply Mode") }}<select name="apply_mode">{% for value, label in department_ou_apply_mode_options %}<option value="{{ value }}">{{ t(label) }}</option>{% endfor %}</select></label></div>
     <div class="ou-dual-tree">
-    <div class="policy-department-tree" data-department-tree>
-      <strong>{{ t("Source organization tree") }}</strong>
-      <label>{{ t("Search departments") }}<input type="search" data-department-tree-search placeholder="{{ t('Search department name or path') }}"></label>
-      <div class="policy-department-tree__list" role="tree" aria-label="{{ t('Searchable department tree') }}">
-        {% for department in source_departments %}
-        {% set department_path = department.path_names|join(" / ") %}
-        <label class="department-tree-node" role="treeitem" data-department-tree-node data-department-search-text="{{ (department_path ~ ' ' ~ department.source_department_id)|lower }}"><input type="radio" name="source_department_id" value="{{ department.source_department_id }}" data-department-name="{{ department.name }}" required><span><strong>{{ department.name }}</strong><small>{{ department_path }}{% if ui_presentation.show_internal_identifiers %} ({{ department.source_department_id }}){% endif %}</small></span></label>
-        {% else %}<div class="empty-state">{{ t("Refresh Source Directory to load the department tree") }}</div>{% endfor %}
-      </div>
+      <div class="policy-department-tree" data-department-tree><strong>{{ t("Source organization tree") }}</strong><label>{{ t("Search departments") }}<input type="search" data-department-tree-search></label><div class="policy-department-tree__list" role="tree">{% for department in source_departments %}{% set department_path = department.path_names|join(" / ") %}<label class="department-tree-node" data-department-tree-node data-department-search-text="{{ (department_path ~ ' ' ~ department.source_department_id)|lower }}"><input type="radio" name="source_department_id" value="{{ department.source_department_id }}" data-department-name="{{ department.name }}" required><span><strong>{{ department.name }}</strong><small>{{ department_path }}</small></span></label>{% else %}<div class="empty-state">{{ t("Refresh Source Directory to load the department tree") }}</div>{% endfor %}</div></div>
+      <div class="policy-department-tree" data-ou-tree><strong>{{ t("AD OU tree") }}</strong><label>{{ t("Search OUs") }}<input type="search" data-ou-tree-search></label><div class="policy-department-tree__list" role="tree">{% for ou in ad_ou_nodes %}<label class="department-tree-node" data-ou-tree-node data-ou-search-text="{{ ((ou.path or '') ~ ' ' ~ (ou.name or '') ~ ' ' ~ (ou.distinguished_name or ''))|lower }}"><input type="radio" name="target_ou_choice" value="{{ ou.path }}" data-target-ou-path="{{ ou.path }}"><span><strong>{{ ou.name or ou.path }}</strong><small>{{ ou.path }}<br>{{ ou.distinguished_name }}</small></span></label>{% else %}<div class="empty-state">{{ t("No AD OU snapshot") }}</div>{% endfor %}</div>{% if latest_ad_snapshot %}<small class="muted">{{ t("AD snapshot") }} #{{ latest_ad_snapshot.id }}</small>{% endif %}</div>
     </div>
-    <div class="policy-department-tree" data-ou-tree>
-      <strong>{{ t("AD OU tree") }}</strong>
-      <label>{{ t("Search OUs") }}<input type="search" data-ou-tree-search placeholder="{{ t('Search OU name, path, or DN') }}"></label>
-      <div class="policy-department-tree__list" role="tree" aria-label="{{ t('Searchable AD OU tree') }}">
-        {% for ou in ad_ou_nodes %}
-        <label class="department-tree-node" role="treeitem" data-ou-tree-node data-ou-search-text="{{ ((ou.path or '') ~ ' ' ~ (ou.name or '') ~ ' ' ~ (ou.distinguished_name or ''))|lower }}"><input type="radio" name="target_ou_choice" value="{{ ou.path }}" data-target-ou-path="{{ ou.path }}"><span><strong>{{ ou.name or ou.path }}</strong><small>{{ ou.path or ou.distinguished_name }}{% if ui_presentation.show_internal_identifiers %}<br>{{ ou.distinguished_name }}{% endif %}</small></span></label>
-        {% else %}<div class="empty-state"><strong>{{ t("No AD OU snapshot") }}</strong><span>{{ t("Refresh the AD identity snapshot before choosing a target OU.") }}</span></div>{% endfor %}
-      </div>
-      {% if latest_ad_snapshot %}<small class="muted">{{ t("AD snapshot") }} #{{ latest_ad_snapshot.id }} · {{ latest_ad_snapshot.snapshot_fingerprint }}</small>{% endif %}
-    </div>
-    </div>
-    <label>{{ t("Business Notes") }}<textarea name="notes" placeholder="{{ t('Record the routing owner and business reason.') }}"></textarea></label>
-    <label class="checkbox-row"><input type="checkbox" name="is_enabled" value="1" checked><span>{{ t("Rule Enabled") }}</span></label>
+    <input type="hidden" name="notes" value=""><input type="hidden" name="is_enabled" value="1">
     {% if can("config.write") %}<div class="form-actions">{{ ui.button(t("Save Department Mapping"), type="submit", variant="secondary", icon="save") }}</div>{% endif %}
   </form>
 {% endcall %}
 
-{% call ui.panel(t("Department Routing Rules"), description=t("All rules show their organization and connector scope. They affect planning only.")) %}
-  <div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Department routing rules') }}"><table data-policy-table><thead><tr><th>{{ t("Scope") }}</th><th>{{ t("Source Department") }}</th><th>{{ t("Target OU") }}</th><th>{{ t("Apply Mode") }}</th><th>{{ t("Status") }}</th><th>{{ t("Updated") }}</th><th>{{ t("Action") }}</th></tr></thead><tbody>
-    {% for record in department_ou_mappings %}<tr><td>{{ t("Organization") }} / {{ record.connector_id or t("Global") }}</td><td><strong>{{ record.source_department_name or record.source_department_id }}</strong>{% if ui_presentation.show_internal_identifiers %}<div class="muted">{{ record.source_department_id }}</div>{% endif %}</td><td class="wrap-anywhere">{{ record.target_ou_path }}</td><td>{{ t(record.apply_mode) }}</td><td>{{ t("Enabled") if record.is_enabled else t("Disabled") }}</td><td>{{ ui.local_time(record.updated_at) }}</td><td>{% if can("config.write") %}<form method="post" action="/sync-policies/department-ou-routing/{{ record.id }}/delete" class="inline" data-confirm="{{ t('Deleting this route invalidates the previous Dry Run and returns the department to default OU placement.') }}" data-confirm-title="{{ t('Review Department Route Deletion') }}" data-confirm-detail-1-label="{{ t('Old value') }}" data-confirm-detail-1-value="{{ record.target_ou_path }}" data-confirm-detail-2-label="{{ t('New value') }}" data-confirm-detail-2-value="{{ directory_policy_settings.directory_root_ou_path or t('Default OU') }}" data-confirm-detail-3-label="{{ t('Scope') }}" data-confirm-detail-3-value="{{ t('Organization') }} / {{ record.connector_id or t('Global') }}" data-confirm-detail-4-label="{{ t('Estimated impact') }}" data-confirm-detail-4-value="{{ estimated_affected_users }} {{ t('users') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ ui.button(t("Delete"), type="submit", variant="danger", size="sm") }}</form>{% endif %}</td></tr>
-    {% else %}<tr><td colspan="7" class="empty-state">{{ t("No department routing rules are configured") }}</td></tr>{% endfor %}
-  </tbody></table></div>
-{% endcall %}
+{% call ui.panel(t("Department Routing Rules"), description=t("All rules show their organization and connector scope. They affect planning only.")) %}<div class="table-scroll"><table data-policy-table><thead><tr><th>{{ t("Source Department") }}</th><th>{{ t("Target OU") }}</th><th>{{ t("Apply Mode") }}</th><th>{{ t("Status") }}</th><th>{{ t("Action") }}</th></tr></thead><tbody>{% for record in department_ou_mappings %}<tr><td>{{ record.source_department_name or record.source_department_id }}</td><td>{{ record.target_ou_path }}</td><td>{{ t(record.apply_mode) }}</td><td>{{ t("Enabled") if record.is_enabled else t("Disabled") }}</td><td>{% if can("config.write") %}<form method="post" action="/sync-policies/department-ou-routing/{{ record.id }}/delete" class="inline" data-confirm="{{ t('Deleting this route invalidates the previous Dry Run and returns the department to default OU placement.') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ ui.button(t("Delete"), type="submit", variant="danger", size="sm") }}</form>{% endif %}</td></tr>{% else %}<tr><td colspan="5" class="empty-state">{{ t("No department routing rules are configured") }}</td></tr>{% endfor %}</tbody></table></div>{% endcall %}
+{% endif %}
 
-{% call ui.helper_block(t("Next step"), t("Saving invalidates the previous Dry Run. Verify connector and OU routing in a fresh plan before Apply."), "warning") %}
-  {{ ui.button(t("Run a new Dry Run"), href="/execution-center/dry-run", variant="secondary", icon="play-circle") }}
-{% endcall %}
+{% call ui.helper_block(t("Next step"), t("Saving invalidates the previous Dry Run. Verify connector and OU routing in a fresh plan before Apply.") if ui_presentation.is_advanced else t("Configuration is complete. Run a Dry Run to preview identities, field changes, and OU creation."), "warning" if ui_presentation.is_advanced else "info") %}{{ ui.button(t("Run a new Dry Run") if ui_presentation.is_advanced else t("Preview synchronization"), href="/execution-center/dry-run", variant="secondary", icon="play-circle") }}{% endcall %}
 {% endblock %}

@@ -5,7 +5,7 @@
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Connectors"), t("Configure the upstream people directory and target AD connections for the current organization. Synchronization scope, naming, routing, and lifecycle rules live in Sync Policies."), eyebrow=t("Data Sources"), badge_text=t("Organization Scope"), badge_level="info") %}
-    {{ ui.button(t("Open Source Directory"), href="/data-sources/source-directory", variant="secondary", icon="users-round") }}
+    {{ ui.button(t("Preview directory fields"), href="/data-sources/source-directory?view=fields", variant="secondary", icon="users-round") }}
   {% endcall %}
 
   <section class="setup-steps" aria-label="{{ t('Connector setup progress') }}">
@@ -122,7 +122,7 @@
   {% endcall %}
   {% endif %}
 
-  {{ mode_ui.basic_guidance(ui_presentation, t("Next step"), t("Test the saved base connections, then refresh Source Directory. Switch to Advanced mode only when this organization needs more than one target AD connection."), t("Open Source Directory"), "/data-sources/source-directory") }}
+  {{ mode_ui.basic_guidance(ui_presentation, t("Next step"), t("After both connection tests pass, refresh the directory and preview the available source and AD fields."), t("Preview directory fields"), "/data-sources/source-directory?view=fields") }}
 
   {% call mode_ui.advanced(ui_presentation) %}
   {% call ui.panel(t("Additional Target AD Connectors"), description=t("Use additional connectors only when one organization routes users to more than one AD domain or connection. Naming and routing rules remain in Sync Policies.")) %}

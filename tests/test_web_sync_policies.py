@@ -520,6 +520,170 @@ class WebSyncPolicyTests(WebAuthzBaseTestCase):
             {"Legacy Ignore", "Temporary Ignore"},
         )
 
+    def test_basic_setup_exposes_only_field_pair_and_root_relationship_choices(self):
+        self._login("superadmin")
+        self._seed_policy_fixture()
+        ad_snapshot_id = self._seed_ad_ou_snapshot(connector_id="default")
+        self.app.state.ad_target_attribute_registry_repo.sync_snapshot_catalog(
+            org_id="default",
+            ad_connector_id="default",
+            snapshot_id=ad_snapshot_id,
+            capability_report={
+                "capabilities": {
+                    "update_user": {"status": "success", "verified": True}
+                },
+                "schema_attributes": ["mail", "sAMAccountName"],
+            },
+            discovered_attributes=["mail", "sAMAccountName"],
+        )
+        snapshot_id = self.app.state.source_directory_repo.start_refresh(
+            org_id="default",
+            provider_id="wecom",
+            created_by="superadmin",
+        )
+        self.app.state.source_directory_repo.replace_snapshot(
+            snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "2",
+                    "name": "Asia",
+                    "parent_department_id": "0",
+                    "path_ids": ["2"],
+                    "path_names": ["Asia"],
+                },
+                {
+                    "source_department_id": "3",
+                    "name": "Engineering",
+                    "parent_department_id": "2",
+                    "path_ids": ["2", "3"],
+                    "path_names": ["Asia", "Engineering"],
+                },
+            ],
+            users=[
+                {
+                    "source_user_id": "alice",
+                    "display_name": "Alice",
+                    "employee_id": "E001",
+                    "email": "alice@example.test",
+                    "department_ids": ["3"],
+                    "department_names": ["Engineering"],
+                    "is_active": True,
+                    "raw_payload": {
+                        "userid": "alice",
+                        "employee_id": "E001",
+                        "email": "alice@example.test",
+                    },
+                    "search_text": "Alice E001",
+                }
+            ],
+            fields=[
+                {
+                    "name": "email",
+                    "label": "Enterprise email",
+                    "coverage": 1,
+                    "samples": ["alice@example.test"],
+                }
+            ],
+            fingerprint="simple-root-selector-fixture",
+        )
+
+        mapping_path = "/sync-policies/attribute-mappings"
+        mapping_page = self._text(
+            self._route(mapping_path, "GET")(self._request(mapping_path))
+        )
+        self.assertIn("Field Mappings", mapping_page)
+        self.assertIn('name="source_field"', mapping_page)
+        self.assertIn('name="target_field"', mapping_page)
+        self.assertIn('value="email"', mapping_page)
+        self.assertIn('value="mail"', mapping_page)
+        self.assertNotIn('value="sAMAccountName"', mapping_page)
+        self.assertNotIn("Enable Source Write-Back", mapping_page)
+        self.assertNotIn("Transform pipeline", mapping_page)
+
+        routing_path = "/sync-policies/department-ou-routing"
+        routing_page = self._text(
+            self._route(routing_path, "GET")(self._request(routing_path))
+        )
+        self.assertIn("Root Department and OU", routing_page)
+        self.assertIn('name="source_root_unit_ids"', routing_page)
+        self.assertIn('value="2"', routing_page)
+        self.assertNotIn('value="3"', routing_page)
+        self.assertIn('name="directory_root_ou_path"', routing_page)
+        self.assertIn('value="Managed Users/China"', routing_page)
+        self.assertNotIn("Department to OU Mapping", routing_page)
+
+    def test_basic_root_relationship_prepares_hidden_dry_run_evidence(self):
+        self._login("superadmin")
+        source_snapshot_id = self._seed_policy_fixture()
+        self._seed_ad_ou_snapshot(connector_id="default")
+        self.app.state.ad_account_repo.upsert_account(
+            org_id="default",
+            connector_id="default",
+            object_guid="guid-alice",
+            sam_account_name="alice",
+            employee_id="E001",
+            account_enabled=True,
+        )
+        rules = self.app.state.identity_match_rule_repo
+        rules.seed_defaults(org_id="default")
+        rules.upsert_rule(
+            org_id="default",
+            rule_order=1,
+            rule_name="primary_identity",
+            source_provider="wecom",
+            source_field="employee_id",
+            ad_field="employee_id",
+            is_required=True,
+            allow_fallback=False,
+            allow_auto_link=True,
+            confidence_level="certain",
+            confidence_score=100,
+            created_by="superadmin",
+        )
+        rules.enable_only_rule(org_id="default", rule_name="primary_identity")
+
+        path = "/sync-policies/department-ou-routing/defaults"
+        response = self._route(path, "POST")(
+            self._request(path, "POST"),
+            csrf_token=self.session["_csrf_token"],
+            advanced_connector_routing_enabled="",
+            user_ou_placement_strategy="source_primary_department",
+            source_root_unit_ids="2",
+            source_root_unit_display_text="Asia",
+            directory_root_ou_path="Managed Users/China",
+            disabled_users_ou_path="",
+        )
+
+        self.assertEqual(response.status_code, 303)
+        scope = self.app.state.source_directory_repo.get_scope_selection(
+            org_id="default",
+            provider_id="wecom",
+        )
+        self.assertEqual(scope["scope_type"], "department")
+        self.assertEqual(scope["selected_department_ids"], ["2"])
+        self.assertEqual(scope["snapshot_id"], source_snapshot_id)
+        self.assertIsNotNone(
+            self.app.state.data_quality_review_repo.get_review_for_snapshot(
+                org_id="default",
+                source_snapshot_id=source_snapshot_id,
+            )
+        )
+        match_run = self.app.state.identity_match_run_repo.get_latest_completed_run(
+            org_id="default"
+        )
+        self.assertIsNotNone(match_run)
+        release = self.app.state.config_release_snapshot_repo.get_latest_snapshot_record(
+            org_id="default"
+        )
+        self.assertIsNotNone(release)
+        self.assertEqual(release.identity_match_run_id, match_run["run_id"])
+        self.assertTrue(
+            any(
+                row.action_type == "simple_setup.evidence.prepare"
+                for row in self.app.state.audit_repo.list_recent_logs(20)
+            )
+        )
+
     def test_policy_change_invalidates_dry_run_and_blocks_apply(self):
         self._login("superadmin")
         created = create_eligible_execution_plan(

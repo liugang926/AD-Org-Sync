@@ -46,6 +46,25 @@ AD_LDAP_TO_ACCOUNT_FIELD = {
     "distinguishedname": "distinguished_name",
     "manager": "manager_dn",
 }
+SOURCE_PRIMARY_ID_FIELDS = frozenset(
+    {
+        "platform_account_id",
+        "source_user_id",
+        "employee_id",
+        "employee_number",
+        "personnel_number",
+    }
+)
+AD_PRIMARY_ID_FIELDS = frozenset(
+    {
+        "sam_account_name",
+        "user_principal_name",
+        "employee_id",
+        "employee_number",
+        "object_guid",
+        "object_sid",
+    }
+)
 
 
 def _field_value(item: Any, key: str, default: Any = "") -> Any:
@@ -75,6 +94,9 @@ def build_source_match_field_options(
         is_multi_value: bool = False,
         availability_status: str = "available",
         permission_status: str = "granted",
+        canonical_field_key: str = "",
+        is_identifier_candidate: bool = False,
+        masked_sample_values: list[str] | None = None,
     ) -> None:
         normalized_value = str(value or "").strip()
         if not normalized_value:
@@ -91,6 +113,14 @@ def build_source_match_field_options(
                     is_multi_value=bool(is_multi_value),
                     availability_status=availability_status,
                     permission_status=permission_status,
+                    canonical_field_key=canonical_field_key,
+                    is_identifier_candidate=bool(is_identifier_candidate),
+                    masked_sample_values=list(masked_sample_values or []),
+                    is_primary_id_candidate=bool(
+                        is_identifier_candidate
+                        or normalized_value in SOURCE_PRIMARY_ID_FIELDS
+                        or canonical_field_key in SOURCE_PRIMARY_ID_FIELDS
+                    ),
                     disabled=(
                         availability_status not in {"available", "type_conflict"}
                         or permission_status in {"denied", "unavailable"}
@@ -110,6 +140,14 @@ def build_source_match_field_options(
                 "is_multi_value": bool(is_multi_value),
                 "availability_status": availability_status,
                 "permission_status": permission_status,
+                "canonical_field_key": canonical_field_key,
+                "is_identifier_candidate": bool(is_identifier_candidate),
+                "masked_sample_values": list(masked_sample_values or []),
+                "is_primary_id_candidate": bool(
+                    is_identifier_candidate
+                    or normalized_value in SOURCE_PRIMARY_ID_FIELDS
+                    or canonical_field_key in SOURCE_PRIMARY_ID_FIELDS
+                ),
                 "disabled": availability_status not in {"available", "type_conflict"}
                 or permission_status in {"denied", "unavailable"},
             }
@@ -146,6 +184,15 @@ def build_source_match_field_options(
             permission_status=str(
                 _field_value(field, "permission_status", "granted") or "granted"
             ),
+            canonical_field_key=str(
+                _field_value(field, "canonical_field_key", "") or ""
+            ),
+            is_identifier_candidate=bool(
+                _field_value(field, "is_identifier_candidate", False)
+            ),
+            masked_sample_values=list(
+                _field_value(field, "masked_sample_values", []) or []
+            ),
         )
     for rule in existing_rules:
         add_option(
@@ -172,6 +219,7 @@ def build_ad_match_field_options(
         capability_status: str = "available",
         schema_detected: bool = True,
         is_read_only: bool = False,
+        is_primary_id_candidate: bool = False,
     ) -> None:
         normalized_value = str(value or "").strip()
         if not normalized_value:
@@ -186,6 +234,10 @@ def build_ad_match_field_options(
                     capability_status=capability_status,
                     schema_detected=bool(schema_detected),
                     is_read_only=bool(is_read_only),
+                    is_primary_id_candidate=bool(
+                        is_primary_id_candidate
+                        or normalized_value in AD_PRIMARY_ID_FIELDS
+                    ),
                     disabled=capability_status
                     in {"not_detected", "unavailable_by_permission", "unknown"},
                 )
@@ -200,6 +252,10 @@ def build_ad_match_field_options(
                 "capability_status": capability_status,
                 "schema_detected": bool(schema_detected),
                 "is_read_only": bool(is_read_only),
+                "is_primary_id_candidate": bool(
+                    is_primary_id_candidate
+                    or normalized_value in AD_PRIMARY_ID_FIELDS
+                ),
                 "disabled": capability_status in {
                     "not_detected",
                     "unavailable_by_permission",

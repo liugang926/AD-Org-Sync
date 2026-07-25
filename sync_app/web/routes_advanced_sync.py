@@ -21,6 +21,7 @@ from sync_app.services.high_risk_operations import (
     high_risk_audit_payload,
 )
 from sync_app.services.runtime_bootstrap import resolve_runtime_config_fingerprint
+from sync_app.services.simple_setup import prepare_simple_setup_evidence
 from sync_app.services.sync_policy_center import (
     USERNAME_STRATEGY_BY_SOURCE_FIELD,
     build_policy_governance_context,
@@ -35,6 +36,7 @@ from sync_app.web.app_state import (
     get_web_services,
 )
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
+from sync_app.web.ui_mode import BASIC_UI_MODE, normalize_ui_mode
 
 
 ADVANCED_SYNC_CLIENT_I18N_KEYS = (
@@ -626,6 +628,65 @@ def register_advanced_sync_routes(
         ).strip().lower()
         if active_registry_view not in {"mappings", "ad-capabilities"}:
             active_registry_view = "mappings"
+        canonical_fields = list(registry_context.get("canonical_fields") or [])
+        excluded_basic_categories = {
+            "technical_identity",
+            "person_identifier",
+            "relationship",
+            "lifecycle",
+        }
+        excluded_routing_fields = {
+            "department_ids",
+            "primary_department_id",
+            "department_path",
+        }
+        basic_canonical_fields = [
+            field
+            for field in canonical_fields
+            if "ATTRIBUTE_SYNC" in set(getattr(field, "allowed_mapping_roles", []) or [])
+            and not bool(getattr(field, "is_identifier", False))
+            and str(getattr(field, "category", "") or "").strip().lower()
+            not in excluded_basic_categories
+            and str(getattr(field, "canonical_field_key", "") or "").strip()
+            not in excluded_routing_fields
+        ]
+        ordinary_canonical_keys = {
+            str(getattr(field, "canonical_field_key", "") or "").strip()
+            for field in basic_canonical_fields
+        }
+        basic_source_registry_fields = [
+            field
+            for field in list(registry_context.get("source_registry_fields") or [])
+            if str(getattr(field, "availability_status", "") or "").strip()
+            in {"available", "type_conflict"}
+            and str(getattr(field, "permission_status", "") or "").strip()
+            not in {"denied", "unavailable"}
+            and not bool(getattr(field, "is_multi_value", False))
+            and not bool(getattr(field, "is_identifier_candidate", False))
+            and str(getattr(field, "category", "") or "").strip().lower()
+            not in excluded_basic_categories
+            and (
+                not str(getattr(field, "canonical_field_key", "") or "").strip()
+                or str(getattr(field, "canonical_field_key", "") or "").strip()
+                in ordinary_canonical_keys
+            )
+        ]
+        excluded_basic_ad_identifiers = {
+            "samaccountname",
+            "userprincipalname",
+            "employeeid",
+            "employeenumber",
+        }
+        basic_ad_target_attributes = [
+            attribute
+            for attribute in list(registry_context.get("ad_target_attributes") or [])
+            if bool(getattr(attribute, "is_writable", False))
+            and not bool(getattr(attribute, "requires_special_handler", False))
+            and str(getattr(attribute, "ldap_attribute", "") or "").strip().casefold()
+            not in FORBIDDEN_GENERIC_AD_ATTRIBUTES
+            and str(getattr(attribute, "ldap_attribute", "") or "").strip().casefold()
+            not in excluded_basic_ad_identifiers
+        ]
         return render(
             request,
             "sync_policy_attribute_mappings.html",
@@ -640,6 +701,9 @@ def register_advanced_sync_routes(
             ),
             active_registry_view=active_registry_view,
             attribute_mappings=list_org_attribute_mapping_rules(request),
+            basic_source_registry_fields=basic_source_registry_fields,
+            basic_canonical_fields=basic_canonical_fields,
+            basic_ad_target_attributes=basic_ad_target_attributes,
             **registry_context,
             mapping_direction_options=[
                 ("source_to_ad", attribute_mapping_direction_labels["source_to_ad"]),
@@ -742,6 +806,28 @@ def register_advanced_sync_routes(
             )
         )
         source_departments = list(page_context.get("source_departments") or [])
+
+        def is_source_root_department(department: Any) -> bool:
+            if isinstance(department, dict):
+                parent_id = department.get("parent_department_id")
+                path_ids = list(department.get("path_ids") or [])
+            else:
+                parent_id = getattr(department, "parent_department_id", "")
+                path_ids = list(getattr(department, "path_ids", []) or [])
+            normalized_parent_id = str(parent_id or "").strip().casefold()
+            return len(path_ids) <= 1 or normalized_parent_id in {
+                "",
+                "0",
+                "none",
+                "null",
+                "root",
+            }
+
+        source_root_departments = [
+            department
+            for department in source_departments
+            if is_source_root_department(department)
+        ] or source_departments
         mapped_department_ids = {
             str(record.source_department_id or "").strip()
             for record in department_mappings
@@ -782,6 +868,15 @@ def register_advanced_sync_routes(
                 ("exact", "Map exact department only"),
             ],
             selected_connector_id=selected_connector_id,
+            selected_source_root_unit_ids=split_csv_values(
+                str(
+                    page_context["directory_policy_settings"].get(
+                        "source_root_unit_ids", ""
+                    )
+                    or ""
+                )
+            ),
+            source_root_departments=source_root_departments,
             latest_ad_snapshot=dict(latest_ad_snapshot) if latest_ad_snapshot else None,
             ad_ou_nodes=(
                 repositories.ad_directory_snapshot_repo.list_ous(
@@ -1351,6 +1446,24 @@ def register_advanced_sync_routes(
                     write_policy=resolved_write_policy,
                     created_by=user.username,
                 )
+                if normalize_ui_mode(request.session.get("ui_mode")) == BASIC_UI_MODE:
+                    repositories.field_authority_rule_repo.upsert_rule(
+                        org_id=current_org.org_id,
+                        field_name=normalized_source_field,
+                        source_provider=resolved_provider_scope,
+                        source_priority=1,
+                        sync_direction="source_to_ad",
+                        sync_mode="replace",
+                        prevent_loop=True,
+                        is_enabled=True,
+                        notes="Managed automatically from the Basic field mapping flow",
+                        created_by=user.username,
+                        authority_mode="SINGLE_SOURCE",
+                        provider_priority=[resolved_provider_scope],
+                        conflict_policy="REJECT_ON_CONFLICT",
+                        null_policy="PRESERVE_TARGET",
+                        manual_override_policy="REQUIRE_REVIEW",
+                    )
         except (TypeError, ValueError) as exc:
             flash_t(request, "error", "Failed to save mapping rule: {error}", error=str(exc))
             return RedirectResponse(url=redirect_url, status_code=303)
@@ -1378,11 +1491,18 @@ def register_advanced_sync_routes(
                 "write_policy": resolved_write_policy,
             },
         )
-        flash(
-            request,
-            "success",
-            "Attribute mapping policy saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
-        )
+        if normalize_ui_mode(request.session.get("ui_mode")) == BASIC_UI_MODE:
+            flash_t(
+                request,
+                "success",
+                "Field mapping saved. Configure the source root department and AD root OU next.",
+            )
+        else:
+            flash(
+                request,
+                "success",
+                "Attribute mapping policy saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+            )
         return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post(CANONICAL_ROUTE_PATHS["sync-field-authority"])
@@ -2032,6 +2152,50 @@ def register_advanced_sync_routes(
         csrf_error = reject_invalid_csrf(request, csrf_token, redirect_url)
         if csrf_error:
             return csrf_error
+        current_org = get_current_org(request)
+        repositories = get_web_repositories(request)
+        normalized_source_root_ids = split_csv_values(source_root_unit_ids)
+        resolved_source_root_display_text = str(
+            source_root_unit_display_text or ""
+        ).strip()
+        if normalized_source_root_ids and not resolved_source_root_display_text:
+            runtime_state = get_web_runtime_state(request)
+            config = repositories.org_config_repo.get_app_config(
+                current_org.org_id,
+                config_path=current_org.config_path or runtime_state.config_path,
+            )
+            source_snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+                org_id=current_org.org_id,
+                provider_id=str(config.source_provider or "wecom").strip().lower()
+                or "wecom",
+            )
+            if source_snapshot:
+                selected_id_set = set(normalized_source_root_ids)
+                selected_names = [
+                    str(
+                        (
+                            department.get("name", "")
+                            if isinstance(department, dict)
+                            else getattr(department, "name", "")
+                        )
+                        or ""
+                    ).strip()
+                    for department in repositories.source_directory_repo.list_departments(
+                        int(source_snapshot["id"]),
+                        org_id=current_org.org_id,
+                    )
+                    if str(
+                        (
+                            department.get("source_department_id", "")
+                            if isinstance(department, dict)
+                            else getattr(department, "source_department_id", "")
+                        )
+                        or ""
+                    ).strip()
+                    in selected_id_set
+                ]
+                if selected_names:
+                    resolved_source_root_display_text = ", ".join(selected_names)
         directory_settings = persist_directory_policy_settings_section(
             request,
             section="department_ou_routing",
@@ -2039,10 +2203,8 @@ def register_advanced_sync_routes(
                 "user_ou_placement_strategy": str(
                     user_ou_placement_strategy or "source_primary_department"
                 ).strip(),
-                "source_root_unit_ids": str(source_root_unit_ids or "").strip(),
-                "source_root_unit_display_text": str(
-                    source_root_unit_display_text or ""
-                ).strip(),
+                "source_root_unit_ids": ",".join(normalized_source_root_ids),
+                "source_root_unit_display_text": resolved_source_root_display_text,
                 "directory_root_ou_path": str(directory_root_ou_path or "").strip(),
                 "disabled_users_ou_path": str(
                     disabled_users_ou_path or "Disabled Users"
@@ -2077,11 +2239,108 @@ def register_advanced_sync_routes(
                 "disabled_users_ou_path": directory_settings.disabled_users_ou_path,
             },
         )
-        flash(
-            request,
-            "success",
-            "Department and OU defaults saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
-        )
+        if normalize_ui_mode(request.session.get("ui_mode")) == BASIC_UI_MODE:
+            runtime_state = get_web_runtime_state(request)
+            config = repositories.org_config_repo.get_app_config(
+                current_org.org_id,
+                config_path=current_org.config_path or runtime_state.config_path,
+            )
+            try:
+                preparation = prepare_simple_setup_evidence(
+                    repositories=repositories,
+                    organization=current_org,
+                    config=config,
+                    source_root_department_ids=normalized_source_root_ids,
+                    actor_username=user.username,
+                )
+            except (TypeError, ValueError) as exc:
+                repositories.audit_repo.add_log(
+                    org_id=current_org.org_id,
+                    actor_username=user.username,
+                    action_type="simple_setup.evidence.prepare",
+                    target_type="organization",
+                    target_id=current_org.org_id,
+                    result="blocked",
+                    message="Basic setup saved but Dry Run evidence preparation was blocked",
+                    payload={"reason": str(exc)},
+                )
+                flash_t(
+                    request,
+                    "warning",
+                    "Root relationship saved, but Dry Run preparation stopped: {error}",
+                    error=str(exc),
+                )
+            else:
+                readiness = get_web_services(request).readiness.evaluate_organization(
+                    organization=current_org,
+                    config_path=current_org.config_path or runtime_state.config_path,
+                ).to_dict()
+                policy_release_step = dict(
+                    dict(readiness.get("step_map") or {}).get(
+                        "policy_release_current",
+                        {},
+                    )
+                )
+                rollout_ready = bool(
+                    preparation.evidence_prepared
+                    and str(policy_release_step.get("status") or "") == "complete"
+                )
+                repositories.audit_repo.add_log(
+                    org_id=current_org.org_id,
+                    actor_username=user.username,
+                    action_type="simple_setup.evidence.prepare",
+                    target_type="config_release",
+                    target_id=str(preparation.policy_release_id or current_org.org_id),
+                    result="success" if rollout_ready else "blocked",
+                    message=(
+                        "Prepared Basic setup evidence and immutable policy release"
+                        if rollout_ready
+                        else "Basic setup evidence prepared but a rollout prerequisite remains"
+                    ),
+                    payload={
+                        "source_snapshot_id": preparation.source_snapshot_id,
+                        "ad_snapshot_id": preparation.ad_snapshot_id,
+                        "identity_match_run_id": preparation.match_run_id,
+                        "blocking_candidate_count": (
+                            preparation.blocking_candidate_count
+                        ),
+                        "policy_release_id": preparation.policy_release_id,
+                        "readiness_next_step": str(
+                            dict(readiness.get("next_step") or {}).get("key") or ""
+                        ),
+                    },
+                )
+                if rollout_ready:
+                    flash_t(
+                        request,
+                        "success",
+                        "Root relationship saved. Identity matching, scope, and policy evidence are ready for Dry Run.",
+                    )
+                elif preparation.blocking_candidate_count:
+                    flash_t(
+                        request,
+                        "warning",
+                        "Root relationship saved, but identity data has {count} ambiguous or conflicting record(s). Correct them before Dry Run.",
+                        count=preparation.blocking_candidate_count,
+                    )
+                else:
+                    next_step = dict(readiness.get("next_step") or {})
+                    flash_t(
+                        request,
+                        "warning",
+                        "Root relationship saved. Complete the remaining check before Dry Run: {reason}",
+                        reason=str(
+                            next_step.get("blocker_reason")
+                            or next_step.get("summary")
+                            or "review synchronization readiness"
+                        ),
+                    )
+        else:
+            flash(
+                request,
+                "success",
+                "Department and OU defaults saved. The previous Dry Run is now invalid; run and review a new Dry Run before Apply.",
+            )
         return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post(CANONICAL_ROUTE_PATHS["sync-department-ou-routing"])
