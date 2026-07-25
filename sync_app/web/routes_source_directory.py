@@ -1928,11 +1928,11 @@ def register_source_directory_routes(
             org_id=current_org.org_id,
             connector_id="default",
         )
-        if not source_snapshot or not ad_snapshot:
+        if not source_snapshot:
             flash(
                 request,
                 "error",
-                "Refresh both the source directory and AD directory before selecting identity fields.",
+                "Refresh the source directory before selecting identity fields.",
             )
             return RedirectResponse(url=return_path, status_code=303)
         detected_source_fields = (

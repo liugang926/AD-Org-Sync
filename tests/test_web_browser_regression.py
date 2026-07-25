@@ -1775,6 +1775,92 @@ class WebBrowserRegressionTests(unittest.TestCase):
             with self.subTest(selector=selector):
                 self.assertGreaterEqual(self._height(selector), 40.0)
 
+    def test_primary_identity_save_opens_confirmation_without_ad_snapshot(self):
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        org_id = "browser-primary-no-ad"
+        organization_repo = OrganizationRepository(manager)
+        organization_repo.upsert_organization(
+            org_id=org_id,
+            name="Browser Primary No AD",
+            config_path="config.ini",
+            description="",
+            is_enabled=True,
+        )
+        self.addCleanup(organization_repo.delete_organization, org_id)
+        source_repo = SourceDirectoryRepository(manager)
+        current_config = OrganizationConfigRepository(manager).get_raw_config(
+            org_id,
+            config_path="config.ini",
+        )
+        provider_id = str(current_config.get("source_provider") or "wecom")
+        snapshot_id = source_repo.start_refresh(
+            org_id=org_id,
+            provider_id=provider_id,
+            created_by="browser-primary-identity",
+        )
+        source_repo.replace_snapshot(
+            snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "browser-primary-root",
+                    "name": "Browser Primary Root",
+                    "parent_department_id": "0",
+                    "path_ids": ["browser-primary-root"],
+                    "path_names": ["Browser Primary Root"],
+                }
+            ],
+            users=[
+                {
+                    "source_user_id": "browser-primary-user",
+                    "display_name": "Browser Primary User",
+                    "employee_id": "BROWSER-001",
+                    "department_ids": ["browser-primary-root"],
+                    "department_names": ["Browser Primary Root"],
+                    "is_active": True,
+                    "raw_payload": {"employee_id": "BROWSER-001"},
+                    "search_text": "Browser Primary User BROWSER-001",
+                }
+            ],
+            fields=[
+                {
+                    "name": "employee_id",
+                    "label": "Employee ID",
+                    "coverage": 1,
+                    "samples": ["BROWSER-001"],
+                }
+            ],
+            fingerprint=f"browser-primary-identity-{snapshot_id}",
+        )
+
+        self._login()
+        organization_switcher = self.page.locator(
+            "form[action='/organization-switch'] select[name='org_id']"
+        )
+        with self.page.expect_navigation(wait_until="networkidle"):
+            organization_switcher.select_option(org_id)
+        self.page.goto(
+            f"{self.base_url}/identity-governance/match-rules?lang=en",
+            wait_until="networkidle",
+        )
+        self.assertIn(
+            "AD directory preview is not available yet",
+            self.page.locator("main").inner_text(),
+        )
+        save_button = self.page.get_by_role(
+            "button", name="Save primary identity fields"
+        )
+        self.assertTrue(save_button.is_enabled())
+        save_button.click()
+        dialog = self.page.locator("[data-confirm-dialog]")
+        self.assertTrue(dialog.is_visible())
+        self.assertEqual(
+            dialog.locator("[data-confirm-title-target]").inner_text().strip(),
+            "Confirm primary identity change",
+        )
+        dialog.locator("[data-confirm-cancel]").last.click()
+        self.assertFalse(dialog.is_visible())
+
     def test_recent_navigation_never_duplicates_the_current_page_highlight(self):
         self._login()
         self.page.goto(f"{self.base_url}/dashboard", wait_until="networkidle")

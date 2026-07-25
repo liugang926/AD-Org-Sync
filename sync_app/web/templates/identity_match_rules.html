@@ -15,11 +15,16 @@
     {{ ui.compact_stat(t("AD identity fields"), ad_primary_id_options|length) }}
   </section>
 
-  {% if not source_snapshot or not ad_snapshot %}
-    {% call ui.helper_block(t("Directory snapshots are required"), t("Refresh the source directory and AD directory before selecting identity fields."), "warning") %}
+  {% if not source_snapshot %}
+    {% call ui.helper_block(t("Source directory snapshot is required"), t("Refresh the source directory before selecting identity fields."), "warning") %}
       <div class="actions">
-        {% if not source_snapshot %}{{ ui.button(t("Refresh Source Directory"), href="/data-sources/source-directory", variant="secondary") }}{% endif %}
-        {% if not ad_snapshot %}{{ ui.button(t("Open connectors"), href="/data-sources/connectors", variant="ghost") }}{% endif %}
+        {{ ui.button(t("Refresh Source Directory"), href="/data-sources/source-directory", variant="secondary") }}
+      </div>
+    {% endcall %}
+  {% elif not ad_snapshot %}
+    {% call ui.helper_block(t("AD directory preview is not available yet"), t("You can save a supported AD identity field now. Refresh the AD directory before Dry Run."), "info") %}
+      <div class="actions">
+        {{ ui.button(t("Open connectors"), href="/data-sources/connectors", variant="ghost") }}
       </div>
     {% endcall %}
   {% endif %}
@@ -66,7 +71,7 @@
         </label>
       </div>
       <div class="helper-block info"><div><strong>{{ t("How matching works") }}</strong><p>{{ t("Each source value must occur once and match exactly one AD account. Missing or duplicate values are blocked for review; they never silently link accounts.") }}</p></div></div>
-      <div class="form-actions">{{ ui.button(t("Save primary identity fields"), type="submit", variant="primary", icon="save", disabled=(not source_snapshot or not ad_snapshot)) }}</div>
+      <div class="form-actions">{{ ui.button(t("Save primary identity fields"), type="submit", variant="primary", icon="save", disabled=(not source_snapshot)) }}</div>
     </form>
   {% endcall %}
   {% endif %}
