@@ -32,6 +32,28 @@ NON_PERSON_ACCOUNT_TYPES = frozenset({"service", "shared", "test"})
 ACTIVE_ACCOUNT_STATUSES = frozenset({"active", "enabled", "employed", "onboarding"})
 
 
+def identity_candidate_requires_decision(candidate: Any) -> bool:
+    """Return whether a pending match candidate must block rollout.
+
+    A source identity with a present, unique required identifier and no AD hit
+    is an expected new-account plan, not an ambiguous identity decision.  It
+    remains visible in Dry Run, while duplicates, suggestions, protected
+    accounts, and other manual cases stay fail-closed.
+    """
+
+    def value(name: str) -> str:
+        if isinstance(candidate, dict):
+            return str(candidate.get(name) or "").strip().lower()
+        return str(getattr(candidate, name, "") or "").strip().lower()
+
+    if value("status") != "pending":
+        return False
+    result_level = value("result_level")
+    if result_level == RESULT_MANUAL:
+        return value("recommended_action") != "create_new_ad_account"
+    return result_level in {RESULT_BLOCKED, RESULT_SUGGESTED}
+
+
 def _plain_text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -783,5 +805,6 @@ __all__ = [
     "EnterpriseIdentityMatchingService",
     "EnterpriseIdentityDecisionService",
     "assess_identity_matches",
+    "identity_candidate_requires_decision",
     "normalize_rule_value",
 ]

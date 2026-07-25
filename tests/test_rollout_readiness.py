@@ -263,6 +263,25 @@ class RolloutReadinessTests(unittest.TestCase):
             "stale",
         )
 
+    def test_disabled_offboarding_needs_no_hidden_lifecycle_or_disabled_ou_setup(self):
+        result = self._evaluate(
+            self._service(
+                settings={
+                    "directory_root_ou_path": "Managed Users",
+                    "source_root_unit_ids": "1",
+                    "offboarding_lifecycle_enabled": False,
+                }
+            )
+        )
+
+        self.assertEqual(
+            result["step_map"]["lifecycle_safety_configured"]["status"],
+            "complete",
+        )
+        routing = result["step_map"]["department_ou_routing_configured"]
+        self.assertEqual(routing["status"], "complete")
+        self.assertTrue(routing["metadata"]["root_relationship_configured"])
+
     def test_new_ad_snapshot_makes_previous_match_run_stale(self):
         source_snapshot = {
             "id": 12,

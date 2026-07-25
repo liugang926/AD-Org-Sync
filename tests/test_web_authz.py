@@ -4898,9 +4898,9 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             "Identity Matching",
             "Organization & OU",
             "Sync Preview",
-            "Conflict Resolution",
-            "Execution & History",
-            "Audit Center",
+            "Primary Identity Fields",
+            "Field Mappings",
+            "Root Department & OU",
             "Control Tower",
             "Current Organization",
             "Deployment Preflight",
@@ -5155,7 +5155,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(getting_started.status_code, 200)
         getting_started_text = self._text(getting_started)
         self.assertIn("Configuration Guide", getting_started_text)
-        self.assertIn("Source platform connector", getting_started_text)
+        self.assertIn("Connect source platform and AD", getting_started_text)
         self.assertIn("Live DingTalk connection", getting_started_text)
 
     def test_getting_started_page_renders_rollout_steps(self):
@@ -5167,11 +5167,14 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.status_code, 200)
         text = self._text(response)
         self.assertIn("Configuration Guide", text)
-        self.assertIn("Recommended next step", text)
-        self.assertIn("Source platform connector", text)
-        self.assertIn("Source identity snapshot", text)
-        self.assertIn("Current Dry Run", text)
-        self.assertIn("Technical preflight evidence", text)
+        self.assertIn("Sync Setup", text)
+        self.assertIn("Connect source platform and AD", text)
+        self.assertIn("Preview directory fields", text)
+        self.assertIn("Choose primary identity fields", text)
+        self.assertIn("Map ordinary fields", text)
+        self.assertIn("Link root department and root OU", text)
+        self.assertIn("Preview synchronization", text)
+        self.assertIn("Connection and security notices", text)
 
     def test_jobs_empty_state_guides_first_sync_run(self):
         self._login("superadmin")

@@ -2,87 +2,116 @@
 {% import "components/ui.html" as ui %}
 
 {% block content %}
-<div class="page-stack">
-  {% call ui.page_header(t("Identity Match Rules"), t("Configure ordered, versioned rules separately from running matches and resolving candidates."), eyebrow=t("Identity Matching"), badge_text=current_org.name, badge_level="info") %}
-    {{ ui.button(t("Return to Matching Workbench"), href="/identity-governance/identity-matching", variant="ghost", icon="arrow-left") }}
+<div class="page-stack primary-identity-page">
+  {% call ui.page_header(t("Primary Identity Fields"), t("Choose the one source field and one AD field that identify the same employee."), eyebrow=t("Sync Setup"), badge_text=current_org.name, badge_level="info") %}
+    {{ ui.button(t("Preview source fields"), href="/data-sources/source-directory?view=fields", variant="secondary", icon="search") }}
   {% endcall %}
 
-  {% call ui.helper_block(t("Safe matching boundary"), t("Only unique strong employee identifiers may create automatic links. Email, phone, name and custom fields remain suggestions or manual review evidence."), "warning") %}{% endcall %}
+  <section class="compact-stats" aria-label="{{ t('Identity field snapshot status') }}">
+    {{ ui.compact_stat(t("Source platform"), t(current_source_provider_name)) }}
+    {{ ui.compact_stat(t("Source users"), source_snapshot.user_count if source_snapshot else 0) }}
+    {{ ui.compact_stat(t("Source fields"), source_primary_id_options|length) }}
+    {{ ui.compact_stat(t("AD users"), ad_snapshot.user_count if ad_snapshot else 0) }}
+    {{ ui.compact_stat(t("AD identity fields"), ad_primary_id_options|length) }}
+  </section>
+
+  {% if not source_snapshot or not ad_snapshot %}
+    {% call ui.helper_block(t("Directory snapshots are required"), t("Refresh the source directory and AD directory before selecting identity fields."), "warning") %}
+      <div class="actions">
+        {% if not source_snapshot %}{{ ui.button(t("Refresh Source Directory"), href="/data-sources/source-directory", variant="secondary") }}{% endif %}
+        {% if not ad_snapshot %}{{ ui.button(t("Open connectors"), href="/data-sources/connectors", variant="ghost") }}{% endif %}
+      </div>
+    {% endcall %}
+  {% endif %}
 
   {% if can("mappings.write") %}
-  {% call ui.panel(t("Add or update a matching rule"), description=t("Saving a rule increments its revision and makes prior match runs and Dry Runs stale.")) %}
-    <form method="post" action="/identity-governance/match-rules" class="page-stack" data-confirm="{{ t('Changing identity match rules invalidates existing match and Dry Run evidence.') }}" data-confirm-title="{{ t('Confirm Match Rule Change') }}">
+  {% call ui.panel(t("Employee identity pairing"), description=t("Example: DingTalk employee number matches AD employeeID. Ordinary fields such as email are configured on the next page.")) %}
+    <form method="post" action="/identity-governance/match-rules/primary" class="page-stack" data-confirm="{{ t('Changing the primary identity fields invalidates existing match and Dry Run evidence.') }}" data-confirm-title="{{ t('Confirm primary identity change') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <div class="form-grid">
-        <label>{{ t("Rule order") }}<input type="number" name="rule_order" value="100" min="1" max="10000" required></label>
-        <label>{{ t("Rule name") }}<input type="text" name="rule_name" maxlength="120" placeholder="platform_id_to_ad_logon" required></label>
-        <label>{{ t("Source platform") }}
-          <select name="source_provider">
-            <option value="*">{{ t("All platforms") }}</option>
-            <option value="dingtalk" {% if current_source_provider == "dingtalk" %}selected{% endif %}>{{ t("DingTalk") }}</option>
-            <option value="wecom" {% if current_source_provider == "wecom" %}selected{% endif %}>{{ t("WeCom") }}</option>
-            <option value="feishu" {% if current_source_provider == "feishu" %}selected{% endif %}>{{ t("Feishu") }}</option>
-          </select>
-          <span class="form-help">{{ t("The configured source platform is selected by default.") }}</span>
-        </label>
-        <label>{{ t("Source field") }}
-          <select name="source_field" required data-match-field-select data-placeholder="{{ t('Search or enter a source field') }}">
-            {% for group_key, group_label in [("standard", "Common identity fields"), ("detected", "Fields detected in current snapshot"), ("existing", "Fields used by existing rules")] %}
+      <div class="identity-pair-grid">
+        <label class="identity-field-card">
+          <span class="eyebrow">1 · {{ t("Source platform") }}</span>
+          <strong>{{ t("Employee identifier from {provider}", provider=t(current_source_provider_name)) }}</strong>
+          <select name="source_field" required data-match-field-select data-placeholder="{{ t('Select a source identity field') }}">
+            {% for group_key, group_label in [("detected", "Fields detected in current snapshot"), ("standard", "Common identity fields"), ("existing", "Fields used by existing rules")] %}
             <optgroup label="{{ t(group_label) }}">
-              {% for field in source_match_field_options if field.group == group_key %}
-              <option value="{{ field.value }}" {% if field.value == "platform_account_id" %}selected{% endif %} {% if field.disabled %}disabled{% endif %}>
-                {% if field.value == "platform_account_id" %}{{ t(current_source_provider_name) }} · {% endif %}{{ t(field.label) }}
-                {% if field.api_hint %} ({{ field.api_hint }}){% else %} ({{ field.value }}){% endif %}
-                {% if field.coverage_count is not none and source_snapshot %} · {{ t("Coverage") }} {{ field.coverage_count }}/{{ source_snapshot.user_count }}{% endif %}
-                {% if field.is_multi_value %} · {{ t("Multi-value") }}{% endif %}
-                {% if field.availability_status != "available" %} · {{ t(field.availability_status) }}{% endif %}
-                {% if field.permission_status not in ["granted", "unknown"] %} · {{ t(field.permission_status) }}{% endif %}
+              {% for field in source_primary_id_options if field.group == group_key %}
+              <option value="{{ field.value }}" {% if (primary_identity_rule and field.value == primary_identity_rule.source_field) or (not primary_identity_rule and field.value == "employee_id") %}selected{% endif %} {% if field.disabled %}disabled{% endif %}>
+                {{ t(field.label) }}{% if field.api_hint %} ({{ field.api_hint }}){% elif field.group == "detected" %} · {{ field.value }}{% endif %}{% if field.coverage_count is not none and source_snapshot %} · {{ t("Coverage") }} {{ field.coverage_count }}/{{ source_snapshot.user_count }}{% endif %}
               </option>
               {% endfor %}
             </optgroup>
             {% endfor %}
           </select>
-          <span class="form-help">{{ t("Choose the normalized platform user ID, a field detected in the current snapshot, or type an exact custom field code.") }}</span>
+          <small>{{ t("Prefer an employee number with complete, unique values. Platform user IDs remain review-only identifiers.") }}</small>
         </label>
-        <label>{{ t("AD field") }}
-          <select name="ad_field" required data-match-field-select data-placeholder="{{ t('Search or enter an AD field') }}">
-            {% for group_key, group_label in [("standard", "Common AD identity fields"), ("detected", "Attributes detected in current AD snapshot"), ("extension", "AD extension attributes"), ("existing", "Fields used by existing rules")] %}
+
+        <div class="identity-pair-arrow" aria-hidden="true">→</div>
+
+        <label class="identity-field-card">
+          <span class="eyebrow">2 · AD</span>
+          <strong>{{ t("Matching AD identifier") }}</strong>
+          <select name="ad_field" required data-match-field-select data-placeholder="{{ t('Select an AD identity field') }}">
+            {% for group_key, group_label in [("detected", "Attributes detected in current AD snapshot"), ("standard", "Common AD identity fields"), ("extension", "AD extension attributes"), ("existing", "Fields used by existing rules")] %}
             <optgroup label="{{ t(group_label) }}">
-              {% for field in ad_match_field_options if field.group == group_key %}
-              <option value="{{ field.value }}" {% if field.value == "sam_account_name" %}selected{% endif %} {% if field.disabled %}disabled{% endif %}>{{ t(field.label) }}{% if field.ldap_attribute %} ({{ field.ldap_attribute }}){% elif ui_presentation.show_field_codes %} ({{ field.value }}){% endif %}{% if field.capability_status != "available" %} · {{ t(field.capability_status) }}{% endif %}</option>
+              {% for field in ad_primary_id_options if field.group == group_key %}
+              <option value="{{ field.value }}" {% if (primary_identity_rule and field.value == primary_identity_rule.ad_field) or (not primary_identity_rule and field.value == "employee_id") %}selected{% endif %} {% if field.disabled %}disabled{% endif %}>
+                {{ t(field.label) }}{% if field.ldap_attribute %} · {{ field.ldap_attribute }}{% endif %}
+              </option>
               {% endfor %}
             </optgroup>
             {% endfor %}
           </select>
-          <span class="form-help">{{ t("Select the AD attribute to compare, such as sAMAccountName or userPrincipalName; this does not select a specific AD user.") }}</span>
+          <small>{{ t("Choose the AD attribute that stores the same business identifier, not a specific AD account.") }}</small>
         </label>
-        <label>{{ t("Confidence level") }}<select name="confidence_level"><option value="low">{{ t("Low") }}</option><option value="medium" selected>{{ t("Medium") }}</option><option value="high">{{ t("High") }}</option><option value="certain">{{ t("Certain") }}</option></select></label>
-        <label>{{ t("Confidence score") }}<input type="number" name="confidence_score" value="50" min="0" max="100" required></label>
       </div>
-      <div class="helper-block info">
-        <div><strong>{{ t("Account name comparison") }}</strong><p>{{ t("For DingTalk account matching, choose DingTalk Platform User ID (userid) and AD logon name (sAMAccountName). This produces a review candidate; keep automatic link disabled for account-name rules.") }}</p></div>
-      </div>
-      <div class="grid cols-3">
-        {% for name, label, checked in [("is_required", "Value required", false), ("case_sensitive", "Case sensitive", false), ("trim_whitespace", "Normalize whitespace", true), ("strip_phone_country_code", "Strip phone country code", false), ("lowercase_email", "Lowercase email", false), ("allow_fallback", "Allow fallback rules", true), ("allow_auto_link", "Allow automatic link", false), ("stop_on_conflict", "Stop on conflict", true), ("is_enabled", "Rule enabled", true)] %}
-        <label class="check-card"><input type="checkbox" name="{{ name }}" value="1" {% if checked %}checked{% endif %}><span><strong>{{ t(label) }}</strong></span></label>
-        {% endfor %}
-      </div>
-      <div class="form-actions">{{ ui.button(t("Save matching rule"), type="submit", variant="primary", icon="save") }}</div>
+      <div class="helper-block info"><div><strong>{{ t("How matching works") }}</strong><p>{{ t("Each source value must occur once and match exactly one AD account. Missing or duplicate values are blocked for review; they never silently link accounts.") }}</p></div></div>
+      <div class="form-actions">{{ ui.button(t("Save primary identity fields"), type="submit", variant="primary", icon="save", disabled=(not source_snapshot or not ad_snapshot)) }}</div>
     </form>
   {% endcall %}
   {% endif %}
 
-  {% call ui.panel(t("Ordered identity matching rules"), description=t("Rules are evaluated in order and stop on ambiguity. Revisions are part of the current evidence fingerprint.")) %}
+  {% if primary_identity_rule %}
+  {% call ui.panel(t("Current identity pairing"), description=t("This pair is used to recognize existing AD accounts before any ordinary attribute is synchronized.")) %}
+    <div class="identity-pair-summary">
+      <div><span>{{ t("Source identity") }}</span><strong>{{ t(source_match_field_labels.get(primary_identity_rule.source_field, primary_identity_rule.source_field)) }}</strong></div>
+      <div aria-hidden="true">→</div>
+      <div><span>{{ t("AD identity") }}</span><strong>{{ t(ad_match_field_labels.get(primary_identity_rule.ad_field, primary_identity_rule.ad_field)) }}</strong></div>
+      {{ ui.badge(t("Automatic unique match") if primary_identity_rule.allow_auto_link else t("Match requires review"), "success" if primary_identity_rule.allow_auto_link else "warning") }}
+    </div>
+  {% endcall %}
+  {% endif %}
+
+  {% if ui_presentation.is_advanced %}
+  {% if can("mappings.write") %}
+  {% call ui.panel(t("Add or update a matching rule"), description=t("Advanced rules remain available for compatibility, suggestions, and manual-review evidence.")) %}
+    <form method="post" action="/identity-governance/match-rules" class="page-stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid">
+        <label>{{ t("Rule order") }}<input type="number" name="rule_order" value="100" min="1" max="10000" required></label>
+        <label>{{ t("Rule name") }}<input type="text" name="rule_name" required></label>
+        <label>{{ t("Source platform") }}<select name="source_provider"><option value="*">{{ t("All platforms") }}</option><option value="dingtalk">{{ t("DingTalk") }}</option><option value="wecom">{{ t("WeCom") }}</option><option value="feishu">{{ t("Feishu") }}</option></select></label>
+        <label>{{ t("Source field") }}<select name="source_field" required data-match-field-select>{% for field in source_match_field_options %}<option value="{{ field.value }}" {% if field.disabled %}disabled{% endif %}>{{ t(field.label) }}{% if field.api_hint %} ({{ field.api_hint }}){% endif %} · {{ field.value }}{% if field.coverage_count is not none and source_snapshot %} · {{ t("Coverage") }} {{ field.coverage_count }}/{{ source_snapshot.user_count }}{% endif %}</option>{% endfor %}</select></label>
+        <label>{{ t("AD field") }}<select name="ad_field" required data-match-field-select>{% for field in ad_match_field_options %}<option value="{{ field.value }}" {% if field.disabled %}disabled{% endif %}>{{ t(field.label) }} · {{ field.value }}</option>{% endfor %}</select></label>
+        <label>{{ t("Confidence level") }}<select name="confidence_level"><option value="low">{{ t("Low") }}</option><option value="medium" selected>{{ t("Medium") }}</option><option value="high">{{ t("High") }}</option><option value="certain">{{ t("Certain") }}</option></select></label>
+        <label>{{ t("Confidence score") }}<input type="number" name="confidence_score" value="50" min="0" max="100"></label>
+      </div>
+      {% for name, checked in [("is_required", false), ("case_sensitive", false), ("trim_whitespace", true), ("strip_phone_country_code", false), ("lowercase_email", false), ("allow_fallback", true), ("allow_auto_link", false), ("stop_on_conflict", true), ("is_enabled", true)] %}<input type="hidden" name="{{ name }}" value="{{ '1' if checked else '' }}">{% endfor %}
+      <div class="form-actions">{{ ui.button(t("Save matching rule"), type="submit", variant="secondary", icon="save") }}</div>
+    </form>
+  {% endcall %}
+  {% endif %}
+  {% call ui.panel(t("Ordered identity matching rules"), description=t("Compatibility rules remain visible in Advanced mode. The primary identity pair above is evaluated first.")) %}
     {% call ui.table_shell() %}
-    <table>
-      <thead><tr><th>{{ t("Order") }}</th><th>{{ t("Rule") }}</th><th>{{ t("Platform") }}</th><th>{{ t("Source to AD") }}</th><th>{{ t("Normalization") }}</th><th>{{ t("Confidence") }}</th><th>{{ t("Conflict behavior") }}</th><th>{{ t("Revision") }}</th></tr></thead>
-      <tbody>
-        {% for rule in identity_match_rules %}
-        <tr><td>{{ rule.rule_order }}</td><td><strong>{{ rule.rule_name }}</strong><small>{{ t("Enabled") if rule.is_enabled else t("Disabled") }}</small></td><td>{{ t("All platforms") if rule.source_provider == "*" else t(rule.source_provider) }}</td><td><strong>{{ t(source_match_field_labels.get(rule.source_field, rule.source_field)) }} → {{ t(ad_match_field_labels.get(rule.ad_field, rule.ad_field)) }}</strong><small><code>{{ rule.source_field }}</code> → <code>{{ rule.ad_field }}</code> · {{ t("Automatic") if rule.allow_auto_link else t("Review required") }}</small></td><td>{% if rule.trim_whitespace %}{{ t("Whitespace") }} {% endif %}{% if rule.lowercase_email %}{{ t("Email lowercase") }} {% endif %}{% if rule.strip_phone_country_code %}{{ t("Phone country code") }}{% endif %}</td><td>{{ t(rule.confidence_level|capitalize) }} · {{ rule.confidence_score }}</td><td>{{ t("Stop") if rule.stop_on_conflict else t("Continue") }}</td><td>{{ rule.rule_revision }}</td></tr>
-        {% else %}<tr><td colspan="8" class="empty-state">{{ t("No identity matching rules are configured") }}</td></tr>{% endfor %}
-      </tbody>
-    </table>
+    <table><thead><tr><th>{{ t("Order") }}</th><th>{{ t("Rule") }}</th><th>{{ t("Platform") }}</th><th>{{ t("Source to AD") }}</th><th>{{ t("Confidence") }}</th><th>{{ t("Status") }}</th></tr></thead><tbody>
+      {% for rule in identity_match_rules %}<tr><td>{{ rule.rule_order }}</td><td><strong>{{ rule.rule_name }}</strong><small>v{{ rule.rule_revision }}</small></td><td>{{ t("All platforms") if rule.source_provider == "*" else t(rule.source_provider) }}</td><td><code>{{ rule.source_field }}</code> → <code>{{ rule.ad_field }}</code></td><td>{{ t(rule.confidence_level|capitalize) }} · {{ rule.confidence_score }}</td><td>{{ t("Enabled") if rule.is_enabled else t("Disabled") }}</td></tr>{% else %}<tr><td colspan="6" class="empty-state">{{ t("No identity matching rules are configured") }}</td></tr>{% endfor %}
+    </tbody></table>
     {% endcall %}
+  {% endcall %}
+  {% endif %}
+
+  {% call ui.helper_block(t("Next step"), t("Map ordinary source fields such as email, mobile, and job title to writable AD attributes."), "info") %}
+    {{ ui.button(t("Configure field mappings"), href="/sync-policies/attribute-mappings", variant="secondary", icon="arrow-right") }}
   {% endcall %}
 </div>
 {% endblock %}

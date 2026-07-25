@@ -912,6 +912,48 @@ class IdentityMatchRuleRepository(BaseRepository):
         )
         return [IdentityMatchRuleRecord.from_row(row) for row in rows]
 
+    def enable_only_rule(self, *, org_id: str, rule_name: str) -> int:
+        """Make one explicitly selected identity rule the only active rule.
+
+        Basic setup uses this to ensure email, phone, and other compatibility
+        rules cannot silently become identity fallbacks after an administrator
+        chooses the source and AD primary identifier pair.
+        """
+
+        normalized_org_id = self._resolve_org_id(org_id) or "default"
+        normalized_name = str(rule_name or "").strip()
+        if not normalized_name:
+            raise ValueError("rule_name is required")
+        existing = self._fetchone(
+            "SELECT id FROM identity_match_rules WHERE org_id = ? AND rule_name = ?",
+            (normalized_org_id, normalized_name),
+        )
+        if existing is None:
+            raise ValueError("identity match rule was not found")
+        now = utcnow_iso()
+        with self.db.transaction() as conn:
+            disabled = conn.execute(
+                """
+                UPDATE identity_match_rules
+                SET is_enabled = 0,
+                    rule_revision = rule_revision + 1,
+                    updated_at = ?
+                WHERE org_id = ? AND rule_name <> ? AND is_enabled = 1
+                """,
+                (now, normalized_org_id, normalized_name),
+            )
+            enabled = conn.execute(
+                """
+                UPDATE identity_match_rules
+                SET is_enabled = 1,
+                    rule_revision = rule_revision + 1,
+                    updated_at = ?
+                WHERE org_id = ? AND rule_name = ? AND is_enabled = 0
+                """,
+                (now, normalized_org_id, normalized_name),
+            )
+        return int(disabled.rowcount or 0) + int(enabled.rowcount or 0)
+
     def upsert_rule(
         self,
         *,

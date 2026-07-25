@@ -2605,6 +2605,10 @@ class WebBrowserRegressionTests(unittest.TestCase):
                 "/identity-governance/identity-matching?lang=zh-CN",
                 ".page-header",
             ),
+            "primary-identity-fields": (
+                "/identity-governance/match-rules?lang=zh-CN",
+                ".identity-pair-grid",
+            ),
             "conflict-queue": (
                 "/identity-governance/conflicts?lang=zh-CN",
                 ".conflict-command-center",
@@ -2627,11 +2631,11 @@ class WebBrowserRegressionTests(unittest.TestCase):
             ),
             "sync-attribute-mappings": (
                 "/sync-policies/attribute-mappings?lang=zh-CN",
-                ".policy-status-grid",
+                ".field-mapping-grid",
             ),
             "sync-department-ou-routing": (
                 "/sync-policies/department-ou-routing?lang=zh-CN",
-                ".policy-status-grid",
+                ".root-routing-grid",
             ),
             "sync-group-rules": (
                 "/sync-policies/group-rules?lang=zh-CN",

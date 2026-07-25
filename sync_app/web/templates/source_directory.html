@@ -18,7 +18,7 @@
     </form>
     {% endif %}
   {% endcall %}
-  {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t("Refresh the directory when source data changes, then review identities that need attention."), t("Review identity matches"), "/identity-governance/identity-matching") }}
+  {{ mode_ui.basic_guidance(ui_presentation, t("Next step"), t("Refresh the directory, preview the detected fields, then choose the employee identifier used to recognize AD accounts."), t("Preview source fields"), "/data-sources/source-directory?view=fields") }}
 
   <nav class="source-directory-tabs" aria-label="{{ t('Source Directory views') }}">
     {% set snapshot_query = ("&snapshot_id=" ~ snapshot.id) if viewing_historical_snapshot and snapshot else "" %}
@@ -250,6 +250,11 @@
   {% endcall %}
 
   {% elif active_view == "fields" %}
+  {% if not ui_presentation.is_advanced %}
+  {% call ui.helper_block(t("Choose the primary identity next"), t("After confirming that the employee number or another identifier is present and complete, pair it with the matching AD field."), "info") %}
+    {{ ui.button(t("Choose primary identity fields"), href="/identity-governance/match-rules", variant="secondary", icon="arrow-right") }}
+  {% endcall %}
+  {% endif %}
   {% call ui.panel(t("Source Field Catalog"), description=t("Review fields discovered from the current immutable snapshot, including type, coverage, permission, sensitivity, and schema conflicts.")) %}
     <div class="detail-grid compact-detail-grid">
       <div class="detail-item"><dt class="label">{{ t("Provider") }}</dt><dd class="value">{{ t(provider_name) }}</dd></div>

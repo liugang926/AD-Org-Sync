@@ -101,6 +101,7 @@ NAVIGATION_GROUPS = (
                 icon="layout-dashboard",
                 capability="dashboard.read",
                 legacy_paths=("/dashboard",),
+                advanced_only=True,
             ),
         ),
     ),
@@ -127,6 +128,7 @@ NAVIGATION_GROUPS = (
                 icon="circle-check-big",
                 capability="config.read",
                 legacy_paths=("/data-quality",),
+                advanced_only=True,
             ),
         ),
     ),
@@ -139,10 +141,11 @@ NAVIGATION_GROUPS = (
                 icon="user-round-search",
                 capability="mappings.read",
                 legacy_paths=(),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="identity-match-rules",
-                label="Identity Match Rules",
+                label="Primary Identity Fields",
                 icon="list-checks",
                 capability="mappings.read",
                 legacy_paths=(),
@@ -153,6 +156,7 @@ NAVIGATION_GROUPS = (
                 icon="network",
                 capability="mappings.read",
                 legacy_paths=(),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="account-takeover",
@@ -160,6 +164,7 @@ NAVIGATION_GROUPS = (
                 icon="link-2",
                 capability="mappings.read",
                 legacy_paths=(),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="mappings",
@@ -188,6 +193,7 @@ NAVIGATION_GROUPS = (
                 icon="badge-check",
                 capability="config.read",
                 legacy_paths=("/advanced-sync",),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="sync-field-authority",
@@ -195,17 +201,18 @@ NAVIGATION_GROUPS = (
                 icon="shield-check",
                 capability="config.read",
                 legacy_paths=(),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="sync-attribute-mappings",
-                label="Attribute Mappings",
+                label="Field Mappings",
                 icon="arrow-left-right",
                 capability="config.read",
                 legacy_paths=(),
             ),
             NavigationItem(
                 page="sync-department-ou-routing",
-                label="Department & OU Routing",
+                label="Root Department & OU",
                 icon="route",
                 capability="config.read",
                 legacy_paths=(),
@@ -216,6 +223,7 @@ NAVIGATION_GROUPS = (
                 icon="users-round",
                 capability="config.read",
                 legacy_paths=(),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="sync-lifecycle-policy",
@@ -223,6 +231,7 @@ NAVIGATION_GROUPS = (
                 icon="refresh-cw",
                 capability="config.read",
                 legacy_paths=(),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="sync-security-policy",
@@ -230,6 +239,7 @@ NAVIGATION_GROUPS = (
                 icon="shield-alert",
                 capability="config.read",
                 legacy_paths=(),
+                advanced_only=True,
             ),
         ),
     ),
@@ -242,6 +252,7 @@ NAVIGATION_GROUPS = (
                 icon="list-filter",
                 capability="config.read",
                 legacy_paths=(),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="sync-policy-releases",
@@ -249,6 +260,7 @@ NAVIGATION_GROUPS = (
                 icon="package-check",
                 capability="config.read",
                 legacy_paths=(),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="execution-dry-run",
@@ -268,6 +280,7 @@ NAVIGATION_GROUPS = (
                 icon="shield-alert",
                 capability="jobs.read",
                 legacy_paths=("/conflicts",),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="exceptions",
@@ -288,6 +301,7 @@ NAVIGATION_GROUPS = (
                 icon="clipboard-check",
                 capability="jobs.read",
                 legacy_paths=(),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="execution-apply",
@@ -295,6 +309,7 @@ NAVIGATION_GROUPS = (
                 icon="shield-check",
                 capability="jobs.read",
                 legacy_paths=(),
+                advanced_only=True,
             ),
             NavigationItem(
                 page="execution-jobs",
@@ -302,6 +317,7 @@ NAVIGATION_GROUPS = (
                 icon="history",
                 capability="jobs.read",
                 legacy_paths=(),
+                advanced_only=True,
             ),
         ),
     ),
@@ -314,6 +330,7 @@ NAVIGATION_GROUPS = (
                 icon="scroll-text",
                 capability="audit.read",
                 legacy_paths=("/audit",),
+                advanced_only=True,
                 basic_roles=(ROLE_AUDITOR,),
             ),
         ),
@@ -421,7 +438,7 @@ ADVANCED_NAV_PAGES = frozenset(
 # Pages in this set remain directly addressable in Basic mode, but the shell
 # explains that they are infrequent operational or system-administration tools.
 # Business rollout configuration pages deliberately stay out of this gate.
-ADVANCED_MODE_PAGE_GATES = ADVANCED_NAV_PAGES
+ADVANCED_MODE_PAGE_GATES = ADVANCED_NAV_PAGES - {"dashboard"}
 
 
 def build_navigation_groups(

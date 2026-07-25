@@ -11,6 +11,9 @@ from sync_app.core.sync_policies import (
     SAFE_TRANSFORM_OPERATIONS,
 )
 from sync_app.services.config_release import build_config_release_center_data
+from sync_app.services.enterprise_identity_matching import (
+    identity_candidate_requires_decision,
+)
 from sync_app.services.runtime_bootstrap import resolve_runtime_config_fingerprint
 
 
@@ -390,6 +393,11 @@ class RolloutReadinessService:
             [rule.to_dict() for rule in rules],
             namespace="identity-match-rules",
         )
+        primary_identity_configured = any(
+            _text(getattr(rule, "rule_name", "")) == "primary_identity"
+            and bool(getattr(rule, "is_enabled", False))
+            for rule in rules
+        )
         match_run = self.identity_match_run_repo.get_latest_completed_run(
             org_id=normalized_org_id
         )
@@ -423,9 +431,7 @@ class RolloutReadinessService:
         unresolved_match_candidates = [
             candidate
             for candidate in match_candidates
-            if _text(getattr(candidate, "status", "")).lower() == "pending"
-            and _text(getattr(candidate, "result_level", "")).lower()
-            in {"blocked", "manual_confirmation", "suggested_link"}
+            if identity_candidate_requires_decision(candidate)
         ]
 
         takeover_batches = self.account_takeover_repo.list_batches(
@@ -617,22 +623,44 @@ class RolloutReadinessService:
         ]
         default_ou = _text(
             self.settings_repo.get_value(
-                "default_directory_root_ou_path", "", org_id=normalized_org_id
+                "directory_root_ou_path",
+                self.settings_repo.get_value(
+                    "default_directory_root_ou_path",
+                    "",
+                    org_id=normalized_org_id,
+                ),
+                org_id=normalized_org_id,
             )
         )
         disabled_ou = _text(
             self.settings_repo.get_value(
-                "default_disabled_users_ou_path", "", org_id=normalized_org_id
+                "disabled_users_ou_path",
+                self.settings_repo.get_value(
+                    "default_disabled_users_ou_path",
+                    "",
+                    org_id=normalized_org_id,
+                ),
+                org_id=normalized_org_id,
             )
         )
+        source_root_unit_ids = _text(
+            self.settings_repo.get_value(
+                "source_root_unit_ids", "", org_id=normalized_org_id
+            )
+        )
+        offboarding_lifecycle_enabled = self.settings_repo.get_bool(
+            "offboarding_lifecycle_enabled", False, org_id=normalized_org_id
+        )
         lifecycle_safety_configured = bool(
-            self.settings_repo.get_bool(
-                "offboarding_lifecycle_enabled", False, org_id=normalized_org_id
+            not offboarding_lifecycle_enabled
+            or (
+                self.settings_repo.get_bool(
+                    "disable_circuit_breaker_enabled",
+                    False,
+                    org_id=normalized_org_id,
+                )
+                and disabled_ou
             )
-            and self.settings_repo.get_bool(
-                "disable_circuit_breaker_enabled", False, org_id=normalized_org_id
-            )
-            and disabled_ou
         )
 
         release_data = build_config_release_center_data(
@@ -719,7 +747,6 @@ class RolloutReadinessService:
             and field_authority_valid
             and attribute_mappings_valid
             and bool(department_mappings or default_ou)
-            and bool(disabled_ou)
             and lifecycle_safety_configured
             and scope_current
             and release_current
@@ -950,7 +977,10 @@ class RolloutReadinessService:
             blocker_reason="" if rules else "No enabled identity matching rule is configured.",
             action_url="/identity-governance/match-rules", action_label="Configure match rules",
             phase="Identity matching", last_updated_at=max((_text(rule.updated_at) for rule in rules), default=""),
-            metadata={"rules_fingerprint": rules_fingerprint},
+            metadata={
+                "rules_fingerprint": rules_fingerprint,
+                "primary_identity_configured": primary_identity_configured,
+            },
         ))
         if match_run_current:
             match_status, match_reason = "complete", ""
@@ -1006,13 +1036,20 @@ class RolloutReadinessService:
             ("account_naming_configured", naming_configured, "Account naming", "Configure account naming and collision handling.", "/sync-policies/account-naming", "Configure account naming"),
             ("field_authority_configured", field_authority_valid, "Field authority", "Define the authoritative source and direction for managed identity fields.", "/sync-policies/field-authority", "Configure field authority"),
             ("attribute_mappings_configured", attribute_mappings_valid, "Attribute mappings", "Map authoritative enterprise identity fields to AD attributes.", "/sync-policies/attribute-mappings", "Configure attribute mappings"),
-            ("department_ou_routing_configured", bool((department_mappings or default_ou) and disabled_ou), "Department and OU routing", "Configure stable department-to-OU routing and disabled-user placement.", "/sync-policies/department-ou-routing", "Configure OU routing"),
+            ("department_ou_routing_configured", bool(department_mappings or default_ou), "Department and OU routing", "Configure stable department-to-OU routing.", "/sync-policies/department-ou-routing", "Configure OU routing"),
             ("lifecycle_safety_configured", lifecycle_safety_configured, "Lifecycle and security", "Configure joiner, mover, leaver, rehire and disable safety gates.", "/sync-policies/lifecycle", "Configure lifecycle safety"),
         ]
         for key, configured, title, summary, url, label in config_steps:
             validation_metadata = (
                 {"validation_errors": mapping_validation_errors}
                 if key == "attribute_mappings_configured"
+                else {
+                    "source_root_unit_ids": source_root_unit_ids,
+                    "root_relationship_configured": bool(
+                        source_root_unit_ids and default_ou
+                    ),
+                }
+                if key == "department_ou_routing_configured"
                 else {}
             )
             steps.append(self._step(

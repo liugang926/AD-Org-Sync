@@ -9,6 +9,135 @@ _SESSION_LIVE_CHECK_KEYS = {"live_source", "live_wecom", "live_ldap"}
 _SESSION_CHECK_TEXT_LIMIT = 512
 
 
+def _simplified_sync_setup_steps(
+    steps: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    step_index = {str(step.get("key") or ""): step for step in steps}
+    status_priority = {
+        "blocked": 5,
+        "action_required": 4,
+        "stale": 3,
+        "not_started": 2,
+        "ready": 1,
+        "complete": 0,
+    }
+
+    def merged_step(
+        *,
+        key: str,
+        keys: tuple[str, ...],
+        title: str,
+        summary: str,
+        action_url: str,
+        action_label: str,
+    ) -> dict[str, Any]:
+        members = [step_index[item] for item in keys if item in step_index]
+        if members and all(str(item.get("status") or "") == "complete" for item in members):
+            status = "complete"
+        elif members:
+            status = max(
+                (str(item.get("status") or "not_started") for item in members),
+                key=lambda value: status_priority.get(value, 2),
+            )
+        else:
+            status = "not_started"
+        blocker_reason = next(
+            (
+                str(item.get("blocker_reason") or "")
+                for item in members
+                if str(item.get("blocker_reason") or "")
+            ),
+            "",
+        )
+        return {
+            "key": key,
+            "status": status,
+            "done": status == "complete",
+            "title": title,
+            "summary": summary,
+            "blocker_reason": blocker_reason,
+            "action_url": action_url,
+            "action_label": action_label,
+        }
+
+    simplified = [
+        merged_step(
+            key="connectors",
+            keys=("source_connector_ready", "ad_connector_ready"),
+            title="Connect source platform and AD",
+            summary="Save and test the DingTalk, Feishu, or WeCom connection and the target AD connection.",
+            action_url="/data-sources/connectors",
+            action_label="Configure connections",
+        ),
+        merged_step(
+            key="directory_fields",
+            keys=(
+                "source_snapshot_current",
+                "source_field_catalog_current",
+                "ad_snapshot_current",
+                "ad_capability_catalog_current",
+            ),
+            title="Preview directory fields",
+            summary="Refresh both directories and review the source fields and AD attributes that are actually available.",
+            action_url="/data-sources/source-directory?view=fields",
+            action_label="Preview fields",
+        ),
+        merged_step(
+            key="primary_identity",
+            keys=("identity_rules_configured",),
+            title="Choose primary identity fields",
+            summary="Pair one source employee identifier with the AD field that stores the same identifier.",
+            action_url="/identity-governance/match-rules",
+            action_label="Choose identity fields",
+        ),
+        merged_step(
+            key="field_mappings",
+            keys=("attribute_mappings_configured",),
+            title="Map ordinary fields",
+            summary="Map fields such as source email to AD mail; empty source values preserve AD by default.",
+            action_url="/sync-policies/attribute-mappings",
+            action_label="Configure field mappings",
+        ),
+        merged_step(
+            key="root_routing",
+            keys=("department_ou_routing_configured",),
+            title="Link root department and root OU",
+            summary="Choose the source root department and the AD root OU for the synchronized organization tree.",
+            action_url="/sync-policies/department-ou-routing",
+            action_label="Configure root relationship",
+        ),
+    ]
+    primary_metadata = dict(
+        step_index.get("identity_rules_configured", {}).get("metadata") or {}
+    )
+    if not bool(primary_metadata.get("primary_identity_configured")):
+        simplified[2].update(
+            status="action_required",
+            done=False,
+            blocker_reason=(
+                "Choose one source employee identifier and the matching AD identifier."
+            ),
+        )
+    routing_metadata = dict(
+        step_index.get("department_ou_routing_configured", {}).get("metadata") or {}
+    )
+    if not bool(routing_metadata.get("root_relationship_configured")):
+        simplified[4].update(
+            status="action_required",
+            done=False,
+            blocker_reason="Choose both the source root department and the AD root OU.",
+        )
+    preview = merged_step(
+        key="preview",
+        keys=("dry_run_current",),
+        title="Preview synchronization",
+        summary="Review account matches, attribute changes, and OU creation before Apply.",
+        action_url="/execution-center/dry-run",
+        action_label="Run Dry Run",
+    )
+    return simplified, preview
+
+
 def _bounded_session_text(value: Any, *, limit: int = _SESSION_CHECK_TEXT_LIMIT) -> str:
     text = str(value or "")
     if len(text) <= limit:
@@ -128,6 +257,7 @@ def build_getting_started_data(
             step["is_recommended"] = str(step.get("key") or "") == next_key
             step["href"] = str(step.get("action_url") or "")
             step["detail"] = str(step.get("summary") or "")
+        simple_steps, preview_step = _simplified_sync_setup_steps(steps)
         return {
             "current_org_name": current_org_name,
             "steps": steps,
@@ -138,6 +268,9 @@ def build_getting_started_data(
             "current_phase": str(rollout_readiness.get("current_phase") or ""),
             "next_step": next_step,
             "phases": _group_rollout_phases(steps),
+            "simple_steps": simple_steps,
+            "simple_completed_steps": sum(1 for step in simple_steps if step["done"]),
+            "preview_step": preview_step,
         }
 
     presentation = get_ui_mode_presentation(ui_mode)
@@ -290,12 +423,16 @@ def build_getting_started_data(
         (step for step in steps if step["status"] == "current"),
         next((step for step in steps if not step["done"]), steps[-1]),
     )
+    simple_steps, preview_step = _simplified_sync_setup_steps([])
     return {
         "current_org_name": current_org_name,
         "steps": steps,
         "completed_steps": completed_steps,
         "total_steps": len(steps),
         "next_step": next_step,
+        "simple_steps": simple_steps,
+        "simple_completed_steps": 0,
+        "preview_step": preview_step,
     }
 
 
