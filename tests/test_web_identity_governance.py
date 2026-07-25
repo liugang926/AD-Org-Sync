@@ -328,6 +328,64 @@ class WebIdentityGovernanceTests(WebAuthzBaseTestCase):
             )
         )
 
+    def test_primary_identity_can_be_saved_before_ad_snapshot(self):
+        self._login("superadmin")
+        self._seed_identity_snapshot()
+
+        page_path = "/identity-governance/match-rules"
+        page = self._text(self._route(page_path, "GET")(self._request(page_path)))
+        self.assertIn("AD directory preview is not available yet", page)
+        self.assertIn(
+            "You can save a supported AD identity field now.",
+            page,
+        )
+        self.assertNotIn('disabled aria-disabled="true"', page)
+
+        save_path = "/identity-governance/match-rules/primary"
+        response = self._route(save_path, "POST")(
+            self._request(save_path, "POST"),
+            csrf_token=self.session["_csrf_token"],
+            source_field="employee_id",
+            ad_field="sam_account_name",
+        )
+
+        self.assertEqual(response.status_code, 303)
+        saved = next(
+            rule
+            for rule in self.app.state.identity_match_rule_repo.list_rules(
+                org_id="default"
+            )
+            if rule.rule_name == "primary_identity"
+        )
+        self.assertEqual(saved.source_field, "employee_id")
+        self.assertEqual(saved.ad_field, "sam_account_name")
+        self.assertIn("Primary identity fields saved", str(self.session["_flash"]))
+
+    def test_primary_identity_still_requires_a_source_snapshot(self):
+        self._login("superadmin")
+
+        save_path = "/identity-governance/match-rules/primary"
+        response = self._route(save_path, "POST")(
+            self._request(save_path, "POST"),
+            csrf_token=self.session["_csrf_token"],
+            source_field="employee_id",
+            ad_field="sam_account_name",
+        )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertFalse(
+            any(
+                rule.rule_name == "primary_identity"
+                for rule in self.app.state.identity_match_rule_repo.list_rules(
+                    org_id="default"
+                )
+            )
+        )
+        self.assertIn(
+            "Refresh the source directory before selecting identity fields.",
+            str(self.session["_flash"]),
+        )
+
     def test_match_rule_page_offers_snapshot_source_and_supported_ad_field_selectors(self):
         self._login("superadmin")
         self.session["ui_mode"] = "advanced"
