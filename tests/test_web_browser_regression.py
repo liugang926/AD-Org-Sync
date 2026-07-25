@@ -1658,7 +1658,13 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.page.goto(f"{self.base_url}/jobs?lang=en", wait_until="networkidle")
         self.assertEqual(
             self.page.locator("aside a[href^='/execution-center/']").count(),
-            4,
+            1,
+        )
+        self.assertEqual(
+            self.page.locator("aside a[href^='/execution-center/']").first.get_attribute(
+                "href"
+            ),
+            "/execution-center/dry-run",
         )
         self.assertEqual(
             self.page.locator("form[action='/jobs/run']").count(),
