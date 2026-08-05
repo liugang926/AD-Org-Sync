@@ -19,6 +19,7 @@ The codebase has already been refactored away from a simple `WeCom -> AD` utilit
 - Multi-organization management
 - Source connector abstraction with provider-aware runtime
 - Organization-scoped source-directory snapshots with server-side pagination, search, filters, field discovery, and refresh retention
+- Snapshot-bound data-quality scans that require an explicit source snapshot ID and fingerprint, remain usable while the source platform is offline, and reuse human review only for identical fingerprints
 - Full, department, selected-user, and single-user replay scopes with partial-sync offboarding protection
 - Source-field-driven AD account mapping with coverage/collision preview and snapshot-bound Dry Run approval
 - Per-user identity relationship preview that separates field candidates, before-sync bindings/AD state, Dry Run expectations, and completed Apply evidence

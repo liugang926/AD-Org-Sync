@@ -2892,6 +2892,12 @@ class WebBrowserRegressionTests(unittest.TestCase):
             self.page.locator('form[action="/data-sources/data-quality/run"]').count(),
             1,
         )
+        self.assertEqual(
+            self.page.locator(
+                'form[action="/data-sources/source-directory/refresh"]'
+            ).count(),
+            1,
+        )
         self.assertIn(
             "quality operations", self.page.locator("body").inner_text().lower()
         )

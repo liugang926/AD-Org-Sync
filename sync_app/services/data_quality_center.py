@@ -64,11 +64,22 @@ def persist_data_quality_snapshot(
     trigger_action: str = "manual_scan",
 ) -> dict[str, Any]:
     repo = DataQualitySnapshotRepository(db_manager)
+    source_snapshot_id = int(snapshot.get("source_snapshot_id") or 0)
+    source_snapshot_fingerprint = str(
+        snapshot.get("source_snapshot_fingerprint") or ""
+    ).strip()
+    summary = dict(snapshot.get("summary") or {})
+    scan_status = (
+        "unqualified" if _int_metric(summary, "error_issue_count") > 0 else "qualified"
+    )
     snapshot_id = repo.add_snapshot(
         org_id=org_id,
         trigger_action=trigger_action,
         created_by=created_by,
-        summary=dict(snapshot.get("summary") or {}),
+        source_snapshot_id=source_snapshot_id,
+        source_snapshot_fingerprint=source_snapshot_fingerprint,
+        scan_status=scan_status,
+        summary=summary,
         snapshot=snapshot,
         created_at=str(snapshot.get("generated_at") or "").strip() or None,
     )
@@ -110,6 +121,9 @@ def build_data_quality_center_context(
     selected_notes = list(selected_payload.get("analysis_notes") or [])
     selected_connector_breakdown = list(selected_payload.get("connector_breakdown") or [])
     selected_repair_items = list(selected_payload.get("repair_items") or [])
+    selected_source_summary = dict(
+        selected_payload.get("source_snapshot_summary") or {}
+    )
 
     previous_snapshot = None
     if selected_snapshot is not None:
@@ -132,6 +146,9 @@ def build_data_quality_center_context(
                 "duplicate_identifier_count": (
                     _int_metric(summary, "duplicate_email_count")
                     + _int_metric(summary, "duplicate_employee_id_count")
+                ),
+                "source_snapshot_completed_at": str(
+                    (snapshot.snapshot or {}).get("source_snapshot_completed_at") or ""
                 ),
                 "is_selected": bool(selected_snapshot and snapshot.id == selected_snapshot.id),
             }
@@ -163,6 +180,10 @@ def build_data_quality_center_context(
         "selected_issues": selected_issues,
         "selected_analysis_notes": selected_notes,
         "selected_connector_breakdown": selected_connector_breakdown,
+        "selected_source_snapshot_completed_at": str(
+            selected_payload.get("source_snapshot_completed_at") or ""
+        ),
+        "selected_source_summary": selected_source_summary,
         "selected_repair_items": selected_repair_items,
         "selected_repair_items_preview": selected_repair_items[:15],
         "selected_repair_item_count": len(selected_repair_items),

@@ -5,33 +5,112 @@ from typing import Any, Optional
 
 from fastapi import Request
 
-from sync_app.core.models import SourceDirectoryUser, UserDepartmentBundle
+from sync_app.core.models import DepartmentNode, SourceDirectoryUser, UserDepartmentBundle
 from sync_app.core.sync_policies import build_template_context
 from sync_app.services.runtime_connectors import is_department_in_connector_scope
 from sync_app.services.runtime_identity import resolve_target_department
+from sync_app.web.app_state import get_web_repositories
 
 
 class SyncDataQualitySupportMixin:
-    def build_source_data_quality_snapshot(self, request: Request) -> dict[str, Any]:
-        config, source_provider = self._get_source_provider(request)
-        try:
-            department_tree = self._build_department_tree(source_provider.list_departments())
-            users_by_id: dict[str, SourceDirectoryUser] = {}
-            for department_id in sorted(department_tree):
-                for user in source_provider.list_department_users(int(department_id)) or []:
-                    self._merge_source_directory_user(users_by_id, user)
+    def build_source_data_quality_snapshot(
+        self,
+        request: Request,
+        *,
+        source_snapshot_id: int,
+        fingerprint: str,
+    ) -> dict[str, Any]:
+        config = self._get_org_app_config(request)
+        current_org = self.request_support.get_current_org(request)
+        source_repo = get_web_repositories(request).source_directory_repo
+        normalized_snapshot_id = int(source_snapshot_id or 0)
+        normalized_fingerprint = str(fingerprint or "").strip()
+        if normalized_snapshot_id <= 0:
+            raise ValueError("Source snapshot ID is required for data quality analysis.")
+        if not normalized_fingerprint:
+            raise ValueError(
+                "Source snapshot fingerprint is required for data quality analysis."
+            )
 
-            for user in users_by_id.values():
-                template_context = build_template_context(user)
-                if str(user.name or "").strip() and str(user.email or "").strip() and str(
-                    template_context.get("employee_id") or ""
-                ).strip():
-                    continue
-                detail_payload = source_provider.get_user_detail(str(user.source_user_id or "").strip()) or {}
-                if detail_payload:
-                    user.merge_payload(detail_payload)
-        finally:
-            self._close_directory_resource(source_provider)
+        source_snapshot = source_repo.get_snapshot(
+            normalized_snapshot_id,
+            org_id=current_org.org_id,
+        )
+        if (
+            source_snapshot is None
+            or str(source_snapshot["status"] or "").strip().lower()
+            not in {"success", "succeeded"}
+            or str(source_snapshot["provider_id"] or "").strip().lower()
+            != str(config.source_provider or "").strip().lower()
+        ):
+            raise ValueError(
+                "The selected source snapshot is not available for data quality analysis."
+            )
+        if str(source_snapshot["snapshot_fingerprint"] or "").strip() != normalized_fingerprint:
+            raise ValueError("Source snapshot fingerprint no longer matches.")
+
+        latest_source_snapshot = source_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=config.source_provider,
+        )
+        if (
+            latest_source_snapshot is None
+            or int(latest_source_snapshot["id"] or 0) != normalized_snapshot_id
+            or str(latest_source_snapshot["snapshot_fingerprint"] or "").strip()
+            != normalized_fingerprint
+        ):
+            raise ValueError(
+                "The current source snapshot changed. Reload the page before running the scan."
+            )
+
+        department_tree = self._build_department_tree(
+            [
+                DepartmentNode.from_source_payload(
+                    {
+                        "department_id": item.get("source_department_id"),
+                        "name": item.get("name"),
+                        "parent_department_id": item.get("parent_department_id"),
+                    }
+                )
+                for item in source_repo.list_departments(
+                    normalized_snapshot_id,
+                    org_id=current_org.org_id,
+                )
+            ]
+        )
+        users_by_id: dict[str, SourceDirectoryUser] = {}
+        offset = 0
+        while True:
+            page = source_repo.list_users(
+                normalized_snapshot_id,
+                org_id=current_org.org_id,
+                provider_id=config.source_provider,
+                limit=200,
+                offset=offset,
+            )
+            for item in page["items"]:
+                payload = dict(item.get("raw_payload") or {})
+                payload.update(
+                    {
+                        "userid": item.get("source_user_id"),
+                        "name": item.get("display_name"),
+                        "email": item.get("email"),
+                        "employee_id": item.get("employee_id"),
+                        "position": item.get("position"),
+                        "department": item.get("department_ids") or [],
+                        "department_names": item.get("department_names") or [],
+                        "primary_department_id": item.get("primary_department_id"),
+                        "status": item.get("account_status"),
+                        "is_active": bool(item.get("is_active")),
+                        "provider_id": config.source_provider,
+                    }
+                )
+                user = SourceDirectoryUser.from_source_payload(payload)
+                user.raw_payload = payload
+                self._merge_source_directory_user(users_by_id, user)
+            offset += len(page["items"])
+            if offset >= int(page["total"] or 0) or not page["items"]:
+                break
 
         runtime_context = self._build_runtime_connector_context(
             request,
@@ -427,6 +506,18 @@ class SyncDataQualitySupportMixin:
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "source_snapshot_id": normalized_snapshot_id,
+            "source_snapshot_fingerprint": normalized_fingerprint,
+            "source_snapshot_completed_at": str(
+                source_snapshot["completed_at"] or ""
+            ),
+            "source_snapshot_summary": {
+                "provider_id": str(source_snapshot["provider_id"] or ""),
+                "user_count": int(source_snapshot["user_count"] or 0),
+                "department_count": int(source_snapshot["department_count"] or 0),
+                "field_count": int(source_snapshot["field_count"] or 0),
+            },
+            "source_mode": "immutable_snapshot",
             "analysis_notes": [
                 "Counts reflect unique source users merged across all returned department memberships.",
                 "Manual bindings and per-user department overrides are not expanded in this snapshot.",

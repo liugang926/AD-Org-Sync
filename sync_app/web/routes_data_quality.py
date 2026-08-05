@@ -27,8 +27,9 @@ def _parse_optional_int(value: str | None) -> Optional[int]:
 def register_data_quality_routes(
     app: FastAPI,
     *,
-    build_source_data_quality_snapshot: Callable[[Request], dict[str, Any]],
+    build_source_data_quality_snapshot: Callable[..., dict[str, Any]],
     flash: Callable[..., None],
+    flash_t: Callable[..., None],
     get_current_org: Callable[[Request], Any],
     reject_invalid_csrf: Callable[[Request, str, str], Any],
     render: Callable[..., Any],
@@ -51,15 +52,67 @@ def register_data_quality_routes(
             org_id=current_org.org_id,
             provider_id=config.source_provider,
         )
+        latest_refresh = repositories.source_directory_repo.get_latest_refresh(
+            org_id=current_org.org_id,
+            provider_id=config.source_provider,
+        )
         source_snapshot_id = int(source_snapshot["id"] or 0) if source_snapshot else 0
-        quality_review = (
-            repositories.data_quality_review_repo.get_review_for_snapshot(
+        source_snapshot_fingerprint = (
+            str(source_snapshot["snapshot_fingerprint"] or "").strip()
+            if source_snapshot
+            else ""
+        )
+        quality_scan = (
+            repositories.data_quality_snapshot_repo.get_latest_for_source_fingerprint(
                 org_id=current_org.org_id,
-                source_snapshot_id=source_snapshot_id,
+                source_snapshot_fingerprint=source_snapshot_fingerprint,
             )
-            if source_snapshot_id
+            if source_snapshot_fingerprint
             else None
         )
+        quality_review = (
+            repositories.data_quality_review_repo.get_review_for_fingerprint(
+                org_id=current_org.org_id,
+                source_snapshot_fingerprint=source_snapshot_fingerprint,
+            )
+            if source_snapshot_fingerprint
+            else None
+        )
+        if source_snapshot is None:
+            quality_state = {
+                "key": "no_snapshot",
+                "label": "No available snapshot",
+                "level": "warning",
+                "detail": "Refresh source data before running a quality scan.",
+            }
+        elif quality_scan is not None and quality_scan.scan_status == "unqualified":
+            quality_state = {
+                "key": "unqualified",
+                "label": "Snapshot data quality failed",
+                "level": "error",
+                "detail": "Resolve the blocking source-data issues, refresh the source data, and scan the new snapshot.",
+            }
+        elif quality_review is not None:
+            quality_state = {
+                "key": "approved",
+                "label": "Snapshot quality review passed",
+                "level": "success",
+                "detail": "The confirmed quality conclusion is bound to this snapshot fingerprint.",
+            }
+        elif quality_scan is not None:
+            quality_state = {
+                "key": "awaiting_review",
+                "label": "Snapshot awaiting manual review",
+                "level": "warning",
+                "detail": "The scan passed automated blockers and now requires an audited human review.",
+            }
+        else:
+            quality_state = {
+                "key": "scan_required",
+                "label": "Quality scan required",
+                "level": "neutral",
+                "detail": "Run a quality scan against the current saved snapshot.",
+            }
         return render(
             request,
             "data_quality_center.html",
@@ -67,7 +120,18 @@ def register_data_quality_routes(
             title="Data Quality Center",
             current_org=current_org,
             source_snapshot=source_snapshot,
+            latest_refresh=latest_refresh,
+            source_refresh_failed=bool(
+                latest_refresh
+                and str(latest_refresh["status"] or "").strip().lower() == "failed"
+            ),
+            quality_scan=quality_scan,
             quality_review=quality_review,
+            quality_review_reused=bool(
+                quality_review
+                and int(quality_review.source_snapshot_id or 0) != source_snapshot_id
+            ),
+            quality_state=quality_state,
             **build_data_quality_center_context(
                 repositories.db_manager,
                 current_org.org_id,
@@ -97,6 +161,20 @@ def register_data_quality_routes(
         current_org = get_current_org(request)
         repositories = get_web_repositories(request)
         try:
+            quality_scan = (
+                repositories.data_quality_snapshot_repo.get_latest_for_source_fingerprint(
+                    org_id=current_org.org_id,
+                    source_snapshot_fingerprint=source_snapshot_fingerprint,
+                )
+            )
+            if quality_scan is None:
+                raise ValueError(
+                    "Run a data quality scan for this source snapshot before review."
+                )
+            if quality_scan.scan_status != "qualified":
+                raise ValueError(
+                    "This source snapshot has blocking data quality issues and cannot be approved."
+                )
             review = repositories.data_quality_review_repo.confirm_snapshot(
                 org_id=current_org.org_id,
                 source_snapshot_id=int(source_snapshot_id),
@@ -120,7 +198,11 @@ def register_data_quality_routes(
                 "source_snapshot_fingerprint": review.source_snapshot_fingerprint,
             },
         )
-        flash(request, "success", "Data quality review confirmed for the current source snapshot.")
+        flash_t(
+            request,
+            "success",
+            "Data quality review confirmed for the current source snapshot.",
+        )
         return RedirectResponse(url=redirect_url, status_code=303)
 
     @app.post(f"{CANONICAL_ROUTE_PATHS['data-quality']}/run")
@@ -128,6 +210,8 @@ def register_data_quality_routes(
     def data_quality_center_run(
         request: Request,
         csrf_token: str = Form(""),
+        source_snapshot_id: int = Form(0),
+        fingerprint: str = Form(""),
     ):
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
@@ -139,8 +223,18 @@ def register_data_quality_routes(
 
         current_org = get_current_org(request)
         repositories = get_web_repositories(request)
+        normalized_source_snapshot_id = _parse_optional_int(
+            source_snapshot_id if isinstance(source_snapshot_id, (str, int)) else None
+        ) or 0
+        normalized_fingerprint = (
+            str(fingerprint or "").strip() if isinstance(fingerprint, str) else ""
+        )
         try:
-            snapshot = build_source_data_quality_snapshot(request)
+            snapshot = build_source_data_quality_snapshot(
+                request,
+                source_snapshot_id=normalized_source_snapshot_id,
+                fingerprint=normalized_fingerprint,
+            )
             result = persist_data_quality_snapshot(
                 repositories.db_manager,
                 current_org.org_id,
@@ -150,8 +244,25 @@ def register_data_quality_routes(
         except ValueError as exc:
             flash(request, "error", str(exc))
             return RedirectResponse(url=redirect_url, status_code=303)
-        except Exception as exc:
-            flash(request, "error", f"Data quality snapshot failed: {exc}")
+        except Exception:
+            repositories.audit_repo.add_log(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                action_type="data_quality_snapshot.run",
+                target_type="source_directory_snapshot",
+                target_id=str(normalized_source_snapshot_id or ""),
+                result="failed",
+                message="Data quality scan failed before a result was stored",
+                payload={
+                    "source_snapshot_id": normalized_source_snapshot_id,
+                    "source_snapshot_fingerprint": normalized_fingerprint,
+                },
+            )
+            flash(
+                request,
+                "error",
+                "Data quality scan failed before a result was stored. Review the server logs and retry the same saved snapshot.",
+            )
             return RedirectResponse(url=redirect_url, status_code=303)
 
         snapshot_record = result.get("snapshot")
@@ -164,12 +275,21 @@ def register_data_quality_routes(
                 target_id=str(getattr(snapshot_record, "id", "") or ""),
                 result="success",
                 message="Captured data quality snapshot",
-                payload=dict(getattr(snapshot_record, "summary", {}) or {}),
+                payload={
+                    **dict(getattr(snapshot_record, "summary", {}) or {}),
+                    "source_snapshot_id": snapshot.get("source_snapshot_id"),
+                    "source_snapshot_fingerprint": snapshot.get(
+                        "source_snapshot_fingerprint"
+                    ),
+                    "source_mode": snapshot.get("source_mode"),
+                    "scan_status": getattr(snapshot_record, "scan_status", ""),
+                },
             )
-            flash(
+            flash_t(
                 request,
                 "success",
-                f"Captured data quality snapshot {snapshot_record.id}",
+                "Captured data quality snapshot {snapshot_id}",
+                snapshot_id=snapshot_record.id,
             )
             return RedirectResponse(
                 url=f"{redirect_url}?snapshot_id={snapshot_record.id}",

@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from sync_app.clients.dingtalk import DingTalkAPIError
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
 from sync_app.services.config_store import save_editable_config
+from sync_app.services.source_directory import SourceDirectoryService
 from sync_app.web.app import resolve_web_runtime_settings
 from sync_app.web.i18n import TRANSLATIONS
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
@@ -867,12 +868,23 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             def close(self):
                 return None
 
-        with patch(
-            "sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()
-        ):
-            response = self._route("/advanced-sync/data-quality-snapshot", "GET")(
-                self._request("/advanced-sync/data-quality-snapshot")
+        source_snapshot = SourceDirectoryService(
+            self.app.state.source_directory_repo
+        ).refresh(
+            org_id="default",
+            provider_id="wecom",
+            provider=FakeSourceProvider(),
+            created_by="superadmin",
+        )
+        response = self._route("/advanced-sync/data-quality-snapshot", "GET")(
+            self._request(
+                "/advanced-sync/data-quality-snapshot",
+                query={
+                    "source_snapshot_id": str(source_snapshot["id"]),
+                    "fingerprint": str(source_snapshot["snapshot_fingerprint"]),
+                },
             )
+        )
 
         self.assertEqual(response.status_code, 200)
         payload = json.loads(self._text(response))
@@ -1005,13 +1017,20 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             def close(self):
                 return None
 
-        with patch(
-            "sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()
-        ):
-            run_response = self._route("/data-sources/data-quality/run", "POST")(
-                self._request("/data-sources/data-quality/run", "POST"),
-                csrf_token=match.group(1),
-            )
+        source_snapshot = SourceDirectoryService(
+            self.app.state.source_directory_repo
+        ).refresh(
+            org_id="default",
+            provider_id="wecom",
+            provider=FakeSourceProvider(),
+            created_by="superadmin",
+        )
+        run_response = self._route("/data-sources/data-quality/run", "POST")(
+            self._request("/data-sources/data-quality/run", "POST"),
+            csrf_token=match.group(1),
+            source_snapshot_id=source_snapshot["id"],
+            fingerprint=source_snapshot["snapshot_fingerprint"],
+        )
         self.assertEqual(run_response.status_code, 303)
         self.assertIn(
             "/data-sources/data-quality?snapshot_id=",

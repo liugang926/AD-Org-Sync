@@ -543,23 +543,42 @@ class DataQualitySnapshotRepository(BaseRepository):
         org_id: Optional[str] = None,
         trigger_action: str = "manual_scan",
         created_by: str = "",
+        source_snapshot_id: int,
+        source_snapshot_fingerprint: str,
+        scan_status: str,
         summary: Optional[Dict[str, Any]] = None,
         snapshot: Dict[str, Any],
         created_at: Optional[str] = None,
     ) -> int:
         normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        normalized_source_snapshot_id = int(source_snapshot_id or 0)
+        normalized_source_fingerprint = str(
+            source_snapshot_fingerprint or ""
+        ).strip()
+        normalized_scan_status = str(scan_status or "").strip().lower()
+        if normalized_source_snapshot_id <= 0:
+            raise ValueError("source snapshot ID is required")
+        if not normalized_source_fingerprint:
+            raise ValueError("source snapshot fingerprint is required")
+        if normalized_scan_status not in {"qualified", "unqualified"}:
+            raise ValueError("data quality scan status is invalid")
         timestamp = str(created_at or utcnow_iso()).strip()
         with self.db.transaction() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO data_quality_snapshots (
-                  org_id, trigger_action, created_by, summary_json, snapshot_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                  org_id, trigger_action, created_by, source_snapshot_id,
+                  source_snapshot_fingerprint, scan_status, summary_json,
+                  snapshot_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     normalized_org_id,
                     str(trigger_action or "manual_scan").strip() or "manual_scan",
                     str(created_by or "").strip(),
+                    normalized_source_snapshot_id,
+                    normalized_source_fingerprint,
+                    normalized_scan_status,
                     dumps_json(summary),
                     dumps_json(snapshot),
                     timestamp,
@@ -633,6 +652,28 @@ class DataQualitySnapshotRepository(BaseRepository):
             (normalized_org_id, int(limit)),
         )
         return [DataQualitySnapshotRecord.from_row(row) for row in rows]
+
+    def get_latest_for_source_fingerprint(
+        self,
+        *,
+        org_id: str,
+        source_snapshot_fingerprint: str,
+    ) -> Optional[DataQualitySnapshotRecord]:
+        normalized_org_id = self._resolve_org_id(org_id, default="default") or "default"
+        normalized_fingerprint = str(source_snapshot_fingerprint or "").strip()
+        if not normalized_fingerprint:
+            return None
+        row = self._fetchone(
+            """
+            SELECT *
+            FROM data_quality_snapshots
+            WHERE org_id = ? AND source_snapshot_fingerprint = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (normalized_org_id, normalized_fingerprint),
+        )
+        return DataQualitySnapshotRecord.from_row(row) if row else None
 
 
 class DataQualityReviewRepository(BaseRepository):
@@ -733,6 +774,32 @@ class DataQualityReviewRepository(BaseRepository):
             LIMIT 1
             """,
             (self._resolve_org_id(org_id, default="default") or "default",),
+        )
+        return DataQualityReviewRecord.from_row(row) if row else None
+
+    def get_review_for_fingerprint(
+        self,
+        *,
+        org_id: str,
+        source_snapshot_fingerprint: str,
+    ) -> Optional[DataQualityReviewRecord]:
+        normalized_fingerprint = str(source_snapshot_fingerprint or "").strip()
+        if not normalized_fingerprint:
+            return None
+        row = self._fetchone(
+            """
+            SELECT *
+            FROM rollout_data_quality_reviews
+            WHERE org_id = ?
+              AND source_snapshot_fingerprint = ?
+              AND status = 'confirmed'
+            ORDER BY reviewed_at DESC, id DESC
+            LIMIT 1
+            """,
+            (
+                self._resolve_org_id(org_id, default="default") or "default",
+                normalized_fingerprint,
+            ),
         )
         return DataQualityReviewRecord.from_row(row) if row else None
 

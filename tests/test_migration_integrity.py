@@ -99,7 +99,30 @@ class MigrationIntegrityTests(unittest.TestCase):
             audit_count = connection.execute(
                 "SELECT COUNT(*) FROM web_audit_logs WHERE action_type = 'test.before_upgrade'"
             ).fetchone()[0]
-        self.assertEqual(applied, 38)
+            data_quality_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info('data_quality_snapshots')"
+                ).fetchall()
+            }
+            data_quality_indexes = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA index_list('data_quality_snapshots')"
+                ).fetchall()
+            }
+        self.assertEqual(applied, 39)
+        self.assertTrue(
+            {
+                "source_snapshot_id",
+                "source_snapshot_fingerprint",
+                "scan_status",
+            }.issubset(data_quality_columns)
+        )
+        self.assertIn(
+            "idx_data_quality_snapshots_source_evidence",
+            data_quality_indexes,
+        )
         self.assertEqual((binding["source_provider"], binding["source_user_id"], binding["ad_username"]), ("wecom", "alice", "alice"))
         self.assertIn("source_directory_snapshots", tables)
         self.assertIn("sync_scope_selections", tables)

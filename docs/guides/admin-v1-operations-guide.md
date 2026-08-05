@@ -154,9 +154,11 @@ Watch these indicators:
 
 Recommended cadence:
 
-1. Run a snapshot after major connector or mapping changes.
-2. Export repair items for HR or source-system owners.
-3. Track whether the total backlog is shrinking over time.
+1. Use `Refresh Source Data` after major source-side changes. This is the only Data Quality action that contacts the source connector.
+2. Run the quality scan against the displayed immutable source snapshot. The request and stored result bind the exact source snapshot ID and fingerprint, so an existing snapshot remains scannable while the source platform is offline.
+3. Review blocking issues before confirming the snapshot. A confirmed review may be reused only by a newer snapshot with the identical fingerprint.
+4. Export repair items for HR or source-system owners.
+5. Track whether the total backlog is shrinking over time. A failed refresh is reported separately and does not invalidate the last successful snapshot.
 
 ## Automation And Notifications
 

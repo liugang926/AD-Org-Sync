@@ -378,9 +378,28 @@ class RolloutReadinessService:
             if source_snapshot_id
             else None
         )
+        review_for_fingerprint = getattr(
+            self.data_quality_review_repo,
+            "get_review_for_fingerprint",
+            None,
+        )
+        if review is None and source_snapshot_fingerprint and callable(
+            review_for_fingerprint
+        ):
+            review = review_for_fingerprint(
+                org_id=normalized_org_id,
+                source_snapshot_fingerprint=source_snapshot_fingerprint,
+            )
         latest_quality_review = self.data_quality_review_repo.get_latest_review(
             org_id=normalized_org_id
         )
+        if (
+            review is None
+            and latest_quality_review is not None
+            and latest_quality_review.source_snapshot_fingerprint
+            == source_snapshot_fingerprint
+        ):
+            review = latest_quality_review
         quality_current = bool(
             review
             and review.status == "confirmed"

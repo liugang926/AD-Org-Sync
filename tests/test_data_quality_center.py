@@ -38,6 +38,15 @@ class DataQualityCenterTests(unittest.TestCase):
     ) -> dict[str, object]:
         return {
             "generated_at": generated_at,
+            "source_snapshot_id": 1,
+            "source_snapshot_fingerprint": f"quality-source:{generated_at}",
+            "source_snapshot_completed_at": generated_at,
+            "source_snapshot_summary": {
+                "provider_id": "wecom",
+                "user_count": total_users,
+                "department_count": 1,
+                "field_count": 1,
+            },
             "analysis_notes": ["Counts reflect unique source users merged across departments."],
             "summary": {
                 "total_users": total_users,
