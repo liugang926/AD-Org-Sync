@@ -34,6 +34,98 @@ def _parse_timestamp(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _scope_members(scope: dict[str, Any], key: str) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                _clean_text(value)
+                for value in scope.get(key, [])
+                if _clean_text(value)
+            }
+        )
+    )
+
+
+def _scope_selection_is_equivalent(
+    job_scope: dict[str, Any],
+    current_scope: dict[str, Any],
+    *,
+    source_snapshot_fingerprint: str,
+) -> bool:
+    """Compare the business scope independently of an equivalent snapshot ID."""
+
+    scalar_fields = ("org_id", "provider_id", "connector_id", "scope_type")
+    if any(
+        _clean_text(job_scope.get(field)).casefold()
+        != _clean_text(current_scope.get(field)).casefold()
+        for field in scalar_fields
+    ):
+        return False
+    if _clean_text(current_scope.get("source_snapshot_fingerprint")) != _clean_text(
+        source_snapshot_fingerprint
+    ):
+        return False
+    members_match = all(
+        _scope_members(job_scope, field) == _scope_members(current_scope, field)
+        for field in ("selected_department_ids", "selected_source_user_ids")
+    )
+    if not members_match:
+        return False
+    job_fingerprint = _clean_text(job_scope.get("selection_fingerprint"))
+    current_fingerprint = _clean_text(current_scope.get("selection_fingerprint"))
+    if job_fingerprint and job_fingerprint == current_fingerprint:
+        return True
+
+    # Compatibility for plans created before snapshot IDs were removed from
+    # the selection fingerprint: rebuild that legacy fingerprint using the
+    # current business fields but the plan's original equivalent snapshot ID.
+    legacy_payload = {
+        "org_id": _clean_text(current_scope.get("org_id")),
+        "provider_id": _clean_text(current_scope.get("provider_id")),
+        "connector_id": _clean_text(current_scope.get("connector_id")) or "default",
+        "scope_type": _clean_text(current_scope.get("scope_type")),
+        "selected_department_ids": list(
+            _scope_members(current_scope, "selected_department_ids")
+        ),
+        "selected_source_user_ids": list(
+            _scope_members(current_scope, "selected_source_user_ids")
+        ),
+        "username_strategy": _clean_text(
+            current_scope.get("username_strategy")
+        ),
+        "username_template": str(current_scope.get("username_template") or ""),
+        "source_field": _clean_text(current_scope.get("source_field")),
+        "snapshot_id": int(job_scope.get("snapshot_id") or 0),
+        "source_snapshot_fingerprint": _clean_text(
+            source_snapshot_fingerprint
+        ),
+    }
+    return job_fingerprint == fingerprint_json(
+        legacy_payload,
+        namespace="sync-scope-selection",
+    )
+
+
+def _snapshot_id_matches_fingerprint(
+    source_directory_repo: Any,
+    snapshot_id: int,
+    *,
+    org_id: str,
+    expected_fingerprint: str,
+) -> bool:
+    """Accept an evidence snapshot ID only when its persisted content is equivalent."""
+
+    if snapshot_id <= 0 or not _clean_text(expected_fingerprint):
+        return False
+    snapshot = source_directory_repo.get_snapshot(snapshot_id, org_id=org_id)
+    return bool(
+        snapshot is not None
+        and _clean_text(snapshot["status"]).lower() == "succeeded"
+        and _clean_text(snapshot["snapshot_fingerprint"])
+        == _clean_text(expected_fingerprint)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionPlanEvaluation:
     allowed: bool
@@ -330,7 +422,6 @@ class ExecutionCenterService:
         )
         if (
             latest_snapshot is None
-            or int(latest_snapshot["id"] or 0) != snapshot_id
             or _clean_text(latest_snapshot["snapshot_fingerprint"])
             != snapshot_fingerprint
         ):
@@ -341,7 +432,7 @@ class ExecutionCenterService:
                 job_scope=job_scope,
                 plan_generated_at=plan_generated_at,
             )
-        snapshot_expires_at = _parse_timestamp(snapshot["expires_at"])
+        snapshot_expires_at = _parse_timestamp(latest_snapshot["expires_at"])
         if snapshot_expires_at is None or snapshot_expires_at < current_time:
             return decision(
                 False,
@@ -357,11 +448,11 @@ class ExecutionCenterService:
         )
         if (
             current_scope is None
-            or int(current_scope.get("snapshot_id") or 0) != snapshot_id
-            or _clean_text(current_scope.get("source_snapshot_fingerprint"))
-            != snapshot_fingerprint
-            or _clean_text(current_scope.get("selection_fingerprint"))
-            != _clean_text(job_scope.get("selection_fingerprint"))
+            or not _scope_selection_is_equivalent(
+                job_scope,
+                current_scope,
+                source_snapshot_fingerprint=snapshot_fingerprint,
+            )
         ):
             return decision(
                 False,
@@ -415,7 +506,6 @@ class ExecutionCenterService:
             )
             if (
                 latest_ad_snapshot is None
-                or int(latest_ad_snapshot["id"] or 0) != ad_snapshot_id
                 or _clean_text(latest_ad_snapshot["snapshot_fingerprint"])
                 != ad_snapshot_fingerprint
             ):
@@ -446,11 +536,20 @@ class ExecutionCenterService:
                 } if latest_match_run is not None else set()
             except (TypeError, ValueError, json.JSONDecodeError):
                 match_source_ids = set()
+            match_source_is_equivalent = any(
+                _snapshot_id_matches_fingerprint(
+                    self.source_directory_repo,
+                    match_source_id,
+                    org_id=normalized_org_id,
+                    expected_fingerprint=snapshot_fingerprint,
+                )
+                for match_source_id in match_source_ids
+            )
             if (
                 latest_match_run is None
                 or _clean_text(latest_match_run["run_id"]) != match_run_id
                 or int(latest_match_run["ad_snapshot_id"] or 0) != ad_snapshot_id
-                or snapshot_id not in match_source_ids
+                or not match_source_is_equivalent
                 or _clean_text(latest_match_run["rules_fingerprint"])
                 != match_rules_fingerprint
                 or current_rules_fingerprint != match_rules_fingerprint
@@ -470,7 +569,12 @@ class ExecutionCenterService:
                 latest_release is None
                 or int(latest_release.id or 0) != release_id
                 or _clean_text(latest_release.bundle_hash) != release_hash
-                or int(latest_release.source_snapshot_id or 0) != snapshot_id
+                or not _snapshot_id_matches_fingerprint(
+                    self.source_directory_repo,
+                    int(latest_release.source_snapshot_id or 0),
+                    org_id=normalized_org_id,
+                    expected_fingerprint=snapshot_fingerprint,
+                )
             ):
                 return decision(
                     False,

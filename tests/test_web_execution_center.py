@@ -257,6 +257,56 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
             "source_field_catalog_current",
         )
 
+    def test_dry_run_accepts_a_newer_equivalent_source_snapshot(self) -> None:
+        self._login("superadmin")
+        created = create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="web-dry-run-equivalent-source",
+            environment_label=self.app.state.environment_label,
+        )
+        source_repo = self.app.state.source_directory_repo
+        newer_snapshot_id = source_repo.start_refresh(
+            org_id="default",
+            provider_id=created["selection"]["provider_id"],
+            connector_id=created["selection"]["connector_id"],
+            created_by="test",
+        )
+        source_repo.replace_snapshot(
+            newer_snapshot_id,
+            departments=[],
+            users=[],
+            fields=[
+                {
+                    "name": "name",
+                    "canonical_field_key": "display_name",
+                    "data_type": "string",
+                    "coverage": 0,
+                }
+            ],
+            fingerprint=created["summary"]["source_snapshot_fingerprint"],
+            ttl_minutes=240,
+        )
+
+        jobs_page = self._route("/jobs", "GET")(self._request("/jobs"))
+        jobs_body = self._text(jobs_page)
+        self.assertNotIn("A newer successful source snapshot exists.", jobs_body)
+
+        with patch.object(
+            self.app.state.sync_runner,
+            "launch",
+            return_value=(True, "Dry Run queued"),
+        ) as launch:
+            post_request = self._request("/jobs/run", "POST")
+            response = self._route("/jobs/run", "POST")(
+                post_request,
+                csrf_token=self._csrf_token(jobs_body),
+                mode="dry_run",
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(launch.call_count, 1, post_request.session)
+        self.assertEqual(launch.call_args.kwargs["mode"], "dry_run")
+
     def test_review_then_apply_binds_the_exact_plan_and_writes_audit(self) -> None:
         self._login("superadmin")
         created = create_eligible_execution_plan(
@@ -569,6 +619,67 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
         self.assertIsNotNone(zero_write_button)
         self.assertIn("secondary", zero_write_button.group(1).split())
         self.assertNotIn("danger", zero_write_button.group(1).split())
+
+    def test_zero_write_completed_apply_reports_post_apply_closure(self) -> None:
+        self._login("superadmin")
+        create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="web-plan-zero-write-complete",
+            environment_label=self.app.state.environment_label,
+            planned_operation_count=0,
+            high_risk_operation_count=0,
+            approved=True,
+        )
+        self.app.state.job_repo.create_job(
+            "web-apply-zero-write-complete",
+            trigger_type="unit_test",
+            execution_mode="apply",
+            status="COMPLETED",
+            org_id="default",
+            plan_source_job_id="web-plan-zero-write-complete",
+        )
+        self.app.state.job_repo.update_job(
+            "web-apply-zero-write-complete",
+            planned_operation_count=0,
+            executed_operation_count=0,
+            error_count=0,
+            summary={"planned_operation_count": 0, "error_count": 0},
+            ended=True,
+        )
+        apply_path = "/execution-center/apply"
+
+        completed_page = self._route(apply_path, "GET")(
+            self._request(
+                apply_path,
+                query={"plan_id": "web-plan-zero-write-complete"},
+            ),
+            plan_id="web-plan-zero-write-complete",
+        )
+        completed_body = self._text(completed_page)
+
+        self.assertIn('data-post-apply-verification="passed"', completed_body)
+        self.assertIn(
+            "Verification complete. No AD changes were required.",
+            completed_body,
+        )
+        self.assertNotIn("Apply 0 Changes", completed_body)
+        self.assertIn("View Apply evidence", completed_body)
+        self.assertRegex(
+            completed_body,
+            r'data-state="complete"\s+data-high-risk-step="confirm"',
+        )
+
+        chinese_page = self._route(apply_path, "GET")(
+            self._request(
+                apply_path,
+                query={
+                    "plan_id": "web-plan-zero-write-complete",
+                    "lang": "zh-CN",
+                },
+            ),
+            plan_id="web-plan-zero-write-complete",
+        )
+        self.assertIn("验证完成，无需修改 AD。", self._text(chinese_page))
 
     def test_apply_page_blocks_when_current_config_changed_after_dry_run(self) -> None:
         self._login("superadmin")

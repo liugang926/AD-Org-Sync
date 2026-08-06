@@ -78,6 +78,56 @@ def classify_user_operation(
     return "update_user"
 
 
+def should_plan_user_operation(
+    operation_type: str,
+    *,
+    connector_ad_sync: Any,
+    username: str,
+    display_name: str,
+    email: str,
+    mapped_attributes: dict[str, Any],
+) -> bool:
+    """Suppress an existing-user update only after a successful live comparison."""
+
+    if operation_type != "update_user":
+        return True
+    preview = getattr(connector_ad_sync, "preview_user_attribute_changes", None)
+    if not callable(preview):
+        return True
+    try:
+        return bool(
+            preview(
+                username,
+                display_name,
+                email,
+                extra_attributes=mapped_attributes,
+            )
+        )
+    except Exception:
+        return True
+
+
+def current_parent_group_sams(
+    connector_ad_sync: Any,
+    existing_user: Any,
+) -> set[str]:
+    """Return current direct parent groups; lookup failure safely plans the add."""
+
+    distinguished_name = _directory_user_dn(existing_user)
+    if not distinguished_name:
+        return set()
+    try:
+        return {
+            str(getattr(group, "group_sam", "") or "").strip().casefold()
+            for group in connector_ad_sync.find_parent_groups_for_member(
+                distinguished_name
+            )
+            if str(getattr(group, "group_sam", "") or "").strip()
+        }
+    except Exception:
+        return set()
+
+
 def _get_source_user_detail_cached(ctx: SyncContext, userid: str, *, user: Optional[Any] = None) -> dict[str, Any]:
     source_user_detail_cache = ctx.identity.source_user_detail_cache
     if userid not in source_user_detail_cache:
@@ -141,6 +191,7 @@ def plan_user_actions(
     existing_users_map_by_connector = ctx.identity.existing_users_map_by_connector
     enabled_ad_users_by_connector = ctx.working.enabled_ad_users_by_connector
     ad_capability_cache: dict[str, dict[str, Any]] = {}
+    parent_group_sams_cache: dict[tuple[str, str], set[str]] = {}
 
     def current_ad_capabilities(connector_id: str) -> dict[str, Any]:
         if connector_id in ad_capability_cache:
@@ -563,63 +614,71 @@ def plan_user_actions(
                 },
             )
             continue
-        ctx.actions.user_actions.append(
-            UserAction(
-                connector_id=connector_id,
-                operation_type=operation_type,
-                username=username,
-                display_name=display_name,
-                email=email,
-                ou_dn=ou_dn,
-                ou_path=list(effective_ou_path),
-                target_department_id=target_dept.department_id,
-                placement_reason=placement_reason,
-                user=user,
-                lifecycle_profile=user_lifecycle_profile,
-                before_state=existing_before_state,
-                rollback_metadata=rollback_metadata,
-            )
-        )
-        ctx.hooks.add_planned_operation(
-            object_type="user",
-            operation_type=operation_type,
-            source_id=userid,
-            department_id=str(target_dept.department_id),
-            target_dn=f"CN={display_name},{ou_dn}",
-            risk_level=(
-                "high"
-                if operation_type == "move_user"
-                or any(
-                    bool(value.get("clear", False))
-                    for value in mapped_attribute_preview.values()
+        if should_plan_user_operation(
+            operation_type,
+            connector_ad_sync=connector_ad_sync,
+            username=username,
+            display_name=display_name,
+            email=email,
+            mapped_attributes=mapped_attribute_preview,
+        ):
+            ctx.actions.user_actions.append(
+                UserAction(
+                    connector_id=connector_id,
+                    operation_type=operation_type,
+                    username=username,
+                    display_name=display_name,
+                    email=email,
+                    ou_dn=ou_dn,
+                    ou_path=list(effective_ou_path),
+                    target_department_id=target_dept.department_id,
+                    placement_reason=placement_reason,
+                    user=user,
+                    lifecycle_profile=user_lifecycle_profile,
+                    before_state=existing_before_state,
+                    rollback_metadata=rollback_metadata,
                 )
-                else "normal"
-            ),
-            desired_state={
-                "userid": userid,
-                "connector_id": connector_id,
-                "ad_username": username,
-                "display_name": display_name,
-                "email": email,
-                "ou_path": effective_ou_path,
-                "current_parent_dn": _parent_distinguished_name(
-                    _directory_user_dn(existing_user)
+            )
+            ctx.hooks.add_planned_operation(
+                object_type="user",
+                operation_type=operation_type,
+                source_id=userid,
+                department_id=str(target_dept.department_id),
+                target_dn=f"CN={display_name},{ou_dn}",
+                risk_level=(
+                    "high"
+                    if operation_type == "move_user"
+                    or any(
+                        bool(value.get("clear", False))
+                        for value in mapped_attribute_preview.values()
+                    )
+                    else "normal"
                 ),
-                "target_ou_dn": ou_dn,
-                "placement_reason": placement_reason,
-                "binding_resolution": binding_resolution_details.get(userid, {}),
-                "field_ownership_policy": dict(field_ownership_policy),
-                "mapped_attributes": mapped_attribute_preview,
-                "before_state": existing_before_state,
-                "rollback": rollback_metadata,
-                "lifecycle_profile": {
-                    "employment_type": user_lifecycle_profile["employment_type"],
-                    "start_value": user_lifecycle_profile["start_value"],
-                    "end_value": user_lifecycle_profile["end_value"],
-                    "sponsor_userid": user_lifecycle_profile["sponsor_userid"],
+                desired_state={
+                    "userid": userid,
+                    "connector_id": connector_id,
+                    "ad_username": username,
+                    "display_name": display_name,
+                    "email": email,
+                    "ou_path": effective_ou_path,
+                    "current_parent_dn": _parent_distinguished_name(
+                        _directory_user_dn(existing_user)
+                    ),
+                    "target_ou_dn": ou_dn,
+                    "placement_reason": placement_reason,
+                    "binding_resolution": binding_resolution_details.get(userid, {}),
+                    "field_ownership_policy": dict(field_ownership_policy),
+                    "mapped_attributes": mapped_attribute_preview,
+                    "before_state": existing_before_state,
+                    "rollback": rollback_metadata,
+                    "lifecycle_profile": {
+                        "employment_type": user_lifecycle_profile["employment_type"],
+                        "start_value": user_lifecycle_profile["start_value"],
+                        "end_value": user_lifecycle_profile["end_value"],
+                        "sponsor_userid": user_lifecycle_profile["sponsor_userid"],
+                    },
                 },
-            },
-        )
+            )
         connector_writeback_rules = (
             select_mapping_rules(
                 ctx.policy_settings.enabled_mapping_rules,
@@ -679,6 +738,19 @@ def plan_user_actions(
             group_connector_id = get_connector_id_for_department(dept)
             membership_key = (group_connector_id, username, group_sam)
             if membership_key in planned_memberships:
+                continue
+
+            existing_user_dn = _directory_user_dn(existing_user)
+            parent_group_cache_key = (group_connector_id, existing_user_dn.casefold())
+            if existing_user_dn and parent_group_cache_key not in parent_group_sams_cache:
+                parent_group_sams_cache[parent_group_cache_key] = current_parent_group_sams(
+                    connector_ad_sync,
+                    existing_user,
+                )
+            if group_sam.casefold() in parent_group_sams_cache.get(
+                parent_group_cache_key,
+                set(),
+            ):
                 continue
 
             seen_group_sams.add(group_sam)

@@ -680,7 +680,6 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             username_template="",
             is_enabled=True,
         )
-
         response = self._route("/advanced-sync/username-preview", "POST")(
             self._request("/advanced-sync/username-preview", "POST"),
             connector_id="asia",
@@ -818,6 +817,62 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             username_template="",
             is_enabled=True,
         )
+        source_snapshot_id = self.app.state.source_directory_repo.start_refresh(
+            org_id="default",
+            provider_id="wecom",
+            created_by="superadmin",
+        )
+        self.app.state.source_directory_repo.replace_snapshot(
+            source_snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "1",
+                    "name": "Headquarters",
+                    "parent_department_id": "0",
+                },
+                {
+                    "source_department_id": "2",
+                    "name": "Sales",
+                    "parent_department_id": "1",
+                },
+            ],
+            users=[
+                {
+                    "source_user_id": "alice1",
+                    "display_name": "Alice One",
+                    "email": "alice@example.com",
+                    "employee_id": "1001",
+                    "department_ids": ["1"],
+                    "raw_payload": {"userid": "alice1"},
+                },
+                {
+                    "source_user_id": "alice2",
+                    "display_name": "Alice Two",
+                    "email": "alice@regional.example.com",
+                    "employee_id": "1002",
+                    "department_ids": ["1"],
+                    "raw_payload": {"userid": "alice2"},
+                },
+                {
+                    "source_user_id": "bob",
+                    "display_name": "Bob",
+                    "email": "",
+                    "employee_id": "",
+                    "department_ids": ["1"],
+                    "raw_payload": {"userid": "bob"},
+                },
+                {
+                    "source_user_id": "carol",
+                    "display_name": "Carol",
+                    "email": "carol@example.com",
+                    "employee_id": "",
+                    "department_ids": ["2"],
+                    "raw_payload": {"userid": "carol"},
+                },
+            ],
+            fields=[],
+            fingerprint="cached-advanced-data-quality-source",
+        )
 
         class FakeSourceProvider:
             def list_departments(self):
@@ -903,10 +958,11 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
         with patch(
             "sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()
-        ):
+        ) as build_source_provider:
             response = self._route("/advanced-sync/data-quality-snapshot", "GET")(
                 self._request("/advanced-sync/data-quality-snapshot")
             )
+        build_source_provider.assert_not_called()
 
         self.assertEqual(response.status_code, 200)
         payload = json.loads(self._text(response))
@@ -944,6 +1000,70 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             username_collision_policy="append_employee_id",
             username_template="",
             is_enabled=True,
+        )
+        source_snapshot_id = self.app.state.source_directory_repo.start_refresh(
+            org_id="default",
+            provider_id="wecom",
+            created_by="superadmin",
+        )
+        self.app.state.source_directory_repo.replace_snapshot(
+            source_snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "1",
+                    "name": "Headquarters",
+                    "parent_department_id": "0",
+                    "path_ids": ["1"],
+                    "path_names": ["Headquarters"],
+                },
+                {
+                    "source_department_id": "2",
+                    "name": "Sales",
+                    "parent_department_id": "1",
+                    "path_ids": ["1", "2"],
+                    "path_names": ["Headquarters", "Sales"],
+                },
+            ],
+            users=[
+                {
+                    "source_user_id": "alice1",
+                    "display_name": "Alice One",
+                    "email": "alice@example.com",
+                    "employee_id": "1001",
+                    "department_ids": ["1"],
+                    "department_names": ["Headquarters"],
+                    "raw_payload": {"userid": "alice1"},
+                },
+                {
+                    "source_user_id": "alice2",
+                    "display_name": "Alice Two",
+                    "email": "alice@regional.example.com",
+                    "employee_id": "1002",
+                    "department_ids": ["1"],
+                    "department_names": ["Headquarters"],
+                    "raw_payload": {"userid": "alice2"},
+                },
+                {
+                    "source_user_id": "bob",
+                    "display_name": "Bob",
+                    "email": "",
+                    "employee_id": "",
+                    "department_ids": ["1"],
+                    "department_names": ["Headquarters"],
+                    "raw_payload": {"userid": "bob"},
+                },
+                {
+                    "source_user_id": "carol",
+                    "display_name": "Carol",
+                    "email": "carol@example.com",
+                    "employee_id": "",
+                    "department_ids": ["2"],
+                    "department_names": ["Sales"],
+                    "raw_payload": {"userid": "carol"},
+                },
+            ],
+            fields=[],
+            fingerprint="cached-data-quality-source",
         )
 
         page = self._route("/data-sources/data-quality", "GET")(
@@ -1041,11 +1161,12 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
 
         with patch(
             "sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()
-        ):
+        ) as build_source_provider:
             run_response = self._route("/data-sources/data-quality/run", "POST")(
                 self._request("/data-sources/data-quality/run", "POST"),
                 csrf_token=match.group(1),
             )
+        build_source_provider.assert_not_called()
         self.assertEqual(run_response.status_code, 303)
         self.assertIn(
             "/data-sources/data-quality?snapshot_id=",

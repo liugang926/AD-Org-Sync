@@ -60,6 +60,17 @@ def register_data_quality_routes(
             if source_snapshot_id
             else None
         )
+        if quality_review is None and source_snapshot is not None:
+            latest_review = repositories.data_quality_review_repo.get_latest_review(
+                org_id=current_org.org_id,
+            )
+            if (
+                latest_review is not None
+                and latest_review.status == "confirmed"
+                and latest_review.source_snapshot_fingerprint
+                == str(source_snapshot["snapshot_fingerprint"] or "")
+            ):
+                quality_review = latest_review
         return render(
             request,
             "data_quality_center.html",
@@ -169,7 +180,7 @@ def register_data_quality_routes(
             flash(
                 request,
                 "success",
-                f"Captured data quality snapshot {snapshot_record.id}",
+                "Data quality snapshot captured.",
             )
             return RedirectResponse(
                 url=f"{redirect_url}?snapshot_id={snapshot_record.id}",

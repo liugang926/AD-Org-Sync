@@ -18,7 +18,7 @@
       <div class="hero-meta">
         {% call mode_ui.advanced_inline(ui_presentation, "cell-mono cell-strong") %}{{ t("Job ID") }}: {{ job.job_id }}{% endcall %}
         {{ ui.badge(t(job.execution_mode), 'info' if job.execution_mode == 'dry_run' else 'success') }}
-        {{ ui.badge(t(job.status), status_level) }}
+        {{ ui.badge(t(job.status|capitalize), status_level) }}
       </div>
     </div>
 
@@ -27,7 +27,7 @@
         <div><strong>{{ t("Started At") }}</strong><br>{{ ui.local_time(job.started_at) }}</div>
         <div><strong>{{ t("Ended At") }}</strong><br>{{ ui.local_time(job.ended_at) }}</div>
         <div><strong>{{ t("Mode") }}</strong><br>{{ t(job.execution_mode) }}</div>
-        <div><strong>{{ t("Status") }}</strong><br>{{ t(job.status) }}</div>
+        <div><strong>{{ t("Status") }}</strong><br>{{ t(job.status|capitalize) }}</div>
       </div>
     </div>
 
@@ -69,7 +69,7 @@
   {% if summary.get("source_snapshot_id") %}
   {% call ui.panel(t("Source Scope and Mapping")) %}
     <div class="detail-grid">
-      <div><div class="label">{{ t("Scope") }}</div><div class="value">{{ summary.get("scope_type", "full") }}</div></div>
+      <div><div class="label">{{ t("Scope") }}</div><div class="value">{{ t(summary.get("scope_type", "full")) }}</div></div>
       <div><div class="label">{{ t("Selected Users") }}</div><div class="value">{{ summary.get("selected_user_count", 0) }}</div></div>
       <div><div class="label">{{ t("Selected Departments") }}</div><div class="value">{{ summary.get("selected_department_count", 0) }}</div></div>
       <div><div class="label">{{ t("Snapshot") }}</div><div class="value cell-mono">#{{ summary.get("source_snapshot_id") }}</div></div>
@@ -186,7 +186,7 @@
           <h3 class="section-header__title">{{ t(section.label_code) }}</h3>
           <p class="section-header__description">
             {% if diff.baseline_job_id %}
-            {{ mode_ui.technical_identifier(ui_presentation, diff.baseline_job_id, "/execution-center/jobs/" ~ diff.baseline_job_id, t("View comparison run")) }}
+            {{ mode_ui.technical_identifier(ui_presentation, diff.baseline_job_id, "/execution-center/jobs/" ~ diff.baseline_job_id, t("View comparison run"), "", t("Copy identifier"), t("Identifier copied")) }}
             {% else %}
             -
             {% endif %}

@@ -299,6 +299,7 @@ def assess_identity_matches(
     for source_account in source_accounts:
         source_id = int(source_account.id or 0)
         existing_link = platform_links.get(source_id)
+        pending_creation_identity_id = ""
         multi_platform_conflicts = _multi_platform_group_conflicts(
             source_account, source_accounts
         )
@@ -336,7 +337,18 @@ def assess_identity_matches(
 
         if existing_link:
             target_links = primary_links.get(existing_link.identity_id, [])
-            if len(target_links) != 1:
+            is_pending_account_creation = bool(
+                not target_links
+                and existing_link.source == "identity_match_decision"
+                and str(existing_link.evidence.get("decision") or "").strip()
+                == "create_new_ad_account"
+            )
+            if is_pending_account_creation:
+                pending_creation_identity_id = existing_link.identity_id
+                base_evidence["pending_creation_platform_link"] = (
+                    existing_link.to_dict()
+                )
+            elif len(target_links) != 1:
                 assessments.append(
                     IdentityMatchAssessment(
                         platform_account_id=source_id,
@@ -362,54 +374,55 @@ def assess_identity_matches(
                     )
                 )
                 continue
-            target_link = target_links[0]
-            target_id = int(target_link.ad_account_id or 0)
-            target = ad_by_id.get(target_id)
-            if target is None or target.is_protected:
+            else:
+                target_link = target_links[0]
+                target_id = int(target_link.ad_account_id or 0)
+                target = ad_by_id.get(target_id)
+                if target is None or target.is_protected:
+                    assessments.append(
+                        IdentityMatchAssessment(
+                            platform_account_id=source_id,
+                            ad_account_id=target_id or None,
+                            proposed_identity_id=existing_link.identity_id,
+                            result_level=RESULT_BLOCKED,
+                            confidence=100,
+                            conflict_fields={
+                                "primary_ad": {
+                                    "reason": "permanent_target_missing_or_protected"
+                                }
+                            },
+                            evidence={
+                                **base_evidence,
+                                "permanent_platform_link": existing_link.to_dict(),
+                                "permanent_ad_link": target_link.to_dict(),
+                            },
+                            recommended_action="repair_permanent_identity_link",
+                        )
+                    )
+                    continue
                 assessments.append(
                     IdentityMatchAssessment(
                         platform_account_id=source_id,
-                        ad_account_id=target_id or None,
+                        ad_account_id=target_id,
                         proposed_identity_id=existing_link.identity_id,
-                        result_level=RESULT_BLOCKED,
+                        result_level=RESULT_AUTOMATIC,
                         confidence=100,
-                        conflict_fields={
-                            "primary_ad": {
-                                "reason": "permanent_target_missing_or_protected"
+                        matched_fields={
+                            "permanent_link": {
+                                "source": existing_link.source,
+                                "association_type": existing_link.association_type,
                             }
                         },
                         evidence={
                             **base_evidence,
                             "permanent_platform_link": existing_link.to_dict(),
                             "permanent_ad_link": target_link.to_dict(),
+                            "stable_target_id": target.object_guid,
                         },
-                        recommended_action="repair_permanent_identity_link",
+                        recommended_action="reuse_permanent_link",
                     )
                 )
                 continue
-            assessments.append(
-                IdentityMatchAssessment(
-                    platform_account_id=source_id,
-                    ad_account_id=target_id,
-                    proposed_identity_id=existing_link.identity_id,
-                    result_level=RESULT_AUTOMATIC,
-                    confidence=100,
-                    matched_fields={
-                        "permanent_link": {
-                            "source": existing_link.source,
-                            "association_type": existing_link.association_type,
-                        }
-                    },
-                    evidence={
-                        **base_evidence,
-                        "permanent_platform_link": existing_link.to_dict(),
-                        "permanent_ad_link": target_link.to_dict(),
-                        "stable_target_id": target.object_guid,
-                    },
-                    recommended_action="reuse_permanent_link",
-                )
-            )
-            continue
 
         required_missing: dict[str, Any] = {}
         duplicate_source_fields: dict[str, Any] = {}
@@ -505,7 +518,7 @@ def assess_identity_matches(
                 IdentityMatchAssessment(
                     platform_account_id=source_id,
                     ad_account_id=None,
-                    proposed_identity_id="",
+                    proposed_identity_id=pending_creation_identity_id,
                     result_level=RESULT_MANUAL,
                     confidence=0,
                     unmatched_fields=unmatched_fields,
@@ -523,7 +536,11 @@ def assess_identity_matches(
         target_id, rule_hits = next(iter(target_hits.items()))
         target = ad_by_id[target_id]
         target_link = ad_links.get(target_id)
-        proposed_identity_id = target_link.identity_id if target_link else ""
+        proposed_identity_id = (
+            target_link.identity_id
+            if target_link
+            else pending_creation_identity_id
+        )
         matched_fields = {
             rule.source_field: {
                 "rule_id": rule.id,

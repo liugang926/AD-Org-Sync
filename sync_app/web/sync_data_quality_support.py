@@ -5,33 +5,85 @@ from typing import Any, Optional
 
 from fastapi import Request
 
-from sync_app.core.models import SourceDirectoryUser, UserDepartmentBundle
+from sync_app.core.models import DepartmentNode, SourceDirectoryUser, UserDepartmentBundle
 from sync_app.core.sync_policies import build_template_context
 from sync_app.services.runtime_connectors import is_department_in_connector_scope
 from sync_app.services.runtime_identity import resolve_target_department
+from sync_app.web.app_state import get_web_repositories
 
 
 class SyncDataQualitySupportMixin:
     def build_source_data_quality_snapshot(self, request: Request) -> dict[str, Any]:
-        config, source_provider = self._get_source_provider(request)
-        try:
-            department_tree = self._build_department_tree(source_provider.list_departments())
-            users_by_id: dict[str, SourceDirectoryUser] = {}
-            for department_id in sorted(department_tree):
-                for user in source_provider.list_department_users(int(department_id)) or []:
-                    self._merge_source_directory_user(users_by_id, user)
-
-            for user in users_by_id.values():
-                template_context = build_template_context(user)
-                if str(user.name or "").strip() and str(user.email or "").strip() and str(
-                    template_context.get("employee_id") or ""
-                ).strip():
-                    continue
-                detail_payload = source_provider.get_user_detail(str(user.source_user_id or "").strip()) or {}
-                if detail_payload:
-                    user.merge_payload(detail_payload)
-        finally:
-            self._close_directory_resource(source_provider)
+        current_org = self.request_support.get_current_org(request)
+        repositories = get_web_repositories(request)
+        config = repositories.org_config_repo.get_app_config(
+            current_org.org_id,
+            config_path=self.request_support.get_org_config_path(request),
+        )
+        source_snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+            org_id=current_org.org_id,
+            provider_id=config.source_provider,
+        )
+        if source_snapshot is None:
+            raise ValueError(
+                "A successful source snapshot is required before running data quality."
+            )
+        source_snapshot_id = int(source_snapshot["id"] or 0)
+        departments = [
+            DepartmentNode.from_source_payload(
+                {
+                    "id": row.get("source_department_id"),
+                    "name": row.get("name"),
+                    "parent_id": row.get("parent_department_id"),
+                }
+            )
+            for row in repositories.source_directory_repo.list_departments(
+                source_snapshot_id,
+                org_id=current_org.org_id,
+            )
+        ]
+        department_tree = self._build_department_tree(departments)
+        users_by_id: dict[str, SourceDirectoryUser] = {}
+        offset = 0
+        while True:
+            page = repositories.source_directory_repo.list_users(
+                source_snapshot_id,
+                org_id=current_org.org_id,
+                provider_id=config.source_provider,
+                limit=200,
+                offset=offset,
+            )
+            items = list(page.get("items") or [])
+            for row in items:
+                payload = dict(row.get("raw_payload") or {})
+                payload.update(
+                    {
+                        "userid": str(row.get("source_user_id") or ""),
+                        "name": str(row.get("display_name") or ""),
+                        "employee_id": str(row.get("employee_id") or ""),
+                        "email": str(row.get("email") or ""),
+                        "department": list(row.get("department_ids") or []),
+                        "department_names": list(
+                            row.get("department_names") or []
+                        ),
+                        "primary_department_id": row.get(
+                            "primary_department_id"
+                        ),
+                        "position": str(row.get("position") or ""),
+                        "account_status": str(
+                            row.get("account_status") or "active"
+                        ),
+                        "is_active": bool(row.get("is_active", True)),
+                        "provider_id": config.source_provider,
+                    }
+                )
+                self._merge_source_directory_user(
+                    users_by_id,
+                    SourceDirectoryUser.from_source_payload(payload),
+                )
+            offset += len(items)
+            if not items or offset >= int(page.get("total") or 0):
+                break
 
         runtime_context = self._build_runtime_connector_context(
             request,
@@ -428,9 +480,13 @@ class SyncDataQualitySupportMixin:
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "analysis_notes": [
-                "Counts reflect unique source users merged across all returned department memberships.",
+                "Counts reflect unique source users from the latest successful persisted source snapshot.",
                 "Manual bindings and per-user department overrides are not expanded in this snapshot.",
             ],
+            "source_snapshot_id": source_snapshot_id,
+            "source_snapshot_fingerprint": str(
+                source_snapshot["snapshot_fingerprint"] or ""
+            ),
             "summary": {
                 "total_users": len(users_by_id),
                 "department_count": len(department_tree),

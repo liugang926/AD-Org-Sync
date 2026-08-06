@@ -317,6 +317,44 @@ class RolloutReadinessService:
         ad_snapshot_fingerprint = _text(
             _row_value(ad_snapshot, "snapshot_fingerprint", "")
         )
+
+        def source_snapshot_matches(snapshot_id: int) -> bool:
+            get_snapshot = getattr(
+                self.source_directory_repo, "get_snapshot", None
+            )
+            if not callable(get_snapshot):
+                return int(snapshot_id or 0) == source_snapshot_id
+            historical = (
+                get_snapshot(
+                    int(snapshot_id), org_id=normalized_org_id
+                )
+                if int(snapshot_id or 0) > 0
+                else None
+            )
+            return bool(
+                historical
+                and _text(_row_value(historical, "snapshot_fingerprint", ""))
+                == source_snapshot_fingerprint
+            )
+
+        def ad_snapshot_matches(snapshot_id: int) -> bool:
+            get_snapshot = getattr(
+                self.ad_directory_snapshot_repo, "get_snapshot", None
+            )
+            if not callable(get_snapshot):
+                return int(snapshot_id or 0) == ad_snapshot_id
+            historical = (
+                get_snapshot(
+                    int(snapshot_id), org_id=normalized_org_id
+                )
+                if int(snapshot_id or 0) > 0
+                else None
+            )
+            return bool(
+                historical
+                and _text(_row_value(historical, "snapshot_fingerprint", ""))
+                == ad_snapshot_fingerprint
+            )
         source_snapshot_expired = bool(
             source_snapshot and _is_expired(_row_value(source_snapshot, "expires_at", ""))
         )
@@ -381,10 +419,12 @@ class RolloutReadinessService:
         latest_quality_review = self.data_quality_review_repo.get_latest_review(
             org_id=normalized_org_id
         )
+        current_quality_review = review or latest_quality_review
         quality_current = bool(
-            review
-            and review.status == "confirmed"
-            and review.source_snapshot_fingerprint == source_snapshot_fingerprint
+            current_quality_review
+            and current_quality_review.status == "confirmed"
+            and current_quality_review.source_snapshot_fingerprint
+            == source_snapshot_fingerprint
         )
         rules = self.identity_match_rule_repo.list_enabled_rules(
             org_id=normalized_org_id
@@ -410,11 +450,12 @@ class RolloutReadinessService:
             match_run
             and source_snapshot_id
             and not source_snapshot_expired
-            and source_snapshot_id in match_source_ids
+            and any(source_snapshot_matches(value) for value in match_source_ids)
             and ad_snapshot_id
             and not ad_snapshot_expired
-            and int(_row_value(match_run, "ad_snapshot_id", 0) or 0)
-            == ad_snapshot_id
+            and ad_snapshot_matches(
+                int(_row_value(match_run, "ad_snapshot_id", 0) or 0)
+            )
             and _text(_row_value(match_run, "rules_fingerprint", ""))
             == rules_fingerprint
         )
@@ -453,7 +494,7 @@ class RolloutReadinessService:
             scope
             and source_snapshot_id
             and not source_snapshot_expired
-            and int(scope.get("snapshot_id") or 0) == source_snapshot_id
+            and source_snapshot_matches(int(scope.get("snapshot_id") or 0))
             and _text(scope.get("source_snapshot_fingerprint"))
             == source_snapshot_fingerprint
         )
@@ -668,40 +709,21 @@ class RolloutReadinessService:
             normalized_org_id,
         )
         release = release_data.get("latest_snapshot")
-        source_catalog_fingerprint = fingerprint_json(
-            [item.to_dict() for item in source_field_records],
-            namespace="source-field-catalog",
-        )
-        ad_capability_fingerprint = fingerprint_json(
-            [item.to_dict() for item in ad_target_attributes],
-            namespace="ad-capability-catalog",
-        )
         release_current = bool(
             release
             and not release_data.get("has_unpublished_changes")
             and source_snapshot_id
-            and int(getattr(release, "source_snapshot_id", 0) or 0)
-            == source_snapshot_id
+            and source_snapshot_matches(
+                int(getattr(release, "source_snapshot_id", 0) or 0)
+            )
             and _text(getattr(release, "source_snapshot_fingerprint", ""))
             == source_snapshot_fingerprint
             and ad_snapshot_id
-            and int(getattr(release, "ad_snapshot_id", 0) or 0) == ad_snapshot_id
+            and ad_snapshot_matches(
+                int(getattr(release, "ad_snapshot_id", 0) or 0)
+            )
             and _text(getattr(release, "ad_snapshot_fingerprint", ""))
             == ad_snapshot_fingerprint
-            and (
-                self.source_field_registry_repo is None
-                or _text(
-                    getattr(release, "source_field_catalog_fingerprint", "")
-                )
-                == source_catalog_fingerprint
-            )
-            and (
-                self.ad_target_attribute_repo is None
-                or _text(
-                    getattr(release, "ad_capability_catalog_fingerprint", "")
-                )
-                == ad_capability_fingerprint
-            )
             and match_run_id
             and _text(getattr(release, "identity_match_run_id", ""))
             == match_run_id
@@ -751,11 +773,15 @@ class RolloutReadinessService:
             and scope_current
             and release_current
             and source_snapshot_id
-            and int(dry_run_scope.get("snapshot_id") or 0) == source_snapshot_id
+            and source_snapshot_matches(
+                int(dry_run_scope.get("snapshot_id") or 0)
+            )
             and _text(dry_run_scope.get("source_snapshot_fingerprint"))
             == source_snapshot_fingerprint
             and ad_snapshot_id
-            and int(dry_run_scope.get("ad_snapshot_id") or 0) == ad_snapshot_id
+            and ad_snapshot_matches(
+                int(dry_run_scope.get("ad_snapshot_id") or 0)
+            )
             and _text(dry_run_scope.get("ad_snapshot_fingerprint"))
             == ad_snapshot_fingerprint
             and match_run_id

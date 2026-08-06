@@ -175,6 +175,12 @@
         values.push(String(value || "").trim() || "—");
         target.set(name, values);
       };
+      const confirmationValue = (control, value) => {
+        if (control instanceof HTMLInputElement && control.type === "password") {
+          return String(value || "").trim() ? "••••••••" : "—";
+        }
+        return value;
+      };
       Array.from(form.elements).forEach((control) => {
         if (
           !(
@@ -202,8 +208,16 @@
           });
           return;
         }
-        addValue(currentByName, control.name, control.value);
-        addValue(initialByName, control.name, control.defaultValue);
+        addValue(
+          currentByName,
+          control.name,
+          confirmationValue(control, control.value),
+        );
+        addValue(
+          initialByName,
+          control.name,
+          confirmationValue(control, control.defaultValue),
+        );
       });
       choiceNames.forEach((name) => {
         if (!currentByName.has(name)) currentByName.set(name, ["Off"]);

@@ -210,7 +210,12 @@ class ADSyncLDAPS:
                 self.logger.info(f"成功连接到LDAP服务器 (NTLM): {self.server_address}:{self.port} (SSL: {self.use_ssl})")
             except Exception as ntlm_error:
                 # NTLM失败（可能是MD4问题），尝试SIMPLE认证
-                if "MD4" in str(ntlm_error) or "unsupported hash type" in str(ntlm_error):
+                error_text = str(ntlm_error)
+                compatibility_fallback = (
+                    "MD4" in error_text or "unsupported hash type" in error_text
+                )
+                strict_ldaps_fallback = self.use_ssl and self.validate_cert
+                if compatibility_fallback or strict_ldaps_fallback:
                     self.logger.warning("NTLM认证失败（MD4不支持），尝试SIMPLE认证...")
                     self.connection = Connection(
                         self.server,
@@ -883,6 +888,23 @@ class ADSyncLDAPS:
             ]
         return changes
 
+    def preview_user_attribute_changes(
+        self,
+        username: str,
+        display_name: str,
+        email: str,
+        *,
+        extra_attributes: Optional[Dict[str, Dict[str, Any] | Any]] = None,
+    ) -> Dict[str, List[Tuple[int, List[Any]]]]:
+        """Read AD and return the exact scalar changes an update would submit."""
+
+        return self._build_user_attribute_changes(
+            username,
+            display_name=display_name,
+            email=email,
+            extra_attributes=extra_attributes,
+        )
+
     def _set_user_password(self, user_dn: str, password: str) -> bool:
         """设置用户密码"""
         try:
@@ -1296,6 +1318,17 @@ class ADSyncLDAPS:
             ),
         }
 
+    def _snapshot_search_attributes(self) -> List[str]:
+        schema = getattr(self.server, "schema", None)
+        attribute_types = getattr(schema, "attribute_types", None)
+        if not attribute_types:
+            return list(AD_IDENTITY_SNAPSHOT_ATTRIBUTES)
+        return [
+            attribute
+            for attribute in AD_IDENTITY_SNAPSHOT_ATTRIBUTES
+            if attribute in attribute_types
+        ]
+
     def list_directory_users(
         self,
         *,
@@ -1307,6 +1340,7 @@ class ADSyncLDAPS:
         base = str(search_base or "").strip() or self.base_dn
         search_filter = "(&(objectCategory=person)(objectClass=user)(!(sAMAccountName=*$)))"
         bounded_page_size = min(max(int(page_size or 500), 1), 1000)
+        snapshot_attributes = self._snapshot_search_attributes()
         output: List[Dict[str, Any]] = []
         paged_search = getattr(
             getattr(getattr(self.connection, "extend", None), "standard", None),
@@ -1317,7 +1351,7 @@ class ADSyncLDAPS:
             entries = paged_search(
                 search_base=base,
                 search_filter=search_filter,
-                attributes=AD_IDENTITY_SNAPSHOT_ATTRIBUTES,
+                attributes=snapshot_attributes,
                 paged_size=bounded_page_size,
                 generator=True,
             )
@@ -1334,12 +1368,12 @@ class ADSyncLDAPS:
             self.connection.search(
                 base,
                 search_filter,
-                attributes=AD_IDENTITY_SNAPSHOT_ATTRIBUTES,
+                attributes=snapshot_attributes,
             )
             for entry in self.connection.entries:
                 attributes = {
                     name: getattr(getattr(entry, name, None), "value", None)
-                    for name in AD_IDENTITY_SNAPSHOT_ATTRIBUTES
+                    for name in snapshot_attributes
                 }
                 member_of = getattr(getattr(entry, "memberOf", None), "values", None)
                 if member_of is not None:

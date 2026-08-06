@@ -5,6 +5,58 @@ from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
 
 class WebDataSourcesTests(WebAuthzBaseTestCase):
+    def test_equivalent_source_snapshot_reuses_data_quality_review_in_ui(self):
+        self._login("superadmin")
+        snapshot_ids = []
+        for created_by in ("first-refresh", "equivalent-refresh"):
+            snapshot_id = self.app.state.source_directory_repo.start_refresh(
+                org_id="default",
+                provider_id="wecom",
+                created_by=created_by,
+            )
+            self.app.state.source_directory_repo.replace_snapshot(
+                snapshot_id,
+                departments=[
+                    {
+                        "source_department_id": "1",
+                        "name": "Headquarters",
+                        "parent_department_id": "0",
+                    }
+                ],
+                users=[
+                    {
+                        "source_user_id": "alice",
+                        "display_name": "Alice",
+                        "email": "alice@example.com",
+                        "employee_id": "E1001",
+                        "department_ids": ["1"],
+                        "raw_payload": {"userid": "alice"},
+                    }
+                ],
+                fields=[],
+                fingerprint="equivalent-reviewed-source",
+            )
+            snapshot_ids.append(snapshot_id)
+
+        self.app.state.data_quality_review_repo.confirm_snapshot(
+            org_id="default",
+            source_snapshot_id=snapshot_ids[0],
+            source_snapshot_fingerprint="equivalent-reviewed-source",
+            reviewer_username="superadmin",
+            review_notes="reviewed immutable content",
+        )
+
+        response = self._route("/data-sources/data-quality", "GET")(
+            self._request("/data-sources/data-quality")
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = self._text(response)
+        self.assertIn(f"#{snapshot_ids[1]}", body)
+        self.assertIn("Confirmed", body)
+        self.assertIn("Reviewed by superadmin", body)
+        self.assertNotIn("Confirm Current Snapshot Review", body)
+
     def _save_base_connections(self, **overrides):
         payload = {
             "csrf_token": self.session.get("_csrf_token", ""),
@@ -202,6 +254,50 @@ class WebDataSourcesTests(WebAuthzBaseTestCase):
             )
         )
         self.assertIn("Connected", page)
+
+    def test_connection_specific_preflight_does_not_wait_for_account_policy(self):
+        self._login("superadmin")
+        raw_config = self.app.state.org_config_repo.get_raw_config(
+            "default", config_path=str(self.config_path)
+        )
+        self.app.state.org_config_repo.save_config(
+            "default",
+            {**raw_config, "default_password": ""},
+            config_path=str(self.config_path),
+        )
+        self.assertEqual(self._save_base_connections().status_code, 303)
+
+        with patch(
+            "sync_app.web.app.test_source_connection",
+            return_value=(True, "Source connection succeeded"),
+        ) as source_test:
+            source_response = self._route("/preflight/run", "POST")(
+                self._request("/preflight/run", "POST"),
+                csrf_token=self.session["_csrf_token"],
+                return_url="/data-sources/connectors",
+                connection_kind="source",
+            )
+        with patch(
+            "sync_app.web.app.test_ldap_connection",
+            return_value=(True, "LDAPS connection succeeded"),
+        ) as ldap_test:
+            ldap_response = self._route("/preflight/run", "POST")(
+                self._request("/preflight/run", "POST"),
+                csrf_token=self.session["_csrf_token"],
+                return_url="/data-sources/connectors",
+                connection_kind="ldap",
+            )
+
+        self.assertEqual(source_response.status_code, 303)
+        self.assertEqual(ldap_response.status_code, 303)
+        source_test.assert_called_once()
+        ldap_test.assert_called_once()
+        result_page = self._text(
+            self._route("/data-sources/connectors", "GET")(
+                self._request("/data-sources/connectors")
+            )
+        )
+        self.assertIn("Preflight finished with status SUCCESS", result_page)
 
     def test_target_connection_edit_preserves_policy_and_rejects_cross_org_id(self):
         self._login("superadmin")

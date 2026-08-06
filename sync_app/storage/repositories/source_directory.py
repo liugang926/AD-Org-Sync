@@ -462,7 +462,10 @@ class SourceDirectoryRepository(BaseRepository):
             "username_template": username_template, "source_field": source_field,
             "snapshot_id": int(snapshot["id"]), "source_snapshot_fingerprint": source_fingerprint,
         }
-        selection_fingerprint = fingerprint_json(payload, namespace="sync-scope-selection")
+        selection_fingerprint = fingerprint_json(
+            {key: value for key, value in payload.items() if key != "snapshot_id"},
+            namespace="sync-scope-selection",
+        )
         with self.db.transaction() as conn:
             conn.execute(
                 """

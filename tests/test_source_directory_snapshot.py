@@ -135,7 +135,12 @@ class SourceDirectorySnapshotTests(unittest.TestCase):
         )
         rebound = self.repo.get_scope_selection(org_id="default", provider_id="wecom")
         self.assertEqual(rebound["snapshot_id"], second_snapshot["id"])
-        self.assertNotEqual(rebound["selection_fingerprint"], first_selection_fingerprint)
+        self.assertNotEqual(second_snapshot["id"], snapshot["id"])
+        self.assertEqual(
+            rebound["selection_fingerprint"],
+            first_selection_fingerprint,
+            "an equivalent snapshot must not invalidate the same business scope",
+        )
 
     def test_mapping_preview_reports_illegal_character_removal_and_truncation(self):
         row = {
