@@ -25,7 +25,7 @@
 
 <div class="page-stack execution-center-page">
   {% call ui.page_header(t("Jobs"), t("The only execution center for Dry Run, plan review, Apply, and task history."), eyebrow=t("Execution Center"), badge_text=current_org.name, badge_level=("error" if apply_blocked else "success")) %}
-    {{ ui.button(t(job_center_summary.next_action_label_code), href=job_center_summary.next_action_url, icon="arrow-right") }}
+    {{ ui.button(t("View current status"), href="#current-status", variant="secondary", icon="activity") }}
   {% endcall %}
 
   <nav class="execution-tabs" aria-label="{{ t('Execution Center') }}">
@@ -75,7 +75,9 @@
     </div>
 
     {{ high_risk.workflow(apply_state.workflow, ui) }}
-    {{ high_risk.context_details(apply_context, ui_presentation) }}
+    {% call ui.detail_toggle(t("Technical evidence"), t("Immutable plan, environment, snapshot and confirmation values."), open=False) %}
+      {{ high_risk.context_details(apply_context, ui_presentation) }}
+    {% endcall %}
 
     <div class="blocker-list" aria-label="{{ t('Blocking Reasons') }}">
       {% for blocker in apply_state.blockers %}
@@ -91,6 +93,10 @@
       {% endfor %}
     </div>
   </section>
+
+  {% call ui.workflow_action_bar("blocked" if apply_blocked else "success", t("Apply Gate") ~ " - " ~ (t("Blocked") if apply_blocked else t("Ready")), t(apply_state.blockers[0].message_code, **apply_state.blockers[0].params) if apply_state.blockers else t("The current plan is ready for the next action.")) %}
+    {{ ui.button(t(job_center_summary.next_action_label_code), href=job_center_summary.next_action_url, variant="primary", icon="arrow-right") }}
+  {% endcall %}
 
   {% call ui.panel(t("Next Step Recommendations"), description=t("Use the highlighted recommendation to clear the current gate, then continue in this page.")) %}
     <div class="execution-recommendations">
@@ -157,11 +163,9 @@
       <div class="impact-grid plan-review-summary">
         <div class="impact-card"><span>{{ t("Create") }}</span><strong>{{ plan_review_summary.create_count }}</strong></div>
         <div class="impact-card"><span>{{ t("Update") }}</span><strong>{{ plan_review_summary.update_count }}</strong></div>
-        <div class="impact-card"><span>{{ t("Enable") }}</span><strong>{{ plan_review_summary.enable_count }}</strong></div>
-        <div class="impact-card"><span>{{ t("Disable") }}</span><strong>{{ plan_review_summary.disable_count }}</strong></div>
+        <div class="impact-card"><span>{{ t("Lifecycle Changes") }}</span><strong>{{ plan_review_summary.enable_count + plan_review_summary.disable_count }}</strong></div>
         <div class="impact-card"><span>{{ t("Group Relationship Changes") }}</span><strong>{{ plan_review_summary.group_relation_count }}</strong></div>
         <div class="impact-card"><span>{{ t("Conflicts") }}</span><strong>{{ plan_review_summary.conflict_count }}</strong></div>
-        <div class="impact-card"><span>{{ t("Errors") }}</span><strong>{{ plan_review_summary.error_count }}</strong></div>
         <div class="impact-card"><span>{{ t("Risk") }}</span><strong>{{ plan_review_summary.risk_count }}</strong></div>
       </div>
 
@@ -209,10 +213,10 @@
         <form method="post" action="/execution-center/apply/run">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           {{ high_risk.confirmation_fields(apply_context) }}
-          {{ ui.button(t("Apply {count} Changes", count=apply_context.impact_count), type="submit", variant="danger", icon="shield-check", confirm_text=t("You are about to apply the reviewed plan. Verify the impact before continuing."), confirm_title=t("Confirm Apply"), confirm_details=apply_confirm_details) }}
+          {{ ui.button(t("Apply {count} Changes", count=apply_context.impact_count), type="submit", variant=("secondary" if apply_context.impact_count == 0 else "danger"), icon="shield-check", confirm_text=t("You are about to apply the reviewed plan. Verify the impact before continuing."), confirm_title=t("Confirm Apply"), confirm_details=apply_confirm_details) }}
         </form>
         {% else %}
-        {{ ui.button(t("Apply Blocked"), type="button", variant="danger", disabled=True, icon="shield-alert") }}
+        {{ ui.button(t("Apply Blocked"), type="button", variant="secondary", disabled=True, icon="shield-alert") }}
         {% endif %}
       </div>
 

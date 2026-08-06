@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 
+from sync_app.core.admin_roles import WEB_ADMIN_ROLES
+
 from sync_app.cli.handlers.config import (
     _handle_config_export,
     _handle_config_import,
@@ -12,6 +14,7 @@ from sync_app.cli.handlers.config import (
 from sync_app.cli.handlers.conflicts import (
     _handle_conflicts_apply_recommendation,
     _handle_conflicts_bulk,
+    _handle_conflicts_archive,
     _handle_conflicts_dismiss,
     _handle_conflicts_list,
     _handle_conflicts_reopen,
@@ -76,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bootstrap_admin_parser.add_argument(
         "--role",
-        choices=["super_admin", "operator", "auditor"],
+        choices=WEB_ADMIN_ROLES,
         default="super_admin",
         help="Role for a newly created account",
     )
@@ -160,9 +163,10 @@ def build_parser() -> argparse.ArgumentParser:
     conflict_list_parser = conflict_subparsers.add_parser("list", help="List recorded sync conflicts")
     conflict_list_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
     conflict_list_parser.add_argument("--job-id", default=None, help="Filter by job ID")
+    conflict_list_parser.add_argument("--plan-id", default=None, help="Filter by plan ID")
     conflict_list_parser.add_argument(
         "--status",
-        choices=["open", "resolved", "dismissed", "all"],
+        choices=["open", "resolved", "ignored", "archived", "dismissed", "all"],
         default="open",
         help="Filter by conflict status",
     )
@@ -188,13 +192,25 @@ def build_parser() -> argparse.ArgumentParser:
     conflict_skip_user_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
     conflict_skip_user_parser.set_defaults(handler=_handle_conflicts_skip_user)
 
-    conflict_dismiss_parser = conflict_subparsers.add_parser("dismiss", help="Mark a conflict as dismissed")
+    conflict_dismiss_parser = conflict_subparsers.add_parser("dismiss", help="Legacy alias for ignoring a conflict")
     conflict_dismiss_parser.add_argument("conflict_id", type=int, help="Conflict ID")
     conflict_dismiss_parser.add_argument("--notes", default="", help="Optional dismiss notes")
     conflict_dismiss_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
     conflict_dismiss_parser.set_defaults(handler=_handle_conflicts_dismiss)
 
-    conflict_reopen_parser = conflict_subparsers.add_parser("reopen", help="Reopen a resolved or dismissed conflict")
+    conflict_ignore_parser = conflict_subparsers.add_parser("ignore", help="Ignore an open conflict with an auditable reason")
+    conflict_ignore_parser.add_argument("conflict_id", type=int, help="Conflict ID")
+    conflict_ignore_parser.add_argument("--notes", default="", help="Optional ignore notes")
+    conflict_ignore_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
+    conflict_ignore_parser.set_defaults(handler=_handle_conflicts_dismiss)
+
+    conflict_archive_parser = conflict_subparsers.add_parser("archive", help="Archive conflict evidence")
+    conflict_archive_parser.add_argument("conflict_id", type=int, help="Conflict ID")
+    conflict_archive_parser.add_argument("--notes", default="", help="Optional archive notes")
+    conflict_archive_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
+    conflict_archive_parser.set_defaults(handler=_handle_conflicts_archive)
+
+    conflict_reopen_parser = conflict_subparsers.add_parser("reopen", help="Reopen a resolved, ignored, or archived conflict")
     conflict_reopen_parser.add_argument("conflict_id", type=int, help="Conflict ID")
     conflict_reopen_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
     conflict_reopen_parser.set_defaults(handler=_handle_conflicts_reopen)
@@ -211,12 +227,13 @@ def build_parser() -> argparse.ArgumentParser:
     conflict_bulk_parser = conflict_subparsers.add_parser("bulk", help="Run a bulk action on selected conflicts")
     conflict_bulk_parser.add_argument(
         "--action",
-        choices=["apply-recommendation", "skip-user-sync", "dismiss", "reopen"],
+        choices=["apply-recommendation", "skip-user-sync", "dismiss", "ignore", "archive", "reopen"],
         required=True,
         help="Bulk action to execute",
     )
     conflict_bulk_parser.add_argument("conflict_ids", nargs="+", type=int, help="Conflict IDs")
     conflict_bulk_parser.add_argument("--notes", default="", help="Optional notes for bulk action")
+    conflict_bulk_parser.add_argument("--confirm", required=True, help="Type CONFIRM to authorize the bulk change")
     conflict_bulk_parser.add_argument("--db-path", default=None, help="Override local SQLite database path")
     conflict_bulk_parser.set_defaults(handler=_handle_conflicts_bulk)
 

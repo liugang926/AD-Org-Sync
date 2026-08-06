@@ -5,7 +5,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from sync_app.web.authz import WEB_ADMIN_ROLES, normalize_role
+from sync_app.web.authz import WEB_ADMIN_ROLES, require_valid_role
 from sync_app.web.app_state import get_web_repositories
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
@@ -94,6 +94,7 @@ def register_admin_routes(
             page="users",
             title="Admin Users",
             users=repositories.user_repo.list_user_records(),
+            administrator_roles=WEB_ADMIN_ROLES,
         )
 
     @app.post(CANONICAL_ROUTE_PATHS["users"])
@@ -115,9 +116,11 @@ def register_admin_routes(
             return csrf_error
 
         username = username.strip()
-        role = normalize_role(role, default="operator")
-        if role not in WEB_ADMIN_ROLES:
-            role = "operator"
+        try:
+            role = require_valid_role(role)
+        except ValueError:
+            flash(request, "error", "Unsupported administrator role")
+            return RedirectResponse(url=return_path, status_code=303)
         if not username:
             flash(request, "error", "Username is required")
             return RedirectResponse(url=return_path, status_code=303)

@@ -8,6 +8,7 @@ from sync_app.core.exception_rules import (
     normalize_exception_rule_type,
 )
 from sync_app.core.models import SyncConflictRecord, SyncExceptionRuleRecord, SyncPlanReviewRecord
+from sync_app.core.models.conflicts import normalize_conflict_status
 from sync_app.storage.local_db import BaseRepository, dumps_json, normalize_org_id, utcnow_iso
 
 
@@ -24,26 +25,36 @@ class SyncConflictRepository(BaseRepository):
         target_key: Optional[str] = None,
         resolution_hint: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None,
+        plan_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
     ) -> int:
+        normalized_status = normalize_conflict_status(status)
+        normalized_plan_id = str(plan_id or job_id).strip()
+        normalized_workflow_id = str(workflow_id or job_id).strip()
+        now = utcnow_iso()
         with self.db.transaction() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO sync_conflicts (
-                  job_id, conflict_type, severity, status, source_id,
-                  target_key, message, resolution_hint, details_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  job_id, plan_id, workflow_id, conflict_type, severity, status,
+                  source_id, target_key, message, resolution_hint, details_json,
+                  created_at, status_changed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
+                    normalized_plan_id,
+                    normalized_workflow_id,
                     conflict_type,
                     severity,
-                    status,
+                    normalized_status,
                     source_id,
                     target_key,
                     message,
                     resolution_hint,
                     dumps_json(details),
-                    utcnow_iso(),
+                    now,
+                    now,
                 ),
             )
             return int(cursor.lastrowid)
@@ -86,6 +97,8 @@ class SyncConflictRepository(BaseRepository):
         job_id: Optional[str] = None,
         status: Optional[str] = None,
         org_id: Optional[str] = None,
+        plan_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
     ) -> list[SyncConflictRecord]:
         rows, _total = self.list_conflict_records_page(
             limit=limit,
@@ -93,6 +106,8 @@ class SyncConflictRepository(BaseRepository):
             job_id=job_id,
             status=status,
             org_id=org_id,
+            plan_id=plan_id,
+            workflow_id=workflow_id,
         )
         return rows
 
@@ -105,6 +120,8 @@ class SyncConflictRepository(BaseRepository):
         status: Optional[str] = None,
         query: str = "",
         org_id: Optional[str] = None,
+        plan_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
     ) -> tuple[list[SyncConflictRecord], int]:
         normalized_org_id = normalize_org_id(org_id)
         if normalized_org_id:
@@ -139,7 +156,18 @@ class SyncConflictRepository(BaseRepository):
             sql += f" AND {conflict_job_column} = ?"
             count_sql += f" AND {conflict_job_column} = ?"
             params.append(job_id)
+        if plan_id:
+            conflict_plan_column = "c.plan_id" if normalized_org_id else "plan_id"
+            sql += f" AND {conflict_plan_column} = ?"
+            count_sql += f" AND {conflict_plan_column} = ?"
+            params.append(plan_id)
+        if workflow_id:
+            conflict_workflow_column = "c.workflow_id" if normalized_org_id else "workflow_id"
+            sql += f" AND {conflict_workflow_column} = ?"
+            count_sql += f" AND {conflict_workflow_column} = ?"
+            params.append(workflow_id)
         if status:
+            status = normalize_conflict_status(status)
             conflict_status_column = "c.status" if normalized_org_id else "status"
             sql += f" AND {conflict_status_column} = ?"
             count_sql += f" AND {conflict_status_column} = ?"
@@ -210,6 +238,80 @@ class SyncConflictRepository(BaseRepository):
         )
         return int(row["total"]) if row else 0
 
+    def count_unresolved_conflicts_for_plan(self, plan_id: str) -> int:
+        row = self._fetchone(
+            """
+            SELECT COUNT(*) AS total
+            FROM sync_conflicts
+            WHERE plan_id = ?
+              AND status = 'open'
+            """,
+            (str(plan_id or "").strip(),),
+        )
+        return int(row["total"]) if row else 0
+
+    @staticmethod
+    def _record_status_transition(
+        conn: Any,
+        *,
+        row: Any,
+        to_status: str,
+        actor_username: str,
+        reason: str,
+        is_bulk: bool,
+        created_at: str,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO sync_conflict_status_history (
+              conflict_id, job_id, plan_id, workflow_id, from_status, to_status,
+              actor_username, reason, is_bulk, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(row["id"]),
+                str(row["job_id"] or ""),
+                str(row["plan_id"] or row["job_id"] or ""),
+                str(row["workflow_id"] or row["job_id"] or ""),
+                str(row["status"] or "open"),
+                to_status,
+                str(actor_username or "system"),
+                str(reason or ""),
+                1 if is_bulk else 0,
+                created_at,
+            ),
+        )
+        org_row = conn.execute(
+            "SELECT org_id FROM sync_jobs WHERE job_id = ? LIMIT 1",
+            (str(row["job_id"] or ""),),
+        ).fetchone()
+        conn.execute(
+            """
+            INSERT INTO web_audit_logs (
+              org_id, actor_username, action_type, target_type, target_id,
+              result, message, payload_json, created_at
+            ) VALUES (?, ?, 'conflict.status_transition', 'sync_conflict', ?,
+                      'success', 'Changed sync conflict lifecycle status', ?, ?)
+            """,
+            (
+                normalize_org_id(org_row["org_id"] if org_row else "", fallback="") or "",
+                str(actor_username or "system"),
+                str(row["id"]),
+                dumps_json(
+                    {
+                        "job_id": str(row["job_id"] or ""),
+                        "plan_id": str(row["plan_id"] or row["job_id"] or ""),
+                        "workflow_id": str(row["workflow_id"] or row["job_id"] or ""),
+                        "from_status": str(row["status"] or "open"),
+                        "to_status": to_status,
+                        "reason": str(reason or ""),
+                        "bulk": bool(is_bulk),
+                    }
+                ),
+                created_at,
+            ),
+        )
+
     def update_conflict_status(
         self,
         conflict_id: int,
@@ -217,23 +319,48 @@ class SyncConflictRepository(BaseRepository):
         status: str,
         resolution_payload: Optional[Dict[str, Any]] = None,
         resolved_at: Optional[str] = None,
-    ) -> None:
+        actor_username: str = "system",
+        reason: str = "",
+        is_bulk: bool = False,
+    ) -> bool:
+        normalized_status = normalize_conflict_status(status)
+        changed_at = utcnow_iso()
         with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM sync_conflicts WHERE id = ? LIMIT 1",
+                (int(conflict_id),),
+            ).fetchone()
+            if not row or str(row["status"] or "open") == normalized_status:
+                return False
             conn.execute(
                 """
                 UPDATE sync_conflicts
                 SET status = ?,
                     resolution_payload_json = ?,
-                    resolved_at = ?
+                    resolved_at = ?,
+                    archived_at = ?,
+                    status_changed_at = ?
                 WHERE id = ?
                 """,
                 (
-                    status,
+                    normalized_status,
                     dumps_json(resolution_payload),
-                    resolved_at,
+                    resolved_at if normalized_status != "open" else None,
+                    changed_at if normalized_status == "archived" else None,
+                    changed_at,
                     int(conflict_id),
                 ),
             )
+            self._record_status_transition(
+                conn,
+                row=row,
+                to_status=normalized_status,
+                actor_username=actor_username,
+                reason=reason,
+                is_bulk=is_bulk,
+                created_at=changed_at,
+            )
+            return True
 
     def resolve_open_conflicts_for_source(
         self,
@@ -242,11 +369,15 @@ class SyncConflictRepository(BaseRepository):
         source_id: str,
         resolution_payload: Optional[Dict[str, Any]] = None,
         resolved_at: Optional[str] = None,
+        actor_username: str = "system",
+        reason: str = "resolved for source",
+        is_bulk: bool = False,
     ) -> int:
+        changed_at = utcnow_iso()
         with self.db.transaction() as conn:
             rows = conn.execute(
                 """
-                SELECT id
+                SELECT *
                 FROM sync_conflicts
                 WHERE job_id = ?
                   AND source_id = ?
@@ -263,16 +394,84 @@ class SyncConflictRepository(BaseRepository):
                     UPDATE sync_conflicts
                     SET status = 'resolved',
                         resolution_payload_json = ?,
-                        resolved_at = ?
+                        resolved_at = ?,
+                        archived_at = NULL,
+                        status_changed_at = ?
                     WHERE id = ?
                     """,
                     (
                         dumps_json(payload),
                         resolved_at,
+                        changed_at,
                         int(row["id"]),
                     ),
                 )
+                self._record_status_transition(
+                    conn,
+                    row=row,
+                    to_status="resolved",
+                    actor_username=actor_username,
+                    reason=reason,
+                    is_bulk=is_bulk,
+                    created_at=changed_at,
+                )
             return len(rows)
+
+    def archive_expired_plan_conflicts(
+        self,
+        *,
+        org_id: str,
+        cutoff_iso: str,
+        actor_username: str,
+        reason: str,
+    ) -> int:
+        normalized_org_id = normalize_org_id(org_id)
+        changed_at = utcnow_iso()
+        with self.db.transaction() as conn:
+            rows = conn.execute(
+                """
+                SELECT c.*
+                FROM sync_conflicts AS c
+                INNER JOIN sync_jobs AS j ON j.job_id = c.job_id
+                WHERE j.org_id = ?
+                  AND j.ended_at IS NOT NULL
+                  AND j.ended_at < ?
+                  AND c.status != 'archived'
+                ORDER BY c.id ASC
+                """,
+                (normalized_org_id, cutoff_iso),
+            ).fetchall()
+            for row in rows:
+                conn.execute(
+                    """
+                    UPDATE sync_conflicts
+                    SET status = 'archived', archived_at = ?, status_changed_at = ?
+                    WHERE id = ?
+                    """,
+                    (changed_at, changed_at, int(row["id"])),
+                )
+                self._record_status_transition(
+                    conn,
+                    row=row,
+                    to_status="archived",
+                    actor_username=actor_username,
+                    reason=reason,
+                    is_bulk=True,
+                    created_at=changed_at,
+                )
+            return len(rows)
+
+    def list_status_history(self, conflict_id: int) -> list[dict[str, Any]]:
+        rows = self._fetchall(
+            """
+            SELECT *
+            FROM sync_conflict_status_history
+            WHERE conflict_id = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (int(conflict_id),),
+        )
+        return [dict(row) for row in rows]
 
 
 class SyncPlanReviewRepository(BaseRepository):

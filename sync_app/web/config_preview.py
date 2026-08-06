@@ -94,11 +94,12 @@ def _build_config_rollout_status(request: Request, current_org: Any) -> dict[str
         None,
     )
     active_job = repositories.job_repo.get_active_job_record(org_id=current_org.org_id)
-    _open_conflicts, open_conflict_count = repositories.conflict_repo.list_conflict_records_page(
-        limit=1,
-        offset=0,
-        status="open",
-        org_id=current_org.org_id,
+    open_conflict_count = (
+        repositories.conflict_repo.count_unresolved_conflicts_for_plan(
+            latest_successful_dry_run.job_id
+        )
+        if latest_successful_dry_run
+        else 0
     )
 
     if active_job:

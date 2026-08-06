@@ -82,6 +82,21 @@ class WebTemplateConventionTests(unittest.TestCase):
         self.assertIn('"{selected_action}"', conflicts)
         self.assertIn('.replaceAll("{selected_count}"', app_script)
         self.assertIn('.replaceAll("{selected_action}"', app_script)
+        self.assertIn('forms.input("confirmation"', conflicts)
+        self.assertIn('placeholder="CONFIRM"', conflicts)
+        self.assertIn('ARCHIVE " ~ current_org.org_id', conflicts)
+
+    def test_workflow_action_bar_preserves_live_status_mobile_layout_and_reduced_motion(self):
+        ui_template = (TEMPLATE_DIR / "components" / "ui.html").read_text(
+            encoding="utf-8"
+        )
+        stylesheet = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("macro workflow_action_bar", ui_template)
+        self.assertIn('aria-live="polite"', ui_template)
+        self.assertIn(".workflow-action-bar", stylesheet)
+        self.assertIn("@media (max-width: 767px)", stylesheet)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", stylesheet)
 
     def test_irreversible_deletes_require_typed_confirmation(self):
         organizations = (TEMPLATE_DIR / "organizations.html").read_text(encoding="utf-8")

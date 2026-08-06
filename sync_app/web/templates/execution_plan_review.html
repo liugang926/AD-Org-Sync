@@ -4,24 +4,31 @@
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Plan Review"), t("Review one Dry Run plan and record an auditable approval before Apply."), eyebrow=t("Execution Center"), badge_text=current_org.name, badge_level="info") %}
-    {% if can_approve and can("jobs.review") %}
-    <form method="post" action="/execution-center/plan-review/{{ selected_item.review.job_id }}/approve">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="review_notes" value="{{ t('Approved in Plan Review') }}">
-      {{ ui.button(t("Approve selected plan"), type="submit", icon="clipboard-check", confirm_text=t("Approve this exact Dry Run plan for the current organization, environment, snapshot, and scope?"), confirm_title=t("Confirm plan approval")) }}
-    </form>
-    {% else %}
-    {{ ui.button(t(next_action_code), href=next_action_url, icon="arrow-right") }}
-    {% endif %}
+    {{ ui.button(t("View review evidence"), href="#selected-plan", variant="secondary", icon="scan-search") }}
   {% endcall %}
 
   {{ execution.tabs("execution-plan-review") }}
   {{ execution.progress("execution-plan-review", dry_run_state=("complete" if selected_item else "pending"), review_state=("complete" if selected_item and selected_item.review.status == "approved" else ("blocked" if blocker_code and selected_item else "current")), apply_state=("current" if selected_item and selected_item.review.status == "approved" else "pending")) }}
   {{ execution.scope_context(current_org, environment_label, selected_item.evaluation.context if selected_item else none) }}
   {{ execution.status(blocker_code, next_action_code, "The selected plan evidence is valid and ready for approval.") }}
-  {{ execution.rollout_evidence(execution_context, selected=True) }}
+  {% call ui.detail_toggle(t("Technical evidence"), t("Immutable snapshot, policy, scope and fingerprint evidence."), open=False) %}
+    {{ execution.rollout_evidence(execution_context, selected=True) }}
+  {% endcall %}
+
+  {% call ui.workflow_action_bar("blocked" if blocker_code else ("success" if selected_item and selected_item.review.status == "approved" else "waiting"), t("Review status"), t(blocker_code) if blocker_code else t("Approve the exact selected plan, then continue to Apply.")) %}
+    {% if can_approve and can("jobs.review") %}
+    <form method="post" action="/execution-center/plan-review/{{ selected_item.review.job_id }}/approve">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="review_notes" value="{{ t('Approved in Plan Review') }}">
+      {{ ui.button(t("Approve selected plan"), type="submit", variant="primary", icon="clipboard-check", confirm_text=t("Approve this exact Dry Run plan for the current organization, environment, snapshot, and scope?"), confirm_title=t("Confirm plan approval")) }}
+    </form>
+    {% else %}
+    {{ ui.button(t(next_action_code), href=next_action_url, variant="primary", icon="arrow-right") }}
+    {% endif %}
+  {% endcall %}
 
   {% if selected_item %}{% set job = selected_item.job %}{% set review = selected_item.review %}{% set summary = job.summary or {} %}
+  <div id="selected-plan">
   {% call ui.panel(t("Selected Plan"), description=t("Approval applies only to this plan fingerprint and expires automatically.")) %}
     <div class="detail-grid">
       <div class="detail-item"><div class="label">{{ t("Dry Run ID") }}</div><div class="value">{{ ui.identifier(job.job_id, t("Copy Dry Run ID"), t("Dry Run ID copied"), "/execution-center/jobs/" ~ job.job_id) }}</div></div>
@@ -33,18 +40,17 @@
     </div>
     <details class="detail-toggle"><summary>{{ t("Technical evidence") }}</summary><div class="evidence-code"><div>{{ t("Plan Fingerprint") }}: <code>{{ review.plan_fingerprint }}</code></div><div>{{ t("Config Fingerprint") }}: <code>{{ review.config_snapshot_hash }}</code></div></div></details>
   {% endcall %}
+  </div>
   {% endif %}
 
   {% call ui.panel(t("Business change and risk summary"), description=t("Approval covers these immutable plan outcomes and the exact evidence version shown above.")) %}
     <div class="compact-stats">
       {{ ui.compact_stat(t("Create"), plan_review_summary.create_count) }}
       {{ ui.compact_stat(t("Update or move"), plan_review_summary.update_count) }}
-      {{ ui.compact_stat(t("Enable or rehire"), plan_review_summary.enable_count) }}
-      {{ ui.compact_stat(t("Disable"), plan_review_summary.disable_count) }}
+      {{ ui.compact_stat(t("Lifecycle changes"), plan_review_summary.enable_count + plan_review_summary.disable_count) }}
       {{ ui.compact_stat(t("Group relationships"), plan_review_summary.group_relation_count) }}
       {{ ui.compact_stat(t("Conflicts"), plan_review_summary.conflict_count) }}
       {{ ui.compact_stat(t("High-risk changes"), plan_review_summary.risk_count) }}
-      {{ ui.compact_stat(t("Errors"), plan_review_summary.error_count) }}
     </div>
   {% endcall %}
 

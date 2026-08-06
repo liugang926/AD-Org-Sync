@@ -771,7 +771,7 @@ class RolloutReadinessService:
         dry_run_job_id = _text(getattr(dry_run_job, "job_id", ""))
         open_plan_conflicts = (
             self.conflict_repo.list_conflict_records(
-                job_id=dry_run_job_id,
+                plan_id=dry_run_job_id,
                 status="open",
                 org_id=normalized_org_id,
             )

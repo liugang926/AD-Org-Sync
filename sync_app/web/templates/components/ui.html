@@ -281,6 +281,19 @@
 </div>
 {% endmacro %}
 
+{% macro workflow_action_bar(status, title, description='') %}
+{% set normalized_status = status if status in ['waiting', 'success', 'blocked', 'failed'] else 'waiting' %}
+<aside class="workflow-action-bar workflow-action-bar--{{ normalized_status }}" data-component="workflow-action-bar" aria-live="polite" aria-atomic="true">
+  <div class="workflow-action-bar__copy">
+    {{ badge(title, 'success' if normalized_status == 'success' else ('danger' if normalized_status in ['blocked', 'failed'] else 'planned')) }}
+    {% if description %}<span>{{ description }}</span>{% endif %}
+  </div>
+  <div class="workflow-action-bar__actions">
+    {{ caller() }}
+  </div>
+</aside>
+{% endmacro %}
+
 {% macro detail_drawer(id, title, summary='', close_label='Close details', footer='', class_name='', attrs='', eyebrow='Details') %}
 <div class="detail-drawer identity-drawer {{ class_name }}" id="{{ id }}" data-detail-drawer data-identity-drawer hidden {{ attrs|safe }}>
   {{ button('', variant='secondary', class_name='detail-drawer__backdrop identity-drawer__backdrop', attrs='data-identity-drawer-close aria-label="' ~ close_label ~ '"') }}

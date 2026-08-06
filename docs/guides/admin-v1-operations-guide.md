@@ -101,6 +101,27 @@ Use this flow when a source user may need to bind to an existing AD account:
    - keep the conflict unresolved until ownership is clarified
    - use an exception only if this is truly temporary
 
+## Conflict Evidence Lifecycle
+
+Every conflict belongs to a concrete `plan_id` and `workflow_id`. The current Apply gate counts only `open` conflicts for the selected current plan. Conflicts from older plans remain visible as `Historical evidence`; they do not block the current plan.
+
+Use these states consistently:
+
+- `open`: unresolved and gates only its own current plan
+- `resolved`: a binding, exception, or other reviewed resolution was applied
+- `ignored`: reviewed evidence that does not require a current action
+- `archived`: retained historical evidence removed from the active queue
+
+You can reopen any resolved, ignored, or archived conflict when new evidence appears. Every state transition records the actor, reason, plan, workflow, bulk flag, and timestamp. Bulk actions require the `mappings.write` capability, CSRF validation, a confirmation dialog, and the typed confirmation shown in the form.
+
+Default retention policy:
+
+- archive conflicts for expired plans after `conflict_archive_after_days` (default 30 days)
+- retain conflict evidence for `conflict_retention_days` (default 90 days)
+- keep an expired job record while retained conflict evidence still references it
+
+The values are SQLite-backed application settings. Review the effective values on `/system-management/database`. On the Conflict Queue, `Archive Expired Plan Conflicts` requires typing `ARCHIVE <org_id>` and creates a bulk audit record.
+
 ## Rule Governance
 
 Use `/identity-governance/manual-overrides` and `/identity-governance/exception-rules` as governed policy stores, not as a scratchpad.
@@ -226,6 +247,29 @@ All administration timestamps show the browser-local absolute time and a relativ
 Legacy Phase 7 GET URLs permanently redirect to their canonical routes and preserve query parameters. Legacy POST paths remain available for compatibility, but new automation should use canonical paths.
 
 Authentication handoffs also preserve safe HTTP semantics. Starting SSPR or administrator SSO requires a CSRF-checked POST. Provider callback GET pages only display and automatically submit the secure handoff; OAuth transaction consumption, login-state changes, and audit records occur on POST.
+
+### Bootstrap administrator roles
+
+`bootstrap-admin --role` accepts the same role catalog used by Web authorization. Unsupported values are rejected before an account is written.
+
+| Role | Intended operational scope |
+| --- | --- |
+| `super_admin` | Full platform administration |
+| `connector_admin` | Source connector and connector configuration |
+| `ad_admin` | AD target configuration and directory operations |
+| `mapping_reviewer` | Mapping, exception, conflict, and plan review decisions |
+| `sync_executor` | Dry Run and Apply execution without review authority |
+| `operator` | Existing operational execution role (permissions unchanged) |
+| `auditor` | Read-only operational and audit access |
+
+Examples:
+
+```powershell
+.\.venv\Scripts\python.exe -m sync_app.cli bootstrap-admin --db-path app.db --username reviewer --password-env AD_ORG_SYNC_ADMIN_PASSWORD --role mapping_reviewer
+.\.venv\Scripts\python.exe -m sync_app.cli bootstrap-admin --db-path app.db --username executor --password-env AD_ORG_SYNC_ADMIN_PASSWORD --role sync_executor
+```
+
+Creating either role uses the supported repository path; no direct database edit or temporary `super_admin` grant is needed. Keep reviewer and executor accounts separate when independent approval is required.
 
 ## Escalation Triggers
 

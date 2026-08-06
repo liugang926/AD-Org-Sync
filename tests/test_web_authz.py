@@ -7,6 +7,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from sync_app.clients.dingtalk import DingTalkAPIError
+from sync_app.core.admin_roles import WEB_ADMIN_ROLES
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
 from sync_app.services.config_store import save_editable_config
 from sync_app.web.app import resolve_web_runtime_settings
@@ -17,6 +18,20 @@ from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
 
 class WebAuthorizationTests(WebAuthzBaseTestCase):
+    def test_every_supported_role_can_login_without_role_downgrade(self):
+        for role in WEB_ADMIN_ROLES:
+            username = f"login-{role}"
+            self.app.state.user_repo.create_user(
+                username,
+                self.app.state.user_repo.get_user_record_by_username(
+                    "superadmin"
+                ).password_hash,
+                role=role,
+            )
+            with self.subTest(role=role):
+                self._login(username)
+                self.assertEqual(self.session.get("role"), role)
+
     def test_operator_cannot_access_config_or_database_actions(self):
         self._login("operator1")
 
@@ -177,6 +192,25 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.headers["location"], "/users")
         self.assertIsNone(
             self.app.state.user_repo.get_user_record_by_username("weakuser")
+        )
+
+    def test_super_admin_cannot_create_user_with_unknown_role(self):
+        self._login("superadmin")
+        users_page = self._route("/users", "GET")(self._request("/users"))
+        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(users_page))
+        self.assertIsNotNone(match)
+
+        response = self._route("/users", "POST")(
+            self._request("/users", "POST"),
+            csrf_token=match.group(1),
+            username="invalidrole",
+            password="Admin123!",
+            role="database_owner",
+        )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIsNone(
+            self.app.state.user_repo.get_user_record_by_username("invalidrole")
         )
 
     def test_super_admin_can_create_user_with_simple_eight_character_password(self):
@@ -2213,6 +2247,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             action="skip_user_sync",
             conflict_ids=[str(conflict_id_1), str(conflict_id_2)],
             notes="bulk skip",
+            confirmation="CONFIRM",
             return_query="",
             return_status="open",
             return_job_id="job-conflict-002",
@@ -2265,6 +2300,126 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(reopened_conflict.status, "open")
         self.assertIsNone(reopened_conflict.resolution_payload)
         self.assertEqual(reopened_conflict.resolved_at, "")
+
+    def test_bulk_conflict_action_requires_server_verified_second_confirmation(self):
+        self._login("superadmin")
+        self.app.state.job_repo.create_job(
+            "job-conflict-confirm",
+            trigger_type="unit_test",
+            execution_mode="dry_run",
+            status="COMPLETED",
+        )
+        conflict_id = self.app.state.conflict_repo.add_conflict(
+            job_id="job-conflict-confirm",
+            conflict_type="identity_ambiguous",
+            source_id="alice",
+            message="confirm bulk mutation",
+        )
+        response = self._route("/conflicts", "GET")(self._request("/conflicts"))
+        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(response))
+        self.assertIsNotNone(match)
+
+        rejected = self._route("/conflicts/bulk", "POST")(
+            self._request("/conflicts/bulk", "POST"),
+            csrf_token=match.group(1),
+            action="dismiss",
+            conflict_ids=[str(conflict_id)],
+            notes="reviewed",
+            confirmation="not-confirmed",
+        )
+        self.assertEqual(rejected.status_code, 303)
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status,
+            "open",
+        )
+
+        accepted = self._route("/conflicts/bulk", "POST")(
+            self._request("/conflicts/bulk", "POST"),
+            csrf_token=match.group(1),
+            action="dismiss",
+            conflict_ids=[str(conflict_id)],
+            notes="reviewed",
+            confirmation="CONFIRM",
+        )
+        self.assertEqual(accepted.status_code, 303)
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status,
+            "ignored",
+        )
+        history = self.app.state.conflict_repo.list_status_history(conflict_id)
+        self.assertEqual(history[-1]["to_status"], "ignored")
+        self.assertEqual(history[-1]["is_bulk"], 1)
+
+    def test_bulk_archive_expired_plans_requires_permission_and_typed_confirmation(self):
+        ended_at = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat(
+            timespec="seconds"
+        )
+        self.app.state.job_repo.create_job(
+            "job-conflict-expired",
+            trigger_type="unit_test",
+            execution_mode="dry_run",
+            status="COMPLETED",
+        )
+        with self.app.state.db_manager.transaction() as conn:
+            conn.execute(
+                "UPDATE sync_jobs SET ended_at = ? WHERE job_id = ?",
+                (ended_at, "job-conflict-expired"),
+            )
+        conflict_id = self.app.state.conflict_repo.add_conflict(
+            job_id="job-conflict-expired",
+            conflict_type="identity_ambiguous",
+            source_id="alice",
+            message="expired plan evidence",
+        )
+
+        self._login("operator1")
+        operator_page = self._route("/conflicts", "GET")(
+            self._request("/conflicts")
+        )
+        csrf_match = re.search(
+            r'name="csrf_token" value="([^"]+)"', self._text(operator_page)
+        )
+        self.assertIsNotNone(csrf_match)
+        denied = self._route("/conflicts/archive-expired", "POST")(
+            self._request("/conflicts/archive-expired", "POST"),
+            csrf_token=csrf_match.group(1),
+            confirmation="ARCHIVE default",
+        )
+        self.assertEqual(denied.status_code, 303)
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status,
+            "open",
+        )
+
+        self._login("superadmin")
+        page = self._route("/conflicts", "GET")(self._request("/conflicts"))
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(page))
+        self.assertIsNotNone(csrf_match)
+        rejected = self._route("/conflicts/archive-expired", "POST")(
+            self._request("/conflicts/archive-expired", "POST"),
+            csrf_token=csrf_match.group(1),
+            confirmation="ARCHIVE wrong",
+        )
+        self.assertEqual(rejected.status_code, 303)
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status,
+            "open",
+        )
+        accepted = self._route("/conflicts/archive-expired", "POST")(
+            self._request("/conflicts/archive-expired", "POST"),
+            csrf_token=csrf_match.group(1),
+            confirmation="ARCHIVE default",
+        )
+        self.assertEqual(accepted.status_code, 303)
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status,
+            "archived",
+        )
+        audit_actions = {
+            item.action_type
+            for item in self.app.state.audit_repo.list_recent_logs(30)
+        }
+        self.assertIn("conflict.bulk_archive_expired", audit_actions)
 
     def test_super_admin_can_apply_conflict_recommendation(self):
         self._login("superadmin")

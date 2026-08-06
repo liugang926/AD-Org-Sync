@@ -546,18 +546,46 @@ class DatabaseManager:
         self,
         *,
         job_retention_days: int = 30,
+        conflict_archive_after_days: Optional[int] = None,
+        conflict_retention_days: Optional[int] = None,
         event_retention_days: int = 30,
         audit_log_retention_days: int = 90,
     ) -> Dict[str, Any]:
         normalized_job_retention_days = max(int(job_retention_days or 0), 0)
+        normalized_conflict_archive_days = max(
+            int(
+                job_retention_days
+                if conflict_archive_after_days is None
+                else conflict_archive_after_days
+            ),
+            0,
+        )
+        normalized_conflict_retention_days = max(
+            int(
+                job_retention_days
+                if conflict_retention_days is None
+                else conflict_retention_days
+            ),
+            0,
+        )
         normalized_event_retention_days = max(int(event_retention_days or 0), 0)
         normalized_audit_log_retention_days = max(int(audit_log_retention_days or 0), 0)
         now = datetime.now(timezone.utc)
         job_cutoff = None
+        conflict_archive_cutoff = None
+        conflict_retention_cutoff = None
         event_cutoff = None
         audit_log_cutoff = None
         if normalized_job_retention_days > 0:
             job_cutoff = (now - timedelta(days=normalized_job_retention_days)).isoformat(timespec="seconds")
+        if normalized_conflict_archive_days > 0:
+            conflict_archive_cutoff = (
+                now - timedelta(days=normalized_conflict_archive_days)
+            ).isoformat(timespec="seconds")
+        if normalized_conflict_retention_days > 0:
+            conflict_retention_cutoff = (
+                now - timedelta(days=normalized_conflict_retention_days)
+            ).isoformat(timespec="seconds")
         if normalized_event_retention_days > 0:
             event_cutoff = (now - timedelta(days=normalized_event_retention_days)).isoformat(timespec="seconds")
         if normalized_audit_log_retention_days > 0:
@@ -566,12 +594,17 @@ class DatabaseManager:
         result = {
             "checked_at": now.isoformat(timespec="seconds"),
             "job_retention_days": normalized_job_retention_days,
+            "conflict_archive_after_days": normalized_conflict_archive_days,
+            "conflict_retention_days": normalized_conflict_retention_days,
             "event_retention_days": normalized_event_retention_days,
             "audit_log_retention_days": normalized_audit_log_retention_days,
             "job_cutoff": job_cutoff or "",
+            "conflict_archive_cutoff": conflict_archive_cutoff or "",
+            "conflict_retention_cutoff": conflict_retention_cutoff or "",
             "event_cutoff": event_cutoff or "",
             "audit_log_cutoff": audit_log_cutoff or "",
             "deleted_jobs": 0,
+            "archived_conflicts": 0,
             "deleted_events": 0,
             "deleted_planned_operations": 0,
             "deleted_operation_logs": 0,
@@ -582,12 +615,98 @@ class DatabaseManager:
         }
 
         with self.transaction() as conn:
+            if conflict_archive_cutoff:
+                rows_to_archive = conn.execute(
+                    """
+                    SELECT c.*, j.org_id AS job_org_id
+                    FROM sync_conflicts AS c
+                    INNER JOIN sync_jobs AS j ON j.job_id = c.job_id
+                    WHERE j.ended_at IS NOT NULL
+                      AND j.ended_at < ?
+                      AND c.status != 'archived'
+                    ORDER BY c.id ASC
+                    """,
+                    (conflict_archive_cutoff,),
+                ).fetchall()
+                archive_timestamp = now.isoformat(timespec="seconds")
+                for row in rows_to_archive:
+                    conn.execute(
+                        """
+                        UPDATE sync_conflicts
+                        SET status = 'archived', archived_at = ?, status_changed_at = ?
+                        WHERE id = ?
+                        """,
+                        (archive_timestamp, archive_timestamp, int(row["id"])),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO sync_conflict_status_history (
+                          conflict_id, job_id, plan_id, workflow_id,
+                          from_status, to_status, actor_username, reason,
+                          is_bulk, created_at
+                        ) VALUES (?, ?, ?, ?, ?, 'archived', 'retention-policy', ?, 1, ?)
+                        """,
+                        (
+                            int(row["id"]),
+                            str(row["job_id"] or ""),
+                            str(row["plan_id"] or row["job_id"] or ""),
+                            str(row["workflow_id"] or row["job_id"] or ""),
+                            str(row["status"] or "open"),
+                            "automatic archive for expired plan",
+                            archive_timestamp,
+                        ),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO web_audit_logs (
+                          org_id, actor_username, action_type, target_type,
+                          target_id, result, message, payload_json, created_at
+                        ) VALUES (?, 'retention-policy', 'conflict.status_transition',
+                                  'sync_conflict', ?, 'success',
+                                  'Archived conflict evidence by retention policy', ?, ?)
+                        """,
+                        (
+                            str(row["job_org_id"] or ""),
+                            str(row["id"]),
+                            dumps_json(
+                                {
+                                    "job_id": str(row["job_id"] or ""),
+                                    "plan_id": str(row["plan_id"] or row["job_id"] or ""),
+                                    "workflow_id": str(row["workflow_id"] or row["job_id"] or ""),
+                                    "from_status": str(row["status"] or "open"),
+                                    "to_status": "archived",
+                                    "reason": "automatic archive for expired plan",
+                                    "bulk": True,
+                                }
+                            ),
+                            archive_timestamp,
+                        ),
+                    )
+                result["archived_conflicts"] = len(rows_to_archive)
+
+            if conflict_retention_cutoff:
+                result["deleted_conflicts"] = conn.execute(
+                    """
+                    DELETE FROM sync_conflicts
+                    WHERE job_id IN (
+                      SELECT job_id
+                      FROM sync_jobs
+                      WHERE ended_at IS NOT NULL
+                        AND ended_at < ?
+                    )
+                    """,
+                    (conflict_retention_cutoff,),
+                ).rowcount
+
             if job_cutoff:
                 old_job_selector = """
-                    SELECT job_id
-                    FROM sync_jobs
-                    WHERE ended_at IS NOT NULL
-                      AND ended_at < ?
+                    SELECT j.job_id
+                    FROM sync_jobs AS j
+                    WHERE j.ended_at IS NOT NULL
+                      AND j.ended_at < ?
+                      AND NOT EXISTS (
+                        SELECT 1 FROM sync_conflicts AS c WHERE c.job_id = j.job_id
+                      )
                 """
                 result["deleted_review_requests"] = conn.execute(
                     f"DELETE FROM sync_plan_reviews WHERE job_id IN ({old_job_selector})",
@@ -599,10 +718,6 @@ class DatabaseManager:
                     WHERE finished_at IS NOT NULL
                       AND finished_at < ?
                     """,
-                    (job_cutoff,),
-                ).rowcount
-                result["deleted_conflicts"] = conn.execute(
-                    f"DELETE FROM sync_conflicts WHERE job_id IN ({old_job_selector})",
                     (job_cutoff,),
                 ).rowcount
                 result["deleted_operation_logs"] = conn.execute(
@@ -618,11 +733,7 @@ class DatabaseManager:
                     (job_cutoff,),
                 ).rowcount
                 result["deleted_jobs"] = conn.execute(
-                    """
-                    DELETE FROM sync_jobs
-                    WHERE ended_at IS NOT NULL
-                      AND ended_at < ?
-                    """,
+                    f"DELETE FROM sync_jobs WHERE job_id IN ({old_job_selector})",
                     (job_cutoff,),
                 ).rowcount
 

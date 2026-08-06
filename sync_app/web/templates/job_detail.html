@@ -59,6 +59,11 @@
       </div>
     </div>
   </section>
+  {% set completion_action_url = "/identity-governance/conflicts?job_id=" ~ job.job_id if summary.get("conflict_count", 0) else ("/execution-center/plan-review?plan_id=" ~ job.job_id if job.execution_mode == "dry_run" else "/execution-center/jobs") %}
+  {% set completion_action_label = t("Review conflicts") if summary.get("conflict_count", 0) else (t("Open Plan Review") if job.execution_mode == "dry_run" else t("Back to Job History")) %}
+  {% call ui.workflow_action_bar("success" if job.status == "COMPLETED" else ("failed" if job.status == "FAILED" else "waiting"), t("Execution completed") if job.status == "COMPLETED" else (t("Execution failed") if job.status == "FAILED" else t("Execution in progress")), t("Review the business result first, then open technical evidence only when needed.")) %}
+    {{ ui.button(completion_action_label, href=completion_action_url, variant="primary", icon="arrow-right") }}
+  {% endcall %}
   {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t("Review the result and risk summary first. Open the conflict queue when identity decisions remain."), t("Review conflicts"), "/identity-governance/conflicts") }}
 
   {% if summary.get("source_snapshot_id") %}
@@ -357,7 +362,7 @@
   {% endif %}
 
   {% if operation_records %}
-  {% call ui.panel(t("Operation Records")) %}
+  {% call ui.detail_toggle(t("Operation Records"), t("Technical execution evidence for each attempted operation."), open=False) %}
     {% call ui.table_shell() %}
       <table class="table-sm">
         <thead>
@@ -435,7 +440,7 @@
     {% endif %}
 
     {% if events %}
-    {% call ui.panel(t("System Events")) %}
+    {% call ui.detail_toggle(t("System Events"), t("Technical event evidence for troubleshooting and audit."), open=False) %}
       {% call ui.table_shell() %}
         <table class="table-sm">
           <thead><tr><th>{{ t("Time") }}</th><th>{{ t("Level") }}</th><th>{{ t("Event") }}</th><th>{{ t("Message") }}</th><th>{{ t("Details") }}</th></tr></thead>
