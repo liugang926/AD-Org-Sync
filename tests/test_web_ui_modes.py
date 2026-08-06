@@ -318,7 +318,7 @@ class WebUIModeTests(WebAuthzBaseTestCase):
         basic_visible = _visible_text(basic_body)
         self.assertNotIn(job_id, basic_visible)
         self.assertIn("Job Details", basic_visible)
-        self.assertIn("COMPLETED", basic_visible)
+        self.assertIn("Completed", basic_visible)
 
         self.session["ui_mode"] = "advanced"
         advanced_body = self._text(
