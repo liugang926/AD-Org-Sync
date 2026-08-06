@@ -99,7 +99,7 @@ class MigrationIntegrityTests(unittest.TestCase):
             audit_count = connection.execute(
                 "SELECT COUNT(*) FROM web_audit_logs WHERE action_type = 'test.before_upgrade'"
             ).fetchone()[0]
-        self.assertEqual(applied, 38)
+        self.assertEqual(applied, MIGRATIONS[-1][0])
         self.assertEqual((binding["source_provider"], binding["source_user_id"], binding["ad_username"]), ("wecom", "alice", "alice"))
         self.assertIn("source_directory_snapshots", tables)
         self.assertIn("sync_scope_selections", tables)
