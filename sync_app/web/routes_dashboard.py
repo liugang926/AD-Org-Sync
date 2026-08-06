@@ -193,6 +193,11 @@ def register_dashboard_routes(
                     "string",
                     org_id=current_org.org_id,
                 )
+        reported_status = str(snapshot.get("overall_status") or "warning")
+        if normalized_connection_kind == "source" and source_result is not None:
+            reported_status = str(source_result.get("status") or "warning")
+        elif normalized_connection_kind == "ldap" and ldap_result is not None:
+            reported_status = str(ldap_result.get("status") or "warning")
         repositories.audit_repo.add_log(
             org_id=current_org.org_id,
             actor_username=user.username,
@@ -201,10 +206,10 @@ def register_dashboard_routes(
             target_id=current_org.org_id,
             result=(
                 "success"
-                if snapshot["overall_status"] == "success"
+                if reported_status == "success"
                 else (
                     "warning"
-                    if snapshot["overall_status"] == "warning"
+                    if reported_status == "warning"
                     else "error"
                 )
             ),
@@ -218,10 +223,10 @@ def register_dashboard_routes(
         flash_t(
             request,
             "success"
-            if snapshot["overall_status"] == "success"
-            else ("warning" if snapshot["overall_status"] == "warning" else "error"),
+            if reported_status == "success"
+            else ("warning" if reported_status == "warning" else "error"),
             "Preflight finished with status {status}",
-            status=str(snapshot["overall_status"]).upper(),
+            status=reported_status.upper(),
         )
         return RedirectResponse(url=fallback_url, status_code=303)
 

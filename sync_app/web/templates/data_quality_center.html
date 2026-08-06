@@ -7,7 +7,7 @@
     {% if can("config.write") %}
     <form method="post" action="/data-sources/data-quality/run" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ ui.button(t("Run Quality Scan"), type="submit", variant="primary", icon="refresh-cw") }}
+      {{ ui.button(t("Run Quality Scan"), type="submit", variant=("secondary" if source_snapshot and not quality_review else "primary"), icon="refresh-cw") }}
     </form>
     {% endif %}
     {% if selected_snapshot %}
@@ -16,7 +16,7 @@
   {% endcall %}
 
   {% if source_snapshot %}
-  {% call ui.panel(t("Current Source Snapshot Review"), description=t("This audited confirmation applies only to the immutable source snapshot shown here. A newer snapshot requires a new review."), class_name="toolbar-card") %}
+  {% call ui.panel(t("Current Source Snapshot Review"), description=t("This audited confirmation follows the immutable content fingerprint. An equivalent newer snapshot reuses it; changed content requires a new review."), class_name="toolbar-card") %}
     <div class="detail-grid">
       <div class="detail-item"><div class="label">{{ t("Source Snapshot") }}</div><div class="value">#{{ source_snapshot.id }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Generated At") }}</div><div class="value">{{ ui.local_time(source_snapshot.completed_at) }}</div></div>
@@ -50,7 +50,7 @@
     <div class="quality-ops-hero__focus">
       <span>{{ t("Repair Backlog") }}</span>
       <strong>{{ selected_repair_item_count or 0 }}</strong>
-      <small>{{ t("Selected snapshot") }}: {{ selected_snapshot_title or t("None") }}</small>
+      <small>{{ t("Selected snapshot") }}: {{ t("Snapshot #{id}", id=selected_snapshot.id) if selected_snapshot else t("None") }}</small>
     </div>
   </section>
 
@@ -85,7 +85,7 @@
   {% else %}
   {% call ui.panel(t("Selected Snapshot"), description=t("Review the current quality posture for the selected snapshot. Use the history table below to jump across older runs."), class_name="toolbar-card") %}
     <div class="detail-grid">
-      <div class="detail-item"><div class="label">{{ t("Snapshot") }}</div><div class="value">{{ selected_snapshot_title or "-" }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Snapshot") }}</div><div class="value">{{ t("Snapshot #{id}", id=selected_snapshot.id) if selected_snapshot else "-" }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Generated At") }}</div><div class="value">{{ ui.local_time(selected_snapshot.created_at) }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Created By") }}</div><div class="value">{{ selected_snapshot.created_by or "-" }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Trigger") }}</div><div class="value">{{ selected_snapshot.trigger_action or "-" }}</div></div>
@@ -124,7 +124,7 @@
         {% for row in snapshots %}
         <tr>
           <td>
-            <a href="{{ '/data-sources/data-quality?snapshot_id=' ~ row.snapshot.id }}">{{ row.title }}</a>
+            <a href="{{ '/data-sources/data-quality?snapshot_id=' ~ row.snapshot.id }}">{{ t("Snapshot #{id}", id=row.snapshot.id) }}</a>
             {% if row.is_selected %}
             <div class="muted">{{ t("Selected") }}</div>
             {% endif %}

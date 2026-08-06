@@ -248,7 +248,6 @@ class DashboardSupport:
         if include_live and normalized_live_check in {"all", "source"}:
             if (
                 config
-                and not validation_errors
                 and config.source_connector.corpid
                 and config.source_connector.corpsecret
             ):
@@ -287,7 +286,7 @@ class DashboardSupport:
                     }
                 )
         if include_live and normalized_live_check in {"all", "ldap"}:
-            if config and not validation_errors and config.ldap.server and config.ldap.domain and config.ldap.username and config.ldap.password:
+            if config and config.ldap.server and config.ldap.domain and config.ldap.username and config.ldap.password:
                 ldap_ok, ldap_message = self.test_ldap_connection(
                     config.ldap.server,
                     config.ldap.domain,

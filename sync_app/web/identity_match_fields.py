@@ -210,6 +210,13 @@ def build_ad_match_field_options(
     options: list[dict[str, Any]] = []
     seen: set[str] = set()
 
+    def matching_disabled(capability_status: str, schema_detected: bool) -> bool:
+        normalized_status = str(capability_status or "unknown").strip().lower()
+        return normalized_status in {"not_detected", "unknown"} or (
+            normalized_status == "unavailable_by_permission"
+            and not schema_detected
+        )
+
     def add_option(
         value: Any,
         label: Any,
@@ -238,8 +245,10 @@ def build_ad_match_field_options(
                         is_primary_id_candidate
                         or normalized_value in AD_PRIMARY_ID_FIELDS
                     ),
-                    disabled=capability_status
-                    in {"not_detected", "unavailable_by_permission", "unknown"},
+                    disabled=matching_disabled(
+                        capability_status,
+                        bool(schema_detected),
+                    ),
                 )
             return
         seen.add(normalized_value)
@@ -256,11 +265,10 @@ def build_ad_match_field_options(
                     is_primary_id_candidate
                     or normalized_value in AD_PRIMARY_ID_FIELDS
                 ),
-                "disabled": capability_status in {
-                    "not_detected",
-                    "unavailable_by_permission",
-                    "unknown",
-                },
+                "disabled": matching_disabled(
+                    capability_status,
+                    bool(schema_detected),
+                ),
             }
         )
 

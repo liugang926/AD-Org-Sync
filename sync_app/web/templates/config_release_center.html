@@ -33,7 +33,7 @@
       </div>
       <div class="release-step {% if latest_snapshot %}is-complete{% else %}is-warning{% endif %}">
         <span>{{ t("Snapshot") }}</span>
-        <strong>{{ latest_snapshot_title or t("None") }}</strong>
+        <strong>{{ t(latest_snapshot_title) if latest_snapshot_title else t("None") }}</strong>
       </div>
       <div class="release-step {% if comparison_diff.changed %}is-warning{% else %}is-complete{% endif %}">
         <span>{{ t("Compare") }}</span>
@@ -103,7 +103,7 @@
       <strong>{{ current_org.name }}</strong>
       {% if latest_snapshot %}
       <span class="muted">{{ t("Latest snapshot") }}:</span>
-      <strong>{{ latest_snapshot_title }}</strong>
+      <strong>{{ t(latest_snapshot_title) }}</strong>
       {% else %}
       <span class="muted">{{ t("No published snapshots yet.") }}</span>
       {% endif %}
@@ -111,7 +111,7 @@
 
     <div class="compact-stats">
       {{ ui.compact_stat(t("Published Snapshots"), snapshot_count) }}
-      {{ ui.compact_stat(t("Latest Snapshot"), latest_snapshot_title or "-") }}
+      {{ ui.compact_stat(t("Latest Snapshot"), t(latest_snapshot_title) if latest_snapshot_title else "-") }}
       {{ ui.compact_stat(t("Changed Groups"), comparison_diff.changed_group_count) }}
       {{ ui.compact_stat(t("Changed Items"), comparison_diff.changed_item_count) }}
     </div>
@@ -194,7 +194,7 @@
           <tr>
             <td>
               <div class="stack-tight">
-                <div class="cell-strong">{{ row.title }}</div>
+                <div class="cell-strong">{{ t(row.title) }}</div>
                 <div class="muted">#{{ row.snapshot.id }}{% if row.is_latest %} · {{ t("Latest") }}{% endif %}</div>
               </div>
             </td>

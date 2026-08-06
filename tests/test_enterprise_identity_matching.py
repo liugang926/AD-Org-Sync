@@ -598,6 +598,30 @@ def test_create_new_account_decision_creates_identity_without_fake_ad_link(tmp_p
     assert decisions_status(identities.db, candidate["id"]) == "create_requested"
 
 
+def test_create_new_account_decision_remains_nonblocking_on_match_rerun(tmp_path) -> None:
+    _, _, _, identities, _, matching, decision_service = _decision_services(
+        tmp_path, with_ad=False
+    )
+    candidate = matching.run(org_id="acme", created_by="reviewer")["candidates"][0]
+    decision = decision_service.decide(
+        org_id="acme",
+        candidate_id=candidate["id"],
+        candidate_fingerprint=candidate["candidate_fingerprint"],
+        decision="create_new_ad_account",
+        request_id="decision-request-create-rerun",
+        decided_by="reviewer",
+    )
+
+    rerun_candidate = matching.run(
+        org_id="acme", created_by="reviewer"
+    )["candidates"][0]
+
+    assert rerun_candidate["result_level"] == RESULT_MANUAL
+    assert rerun_candidate["recommended_action"] == "create_new_ad_account"
+    assert rerun_candidate["proposed_identity_id"] == decision["resulting_identity_id"]
+    assert not identity_candidate_requires_decision(rerun_candidate)
+
+
 def decisions_status(db, candidate_id: int) -> str:
     with db.connection() as conn:
         row = conn.execute(

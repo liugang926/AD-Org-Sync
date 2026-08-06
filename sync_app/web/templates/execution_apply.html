@@ -25,16 +25,36 @@
 
   {{ execution.tabs("execution-apply") }}
   {% set apply_finished = latest_apply and latest_apply.status|upper in ["COMPLETED", "FAILED"] %}
+  {% set apply_succeeded = latest_apply and latest_apply.status|upper == "COMPLETED" %}
+  {% set apply_failed = latest_apply and latest_apply.status|upper == "FAILED" %}
+  {% set zero_change_completed = apply_succeeded and context.impact_count == 0 and latest_apply.error_count|int == 0 %}
   {{ execution.progress("execution-apply", dry_run_state=("complete" if evaluation.job else "pending"), review_state=("complete" if evaluation.review and evaluation.review.status == "approved" else "pending"), apply_state=("complete" if latest_apply and latest_apply.status|upper == "COMPLETED" else ("blocked" if blocked else "current")), audit_state=("complete" if apply_finished else "pending")) }}
   {{ high_risk.workflow(workflow, ui) }}
-  {{ execution.status((blockers[0].message_code if blockers else ''), (blockers[0].next_action_code if blockers else ''), "The approved plan is eligible for one Apply execution.") }}
+  {% if apply_succeeded %}
+    {{ execution.status("", "", "Verification complete. No AD changes were required." if zero_change_completed else "Verification complete. Apply results were recorded for this task.") }}
+  {% else %}
+    {{ execution.status((blockers[0].message_code if blockers else ''), (blockers[0].next_action_code if blockers else ''), "The approved plan is eligible for one Apply execution.") }}
+  {% endif %}
+  {% if apply_succeeded %}
+  <div class="callout callout--success" role="status" data-post-apply-verification="passed">
+    <strong>{{ t("Post-Apply verification") }}</strong>
+    <span>{{ t("Verification complete. No AD changes were required.") if zero_change_completed else t("Verification complete. Apply results were recorded for this task.") }}</span>
+  </div>
+  {% elif apply_failed %}
+  <div class="callout callout--danger" role="alert" data-post-apply-verification="failed">
+    <strong>{{ t("Post-Apply verification failed") }}</strong>
+    <span>{{ t("Verification did not complete. Review the failed Apply evidence before retrying.") }}</span>
+  </div>
+  {% endif %}
   {% call ui.detail_toggle(t("Technical evidence"), t("Immutable plan, environment, snapshot, policy and confirmation values."), open=False) %}
     {{ high_risk.context_details(context) }}
     {{ execution.rollout_evidence(execution_context, selected=True) }}
   {% endcall %}
 
-  {% call ui.workflow_action_bar("blocked" if blocked else ("failed" if latest_apply and latest_apply.status|upper == "FAILED" else "success"), t("Apply blocked") if blocked else (t("Execution failed") if latest_apply and latest_apply.status|upper == "FAILED" else t("Ready to Apply")), t(blockers[0].message_code, **blockers[0].params) if blockers else t("Run the reviewed plan with one final confirmation.")) %}
-    {% if can("jobs.run") and not blocked %}
+  {% call ui.workflow_action_bar("success" if apply_succeeded else ("failed" if apply_failed else ("blocked" if blocked else "success")), t("Verification complete") if apply_succeeded else (t("Execution failed") if apply_failed else (t("Apply blocked") if blocked else t("Ready to Apply"))), t("Verification complete. No AD changes were required.") if zero_change_completed else (t("Verification complete. Apply results were recorded for this task.") if apply_succeeded else (t(blockers[0].message_code, **blockers[0].params) if blockers else t("Run the reviewed plan with one final confirmation.")))) %}
+    {% if apply_succeeded %}
+    {{ ui.button(t("View Apply evidence"), href="/execution-center/jobs/" ~ latest_apply.job_id, variant="secondary", icon="file-check") }}
+    {% elif can("jobs.run") and not blocked %}
     <form method="post" action="/execution-center/apply/run">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       {{ high_risk.confirmation_fields(context) }}

@@ -2014,6 +2014,27 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertGreater(float(first_field.bounding_box()["width"]), 0)
         self._capture("connectors-text-scale-200.png")
 
+    def test_policy_confirmation_masks_password_values(self):
+        self._login()
+        self.page.goto(
+            f"{self.base_url}/sync-policies/account-naming?lang=en",
+            wait_until="networkidle",
+        )
+        creation_form = self.page.locator(
+            "form[action='/sync-policies/account-naming/account-creation']"
+        )
+        secret = "BrowserAcceptanceSecret!2026"
+        creation_form.locator("input[name='default_password']").fill(secret)
+        creation_form.get_by_role(
+            "button", name="Save Account Creation Policy"
+        ).click()
+
+        dialog = self.page.locator("[data-confirm-dialog]")
+        self.assertTrue(dialog.is_visible())
+        details = dialog.locator("[data-confirm-details]").inner_text()
+        self.assertNotIn(secret, details)
+        self.assertIn("••••••••", details)
+
     def test_chinese_operating_pages_do_not_leak_known_dynamic_english_messages(self):
         self._login()
         for path in ("/dashboard?lang=zh-CN", "/jobs?lang=zh-CN"):
