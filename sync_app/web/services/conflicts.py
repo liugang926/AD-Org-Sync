@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from sync_app.core.conflict_recommendations import (
     recommend_conflict_resolution,
     recommendation_requires_confirmation,
 )
-from sync_app.storage.local_db import SyncConflictRepository, WebAuditLogRepository
+from sync_app.storage.local_db import (
+    SettingsRepository,
+    SyncConflictRepository,
+    WebAuditLogRepository,
+)
 
 
 @dataclass(slots=True)
 class WebConflictService:
     conflict_repo: SyncConflictRepository
     audit_repo: WebAuditLogRepository
+    settings_repo: SettingsRepository
     recommend_conflict_resolution_fn: Callable[[Any], Optional[dict[str, Any]]] = recommend_conflict_resolution
 
     def list_conflicts_page(
@@ -26,6 +31,7 @@ class WebConflictService:
         job_id: str | None = None,
         status: str | None = None,
         query: str = "",
+        plan_id: str | None = None,
     ) -> tuple[list[Any], dict[str, Any]]:
         return self.conflict_repo.list_conflict_records_page(
             limit=limit,
@@ -34,6 +40,7 @@ class WebConflictService:
             status=status,
             query=query,
             org_id=org_id,
+            plan_id=plan_id,
         )
 
     def get_conflict_record(self, conflict_id: int, *, org_id: str) -> Any | None:
@@ -175,14 +182,17 @@ class WebConflictService:
     ) -> None:
         self.conflict_repo.update_conflict_status(
             conflict.id,
-            status="dismissed",
+            status="ignored",
             resolution_payload={
-                "action": "dismissed",
+                "action": "ignored",
                 "notes": notes,
                 "actor_username": actor_username,
                 "bulk": bulk,
             },
             resolved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            actor_username=actor_username,
+            reason=notes or "conflict ignored",
+            is_bulk=bulk,
         )
         if audit_action:
             payload = {"job_id": conflict.job_id, "notes": notes}
@@ -191,11 +201,11 @@ class WebConflictService:
             self.audit_repo.add_log(
                 org_id=org_id,
                 actor_username=actor_username,
-                action_type="conflict.dismiss",
+                action_type="conflict.ignore",
                 target_type="sync_conflict",
                 target_id=str(conflict.id),
                 result="success",
-                message="Dismissed sync conflict",
+                message="Ignored sync conflict",
                 payload=payload,
             )
 
@@ -213,6 +223,9 @@ class WebConflictService:
             status="open",
             resolution_payload=None,
             resolved_at=None,
+            actor_username=actor_username,
+            reason=f"reopened from {conflict.status}",
+            is_bulk=bulk,
         )
         if audit_action:
             payload = {"job_id": conflict.job_id, "previous_status": conflict.status}
@@ -261,6 +274,23 @@ class WebConflictService:
                     audit_action=False,
                 )
                 updated_count += 1
+                continue
+
+            if action == "archive":
+                if conflict.status == "archived":
+                    skipped_count += 1
+                    continue
+                if self.archive_conflict(
+                    conflict=conflict,
+                    org_id=org_id,
+                    actor_username=actor_username,
+                    notes=notes,
+                    bulk=True,
+                    audit_action=False,
+                ):
+                    updated_count += 1
+                else:
+                    skipped_count += 1
                 continue
 
             if conflict.status != "open":
@@ -326,3 +356,88 @@ class WebConflictService:
             },
         )
         return updated_count, skipped_count
+
+    def archive_conflict(
+        self,
+        *,
+        conflict: Any,
+        org_id: str,
+        actor_username: str,
+        notes: str,
+        bulk: bool = False,
+        audit_action: bool = True,
+    ) -> bool:
+        changed = self.conflict_repo.update_conflict_status(
+            conflict.id,
+            status="archived",
+            resolution_payload={
+                **dict(conflict.resolution_payload or {}),
+                "archive_notes": notes,
+                "archived_by": actor_username,
+                "bulk": bulk,
+            },
+            resolved_at=conflict.resolved_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            actor_username=actor_username,
+            reason=notes or "conflict archived",
+            is_bulk=bulk,
+        )
+        if changed and audit_action:
+            self.audit_repo.add_log(
+                org_id=org_id,
+                actor_username=actor_username,
+                action_type="conflict.archive",
+                target_type="sync_conflict",
+                target_id=str(conflict.id),
+                result="success",
+                message="Archived sync conflict evidence",
+                payload={
+                    "job_id": conflict.job_id,
+                    "plan_id": conflict.plan_id,
+                    "workflow_id": conflict.workflow_id,
+                    "notes": notes,
+                    "bulk": bulk,
+                },
+            )
+        return changed
+
+    def archive_expired_plan_conflicts(
+        self,
+        *,
+        org_id: str,
+        actor_username: str,
+        confirmation: str,
+    ) -> int:
+        expected_confirmation = f"ARCHIVE {org_id}"
+        if str(confirmation or "").strip() != expected_confirmation:
+            raise ValueError(f"confirmation must equal {expected_confirmation}")
+        archive_after_days = max(
+            self.settings_repo.get_int(
+                "conflict_archive_after_days", 30, org_id=org_id
+            ),
+            1,
+        )
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=archive_after_days)
+        ).isoformat(timespec="seconds")
+        archived_count = self.conflict_repo.archive_expired_plan_conflicts(
+            org_id=org_id,
+            cutoff_iso=cutoff,
+            actor_username=actor_username,
+            reason=f"bulk archive: plan older than {archive_after_days} days",
+        )
+        self.audit_repo.add_log(
+            org_id=org_id,
+            actor_username=actor_username,
+            action_type="conflict.bulk_archive_expired",
+            target_type="sync_conflict",
+            target_id="expired-plans",
+            result="success" if archived_count else "warning",
+            message="Bulk archived conflicts for expired plans",
+            payload={
+                "archive_after_days": archive_after_days,
+                "cutoff": cutoff,
+                "archived_count": archived_count,
+                "second_confirmation": True,
+            },
+        )
+        return archived_count

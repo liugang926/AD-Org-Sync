@@ -5,6 +5,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from sync_app import cli
+from sync_app.core.admin_roles import WEB_ADMIN_ROLES
 from sync_app.storage.local_db import DatabaseManager, OrganizationRepository, WebAdminUserRepository
 from sync_app.web.security import verify_password
 
@@ -77,6 +78,61 @@ class CliDeployCommandTests(unittest.TestCase):
         user = WebAdminUserRepository(manager).get_user_record_by_username("deployadmin")
         self.assertIsNotNone(user)
         self.assertTrue(verify_password("simple88", user.password_hash))
+
+    def test_bootstrap_admin_accepts_every_web_administrator_role(self):
+        for role in WEB_ADMIN_ROLES:
+            with self.subTest(role=role):
+                username = f"cli-{role.replace('_', '-')}"
+                exit_code, stdout, stderr = self._run_cli(
+                    [
+                        "bootstrap-admin",
+                        "--db-path",
+                        str(self.db_path),
+                        "--username",
+                        username,
+                        "--password",
+                        "simple88",
+                        "--role",
+                        role,
+                    ]
+                )
+
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(stderr, "")
+                self.assertIn(f"role: {role}", stdout)
+
+                manager = DatabaseManager(db_path=str(self.db_path))
+                manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+                user = WebAdminUserRepository(manager).get_user_record_by_username(username)
+                self.assertIsNotNone(user)
+                self.assertEqual(user.role, role)
+
+    def test_bootstrap_admin_rejects_unknown_role(self):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+            cli.main(
+                [
+                    "bootstrap-admin",
+                    "--db-path",
+                    str(self.db_path),
+                    "--username",
+                    "invalid-role-user",
+                    "--password",
+                    "simple88",
+                    "--role",
+                    "database_owner",
+                ]
+            )
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("invalid choice", stderr.getvalue())
+        manager = DatabaseManager(db_path=str(self.db_path))
+        manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+        self.assertIsNone(
+            WebAdminUserRepository(manager).get_user_record_by_username(
+                "invalid-role-user"
+            )
+        )
 
     def test_bootstrap_admin_requires_reset_for_existing_account(self):
         first_exit, _, first_stderr = self._run_cli(

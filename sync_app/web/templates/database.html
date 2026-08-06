@@ -36,6 +36,8 @@
   {% call ui.panel(t("Retention Policy"), t("Global Scope"), "warning") %}
     <div class="detail-grid">
       <div class="detail-item"><div class="label">{{ t("Job history") }}</div><div class="value">{{ retention_settings.job_history_retention_days }} {{ t("days") }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Conflict auto-archive") }}</div><div class="value">{{ retention_settings.conflict_archive_after_days }} {{ t("days") }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Conflict evidence") }}</div><div class="value">{{ retention_settings.conflict_retention_days }} {{ t("days") }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Event history") }}</div><div class="value">{{ retention_settings.event_history_retention_days }} {{ t("days") }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Audit logs") }}</div><div class="value">{{ retention_settings.audit_log_retention_days }} {{ t("days") }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Backups") }}</div><div class="value">{{ retention_settings.backup_retention_days }} {{ t("days") }} / {{ t("max {count} files", count=retention_settings.backup_retention_max_files) }}</div></div>

@@ -370,6 +370,7 @@ Before adding a new feature, run the architecture guard tests to confirm the dep
 .\.venv\Scripts\python.exe -m sync_app.cli version
 .\.venv\Scripts\python.exe -m sync_app.cli init-web --db-path app.db --config config.ini
 .\.venv\Scripts\python.exe -m sync_app.cli bootstrap-admin --db-path app.db --username admin --password simple88
+.\.venv\Scripts\python.exe -m sync_app.cli bootstrap-admin --db-path app.db --username reviewer --password-env AD_ORG_SYNC_ADMIN_PASSWORD --role mapping_reviewer
 .\.venv\Scripts\python.exe -m sync_app.cli validate-config --db-path app.db --org-id default
 .\.venv\Scripts\python.exe -m sync_app.cli test-source --db-path app.db --org-id default
 .\.venv\Scripts\python.exe -m sync_app.cli test-ldap --db-path app.db --org-id default
@@ -377,6 +378,9 @@ Before adding a new feature, run the architecture guard tests to confirm the dep
 .\.venv\Scripts\python.exe -m sync_app.cli sync --mode apply --db-path app.db --org-id default
 .\.venv\Scripts\python.exe -m sync_app.cli approve-plan <job_id> --notes "reviewed"
 .\.venv\Scripts\python.exe -m sync_app.cli conflicts list --status open --json
+.\.venv\Scripts\python.exe -m sync_app.cli conflicts list --plan-id <dry_run_job_id> --status all --json
+.\.venv\Scripts\python.exe -m sync_app.cli conflicts archive <conflict_id> --notes "expired plan evidence"
+.\.venv\Scripts\python.exe -m sync_app.cli conflicts bulk --action archive --confirm CONFIRM <conflict_id> [<conflict_id> ...]
 .\.venv\Scripts\python.exe -m sync_app.cli conflicts apply-recommendation <conflict_id> --reason "checked manually"
 .\.venv\Scripts\python.exe -m sync_app.cli config-export --db-path app.db --org-id default
 .\.venv\Scripts\python.exe -m sync_app.cli config-import --db-path app.db --org-id target --file bundle.json

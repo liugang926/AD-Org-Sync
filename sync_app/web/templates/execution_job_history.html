@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Job History"), t("Monitor execution status and open detailed audit evidence without starting a new operation."), eyebrow=t("Execution Center"), badge_text=current_org.name, badge_level="info") %}
-    {{ ui.button(t("Run Dry Run"), href="/execution-center/dry-run", icon="play-circle") }}
+    {{ ui.button(t("Run Dry Run"), href="#next-action", variant="secondary", icon="play-circle") }}
   {% endcall %}
 
   {{ execution.tabs("execution-jobs") }}
@@ -12,7 +12,10 @@
   {% set latest_status = latest_job.status|upper if latest_job else "" %}
   {{ execution.progress("execution-jobs", dry_run_state=("complete" if jobs else "pending"), review_state=("complete" if latest_mode == "apply" else "pending"), apply_state=("complete" if latest_mode == "apply" and latest_status == "COMPLETED" else "pending"), audit_state=("complete" if latest_status in ["COMPLETED", "FAILED"] else "current")) }}
   {{ execution.scope_context(current_org, environment_label) }}
-  {{ execution.status("", "execution.action.run_dry_run", "Execution history is ready for monitoring and audit review.") }}
+  <span id="next-action" class="anchor-target" aria-hidden="true"></span>
+  {% call ui.workflow_action_bar("success", t("Ready for the next step"), t("Execution history is ready for monitoring and audit review.")) %}
+    {{ ui.button(t("Run Dry Run"), href="/execution-center/dry-run", variant="primary", icon="play-circle") }}
+  {% endcall %}
 
   {% call ui.panel(t("Task History"), description=t("Times are shown in your local time zone with relative time. Open a job for phases, identity timeline, operations, and technical evidence.")) %}
     {% if jobs %}<div class="table-scroll" tabindex="0" role="region" aria-label="{{ t('Task History') }}"><table>

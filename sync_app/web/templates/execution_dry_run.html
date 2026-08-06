@@ -4,14 +4,7 @@
 {% block content %}
 <div class="page-stack">
   {% call ui.page_header(t("Dry Run (Preview)"), t("Generate an immutable change plan from the saved scope without modifying Active Directory."), eyebrow=t("Execution Center"), badge_text=current_org.name, badge_level="info") %}
-    {% if can("jobs.run") and not blocker_code %}
-    <form method="post" action="/execution-center/dry-run/run">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ ui.button(t("Run Dry Run"), type="submit", icon="play-circle") }}
-    </form>
-    {% else %}
-    {{ ui.button(t(next_action_code), href=next_action_url, icon="arrow-right") }}
-    {% endif %}
+    {{ ui.button(t("View business impact"), href="#business-impact", variant="secondary", icon="scan-search") }}
   {% endcall %}
 
   {{ execution.tabs("execution-dry-run") }}
@@ -19,22 +12,35 @@
   {{ execution.progress("execution-dry-run", dry_run_state=("complete" if latest_dry_run and latest_dry_run.status|upper == "COMPLETED" else ("blocked" if blocker_code else "current")), review_state=("current" if latest_dry_run and latest_dry_run.status|upper == "COMPLETED" else "pending")) }}
   {{ execution.scope_context(current_org, environment_label) }}
   {{ execution.status(blocker_code, next_action_code, "The saved scope and preflight evidence are ready to generate a plan.") }}
-  {{ execution.rollout_evidence(execution_context) }}
+  {% call ui.detail_toggle(t("Technical evidence"), t("Current snapshots, policy release and fingerprints used for planning."), open=False) %}
+    {{ execution.rollout_evidence(execution_context) }}
+  {% endcall %}
+
+  {% call ui.workflow_action_bar("blocked" if blocker_code else ("failed" if latest_dry_run and latest_dry_run.status|upper == "FAILED" else "success"), t("Dry Run blocked") if blocker_code else (t("Dry Run failed") if latest_dry_run and latest_dry_run.status|upper == "FAILED" else t("Ready to preview")), t(blocker_code) if blocker_code else t("Generate a read-only plan; Active Directory will not be modified.")) %}
+    {% if can("jobs.run") and not blocker_code %}
+    <form method="post" action="/execution-center/dry-run/run">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {{ ui.button(t("Run Dry Run"), type="submit", variant="primary", icon="play-circle") }}
+    </form>
+    {% else %}
+    {{ ui.button(t(next_action_code), href=next_action_url, variant="primary", icon="arrow-right") }}
+    {% endif %}
+  {% endcall %}
 
   {% if sync_runner_error %}<div class="callout callout--danger" role="alert"><strong>{{ t("Last background execution error") }}</strong><span>{{ sync_runner_error }}</span></div>{% endif %}
 
+  <div id="business-impact">
   {% call ui.panel(t("Latest business impact"), description=t("The plan is grouped by administrator-facing outcomes instead of requiring the Dry Run ID to explain its result.")) %}
     <div class="compact-stats">
       {{ ui.compact_stat(t("Create"), latest_plan_summary.create_count) }}
       {{ ui.compact_stat(t("Update or move"), latest_plan_summary.update_count) }}
-      {{ ui.compact_stat(t("Enable or rehire"), latest_plan_summary.enable_count) }}
-      {{ ui.compact_stat(t("Disable"), latest_plan_summary.disable_count) }}
+      {{ ui.compact_stat(t("Lifecycle changes"), latest_plan_summary.enable_count + latest_plan_summary.disable_count) }}
       {{ ui.compact_stat(t("Group relationships"), latest_plan_summary.group_relation_count) }}
       {{ ui.compact_stat(t("Conflicts"), latest_plan_summary.conflict_count) }}
       {{ ui.compact_stat(t("High-risk changes"), latest_plan_summary.risk_count) }}
-      {{ ui.compact_stat(t("Errors"), latest_plan_summary.error_count) }}
     </div>
   {% endcall %}
+  </div>
 
   {% call ui.panel(t("Recent Dry Runs"), description=t("Basic mode shows only the evidence needed to choose a plan. Open a job for technical details.")) %}
     {% if recent_dry_runs %}

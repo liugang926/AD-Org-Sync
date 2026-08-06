@@ -266,6 +266,8 @@ class CliConflictCommandTests(unittest.TestCase):
                 "skip-user-sync",
                 "--notes",
                 "bulk skip",
+                "--confirm",
+                "CONFIRM",
                 "--db-path",
                 self.db_path,
                 str(conflict_id_1),
@@ -302,6 +304,81 @@ class CliConflictCommandTests(unittest.TestCase):
         self.assertEqual(reopened_conflict.status, "open")
         self.assertIsNone(reopened_conflict.resolution_payload)
         self.assertEqual(reopened_conflict.resolved_at, "")
+
+    def test_conflicts_cli_supports_ignore_archive_reopen_and_plan_filter(self):
+        self._create_job("job-cli-lifecycle")
+        conflict_id = self.conflict_repo.add_conflict(
+            job_id="job-cli-lifecycle",
+            plan_id="plan-cli-lifecycle",
+            workflow_id="job-cli-lifecycle",
+            conflict_type="identity_ambiguous",
+            source_id="alice",
+            message="lifecycle",
+        )
+
+        exit_code, stdout, stderr = self._run_cli(
+            [
+                "conflicts",
+                "list",
+                "--plan-id",
+                "plan-cli-lifecycle",
+                "--status",
+                "open",
+                "--db-path",
+                self.db_path,
+            ]
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("plan_id: plan-cli-lifecycle", stdout)
+
+        for command, expected_status in (
+            ("ignore", "ignored"),
+            ("archive", "archived"),
+            ("reopen", "open"),
+        ):
+            with self.subTest(command=command):
+                args = ["conflicts", command, str(conflict_id), "--db-path", self.db_path]
+                exit_code, _stdout, stderr = self._run_cli(args)
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(stderr, "")
+                self.assertEqual(
+                    self.conflict_repo.get_conflict_record(conflict_id).status,
+                    expected_status,
+                )
+
+        self.assertEqual(
+            [item["to_status"] for item in self.conflict_repo.list_status_history(conflict_id)],
+            ["ignored", "archived", "open"],
+        )
+
+    def test_conflicts_bulk_rejects_missing_typed_confirmation(self):
+        self._create_job("job-cli-confirm")
+        conflict_id = self.conflict_repo.add_conflict(
+            job_id="job-cli-confirm",
+            conflict_type="identity_ambiguous",
+            source_id="alice",
+            message="confirmation required",
+        )
+        exit_code, _stdout, stderr = self._run_cli(
+            [
+                "conflicts",
+                "bulk",
+                "--action",
+                "dismiss",
+                "--confirm",
+                "WRONG",
+                "--db-path",
+                self.db_path,
+                str(conflict_id),
+            ]
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--confirm CONFIRM", stderr)
+        self.assertEqual(
+            self.conflict_repo.get_conflict_record(conflict_id).status,
+            "open",
+        )
 
     def test_conflicts_apply_recommendation_uses_best_candidate(self):
         self._create_job("job-cli-004")

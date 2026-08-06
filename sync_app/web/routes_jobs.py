@@ -1547,6 +1547,8 @@ def register_job_routes(
             integrity=integrity,
             retention_settings={
                 "job_history_retention_days": repositories.settings_repo.get_int("job_history_retention_days", 30),
+                "conflict_archive_after_days": repositories.settings_repo.get_int("conflict_archive_after_days", 30),
+                "conflict_retention_days": repositories.settings_repo.get_int("conflict_retention_days", 90),
                 "event_history_retention_days": repositories.settings_repo.get_int("event_history_retention_days", 30),
                 "audit_log_retention_days": repositories.settings_repo.get_int("audit_log_retention_days", 90),
                 "backup_retention_days": repositories.settings_repo.get_int("backup_retention_days", 30),

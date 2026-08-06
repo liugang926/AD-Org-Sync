@@ -485,6 +485,8 @@ class SyncConflictSupportMixin:
                 "actor_username": actor_username,
             },
             resolved_at=resolved_at,
+            actor_username=actor_username,
+            reason=str(resolution_payload.get("action") or "resolved from web workflow"),
         )
 
     def apply_conflict_manual_binding(

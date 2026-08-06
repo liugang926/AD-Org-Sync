@@ -56,6 +56,7 @@ def _resolve_conflicts_for_source(
     job_id: str,
     source_id: str,
     resolution_payload: dict[str, Any],
+    actor_username: str,
 ) -> int:
     resolved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return conflict_repo.resolve_open_conflicts_for_source(
@@ -63,12 +64,16 @@ def _resolve_conflicts_for_source(
         source_id=source_id,
         resolution_payload=resolution_payload,
         resolved_at=resolved_at,
+        actor_username=actor_username,
+        reason=str(resolution_payload.get("action") or "resolved from CLI"),
     )
 
 def _serialize_conflict(item: Any) -> dict[str, Any]:
     return {
         "id": item.id,
         "job_id": item.job_id,
+        "plan_id": item.plan_id,
+        "workflow_id": item.workflow_id,
         "conflict_type": item.conflict_type,
         "severity": item.severity,
         "status": item.status,
@@ -81,6 +86,7 @@ def _serialize_conflict(item: Any) -> dict[str, Any]:
         "recommendation": recommend_conflict_resolution(item),
         "created_at": item.created_at,
         "resolved_at": item.resolved_at,
+        "archived_at": item.archived_at,
     }
 
 def _apply_conflict_manual_binding(
@@ -127,6 +133,7 @@ def _apply_conflict_manual_binding(
             "source_conflict_id": conflict.id,
             "actor_username": actor_username,
         },
+        actor_username=actor_username,
     )
     return True, normalized_ad_username, resolved_count
 
@@ -161,6 +168,7 @@ def _apply_conflict_skip_user_sync(
             "source_conflict_id": conflict.id,
             "actor_username": actor_username,
         },
+        actor_username=actor_username,
     )
     return True, rule_notes, resolved_count
 
@@ -211,8 +219,11 @@ def _handle_conflicts_list(args: argparse.Namespace) -> int:
     db_manager = _open_db_manager(args.db_path)
     conflict_repo = SyncConflictRepository(db_manager)
     status_filter = None if args.status == "all" else args.status
+    if status_filter == "dismissed":
+        status_filter = "ignored"
     conflicts = conflict_repo.list_conflict_records(
         job_id=args.job_id,
+        plan_id=getattr(args, "plan_id", None),
         status=status_filter,
         limit=max(int(args.limit), 1),
     )
@@ -227,6 +238,8 @@ def _handle_conflicts_list(args: argparse.Namespace) -> int:
     for item in conflicts:
         print(f"id: {item.id}")
         print(f"job_id: {item.job_id}")
+        print(f"plan_id: {item.plan_id}")
+        print(f"workflow_id: {item.workflow_id}")
         print(f"type: {item.conflict_type}")
         print(f"status: {item.status}")
         print(f"source_id: {item.source_id}")
@@ -316,15 +329,44 @@ def _handle_conflicts_dismiss(args: argparse.Namespace) -> int:
     notes = str(args.notes or "").strip()
     conflict_repo.update_conflict_status(
         conflict.id,
-        status="dismissed",
+        status="ignored",
         resolution_payload={
-            "action": "dismissed",
+            "action": "ignored",
             "notes": notes,
             "actor_username": os.getenv("USERNAME") or os.getenv("USER") or "cli",
         },
         resolved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        actor_username=os.getenv("USERNAME") or os.getenv("USER") or "cli",
+        reason=notes or "conflict ignored from CLI",
     )
-    print(f"dismissed conflict: {conflict.id}")
+    print(f"ignored conflict: {conflict.id}")
+    return 0
+
+def _handle_conflicts_archive(args: argparse.Namespace) -> int:
+    db_manager = _open_db_manager(args.db_path)
+    conflict_repo = SyncConflictRepository(db_manager)
+    conflict = conflict_repo.get_conflict_record(args.conflict_id)
+    if not conflict:
+        print(f"conflict not found: {args.conflict_id}", file=sys.stderr)
+        return 1
+    actor_username = os.getenv("USERNAME") or os.getenv("USER") or "cli"
+    changed = conflict_repo.update_conflict_status(
+        conflict.id,
+        status="archived",
+        resolution_payload={
+            **dict(conflict.resolution_payload or {}),
+            "action": "archived",
+            "notes": str(args.notes or "").strip(),
+            "actor_username": actor_username,
+        },
+        resolved_at=conflict.resolved_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        actor_username=actor_username,
+        reason=str(args.notes or "").strip() or "conflict archived from CLI",
+    )
+    if not changed:
+        print("conflict is already archived", file=sys.stderr)
+        return 1
+    print(f"archived conflict: {conflict.id}")
     return 0
 
 def _handle_conflicts_reopen(args: argparse.Namespace) -> int:
@@ -344,6 +386,8 @@ def _handle_conflicts_reopen(args: argparse.Namespace) -> int:
         status="open",
         resolution_payload=None,
         resolved_at=None,
+        actor_username=os.getenv("USERNAME") or os.getenv("USER") or "cli",
+        reason=f"reopened from {conflict.status} via CLI",
     )
     print(f"reopened conflict: {conflict.id}")
     return 0
@@ -391,10 +435,15 @@ def _handle_conflicts_bulk(args: argparse.Namespace) -> int:
     job_repo = SyncJobRepository(db_manager)
 
     normalized_action = str(args.action or "").strip().lower()
+    if normalized_action in {"dismiss", "ignore"}:
+        normalized_action = "ignore"
     updated_count = 0
     skipped_count = 0
     actor_username = os.getenv("USERNAME") or os.getenv("USER") or "cli"
     notes = str(args.notes or "").strip()
+    if str(getattr(args, "confirm", "") or "").strip() != "CONFIRM":
+        print("bulk conflict actions require --confirm CONFIRM", file=sys.stderr)
+        return 1
 
     for conflict_id in args.conflict_ids:
         conflict = conflict_repo.get_conflict_record(int(conflict_id))
@@ -411,6 +460,31 @@ def _handle_conflicts_bulk(args: argparse.Namespace) -> int:
                 status="open",
                 resolution_payload=None,
                 resolved_at=None,
+                actor_username=actor_username,
+                reason=f"bulk reopen from {conflict.status}",
+                is_bulk=True,
+            )
+            updated_count += 1
+            continue
+
+        if normalized_action == "archive":
+            if conflict.status == "archived":
+                skipped_count += 1
+                continue
+            conflict_repo.update_conflict_status(
+                conflict.id,
+                status="archived",
+                resolution_payload={
+                    **dict(conflict.resolution_payload or {}),
+                    "action": "archived",
+                    "notes": notes,
+                    "actor_username": actor_username,
+                    "bulk": True,
+                },
+                resolved_at=conflict.resolved_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                actor_username=actor_username,
+                reason=notes or "bulk archive from CLI",
+                is_bulk=True,
             )
             updated_count += 1
             continue
@@ -425,17 +499,20 @@ def _handle_conflicts_bulk(args: argparse.Namespace) -> int:
                 print("low-confidence bulk recommendation apply requires --notes", file=sys.stderr)
                 return 1
 
-        if normalized_action == "dismiss":
+        if normalized_action == "ignore":
             conflict_repo.update_conflict_status(
                 conflict.id,
-                status="dismissed",
+                status="ignored",
                 resolution_payload={
-                    "action": "dismissed",
+                    "action": "ignored",
                     "notes": notes,
                     "actor_username": actor_username,
                     "bulk": True,
                 },
                 resolved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                actor_username=actor_username,
+                reason=notes or "bulk ignore from CLI",
+                is_bulk=True,
             )
             updated_count += 1
             continue

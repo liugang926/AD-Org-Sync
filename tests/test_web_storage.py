@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sync_app.core.models import AccountConfig, AppConfig, LDAPConfig, WeComConfig
+from sync_app.core.admin_roles import WEB_ADMIN_ROLES
 from sync_app.storage.local_db import (
     DatabaseManager,
     OrganizationConfigRepository,
@@ -22,6 +23,43 @@ from sync_app.web.security import hash_password, verify_password
 
 
 class WebStorageTests(unittest.TestCase):
+    def test_admin_repository_persists_all_supported_roles_and_rejects_unknown_roles(self):
+        test_root = Path(os.getcwd()) / "test_artifacts"
+        test_root.mkdir(exist_ok=True)
+        db_path = test_root / "web_storage_admin_roles.db"
+        try:
+            for suffix in ("", "-wal", "-shm"):
+                Path(str(db_path) + suffix).unlink(missing_ok=True)
+            manager = DatabaseManager(db_path=str(db_path))
+            manager.initialize(create_startup_snapshot=False, verify_integrity=True)
+            user_repo = WebAdminUserRepository(manager)
+
+            for role in WEB_ADMIN_ROLES:
+                username = f"repo-{role}"
+                user_repo.create_user(
+                    username,
+                    hash_password("Admin123!"),
+                    role=role,
+                )
+                self.assertEqual(
+                    user_repo.get_user_record_by_username(username).role,
+                    role,
+                )
+
+            with self.assertRaisesRegex(ValueError, "unsupported administrator role"):
+                user_repo.create_user(
+                    "repo-invalid",
+                    hash_password("Admin123!"),
+                    role="database_owner",
+                )
+            self.assertIsNone(user_repo.get_user_record_by_username("repo-invalid"))
+        finally:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    Path(str(db_path) + suffix).unlink(missing_ok=True)
+                except PermissionError:
+                    pass
+
     def test_workspace_fallback_path_calculation_has_no_filesystem_side_effect(self):
         with patch("sync_app.storage.local_db.os.makedirs") as make_dirs:
             fallback_path = workspace_fallback_db_path("TestApp")
@@ -409,7 +447,13 @@ class WebStorageTests(unittest.TestCase):
                 remaining_audit_logs = conn.execute("SELECT message FROM web_audit_logs").fetchall()
             self.assertEqual([row["job_id"] for row in remaining_jobs], ["job-current"])
             self.assertEqual(len(remaining_events), 0)
-            self.assertEqual([row["message"] for row in remaining_audit_logs], ["current audit log"])
+            self.assertEqual(
+                [row["message"] for row in remaining_audit_logs],
+                [
+                    "current audit log",
+                    "Archived conflict evidence by retention policy",
+                ],
+            )
         finally:
             backup_dir = db_path.parent / "backups"
             if db_path.exists():
