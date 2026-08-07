@@ -25,6 +25,8 @@ jobs:
           pip install -r requirements-build.txt
 
       - name: Build release artifacts
+        env:
+          AD_ORG_SYNC_BUILD_PYTHON: python
         run: |
           python -m build --wheel --outdir dist/packages
           python -m PyInstaller --noconfirm --clean AD-Org-Sync.spec

@@ -5,15 +5,27 @@ chcp 65001 >nul
 set ROOT=%~dp0
 cd /d "%ROOT%"
 
-set VENV_PYTHON=%ROOT%.venv\Scripts\python.exe
-if not exist "%VENV_PYTHON%" set VENV_PYTHON=%ROOT%venv\Scripts\python.exe
-if not exist "%VENV_PYTHON%" (
+if defined AD_ORG_SYNC_BUILD_PYTHON (
+    set "BUILD_PYTHON=%AD_ORG_SYNC_BUILD_PYTHON%"
+    goto validate_build_python
+)
+
+set "BUILD_PYTHON=%ROOT%.venv\Scripts\python.exe"
+if not exist "%BUILD_PYTHON%" set "BUILD_PYTHON=%ROOT%venv\Scripts\python.exe"
+if not exist "%BUILD_PYTHON%" (
     echo [ERROR] Python virtual environment not found. Run install_web_env.bat first.
     exit /b 1
 )
 
+:validate_build_python
+"%BUILD_PYTHON%" --version >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Build Python is not available: %BUILD_PYTHON%
+    exit /b 1
+)
+
 set VERSION_FILE=%TEMP%\ad_org_sync_version.txt
-"%VENV_PYTHON%" -c "import pathlib; import sync_app.core.common as c; pathlib.Path(r'%VERSION_FILE%').write_text(c.APP_VERSION, encoding='utf-8')"
+"%BUILD_PYTHON%" -c "import pathlib; import sync_app.core.common as c; pathlib.Path(r'%VERSION_FILE%').write_text(c.APP_VERSION, encoding='utf-8')"
 if errorlevel 1 exit /b 1
 set /p APP_VERSION=<"%VERSION_FILE%"
 del /f /q "%VERSION_FILE%" >nul 2>&1
@@ -31,11 +43,11 @@ if exist "%ZIP_PATH%" del /f /q "%ZIP_PATH%"
 if exist "%WHEEL_DIR%" rmdir /s /q "%WHEEL_DIR%"
 
 echo [INFO] Installing build dependencies...
-"%VENV_PYTHON%" -m pip install -r requirements-build.txt
+"%BUILD_PYTHON%" -m pip install -r requirements-build.txt
 if errorlevel 1 exit /b 1
 
 echo [INFO] Building wheel...
-"%VENV_PYTHON%" -m build --wheel --outdir "%WHEEL_DIR%"
+"%BUILD_PYTHON%" -m build --wheel --outdir "%WHEEL_DIR%"
 if errorlevel 1 exit /b 1
 
 mkdir "%RELEASE_DIR%"

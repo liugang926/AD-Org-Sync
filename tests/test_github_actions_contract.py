@@ -50,3 +50,14 @@ def test_workflows_do_not_mask_javascript_runtime_deprecations() -> None:
     workflow_text = "\n".join(_workflow_sources().values())
     present = sorted(FORBIDDEN_RUNTIME_OVERRIDES.intersection(workflow_text))
     assert not present, f"remove JavaScript runtime overrides: {', '.join(present)}"
+
+
+def test_release_builder_uses_the_setup_python_interpreter_in_ci() -> None:
+    release_workflow = (WORKFLOW_ROOT / "release.yml").read_text(encoding="utf-8")
+    release_builder = (REPOSITORY_ROOT / "build_release.bat").read_text(
+        encoding="utf-8"
+    )
+
+    assert "AD_ORG_SYNC_BUILD_PYTHON: python" in release_workflow
+    assert "if defined AD_ORG_SYNC_BUILD_PYTHON" in release_builder
+    assert '"%BUILD_PYTHON%" --version' in release_builder
