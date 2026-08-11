@@ -12,10 +12,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -25,13 +25,15 @@ jobs:
           pip install -r requirements-build.txt
 
       - name: Build release artifacts
+        env:
+          AD_ORG_SYNC_BUILD_PYTHON: python
         run: |
           python -m build --wheel --outdir dist/packages
           python -m PyInstaller --noconfirm --clean AD-Org-Sync.spec
           cmd /c build_release.bat
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ad-org-sync-release
           path: |
@@ -41,7 +43,7 @@ jobs:
 
       - name: Publish GitHub release assets
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/packages/*.whl
