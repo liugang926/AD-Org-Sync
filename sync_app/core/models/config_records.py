@@ -131,6 +131,9 @@ class DataQualitySnapshotRecord(MappingLikeModel):
     org_id: str = ""
     trigger_action: str = "manual_scan"
     created_by: str = ""
+    source_snapshot_id: Optional[int] = None
+    source_snapshot_fingerprint: str = ""
+    scan_status: str = "qualified"
     summary: Optional[Dict[str, Any]] = None
     snapshot: Optional[Dict[str, Any]] = None
     created_at: str = ""
@@ -154,6 +157,22 @@ class DataQualitySnapshotRecord(MappingLikeModel):
             org_id=str(row["org_id"] or ""),
             trigger_action=str(row["trigger_action"] or "manual_scan"),
             created_by=str(row["created_by"] or ""),
+            source_snapshot_id=(
+                int(row["source_snapshot_id"])
+                if "source_snapshot_id" in row.keys()
+                and row["source_snapshot_id"] is not None
+                else None
+            ),
+            source_snapshot_fingerprint=(
+                str(row["source_snapshot_fingerprint"] or "")
+                if "source_snapshot_fingerprint" in row.keys()
+                else ""
+            ),
+            scan_status=(
+                str(row["scan_status"] or "qualified")
+                if "scan_status" in row.keys()
+                else "qualified"
+            ),
             summary=summary if isinstance(summary, dict) or summary is None else {"raw": summary},
             snapshot=snapshot if isinstance(snapshot, dict) or snapshot is None else {"raw": snapshot},
             created_at=str(row["created_at"] or ""),

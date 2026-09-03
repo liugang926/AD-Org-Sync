@@ -7,13 +7,31 @@
     {% if can("config.write") %}
     <form method="post" action="/data-sources/data-quality/run" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ ui.button(t("Run Quality Scan"), type="submit", variant=("secondary" if source_snapshot and not quality_review else "primary"), icon="refresh-cw") }}
+      <input type="hidden" name="source_snapshot_id" value="{{ source_snapshot.id if source_snapshot else '' }}">
+      <input type="hidden" name="fingerprint" value="{{ source_snapshot.snapshot_fingerprint if source_snapshot else '' }}">
+      {{ ui.button(t("Run Quality Scan"), type="submit", variant="primary", icon="search", disabled=(not source_snapshot)) }}
+    </form>
+    <form method="post" action="/data-sources/source-directory/refresh" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="return_url" value="/data-sources/data-quality">
+      {{ ui.button(t("Refresh Source Data"), type="submit", variant="secondary", icon="cloud-download") }}
     </form>
     {% endif %}
     {% if selected_snapshot %}
     {{ ui.button(t("Export Repair List"), href=("/data-sources/data-quality/export?snapshot_id=" ~ selected_snapshot.id), variant="ghost", icon="download") }}
     {% endif %}
   {% endcall %}
+  <div class="panel-note info">{{ t("Quality analysis uses the explicitly identified immutable source snapshot and does not contact the source platform.") }}</div>
+
+  {% if source_refresh_failed %}
+    <div class="panel-note error" data-quality-source-state="refresh_failed">
+      {{ t("The latest source refresh failed. The previous successful snapshot remains available for quality scanning.") }}
+      {% if source_snapshot %} {{ t("Available snapshot: #{id} from {time}.", id=source_snapshot.id, time=source_snapshot.completed_at) }}{% endif %}
+    </div>
+  {% endif %}
+  <div class="panel-note {{ quality_state.level }}" data-quality-state="{{ quality_state.key }}">
+    <strong>{{ t(quality_state.label) }}</strong> — {{ t(quality_state.detail) }}
+  </div>
 
   {% if source_snapshot %}
   {% call ui.panel(t("Current Source Snapshot Review"), description=t("This audited confirmation follows the immutable content fingerprint. An equivalent newer snapshot reuses it; changed content requires a new review."), class_name="toolbar-card") %}
@@ -21,11 +39,15 @@
       <div class="detail-item"><div class="label">{{ t("Source Snapshot") }}</div><div class="value">#{{ source_snapshot.id }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Generated At") }}</div><div class="value">{{ ui.local_time(source_snapshot.completed_at) }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Users") }}</div><div class="value">{{ source_snapshot.user_count or 0 }}</div></div>
-      <div class="detail-item"><div class="label">{{ t("Review Status") }}</div><div class="value">{% if quality_review %}{{ ui.badge(t("Confirmed"), "success") }}{% else %}{{ ui.badge(t("Action required"), "warning") }}{% endif %}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Departments") }}</div><div class="value">{{ source_snapshot.department_count or 0 }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Fields") }}</div><div class="value">{{ source_snapshot.field_count or 0 }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Quality Status") }}</div><div class="value">{% if quality_review %}{{ ui.badge(t("Confirmed"), "success") }}{% else %}{{ ui.badge(t(quality_state.label), quality_state.level) }}{% endif %}</div></div>
     </div>
+    {% if ui_presentation.is_advanced %}<details class="detail-toggle"><summary>{{ t("Technical evidence") }}</summary><div class="evidence-code"><div>{{ t("Source Snapshot ID") }}: <code>{{ source_snapshot.id }}</code></div><div>{{ t("Snapshot Fingerprint") }}: <code>{{ source_snapshot.snapshot_fingerprint }}</code></div></div></details>{% endif %}
     {% if quality_review %}
       <div class="panel-note success">{{ t("Reviewed by {name} at {time}.", name=quality_review.reviewer_username, time=quality_review.reviewed_at) }}</div>
-    {% elif can("config.write") %}
+      {% if quality_review_reused %}<div class="panel-note info">{{ t("Reused the quality conclusion from source snapshot #{id} because the fingerprint is identical.", id=quality_review.source_snapshot_id) }}</div>{% endif %}
+    {% elif quality_scan and quality_scan.scan_status == "qualified" and can("config.write") %}
       <form method="post" action="/data-sources/data-quality/review" class="page-stack" data-confirm="{{ t('Confirm that you reviewed identity, naming and routing risks for this exact source snapshot.') }}" data-confirm-title="{{ t('Confirm Data Quality Review') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="source_snapshot_id" value="{{ source_snapshot.id }}">
@@ -37,8 +59,8 @@
     {% endif %}
   {% endcall %}
   {% else %}
-    {{ ui.empty_state(t("No current source snapshot"), t("Refresh the source directory before reviewing data quality."), "warning") }}
-    <div class="actions">{{ ui.button(t("Refresh source snapshot"), href="/data-sources/source-directory", variant="secondary") }}</div>
+    {{ ui.empty_state(t("No available snapshot"), t("Refresh source data before running or reviewing data quality."), "warning") }}
+    <div class="actions">{{ ui.button(t("Open Source Directory"), href="/data-sources/source-directory", variant="secondary") }}</div>
   {% endif %}
 
   <section class="quality-ops-hero">
@@ -85,10 +107,14 @@
   {% else %}
   {% call ui.panel(t("Selected Snapshot"), description=t("Review the current quality posture for the selected snapshot. Use the history table below to jump across older runs."), class_name="toolbar-card") %}
     <div class="detail-grid">
-      <div class="detail-item"><div class="label">{{ t("Snapshot") }}</div><div class="value">{{ t("Snapshot #{id}", id=selected_snapshot.id) if selected_snapshot else "-" }}</div></div>
-      <div class="detail-item"><div class="label">{{ t("Generated At") }}</div><div class="value">{{ ui.local_time(selected_snapshot.created_at) }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Quality Scan") }}</div><div class="value">{{ t("Scan #{id}", id=selected_snapshot.id) if selected_snapshot else "-" }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Scan Generated At") }}</div><div class="value">{{ ui.local_time(selected_snapshot.created_at) }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Based on Source Snapshot") }}</div><div class="value">#{{ selected_snapshot.source_snapshot_id or "-" }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Source Snapshot Time") }}</div><div class="value">{{ ui.local_time(selected_source_snapshot_completed_at) }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Source Users") }}</div><div class="value">{{ selected_source_summary.user_count or 0 }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Source Departments") }}</div><div class="value">{{ selected_source_summary.department_count or 0 }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Created By") }}</div><div class="value">{{ selected_snapshot.created_by or "-" }}</div></div>
-      <div class="detail-item"><div class="label">{{ t("Trigger") }}</div><div class="value">{{ selected_snapshot.trigger_action or "-" }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Trigger") }}</div><div class="value">{{ t(selected_snapshot.trigger_action) if selected_snapshot.trigger_action else "-" }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Users Missing Email") }}</div><div class="value">{{ selected_summary.users_missing_email or 0 }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Users Missing Employee ID") }}</div><div class="value">{{ selected_summary.users_missing_employee_id or 0 }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Department Anomalies") }}</div><div class="value">{{ selected_summary.department_anomaly_count or 0 }}</div></div>
@@ -190,7 +216,7 @@
           <tr>
             <td>{{ ui.badge((t(item.label) if item.label else "-"), ("error" if item.severity == "error" else "warning")) }}</td>
             <td>{{ t(item.title) if item.title else "-" }}</td>
-            <td>{{ ui_presentation.choose(item.connector_name or "-", item.connector_name or item.connector_id or "-") }}</td>
+            <td>{{ ui_presentation.choose(t(item.connector_name) if item.connector_name else "-", t(item.connector_name) if item.connector_name else (item.connector_id or "-")) }}</td>
             <td>{{ t(item.detail) if item.detail else "-" }}</td>
           </tr>
           {% else %}
@@ -247,7 +273,7 @@
         <tbody>
           {% for row in selected_connector_breakdown %}
           <tr>
-            <td>{{ row.name or "-" }}</td>
+            <td>{{ t(row.name) if row.name else "-" }}</td>
             {% if ui_presentation.show_provider_connector_details %}<td>{{ row.connector_id or "-" }}</td>{% endif %}
             <td>{{ row.user_count or 0 }}</td>
           </tr>

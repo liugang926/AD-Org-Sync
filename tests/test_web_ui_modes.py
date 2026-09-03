@@ -376,6 +376,15 @@ class WebUIModeTests(WebAuthzBaseTestCase):
             created_by="mode-test",
             snapshot={
                 "generated_at": "2026-07-19T10:00:00+00:00",
+                "source_snapshot_id": 41,
+                "source_snapshot_fingerprint": "sha256:v2:mode-quality-source",
+                "source_snapshot_completed_at": "2026-07-19T09:55:00+00:00",
+                "source_snapshot_summary": {
+                    "provider_id": "wecom",
+                    "user_count": 1,
+                    "department_count": 1,
+                    "field_count": 1,
+                },
                 "analysis_notes": [],
                 "summary": {
                     "total_users": 1,

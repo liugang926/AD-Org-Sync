@@ -482,6 +482,7 @@ def create_app(
         app,
         build_source_data_quality_snapshot=sync_support_call("build_source_data_quality_snapshot"),
         flash=request_support.flash,
+        flash_t=request_support.flash_t,
         get_current_org=request_support.get_current_org,
         reject_invalid_csrf=request_support.reject_invalid_csrf,
         render=request_support.render,

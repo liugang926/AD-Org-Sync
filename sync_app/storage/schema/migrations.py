@@ -2348,4 +2348,38 @@ MIGRATIONS = [
         ON sync_conflict_status_history (plan_id, created_at DESC, id DESC);
         """,
     ),
+    (
+        40,
+        "bind data quality scans to immutable source snapshot evidence",
+        """
+        ALTER TABLE data_quality_snapshots
+        ADD COLUMN source_snapshot_id INTEGER;
+        ALTER TABLE data_quality_snapshots
+        ADD COLUMN source_snapshot_fingerprint TEXT NOT NULL DEFAULT '';
+        ALTER TABLE data_quality_snapshots
+        ADD COLUMN scan_status TEXT NOT NULL DEFAULT 'qualified';
+
+        UPDATE data_quality_snapshots
+        SET source_snapshot_id = CAST(
+              json_extract(snapshot_json, '$.source_snapshot_id') AS INTEGER
+            ),
+            source_snapshot_fingerprint = COALESCE(
+              json_extract(snapshot_json, '$.source_snapshot_fingerprint'),
+              ''
+            ),
+            scan_status = CASE
+              WHEN COALESCE(
+                CAST(json_extract(summary_json, '$.error_issue_count') AS INTEGER),
+                0
+              ) > 0 THEN 'unqualified'
+              ELSE 'qualified'
+            END;
+
+        CREATE INDEX idx_data_quality_snapshots_source_evidence
+        ON data_quality_snapshots (
+          org_id, source_snapshot_fingerprint, source_snapshot_id,
+          created_at DESC, id DESC
+        );
+        """,
+    ),
 ]

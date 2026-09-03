@@ -213,7 +213,7 @@ def _submitted_text(value: Any, default: str = "") -> str:
 def register_advanced_sync_routes(
     app: FastAPI,
     *,
-    build_source_data_quality_snapshot: Callable[[Request], dict[str, Any]],
+    build_source_data_quality_snapshot: Callable[..., dict[str, Any]],
     attribute_mapping_direction_labels: dict[str, str],
     build_username_preview: Callable[..., dict[str, Any]],
     describe_connector_config_source: Callable[[Any], str],
@@ -1074,8 +1074,14 @@ def register_advanced_sync_routes(
         if isinstance(user, RedirectResponse):
             return JSONResponse({"ok": False, "error": "Access denied"}, status_code=403)
         try:
-            snapshot = build_source_data_quality_snapshot(request)
-        except ValueError as exc:
+            snapshot = build_source_data_quality_snapshot(
+                request,
+                source_snapshot_id=int(
+                    str(request.query_params.get("source_snapshot_id") or "0")
+                ),
+                fingerprint=str(request.query_params.get("fingerprint") or ""),
+            )
+        except (TypeError, ValueError) as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         except Exception as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)

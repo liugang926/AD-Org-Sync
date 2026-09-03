@@ -10,6 +10,7 @@ from sync_app.clients.dingtalk import DingTalkAPIError
 from sync_app.core.admin_roles import WEB_ADMIN_ROLES
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
 from sync_app.services.config_store import save_editable_config
+from sync_app.services.source_directory import SourceDirectoryService
 from sync_app.web.app import resolve_web_runtime_settings
 from sync_app.web.i18n import TRANSLATIONS
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
@@ -956,11 +957,25 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             def close(self):
                 return None
 
+        source_snapshot = SourceDirectoryService(
+            self.app.state.source_directory_repo
+        ).refresh(
+            org_id="default",
+            provider_id="wecom",
+            provider=FakeSourceProvider(),
+            created_by="superadmin",
+        )
         with patch(
             "sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()
         ) as build_source_provider:
             response = self._route("/advanced-sync/data-quality-snapshot", "GET")(
-                self._request("/advanced-sync/data-quality-snapshot")
+                self._request(
+                    "/advanced-sync/data-quality-snapshot",
+                    query={
+                        "source_snapshot_id": str(source_snapshot["id"]),
+                        "fingerprint": str(source_snapshot["snapshot_fingerprint"]),
+                    },
+                )
             )
         build_source_provider.assert_not_called()
 
@@ -1159,12 +1174,22 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             def close(self):
                 return None
 
+        source_snapshot = SourceDirectoryService(
+            self.app.state.source_directory_repo
+        ).refresh(
+            org_id="default",
+            provider_id="wecom",
+            provider=FakeSourceProvider(),
+            created_by="superadmin",
+        )
         with patch(
             "sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()
         ) as build_source_provider:
             run_response = self._route("/data-sources/data-quality/run", "POST")(
                 self._request("/data-sources/data-quality/run", "POST"),
                 csrf_token=match.group(1),
+                source_snapshot_id=source_snapshot["id"],
+                fingerprint=source_snapshot["snapshot_fingerprint"],
             )
         build_source_provider.assert_not_called()
         self.assertEqual(run_response.status_code, 303)

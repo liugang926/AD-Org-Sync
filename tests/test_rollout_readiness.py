@@ -75,15 +75,19 @@ class _ListRepository:
 
 
 class _QualityReviews:
-    def __init__(self, current=None, latest=None):
+    def __init__(self, current=None, latest=None, fingerprint_review=None):
         self.current = current
         self.latest = latest
+        self.fingerprint_review = fingerprint_review
 
     def get_review_for_snapshot(self, **kwargs):
         return self.current
 
     def get_latest_review(self, **kwargs):
         return self.latest
+
+    def get_review_for_fingerprint(self, **kwargs):
+        return self.fingerprint_review
 
 
 class _MatchRuns:
@@ -131,6 +135,7 @@ class RolloutReadinessTests(unittest.TestCase):
         ad_snapshot=None,
         review=None,
         latest_review=None,
+        fingerprint_review=None,
         match_run=None,
         rules=None,
         scope=None,
@@ -168,7 +173,11 @@ class RolloutReadinessTests(unittest.TestCase):
             attribute_mapping_repo=_ListRepository(),
             department_ou_mapping_repo=_ListRepository(),
             config_release_snapshot_repo=object(),
-            data_quality_review_repo=_QualityReviews(review, latest_review),
+            data_quality_review_repo=_QualityReviews(
+                review,
+                latest_review,
+                fingerprint_review,
+            ),
             job_repo=_Jobs(jobs),
             review_repo=_Reviews(plan_review),
             conflict_repo=_Conflicts(),
@@ -262,6 +271,38 @@ class RolloutReadinessTests(unittest.TestCase):
         self.assertEqual(
             result["step_map"]["data_quality_reviewed"]["status"],
             "stale",
+        )
+
+    def test_data_quality_review_reuses_an_older_identical_fingerprint(self):
+        source_snapshot = {
+            "id": 13,
+            "snapshot_fingerprint": "source-identical",
+            "completed_at": "2026-07-22T10:00:00+00:00",
+        }
+        matching_review = SimpleNamespace(
+            status="confirmed",
+            source_snapshot_fingerprint="source-identical",
+            reviewed_at="2026-07-21T09:30:00+00:00",
+        )
+        newer_different_review = SimpleNamespace(
+            status="confirmed",
+            source_snapshot_fingerprint="source-different",
+            reviewed_at="2026-07-22T09:30:00+00:00",
+        )
+
+        result = self._evaluate(
+            self._service(
+                source_snapshot=source_snapshot,
+                source_status="connected",
+                latest_review=newer_different_review,
+                fingerprint_review=matching_review,
+            ),
+            source_connector_configured=True,
+        )
+
+        self.assertEqual(
+            result["step_map"]["data_quality_reviewed"]["status"],
+            "complete",
         )
 
     def test_disabled_offboarding_needs_no_hidden_lifecycle_or_disabled_ou_setup(self):

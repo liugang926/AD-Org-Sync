@@ -13,41 +13,76 @@ from sync_app.web.app_state import get_web_repositories
 
 
 class SyncDataQualitySupportMixin:
-    def build_source_data_quality_snapshot(self, request: Request) -> dict[str, Any]:
+    def build_source_data_quality_snapshot(
+        self,
+        request: Request,
+        *,
+        source_snapshot_id: int,
+        fingerprint: str,
+    ) -> dict[str, Any]:
+        config = self._get_org_app_config(request)
         current_org = self.request_support.get_current_org(request)
-        repositories = get_web_repositories(request)
-        config = repositories.org_config_repo.get_app_config(
-            current_org.org_id,
-            config_path=self.request_support.get_org_config_path(request),
+        source_repo = get_web_repositories(request).source_directory_repo
+        normalized_snapshot_id = int(source_snapshot_id or 0)
+        normalized_fingerprint = str(fingerprint or "").strip()
+        if normalized_snapshot_id <= 0:
+            raise ValueError("Source snapshot ID is required for data quality analysis.")
+        if not normalized_fingerprint:
+            raise ValueError(
+                "Source snapshot fingerprint is required for data quality analysis."
+            )
+
+        source_snapshot = source_repo.get_snapshot(
+            normalized_snapshot_id,
+            org_id=current_org.org_id,
         )
-        source_snapshot = repositories.source_directory_repo.get_latest_successful_snapshot(
+        if (
+            source_snapshot is None
+            or str(source_snapshot["status"] or "").strip().lower()
+            not in {"success", "succeeded"}
+            or str(source_snapshot["provider_id"] or "").strip().lower()
+            != str(config.source_provider or "").strip().lower()
+        ):
+            raise ValueError(
+                "The selected source snapshot is not available for data quality analysis."
+            )
+        if str(source_snapshot["snapshot_fingerprint"] or "").strip() != normalized_fingerprint:
+            raise ValueError("Source snapshot fingerprint no longer matches.")
+
+        latest_source_snapshot = source_repo.get_latest_successful_snapshot(
             org_id=current_org.org_id,
             provider_id=config.source_provider,
         )
-        if source_snapshot is None:
+        if (
+            latest_source_snapshot is None
+            or int(latest_source_snapshot["id"] or 0) != normalized_snapshot_id
+            or str(latest_source_snapshot["snapshot_fingerprint"] or "").strip()
+            != normalized_fingerprint
+        ):
             raise ValueError(
-                "A successful source snapshot is required before running data quality."
+                "The current source snapshot changed. Reload the page before running the scan."
             )
-        source_snapshot_id = int(source_snapshot["id"] or 0)
-        departments = [
-            DepartmentNode.from_source_payload(
-                {
-                    "id": row.get("source_department_id"),
-                    "name": row.get("name"),
-                    "parent_id": row.get("parent_department_id"),
-                }
-            )
-            for row in repositories.source_directory_repo.list_departments(
-                source_snapshot_id,
-                org_id=current_org.org_id,
-            )
-        ]
-        department_tree = self._build_department_tree(departments)
+
+        department_tree = self._build_department_tree(
+            [
+                DepartmentNode.from_source_payload(
+                    {
+                        "department_id": item.get("source_department_id"),
+                        "name": item.get("name"),
+                        "parent_department_id": item.get("parent_department_id"),
+                    }
+                )
+                for item in source_repo.list_departments(
+                    normalized_snapshot_id,
+                    org_id=current_org.org_id,
+                )
+            ]
+        )
         users_by_id: dict[str, SourceDirectoryUser] = {}
         offset = 0
         while True:
-            page = repositories.source_directory_repo.list_users(
-                source_snapshot_id,
+            page = source_repo.list_users(
+                normalized_snapshot_id,
                 org_id=current_org.org_id,
                 provider_id=config.source_provider,
                 limit=200,
@@ -479,14 +514,22 @@ class SyncDataQualitySupportMixin:
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "source_snapshot_id": normalized_snapshot_id,
+            "source_snapshot_fingerprint": normalized_fingerprint,
+            "source_snapshot_completed_at": str(
+                source_snapshot["completed_at"] or ""
+            ),
+            "source_snapshot_summary": {
+                "provider_id": str(source_snapshot["provider_id"] or ""),
+                "user_count": int(source_snapshot["user_count"] or 0),
+                "department_count": int(source_snapshot["department_count"] or 0),
+                "field_count": int(source_snapshot["field_count"] or 0),
+            },
+            "source_mode": "immutable_snapshot",
             "analysis_notes": [
                 "Counts reflect unique source users from the latest successful persisted source snapshot.",
                 "Manual bindings and per-user department overrides are not expanded in this snapshot.",
             ],
-            "source_snapshot_id": source_snapshot_id,
-            "source_snapshot_fingerprint": str(
-                source_snapshot["snapshot_fingerprint"] or ""
-            ),
             "summary": {
                 "total_users": len(users_by_id),
                 "department_count": len(department_tree),

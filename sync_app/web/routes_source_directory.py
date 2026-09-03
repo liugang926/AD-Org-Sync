@@ -3044,14 +3044,25 @@ def register_source_directory_routes(
         request: Request,
         background_tasks: BackgroundTasks,
         csrf_token: str = Form(""),
+        return_url: str = Form(""),
     ):
         user = require_capability(request, "config.write")
         if isinstance(user, RedirectResponse):
             return user
+        requested_return_path = str(return_url or "").strip()
+        allowed_return_paths = {
+            CANONICAL_ROUTE_PATHS["source-directory"],
+            CANONICAL_ROUTE_PATHS["data-quality"],
+        }
+        return_path = (
+            requested_return_path
+            if requested_return_path in allowed_return_paths
+            else CANONICAL_ROUTE_PATHS["source-directory"]
+        )
         csrf_error = reject_invalid_csrf(
             request,
             csrf_token,
-            CANONICAL_ROUTE_PATHS["source-directory"],
+            return_path,
         )
         if csrf_error:
             return csrf_error
@@ -3082,7 +3093,7 @@ def register_source_directory_routes(
         )
         flash(request, "success", "Source directory refresh started. The previous successful snapshot remains available until completion.")
         return RedirectResponse(
-            url=CANONICAL_ROUTE_PATHS["source-directory"],
+            url=return_path,
             status_code=303,
         )
 
