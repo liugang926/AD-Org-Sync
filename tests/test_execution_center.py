@@ -212,6 +212,214 @@ class ExecutionCenterServiceTests(unittest.TestCase):
             "execution.action.save_scope",
         )
 
+    def test_equivalent_source_snapshot_keeps_plan_current_and_renews_freshness(
+        self,
+    ) -> None:
+        created = create_eligible_execution_plan(
+            self.db_manager,
+            job_id="plan-equivalent-source",
+            approved=True,
+        )
+        replacement_id = self.source_repo.start_refresh(
+            org_id="default",
+            provider_id=created["selection"]["provider_id"],
+            connector_id=created["selection"]["connector_id"],
+            created_by="test",
+        )
+        self.source_repo.replace_snapshot(
+            replacement_id,
+            departments=[],
+            users=[],
+            fields=[],
+            fingerprint=created["summary"]["source_snapshot_fingerprint"],
+            ttl_minutes=240,
+        )
+        refreshed_selection = self.source_repo.save_scope_selection(
+            org_id="default",
+            provider_id=created["selection"]["provider_id"],
+            connector_id=created["selection"]["connector_id"],
+            scope_type=created["selection"]["scope_type"],
+            selected_department_ids=created["selection"].get(
+                "selected_department_ids", []
+            ),
+            selected_source_user_ids=created["selection"].get(
+                "selected_source_user_ids", []
+            ),
+            snapshot_id=replacement_id,
+            requested_by="test",
+        )
+        with self.db_manager.transaction() as connection:
+            connection.execute(
+                "UPDATE source_directory_snapshots SET expires_at = ? WHERE id = ?",
+                (
+                    (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+                    created["snapshot_id"],
+                ),
+            )
+
+        evaluation = self._evaluate("plan-equivalent-source")
+
+        self.assertTrue(evaluation.allowed)
+        self.assertEqual(evaluation.reason_code, "")
+        self.assertEqual(
+            int(evaluation.job_scope["snapshot_id"]),
+            created["snapshot_id"],
+        )
+        self.assertEqual(int(refreshed_selection["snapshot_id"]), replacement_id)
+
+    def test_plan_on_new_equivalent_snapshot_reuses_matching_and_release_evidence(
+        self,
+    ) -> None:
+        created = create_eligible_execution_plan(
+            self.db_manager,
+            job_id="plan-new-equivalent-source",
+            approved=True,
+        )
+        replacement_id = self.source_repo.start_refresh(
+            org_id="default",
+            provider_id=created["selection"]["provider_id"],
+            connector_id=created["selection"]["connector_id"],
+            created_by="test",
+        )
+        self.source_repo.replace_snapshot(
+            replacement_id,
+            departments=[],
+            users=[],
+            fields=[],
+            fingerprint=created["summary"]["source_snapshot_fingerprint"],
+            ttl_minutes=240,
+        )
+        replacement_selection = self.source_repo.save_scope_selection(
+            org_id="default",
+            provider_id=created["selection"]["provider_id"],
+            connector_id=created["selection"]["connector_id"],
+            scope_type=created["selection"]["scope_type"],
+            selected_department_ids=created["selection"].get(
+                "selected_department_ids", []
+            ),
+            selected_source_user_ids=created["selection"].get(
+                "selected_source_user_ids", []
+            ),
+            snapshot_id=replacement_id,
+            requested_by="test",
+        )
+        summary = dict(created["job"].summary or {})
+        summary.update(
+            {
+                "source_snapshot_id": replacement_id,
+                "selection_fingerprint": replacement_selection[
+                    "selection_fingerprint"
+                ],
+            }
+        )
+        self.job_repo.update_job(
+            "plan-new-equivalent-source",
+            summary=summary,
+        )
+        self.source_repo.bind_job_scope(
+            job_id="plan-new-equivalent-source",
+            execution_mode="dry_run",
+            config_fingerprint=created["job"].config_snapshot_hash,
+            selection=replacement_selection,
+            requested_by="test",
+            ad_snapshot_id=created["ad_snapshot_id"],
+            ad_snapshot_fingerprint=self.ad_snapshot_repo.get_snapshot(
+                created["ad_snapshot_id"],
+                org_id="default",
+            )["snapshot_fingerprint"],
+            identity_match_run_id=created["match_run_id"],
+            identity_match_rules_fingerprint=self.match_run_repo.get_latest_completed_run(
+                org_id="default"
+            )["rules_fingerprint"],
+            policy_release_id=created["policy_release_id"],
+            policy_release_hash=self.release_repo.get_latest_snapshot_record(
+                org_id="default"
+            ).bundle_hash,
+        )
+
+        evaluation = self._evaluate("plan-new-equivalent-source")
+
+        self.assertTrue(evaluation.allowed)
+        self.assertEqual(evaluation.reason_code, "")
+        self.assertEqual(int(evaluation.job_scope["snapshot_id"]), replacement_id)
+
+    def test_equivalent_source_snapshot_does_not_hide_a_real_scope_change(
+        self,
+    ) -> None:
+        created = create_eligible_execution_plan(
+            self.db_manager,
+            job_id="plan-equivalent-source-real-scope-change",
+            approved=True,
+        )
+        replacement_id = self.source_repo.start_refresh(
+            org_id="default",
+            provider_id=created["selection"]["provider_id"],
+            connector_id=created["selection"]["connector_id"],
+            created_by="test",
+        )
+        self.source_repo.replace_snapshot(
+            replacement_id,
+            departments=[],
+            users=[],
+            fields=[],
+            fingerprint=created["summary"]["source_snapshot_fingerprint"],
+            ttl_minutes=240,
+        )
+        self.source_repo.save_scope_selection(
+            org_id="default",
+            provider_id=created["selection"]["provider_id"],
+            connector_id=created["selection"]["connector_id"],
+            scope_type="full",
+            snapshot_id=replacement_id,
+            requested_by="test",
+        )
+        with self.db_manager.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE sync_scope_selections
+                SET scope_type = 'department', selection_fingerprint = 'changed'
+                WHERE org_id = 'default'
+                """
+            )
+
+        evaluation = self._evaluate("plan-equivalent-source-real-scope-change")
+
+        self.assertFalse(evaluation.allowed)
+        self.assertEqual(evaluation.reason_code, "execution.blocker.scope_changed")
+
+    def test_equivalent_ad_snapshot_keeps_plan_current(self) -> None:
+        create_eligible_execution_plan(
+            self.db_manager,
+            job_id="plan-equivalent-ad",
+            approved=True,
+        )
+        job_scope = self.source_repo.get_job_scope(
+            "plan-equivalent-ad",
+            org_id="default",
+        )
+        replacement_id = self.ad_snapshot_repo.start_snapshot(
+            org_id="default",
+            connector_id="default",
+            created_by="test",
+        )
+        self.ad_snapshot_repo.complete_snapshot(
+            replacement_id,
+            org_id="default",
+            user_count=0,
+            ou_count=1,
+            duplicate_employee_id_count=0,
+            duplicate_employee_number_count=0,
+            snapshot_fingerprint=job_scope["ad_snapshot_fingerprint"],
+            expires_at=(
+                datetime.now(timezone.utc) + timedelta(hours=4)
+            ).isoformat(timespec="seconds"),
+        )
+
+        evaluation = self._evaluate("plan-equivalent-ad")
+
+        self.assertTrue(evaluation.allowed)
+        self.assertEqual(evaluation.reason_code, "")
+
     def test_new_ad_snapshot_invalidates_the_plan(self) -> None:
         create_eligible_execution_plan(
             self.db_manager,

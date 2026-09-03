@@ -70,7 +70,7 @@
       <span class="config-brief__fact">
         <span>{{ t("Latest Dry Run") }}:</span>
         {% if config_rollout_status.latest_dry_run %}
-        {{ mode_ui.technical_identifier(ui_presentation, config_rollout_status.latest_dry_run.job_id, "/execution-center/jobs/" ~ config_rollout_status.latest_dry_run.job_id, t("View latest Dry Run")) }}
+        {{ mode_ui.technical_identifier(ui_presentation, config_rollout_status.latest_dry_run.job_id, "/execution-center/jobs/" ~ config_rollout_status.latest_dry_run.job_id, t("View latest Dry Run"), "", t("Copy identifier"), t("Identifier copied")) }}
         {% else %}
         <strong>-</strong>
         {% endif %}

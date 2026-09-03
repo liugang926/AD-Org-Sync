@@ -5,7 +5,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from sync_app.web.app_state import get_web_services
+from sync_app.web.app_state import get_web_repositories, get_web_services
 from sync_app.web.navigation import CANONICAL_ROUTE_PATHS
 
 
@@ -65,12 +65,14 @@ def register_conflict_routes(
         page_number = parse_page_number(request.query_params.get("page_number"), 1)
         services = get_web_services(request)
 
-        status_filter = status if status in {"open", "resolved", "dismissed"} else None
+        if status == "dismissed":
+            status = "ignored"
+        status_filter = status if status in {"open", "resolved", "ignored", "archived"} else None
         conflicts, page_data = fetch_page(
             lambda *, limit, offset: services.conflicts.list_conflicts_page(
                 limit=limit,
                 offset=offset,
-                job_id=job_id or None,
+                plan_id=job_id or None,
                 status=status_filter,
                 query=query,
                 org_id=current_org.org_id,
@@ -79,6 +81,21 @@ def register_conflict_routes(
             page_size=30,
         )
         conflict_recommendations = services.conflicts.build_recommendations(conflicts)
+        repositories = get_web_repositories(request)
+        recent_jobs = repositories.job_repo.list_recent_job_records(
+            limit=100, org_id=current_org.org_id
+        )
+        current_plan = next(
+            (
+                job
+                for job in recent_jobs
+                if str(getattr(job, "execution_mode", "") or "").lower() == "dry_run"
+                and str(getattr(job, "status", "") or "").lower()
+                in {"success", "completed"}
+            ),
+            None,
+        )
+        current_plan_id = str(getattr(current_plan, "job_id", "") or "")
         return render(
             request,
             "conflicts.html",
@@ -93,6 +110,13 @@ def register_conflict_routes(
             current_org=current_org,
             filters_are_remembered=True,
             conflicts_base_path=base_path_for(request),
+            current_plan_id=current_plan_id,
+            conflict_archive_after_days=repositories.settings_repo.get_int(
+                "conflict_archive_after_days", 30, org_id=current_org.org_id
+            ),
+            conflict_retention_days=repositories.settings_repo.get_int(
+                "conflict_retention_days", 90, org_id=current_org.org_id
+            ),
         )
 
     @app.get(f"{canonical_path}/{{conflict_id}}/decision-guide", response_class=HTMLResponse)
@@ -114,7 +138,7 @@ def register_conflict_routes(
         return_query = to_text(request.query_params.get("return_query"))
         return_status = to_text(request.query_params.get("return_status")) or "open"
         return_job_id = (
-            to_text(request.query_params.get("return_job_id")) or conflict.job_id
+            to_text(request.query_params.get("return_job_id")) or conflict.plan_id
         )
         return_url = return_url_for(
             request,
@@ -225,7 +249,7 @@ def register_conflict_routes(
             request,
             to_text(return_query),
             to_text(return_status),
-            to_text(return_job_id) or conflict.job_id,
+            to_text(return_job_id) or conflict.plan_id,
         )
         csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
         if csrf_error:
@@ -283,7 +307,7 @@ def register_conflict_routes(
             request,
             to_text(return_query),
             to_text(return_status),
-            to_text(return_job_id) or conflict.job_id,
+            to_text(return_job_id) or conflict.plan_id,
         )
         csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
         if csrf_error:
@@ -313,7 +337,9 @@ def register_conflict_routes(
         return RedirectResponse(url=fallback_url, status_code=303)
 
     @app.post(f"{canonical_path}/{{conflict_id}}/dismiss")
+    @app.post(f"{canonical_path}/{{conflict_id}}/ignore")
     @app.post("/conflicts/{conflict_id}/dismiss")
+    @app.post("/conflicts/{conflict_id}/ignore")
     def dismiss_conflict(
         request: Request,
         conflict_id: int,
@@ -339,7 +365,7 @@ def register_conflict_routes(
             request,
             to_text(return_query),
             to_text(return_status),
-            to_text(return_job_id) or conflict.job_id,
+            to_text(return_job_id) or conflict.plan_id,
         )
         csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
         if csrf_error:
@@ -351,7 +377,7 @@ def register_conflict_routes(
             actor_username=user.username,
             notes=to_text(notes),
         )
-        flash(request, "success", "Conflict dismissed")
+        flash(request, "success", "Conflict ignored")
         return RedirectResponse(url=fallback_url, status_code=303)
 
     @app.post(f"{canonical_path}/{{conflict_id}}/reopen")
@@ -380,7 +406,7 @@ def register_conflict_routes(
             request,
             to_text(return_query),
             to_text(return_status),
-            to_text(return_job_id) or conflict.job_id,
+            to_text(return_job_id) or conflict.plan_id,
         )
         csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
         if csrf_error:
@@ -397,6 +423,80 @@ def register_conflict_routes(
         flash(request, "success", "Conflict reopened")
         return RedirectResponse(url=fallback_url, status_code=303)
 
+    @app.post(f"{canonical_path}/{{conflict_id}}/archive")
+    @app.post("/conflicts/{conflict_id}/archive")
+    def archive_conflict(
+        request: Request,
+        conflict_id: int,
+        csrf_token: str = Form(""),
+        notes: str = Form(""),
+        return_query: str = Form(""),
+        return_status: str = Form(""),
+        return_job_id: str = Form(""),
+    ):
+        user = require_capability(request, "mappings.write")
+        if isinstance(user, RedirectResponse):
+            return user
+
+        current_org = get_current_org(request)
+        services = get_web_services(request)
+        conflict = services.conflicts.get_conflict_record(
+            conflict_id, org_id=current_org.org_id
+        )
+        if not conflict:
+            flash(request, "error", "Conflict record not found")
+            return RedirectResponse(url=base_path_for(request), status_code=303)
+        fallback_url = return_url_for(
+            request,
+            to_text(return_query),
+            to_text(return_status),
+            to_text(return_job_id) or conflict.plan_id,
+        )
+        csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
+        if csrf_error:
+            return csrf_error
+        changed = services.conflicts.archive_conflict(
+            conflict=conflict,
+            org_id=current_org.org_id,
+            actor_username=user.username,
+            notes=to_text(notes),
+        )
+        flash(
+            request,
+            "success" if changed else "warning",
+            "Conflict archived" if changed else "Conflict is already archived",
+        )
+        return RedirectResponse(url=fallback_url, status_code=303)
+
+    @app.post(f"{canonical_path}/archive-expired")
+    @app.post("/conflicts/archive-expired")
+    def archive_expired_conflicts(
+        request: Request,
+        csrf_token: str = Form(""),
+        confirmation: str = Form(""),
+    ):
+        user = require_capability(request, "mappings.write")
+        if isinstance(user, RedirectResponse):
+            return user
+        current_org = get_current_org(request)
+        fallback_url = base_path_for(request)
+        csrf_error = reject_invalid_csrf(request, csrf_token, fallback_url)
+        if csrf_error:
+            return csrf_error
+        try:
+            archived_count = get_web_services(
+                request
+            ).conflicts.archive_expired_plan_conflicts(
+                org_id=current_org.org_id,
+                actor_username=user.username,
+                confirmation=to_text(confirmation),
+            )
+        except ValueError as exc:
+            flash(request, "error", str(exc))
+            return RedirectResponse(url=fallback_url, status_code=303)
+        flash(request, "success", f"Archived {archived_count} expired-plan conflicts")
+        return RedirectResponse(url=fallback_url, status_code=303)
+
     @app.post(f"{canonical_path}/bulk")
     @app.post("/conflicts/bulk")
     def bulk_conflict_action(
@@ -405,6 +505,7 @@ def register_conflict_routes(
         action: str = Form(...),
         conflict_ids: list[str] = Form([]),
         notes: str = Form(""),
+        confirmation: str = Form(""),
         return_query: str = Form(""),
         return_status: str = Form(""),
         return_job_id: str = Form(""),
@@ -438,12 +539,20 @@ def register_conflict_routes(
             "apply_recommendation",
             "skip_user_sync",
             "dismiss",
+            "archive",
             "reopen",
         }:
             flash(request, "error", "Unsupported bulk conflict action")
             return RedirectResponse(url=fallback_url, status_code=303)
         if not selected_conflict_ids:
             flash(request, "error", "No conflicts selected")
+            return RedirectResponse(url=fallback_url, status_code=303)
+        if to_text(confirmation) != "CONFIRM":
+            flash(
+                request,
+                "error",
+                "Bulk conflict actions require confirmation text CONFIRM",
+            )
             return RedirectResponse(url=fallback_url, status_code=303)
         if (
             normalized_action == "apply_recommendation"

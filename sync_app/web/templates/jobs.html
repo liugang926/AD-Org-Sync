@@ -25,7 +25,7 @@
 
 <div class="page-stack execution-center-page">
   {% call ui.page_header(t("Jobs"), t("The only execution center for Dry Run, plan review, Apply, and task history."), eyebrow=t("Execution Center"), badge_text=current_org.name, badge_level=("error" if apply_blocked else "success")) %}
-    {{ ui.button(t(job_center_summary.next_action_label_code), href=job_center_summary.next_action_url, icon="arrow-right") }}
+    {{ ui.button(t("View current status"), href="#current-status", variant="secondary", icon="activity") }}
   {% endcall %}
 
   <nav class="execution-tabs" aria-label="{{ t('Execution Center') }}">
@@ -60,7 +60,7 @@
         {{ ui.badge(t("Blocked") if apply_blocked else t("Ready"), "error" if apply_blocked else "success") }}
         <div class="decision-rail__meta">
           <span>{{ t("Selected Dry Run ID") }}</span>
-          <strong>{{ mode_ui.technical_identifier(ui_presentation, apply_context.preview_id, ("/execution-center/jobs/" ~ apply_context.preview_id) if apply_context.preview_id else "", t("View selected plan")) }}</strong>
+          <strong>{{ mode_ui.technical_identifier(ui_presentation, apply_context.preview_id, ("/execution-center/jobs/" ~ apply_context.preview_id) if apply_context.preview_id else "", t("View selected plan"), "", t("Copy identifier"), t("Identifier copied")) }}</strong>
         </div>
       </div>
     </div>
@@ -69,13 +69,15 @@
       <div><span>{{ t("Current Organization") }}</span><strong>{{ current_org.name }}{% call mode_ui.advanced_inline(ui_presentation, "muted") %}({{ current_org.org_id }}){% endcall %}</strong></div>
       <div><span>{{ t("Current Source Snapshot") }}</span><strong>{{ execution_context.current_snapshot_version }}</strong></div>
       <div><span>{{ t("Current Sync Policy Version") }}</span><strong>{{ execution_context.current_policy_version }}</strong></div>
-      <div><span>{{ t("Latest Successful Dry Run") }}</span><strong>{% if job_center_summary.latest_successful_dry_run %}{{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_successful_dry_run.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_successful_dry_run.job_id, t("View Dry Run")) }}{% else %}-{% endif %}</strong></div>
-      <div><span>{{ t("Latest Apply") }}</span><strong>{% if job_center_summary.latest_apply %}{{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_apply.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id, t("View Apply")) }}{% else %}-{% endif %}</strong></div>
+      <div><span>{{ t("Latest Successful Dry Run") }}</span><strong>{% if job_center_summary.latest_successful_dry_run %}{{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_successful_dry_run.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_successful_dry_run.job_id, t("View Dry Run"), "", t("Copy identifier"), t("Identifier copied")) }}{% else %}-{% endif %}</strong></div>
+      <div><span>{{ t("Latest Apply") }}</span><strong>{% if job_center_summary.latest_apply %}{{ mode_ui.technical_identifier(ui_presentation, job_center_summary.latest_apply.job_id, "/execution-center/jobs/" ~ job_center_summary.latest_apply.job_id, t("View Apply"), "", t("Copy identifier"), t("Identifier copied")) }}{% else %}-{% endif %}</strong></div>
       <div><span>{{ t("Current Apply Gate") }}</span><strong>{{ t("Blocked") if apply_blocked else t("Ready") }}</strong></div>
     </div>
 
     {{ high_risk.workflow(apply_state.workflow, ui) }}
-    {{ high_risk.context_details(apply_context, ui_presentation) }}
+    {% call ui.detail_toggle(t("Technical evidence"), t("Immutable plan, environment, snapshot and confirmation values."), open=False) %}
+      {{ high_risk.context_details(apply_context, ui_presentation) }}
+    {% endcall %}
 
     <div class="blocker-list" aria-label="{{ t('Blocking Reasons') }}">
       {% for blocker in apply_state.blockers %}
@@ -91,6 +93,10 @@
       {% endfor %}
     </div>
   </section>
+
+  {% call ui.workflow_action_bar("blocked" if apply_blocked else "success", t("Apply Gate") ~ " - " ~ (t("Blocked") if apply_blocked else t("Ready")), t(apply_state.blockers[0].message_code, **apply_state.blockers[0].params) if apply_state.blockers else t("The current plan is ready for the next action.")) %}
+    {{ ui.button(t(job_center_summary.next_action_label_code), href=job_center_summary.next_action_url, variant="primary", icon="arrow-right") }}
+  {% endcall %}
 
   {% call ui.panel(t("Next Step Recommendations"), description=t("Use the highlighted recommendation to clear the current gate, then continue in this page.")) %}
     <div class="execution-recommendations">
@@ -141,7 +147,7 @@
       <div class="section-heading-row">
         <div>
           <h2>{{ t("Plan Review") }}</h2>
-          <p class="muted">{{ t(ui_presentation.choose("Selected plan", "Selected Dry Run ID")) }}: <strong>{{ mode_ui.technical_identifier(ui_presentation, selected_plan_id, ("/execution-center/jobs/" ~ selected_plan_id) if selected_plan_id else "", t("View selected plan")) }}</strong></p>
+          <p class="muted">{{ t(ui_presentation.choose("Selected plan", "Selected Dry Run ID")) }}: <strong>{{ mode_ui.technical_identifier(ui_presentation, selected_plan_id, ("/execution-center/jobs/" ~ selected_plan_id) if selected_plan_id else "", t("View selected plan"), "", t("Copy identifier"), t("Identifier copied")) }}</strong></p>
         </div>
         {% if can_approve %}
         <form method="post" action="/execution-center/plan-review/{{ selected_review.job_id }}/approve">
@@ -157,17 +163,15 @@
       <div class="impact-grid plan-review-summary">
         <div class="impact-card"><span>{{ t("Create") }}</span><strong>{{ plan_review_summary.create_count }}</strong></div>
         <div class="impact-card"><span>{{ t("Update") }}</span><strong>{{ plan_review_summary.update_count }}</strong></div>
-        <div class="impact-card"><span>{{ t("Enable") }}</span><strong>{{ plan_review_summary.enable_count }}</strong></div>
-        <div class="impact-card"><span>{{ t("Disable") }}</span><strong>{{ plan_review_summary.disable_count }}</strong></div>
+        <div class="impact-card"><span>{{ t("Lifecycle Changes") }}</span><strong>{{ plan_review_summary.enable_count + plan_review_summary.disable_count }}</strong></div>
         <div class="impact-card"><span>{{ t("Group Relationship Changes") }}</span><strong>{{ plan_review_summary.group_relation_count }}</strong></div>
         <div class="impact-card"><span>{{ t("Conflicts") }}</span><strong>{{ plan_review_summary.conflict_count }}</strong></div>
-        <div class="impact-card"><span>{{ t("Errors") }}</span><strong>{{ plan_review_summary.error_count }}</strong></div>
         <div class="impact-card"><span>{{ t("Risk") }}</span><strong>{{ plan_review_summary.risk_count }}</strong></div>
       </div>
 
       {% if selected_item %}
       <div class="detail-grid">
-        <div class="detail-item"><div class="label">{{ t(ui_presentation.choose("Selected plan", "Dry Run ID")) }}</div><div class="value">{{ mode_ui.technical_identifier(ui_presentation, selected_item.job.job_id, "/execution-center/jobs/" ~ selected_item.job.job_id, t("View selected plan")) }}</div></div>
+        <div class="detail-item"><div class="label">{{ t(ui_presentation.choose("Selected plan", "Dry Run ID")) }}</div><div class="value">{{ mode_ui.technical_identifier(ui_presentation, selected_item.job.job_id, "/execution-center/jobs/" ~ selected_item.job.job_id, t("View selected plan"), "", t("Copy identifier"), t("Identifier copied")) }}</div></div>
         <div class="detail-item"><div class="label">{{ t("Snapshot Version") }}</div><div class="value">{{ selected_item.evaluation.context.snapshot_version }}</div></div>
         <div class="detail-item"><div class="label">{{ t("Sync Policy Version") }}</div><div class="value">{{ execution_context.used_policy_version }}</div></div>
         <div class="detail-item"><div class="label">{{ t("Review Status") }}</div><div class="value">{{ ui.badge(t(selected_item.review.status|capitalize), "success" if selected_item.review.status == "approved" else "warning") }}</div></div>
@@ -181,7 +185,7 @@
           <tbody>
             {% for item in review_items %}
             <tr{% if item.review.job_id == selected_plan_id %} aria-current="true"{% endif %}>
-              <td>{{ mode_ui.technical_identifier(ui_presentation, item.review.job_id, "/execution-center/plan-review?plan_id=" ~ (item.review.job_id|urlencode), t("Review plan")) }}</td>
+              <td>{{ mode_ui.technical_identifier(ui_presentation, item.review.job_id, "/execution-center/plan-review?plan_id=" ~ (item.review.job_id|urlencode), t("Review plan"), "", t("Copy identifier"), t("Identifier copied")) }}</td>
               <td>{{ ui.badge(t(item.review.status|capitalize), "success" if item.review.status == "approved" else "warning") }}</td>
               <td>{{ item.evaluation.context.snapshot_version }}</td>
               <td>{{ item.evaluation.context.impact_count }}</td>
@@ -203,21 +207,21 @@
       <div class="section-heading-row">
         <div>
           <h2>{{ t("Apply") }}</h2>
-          <p class="muted">{{ t(ui_presentation.choose("Selected plan", "Selected Dry Run ID")) }}: <strong>{{ mode_ui.technical_identifier(ui_presentation, apply_context.preview_id, ("/execution-center/jobs/" ~ apply_context.preview_id) if apply_context.preview_id else "", t("View selected plan")) }}</strong></p>
+          <p class="muted">{{ t(ui_presentation.choose("Selected plan", "Selected Dry Run ID")) }}: <strong>{{ mode_ui.technical_identifier(ui_presentation, apply_context.preview_id, ("/execution-center/jobs/" ~ apply_context.preview_id) if apply_context.preview_id else "", t("View selected plan"), "", t("Copy identifier"), t("Identifier copied")) }}</strong></p>
         </div>
         {% if can("jobs.run") and not apply_blocked %}
         <form method="post" action="/execution-center/apply/run">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           {{ high_risk.confirmation_fields(apply_context) }}
-          {{ ui.button(t("Apply {count} Changes", count=apply_context.impact_count), type="submit", variant="danger", icon="shield-check", confirm_text=t("You are about to apply the reviewed plan. Verify the impact before continuing."), confirm_title=t("Confirm Apply"), confirm_details=apply_confirm_details) }}
+          {{ ui.button(t("Apply {count} Changes", count=apply_context.impact_count), type="submit", variant=("secondary" if apply_context.impact_count == 0 else "danger"), icon="shield-check", confirm_text=t("You are about to apply the reviewed plan. Verify the impact before continuing."), confirm_title=t("Confirm Apply"), confirm_details=apply_confirm_details) }}
         </form>
         {% else %}
-        {{ ui.button(t("Apply Blocked"), type="button", variant="danger", disabled=True, icon="shield-alert") }}
+        {{ ui.button(t("Apply Blocked"), type="button", variant="secondary", disabled=True, icon="shield-alert") }}
         {% endif %}
       </div>
 
       <div class="detail-grid">
-        <div class="detail-item"><div class="label">{{ t(ui_presentation.choose("Selected plan", "Dry Run ID")) }}</div><div class="value">{{ mode_ui.technical_identifier(ui_presentation, apply_context.preview_id, ("/execution-center/jobs/" ~ apply_context.preview_id) if apply_context.preview_id else "", t("View selected plan")) }}</div></div>
+        <div class="detail-item"><div class="label">{{ t(ui_presentation.choose("Selected plan", "Dry Run ID")) }}</div><div class="value">{{ mode_ui.technical_identifier(ui_presentation, apply_context.preview_id, ("/execution-center/jobs/" ~ apply_context.preview_id) if apply_context.preview_id else "", t("View selected plan"), "", t("Copy identifier"), t("Identifier copied")) }}</div></div>
         <div class="detail-item"><div class="label">{{ t("Impact Count") }}</div><div class="value">{{ apply_context.impact_count }}</div></div>
         <div class="detail-item"><div class="label">{{ t("Used Source Snapshot") }}</div><div class="value">{{ apply_context.snapshot_version }}</div></div>
         <div class="detail-item"><div class="label">{{ t("Used Policy Version") }}</div><div class="value">{{ execution_context.used_policy_version }}</div></div>

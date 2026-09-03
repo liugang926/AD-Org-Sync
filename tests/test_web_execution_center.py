@@ -121,15 +121,14 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
         for label in (
             "Create",
             "Update",
-            "Enable",
-            "Disable",
+            "Lifecycle Changes",
             "Group Relationship Changes",
             "Conflicts",
-            "Errors",
             "Risk",
         ):
             self.assertIn(label, body)
-        self.assertGreaterEqual(body.count("<strong>1</strong>"), 5)
+        self.assertGreaterEqual(body.count("<strong>1</strong>"), 3)
+        self.assertIn("<strong>2</strong>", body)
 
     def test_preflight_audit_is_included_in_unified_task_history(self) -> None:
         self._login("superadmin")
@@ -257,6 +256,56 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
             blocked.payload["readiness_step"],
             "source_field_catalog_current",
         )
+
+    def test_dry_run_accepts_a_newer_equivalent_source_snapshot(self) -> None:
+        self._login("superadmin")
+        created = create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="web-dry-run-equivalent-source",
+            environment_label=self.app.state.environment_label,
+        )
+        source_repo = self.app.state.source_directory_repo
+        newer_snapshot_id = source_repo.start_refresh(
+            org_id="default",
+            provider_id=created["selection"]["provider_id"],
+            connector_id=created["selection"]["connector_id"],
+            created_by="test",
+        )
+        source_repo.replace_snapshot(
+            newer_snapshot_id,
+            departments=[],
+            users=[],
+            fields=[
+                {
+                    "name": "name",
+                    "canonical_field_key": "display_name",
+                    "data_type": "string",
+                    "coverage": 0,
+                }
+            ],
+            fingerprint=created["summary"]["source_snapshot_fingerprint"],
+            ttl_minutes=240,
+        )
+
+        jobs_page = self._route("/jobs", "GET")(self._request("/jobs"))
+        jobs_body = self._text(jobs_page)
+        self.assertNotIn("A newer successful source snapshot exists.", jobs_body)
+
+        with patch.object(
+            self.app.state.sync_runner,
+            "launch",
+            return_value=(True, "Dry Run queued"),
+        ) as launch:
+            post_request = self._request("/jobs/run", "POST")
+            response = self._route("/jobs/run", "POST")(
+                post_request,
+                csrf_token=self._csrf_token(jobs_body),
+                mode="dry_run",
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(launch.call_count, 1, post_request.session)
+        self.assertEqual(launch.call_args.kwargs["mode"], "dry_run")
 
     def test_review_then_apply_binds_the_exact_plan_and_writes_audit(self) -> None:
         self._login("superadmin")
@@ -464,6 +513,173 @@ class WebExecutionCenterTests(WebAuthzBaseTestCase):
             apply_body,
             r'data-state="complete" data-high-risk-step="execute"',
         )
+
+    def test_historical_plan_conflicts_are_evidence_not_current_apply_gate(self) -> None:
+        self._login("superadmin")
+        create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="web-plan-conflict-current",
+            environment_label=self.app.state.environment_label,
+            approved=True,
+        )
+        SyncJobRepository(self.app.state.db_manager).create_job(
+            "web-apply-conflict-history",
+            trigger_type="unit_test",
+            execution_mode="apply",
+            status="COMPLETED",
+            org_id="default",
+            plan_source_job_id="web-plan-conflict-history",
+        )
+        self.app.state.conflict_repo.add_conflict(
+            job_id="web-apply-conflict-history",
+            plan_id="web-plan-conflict-history",
+            workflow_id="web-apply-conflict-history",
+            conflict_type="identity_ambiguous",
+            source_id="historical-user",
+            message="historical evidence only",
+        )
+
+        apply_path = "/execution-center/apply"
+        apply_page = self._route(apply_path, "GET")(
+            self._request(
+                apply_path,
+                query={"plan_id": "web-plan-conflict-current"},
+            ),
+            plan_id="web-plan-conflict-current",
+        )
+        apply_body = self._text(apply_page)
+
+        self.assertIn("Apply 1 Changes", apply_body)
+        self.assertNotIn("Resolve current plan conflicts before approval", apply_body)
+        self.assertEqual(
+            self.app.state.conflict_repo.count_unresolved_conflicts_for_plan(
+                "web-plan-conflict-current"
+            ),
+            0,
+        )
+        self.assertEqual(
+            self.app.state.conflict_repo.count_unresolved_conflicts_for_plan(
+                "web-plan-conflict-history"
+            ),
+            1,
+        )
+
+    def test_current_plan_open_conflict_blocks_apply_gate(self) -> None:
+        self._login("superadmin")
+        create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="web-plan-conflict-blocked",
+            environment_label=self.app.state.environment_label,
+            approved=True,
+        )
+        self.app.state.conflict_repo.add_conflict(
+            job_id="web-plan-conflict-blocked",
+            plan_id="web-plan-conflict-blocked",
+            workflow_id="web-plan-conflict-blocked",
+            conflict_type="identity_ambiguous",
+            source_id="current-user",
+            message="current plan must be resolved",
+        )
+
+        apply_path = "/execution-center/apply"
+        apply_page = self._route(apply_path, "GET")(
+            self._request(
+                apply_path,
+                query={"plan_id": "web-plan-conflict-blocked"},
+            ),
+            plan_id="web-plan-conflict-blocked",
+        )
+        apply_body = self._text(apply_page)
+
+        self.assertNotIn("Apply 1 Changes", apply_body)
+        self.assertIn("Resolve the 1 open conflicts before running apply.", apply_body)
+        self.assertIn("Review Conflicts", apply_body)
+
+    def test_zero_write_apply_uses_non_danger_action_style(self) -> None:
+        self._login("superadmin")
+        create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="web-plan-zero-write",
+            environment_label=self.app.state.environment_label,
+            planned_operation_count=0,
+            high_risk_operation_count=0,
+            approved=True,
+        )
+        apply_path = "/execution-center/apply"
+        apply_page = self._route(apply_path, "GET")(
+            self._request(apply_path, query={"plan_id": "web-plan-zero-write"}),
+            plan_id="web-plan-zero-write",
+        )
+        apply_body = self._text(apply_page)
+        zero_write_button = re.search(
+            r'<button[^>]*class="([^"]*)"[^>]*>(?:(?!</button>).)*?<span>Apply 0 Changes</span>',
+            apply_body,
+            re.S,
+        )
+        self.assertIsNotNone(zero_write_button)
+        self.assertIn("secondary", zero_write_button.group(1).split())
+        self.assertNotIn("danger", zero_write_button.group(1).split())
+
+    def test_zero_write_completed_apply_reports_post_apply_closure(self) -> None:
+        self._login("superadmin")
+        create_eligible_execution_plan(
+            self.app.state.db_manager,
+            job_id="web-plan-zero-write-complete",
+            environment_label=self.app.state.environment_label,
+            planned_operation_count=0,
+            high_risk_operation_count=0,
+            approved=True,
+        )
+        self.app.state.job_repo.create_job(
+            "web-apply-zero-write-complete",
+            trigger_type="unit_test",
+            execution_mode="apply",
+            status="COMPLETED",
+            org_id="default",
+            plan_source_job_id="web-plan-zero-write-complete",
+        )
+        self.app.state.job_repo.update_job(
+            "web-apply-zero-write-complete",
+            planned_operation_count=0,
+            executed_operation_count=0,
+            error_count=0,
+            summary={"planned_operation_count": 0, "error_count": 0},
+            ended=True,
+        )
+        apply_path = "/execution-center/apply"
+
+        completed_page = self._route(apply_path, "GET")(
+            self._request(
+                apply_path,
+                query={"plan_id": "web-plan-zero-write-complete"},
+            ),
+            plan_id="web-plan-zero-write-complete",
+        )
+        completed_body = self._text(completed_page)
+
+        self.assertIn('data-post-apply-verification="passed"', completed_body)
+        self.assertIn(
+            "Verification complete. No AD changes were required.",
+            completed_body,
+        )
+        self.assertNotIn("Apply 0 Changes", completed_body)
+        self.assertIn("View Apply evidence", completed_body)
+        self.assertRegex(
+            completed_body,
+            r'data-state="complete"\s+data-high-risk-step="confirm"',
+        )
+
+        chinese_page = self._route(apply_path, "GET")(
+            self._request(
+                apply_path,
+                query={
+                    "plan_id": "web-plan-zero-write-complete",
+                    "lang": "zh-CN",
+                },
+            ),
+            plan_id="web-plan-zero-write-complete",
+        )
+        self.assertIn("验证完成，无需修改 AD。", self._text(chinese_page))
 
     def test_apply_page_blocks_when_current_config_changed_after_dry_run(self) -> None:
         self._login("superadmin")

@@ -898,6 +898,8 @@ def run_sync_job(
         try:
             conflict_repo.add_conflict(
                 job_id=job_id,
+                plan_id=str(sync_stats.get('plan_source_job_id') or job_id),
+                workflow_id=job_id,
                 conflict_type=conflict_type,
                 source_id=source_id,
                 message=message,
@@ -973,12 +975,16 @@ def run_sync_job(
 
     def run_history_cleanup() -> dict[str, Any]:
         job_retention_days = settings_repo.get_int('job_history_retention_days', 30)
+        conflict_archive_after_days = settings_repo.get_int('conflict_archive_after_days', 30)
+        conflict_retention_days = settings_repo.get_int('conflict_retention_days', 90)
         event_retention_days = settings_repo.get_int('event_history_retention_days', 30)
         audit_log_retention_days = settings_repo.get_int('audit_log_retention_days', 90)
         backup_retention_days = settings_repo.get_int('backup_retention_days', 30)
         backup_retention_max_files = settings_repo.get_int('backup_retention_max_files', 30)
         history_cleanup_result = db_manager.cleanup_history(
             job_retention_days=job_retention_days,
+            conflict_archive_after_days=conflict_archive_after_days,
+            conflict_retention_days=conflict_retention_days,
             event_retention_days=event_retention_days,
             audit_log_retention_days=audit_log_retention_days,
         )

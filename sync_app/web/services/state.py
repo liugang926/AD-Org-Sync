@@ -111,6 +111,7 @@ def build_web_service_state(
         conflicts=WebConflictService(
             conflict_repo=conflict_repo,
             audit_repo=audit_repo,
+            settings_repo=settings_repo,
         ),
         config=WebConfigService(
             db_manager=db_manager,

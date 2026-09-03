@@ -18,7 +18,7 @@
       <div class="hero-meta">
         {% call mode_ui.advanced_inline(ui_presentation, "cell-mono cell-strong") %}{{ t("Job ID") }}: {{ job.job_id }}{% endcall %}
         {{ ui.badge(t(job.execution_mode), 'info' if job.execution_mode == 'dry_run' else 'success') }}
-        {{ ui.badge(t(job.status), status_level) }}
+        {{ ui.badge(t(job.status|capitalize), status_level) }}
       </div>
     </div>
 
@@ -27,7 +27,7 @@
         <div><strong>{{ t("Started At") }}</strong><br>{{ ui.local_time(job.started_at) }}</div>
         <div><strong>{{ t("Ended At") }}</strong><br>{{ ui.local_time(job.ended_at) }}</div>
         <div><strong>{{ t("Mode") }}</strong><br>{{ t(job.execution_mode) }}</div>
-        <div><strong>{{ t("Status") }}</strong><br>{{ t(job.status) }}</div>
+        <div><strong>{{ t("Status") }}</strong><br>{{ t(job.status|capitalize) }}</div>
       </div>
     </div>
 
@@ -59,12 +59,17 @@
       </div>
     </div>
   </section>
+  {% set completion_action_url = "/identity-governance/conflicts?job_id=" ~ job.job_id if summary.get("conflict_count", 0) else ("/execution-center/plan-review?plan_id=" ~ job.job_id if job.execution_mode == "dry_run" else "/execution-center/jobs") %}
+  {% set completion_action_label = t("Review conflicts") if summary.get("conflict_count", 0) else (t("Open Plan Review") if job.execution_mode == "dry_run" else t("Back to Job History")) %}
+  {% call ui.workflow_action_bar("success" if job.status == "COMPLETED" else ("failed" if job.status == "FAILED" else "waiting"), t("Execution completed") if job.status == "COMPLETED" else (t("Execution failed") if job.status == "FAILED" else t("Execution in progress")), t("Review the business result first, then open technical evidence only when needed.")) %}
+    {{ ui.button(completion_action_label, href=completion_action_url, variant="primary", icon="arrow-right") }}
+  {% endcall %}
   {{ mode_ui.basic_guidance(ui_presentation, t("System recommendation"), t("Review the result and risk summary first. Open the conflict queue when identity decisions remain."), t("Review conflicts"), "/identity-governance/conflicts") }}
 
   {% if summary.get("source_snapshot_id") %}
   {% call ui.panel(t("Source Scope and Mapping")) %}
     <div class="detail-grid">
-      <div><div class="label">{{ t("Scope") }}</div><div class="value">{{ summary.get("scope_type", "full") }}</div></div>
+      <div><div class="label">{{ t("Scope") }}</div><div class="value">{{ t(summary.get("scope_type", "full")) }}</div></div>
       <div><div class="label">{{ t("Selected Users") }}</div><div class="value">{{ summary.get("selected_user_count", 0) }}</div></div>
       <div><div class="label">{{ t("Selected Departments") }}</div><div class="value">{{ summary.get("selected_department_count", 0) }}</div></div>
       <div><div class="label">{{ t("Snapshot") }}</div><div class="value cell-mono">#{{ summary.get("source_snapshot_id") }}</div></div>
@@ -181,7 +186,7 @@
           <h3 class="section-header__title">{{ t(section.label_code) }}</h3>
           <p class="section-header__description">
             {% if diff.baseline_job_id %}
-            {{ mode_ui.technical_identifier(ui_presentation, diff.baseline_job_id, "/execution-center/jobs/" ~ diff.baseline_job_id, t("View comparison run")) }}
+            {{ mode_ui.technical_identifier(ui_presentation, diff.baseline_job_id, "/execution-center/jobs/" ~ diff.baseline_job_id, t("View comparison run"), "", t("Copy identifier"), t("Identifier copied")) }}
             {% else %}
             -
             {% endif %}
@@ -357,7 +362,7 @@
   {% endif %}
 
   {% if operation_records %}
-  {% call ui.panel(t("Operation Records")) %}
+  {% call ui.detail_toggle(t("Operation Records"), t("Technical execution evidence for each attempted operation."), open=False) %}
     {% call ui.table_shell() %}
       <table class="table-sm">
         <thead>
@@ -435,7 +440,7 @@
     {% endif %}
 
     {% if events %}
-    {% call ui.panel(t("System Events")) %}
+    {% call ui.detail_toggle(t("System Events"), t("Technical event evidence for troubleshooting and audit."), open=False) %}
       {% call ui.table_shell() %}
         <table class="table-sm">
           <thead><tr><th>{{ t("Time") }}</th><th>{{ t("Level") }}</th><th>{{ t("Event") }}</th><th>{{ t("Message") }}</th><th>{{ t("Details") }}</th></tr></thead>

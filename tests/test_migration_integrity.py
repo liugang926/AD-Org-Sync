@@ -111,7 +111,7 @@ class MigrationIntegrityTests(unittest.TestCase):
                     "PRAGMA index_list('data_quality_snapshots')"
                 ).fetchall()
             }
-        self.assertEqual(applied, 39)
+        self.assertEqual(applied, MIGRATIONS[-1][0])
         self.assertTrue(
             {
                 "source_snapshot_id",

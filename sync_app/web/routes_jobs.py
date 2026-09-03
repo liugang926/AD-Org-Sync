@@ -486,13 +486,12 @@ def register_job_routes(
             )
             if (
                 latest_snapshot is None
-                or int(latest_snapshot["id"] or 0) != snapshot_id
                 or str(latest_snapshot["snapshot_fingerprint"] or "")
                 != str(scope.get("source_snapshot_fingerprint") or "")
             ):
                 return "execution.blocker.snapshot_superseded"
 
-            expires_at_raw = str(snapshot["expires_at"] or "").strip()
+            expires_at_raw = str(latest_snapshot["expires_at"] or "").strip()
             try:
                 expires_at = datetime.fromisoformat(
                     expires_at_raw.replace("Z", "+00:00")
@@ -1037,9 +1036,12 @@ def register_job_routes(
             preview_state="complete" if evaluation.job else "pending",
             confirm_state=(
                 "complete"
-                if evaluation.review
-                and str(evaluation.review.status or "").lower() == "approved"
-                and evaluation.allowed
+                if apply_status in {"COMPLETED", "FAILED"}
+                or (
+                    evaluation.review
+                    and str(evaluation.review.status or "").lower() == "approved"
+                    and evaluation.allowed
+                )
                 else ("blocked" if evaluation.job else "pending")
             ),
             execute_state=(
@@ -1384,7 +1386,16 @@ def register_job_routes(
                 message=message,
                 payload=high_risk_audit_payload(high_risk_context),
             )
-        flash(request, "success" if ok else "error", message)
+        if ok:
+            flash_t(
+                request,
+                "success",
+                "Dry Run request accepted."
+                if normalized_mode == "dry_run"
+                else "Apply request accepted.",
+            )
+        else:
+            flash(request, "error", message)
         return RedirectResponse(url=return_url, status_code=303)
 
     @app.get(
@@ -1547,6 +1558,8 @@ def register_job_routes(
             integrity=integrity,
             retention_settings={
                 "job_history_retention_days": repositories.settings_repo.get_int("job_history_retention_days", 30),
+                "conflict_archive_after_days": repositories.settings_repo.get_int("conflict_archive_after_days", 30),
+                "conflict_retention_days": repositories.settings_repo.get_int("conflict_retention_days", 90),
                 "event_history_retention_days": repositories.settings_repo.get_int("event_history_retention_days", 30),
                 "audit_log_retention_days": repositories.settings_repo.get_int("audit_log_retention_days", 90),
                 "backup_retention_days": repositories.settings_repo.get_int("backup_retention_days", 30),

@@ -7,10 +7,25 @@ from typing import Any, Dict, Optional
 from sync_app.core.models.base import MappingLikeModel
 
 
+CONFLICT_STATUSES = ("open", "resolved", "ignored", "archived")
+CONFLICT_UNRESOLVED_STATUSES = ("open",)
+
+
+def normalize_conflict_status(status: str | None) -> str:
+    candidate = str(status or "").strip().lower()
+    if candidate == "dismissed":
+        return "ignored"
+    if candidate not in CONFLICT_STATUSES:
+        raise ValueError(f"unsupported conflict status: {status!r}")
+    return candidate
+
+
 @dataclass(slots=True)
 class SyncConflictRecord(MappingLikeModel):
     id: Optional[int] = None
     job_id: str = ""
+    plan_id: str = ""
+    workflow_id: str = ""
     conflict_type: str = ""
     severity: str = "warning"
     status: str = "open"
@@ -22,6 +37,8 @@ class SyncConflictRecord(MappingLikeModel):
     resolution_payload: Optional[Dict[str, Any]] = None
     created_at: str = ""
     resolved_at: str = ""
+    archived_at: str = ""
+    status_changed_at: str = ""
 
     @classmethod
     def from_row(cls, row: Any) -> "SyncConflictRecord":
@@ -40,6 +57,16 @@ class SyncConflictRecord(MappingLikeModel):
         return cls(
             id=int(row["id"]) if row["id"] is not None else None,
             job_id=str(row["job_id"] or ""),
+            plan_id=(
+                str(row["plan_id"] or row["job_id"] or "")
+                if "plan_id" in row.keys()
+                else str(row["job_id"] or "")
+            ),
+            workflow_id=(
+                str(row["workflow_id"] or row["job_id"] or "")
+                if "workflow_id" in row.keys()
+                else str(row["job_id"] or "")
+            ),
             conflict_type=str(row["conflict_type"] or ""),
             severity=str(row["severity"] or "warning"),
             status=str(row["status"] or "open"),
@@ -55,6 +82,14 @@ class SyncConflictRecord(MappingLikeModel):
             ),
             created_at=str(row["created_at"] or ""),
             resolved_at=str(row["resolved_at"] or ""),
+            archived_at=(
+                str(row["archived_at"] or "") if "archived_at" in row.keys() else ""
+            ),
+            status_changed_at=(
+                str(row["status_changed_at"] or row["created_at"] or "")
+                if "status_changed_at" in row.keys()
+                else str(row["resolved_at"] or row["created_at"] or "")
+            ),
         )
 
 @dataclass(slots=True)

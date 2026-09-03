@@ -2299,6 +2299,57 @@ MIGRATIONS = [
     ),
     (
         39,
+        "govern sync conflict plan lifecycle and status audit",
+        """
+        ALTER TABLE sync_conflicts
+        ADD COLUMN plan_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_conflicts
+        ADD COLUMN workflow_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE sync_conflicts
+        ADD COLUMN archived_at TEXT;
+        ALTER TABLE sync_conflicts
+        ADD COLUMN status_changed_at TEXT;
+
+        UPDATE sync_conflicts
+        SET plan_id = job_id
+        WHERE plan_id = '';
+        UPDATE sync_conflicts
+        SET workflow_id = job_id
+        WHERE workflow_id = '';
+        UPDATE sync_conflicts
+        SET status = 'ignored'
+        WHERE status = 'dismissed';
+        UPDATE sync_conflicts
+        SET status_changed_at = COALESCE(NULLIF(resolved_at, ''), created_at)
+        WHERE status_changed_at IS NULL OR status_changed_at = '';
+
+        CREATE INDEX idx_sync_conflicts_plan_status_created
+        ON sync_conflicts (plan_id, status, created_at DESC, id DESC);
+        CREATE INDEX idx_sync_conflicts_workflow_status_created
+        ON sync_conflicts (workflow_id, status, created_at DESC, id DESC);
+
+        CREATE TABLE sync_conflict_status_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          conflict_id INTEGER NOT NULL,
+          job_id TEXT NOT NULL,
+          plan_id TEXT NOT NULL,
+          workflow_id TEXT NOT NULL,
+          from_status TEXT NOT NULL,
+          to_status TEXT NOT NULL,
+          actor_username TEXT NOT NULL,
+          reason TEXT NOT NULL DEFAULT '',
+          is_bulk INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(conflict_id) REFERENCES sync_conflicts(id) ON DELETE CASCADE
+        );
+        CREATE INDEX idx_sync_conflict_status_history_conflict
+        ON sync_conflict_status_history (conflict_id, created_at DESC, id DESC);
+        CREATE INDEX idx_sync_conflict_status_history_plan
+        ON sync_conflict_status_history (plan_id, created_at DESC, id DESC);
+        """,
+    ),
+    (
+        40,
         "bind data quality scans to immutable source snapshot evidence",
         """
         ALTER TABLE data_quality_snapshots

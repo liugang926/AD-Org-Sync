@@ -48,7 +48,7 @@
       <strong class="text-danger">{{ t('Invalid — rerun required') }}</strong>
     {% elif latest_policy_dry_run %}
       <strong>{{ t('Current') }}</strong>
-      <span class="muted">{{ mode_ui.technical_identifier(ui_presentation, latest_policy_dry_run.job_id, "/execution-center/jobs/" ~ latest_policy_dry_run.job_id, t("View latest Dry Run")) }}</span>
+      <span class="muted">{{ mode_ui.technical_identifier(ui_presentation, latest_policy_dry_run.job_id, "/execution-center/jobs/" ~ latest_policy_dry_run.job_id, t("View latest Dry Run"), "", t("Copy identifier"), t("Identifier copied")) }}</span>
     {% else %}
       <strong>{{ t('Not run') }}</strong>
       <span class="muted">{{ t('A Dry Run is required before Apply.') }}</span>

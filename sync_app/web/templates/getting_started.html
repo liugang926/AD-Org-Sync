@@ -11,6 +11,7 @@
     <div><span>{{ t("Configuration progress") }}</span><strong>{{ getting_started.simple_completed_steps or 0 }} / {{ getting_started.simple_steps|length }}</strong></div>
     <div><span>{{ t("Required configuration") }}</span><strong>{{ t("Five steps") }}</strong></div>
     <div><span>{{ t("Final check") }}</span><strong>{{ t("Dry Run preview") }}</strong></div>
+    <div><span>{{ t("Current status") }}</span><strong>{{ t("Ready") if getting_started.simple_completed_steps == getting_started.simple_steps|length else t("Waiting") }}</strong></div>
   </section>
 
   <section class="simple-setup-flow step-list" aria-label="{{ t('Required synchronization setup') }}">
@@ -32,10 +33,9 @@
     {% endfor %}
   </section>
 
-  <section class="rollout-next sync-preview-callout" data-rollout-next-step>
-    <div><div class="decision-wizard__eyebrow">{{ t("After the five settings") }}</div><h2>{{ t(getting_started.preview_step.title) }}</h2><p>{{ t(getting_started.preview_step.summary) }}</p></div>
+  {% call ui.workflow_action_bar("success" if getting_started.simple_completed_steps == getting_started.simple_steps|length else "waiting", t(getting_started.preview_step.title), t(getting_started.preview_step.summary)) %}
     {{ ui.button(t(getting_started.preview_step.action_label), href=getting_started.preview_step.action_url, variant="primary", icon="play-circle") }}
-  </section>
+  {% endcall %}
 
   {% call ui.detail_toggle(t("Connection and security notices"), t("Connection tests and security warnings support the five-step setup."), open=False) %}
     <div class="check-list">{% for item in preflight_summary.checks %}<article class="check-item check-item--{{ item.status }}"><div><strong>{{ t(item.label, **(item.label_params or {})) }}</strong><p>{{ t(item.detail, **(item.detail_params or {})) }}</p></div></article>{% endfor %}</div>

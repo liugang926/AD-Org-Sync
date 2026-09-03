@@ -1546,6 +1546,15 @@ class WebBrowserRegressionTests(unittest.TestCase):
                     self.page.locator(".execution-tabs a[aria-current='page']").count(),
                     1,
                 )
+                if heading != "Job History":
+                    technical_summary = self.page.locator(
+                        "details.detail-toggle > summary"
+                    ).filter(has_text="Technical evidence").first
+                    self.assertTrue(technical_summary.is_visible())
+                    technical_details = technical_summary.locator("..")
+                    self.assertIsNone(technical_details.get_attribute("open"))
+                    technical_summary.click()
+                    self.assertIsNotNone(technical_details.get_attribute("open"))
                 main_text = self.page.locator("main").inner_text().lower()
                 self.assertIn("organization", main_text)
                 self.assertIn("environment", main_text)
@@ -1594,6 +1603,14 @@ class WebBrowserRegressionTests(unittest.TestCase):
             f"{self.base_url}/execution-center/apply?plan_id=browser-execution-plan&lang=en",
             wait_until="networkidle",
         )
+        technical_summary = self.page.locator(
+            "details.detail-toggle > summary"
+        ).filter(has_text="Technical evidence").first
+        self.assertTrue(technical_summary.is_visible())
+        technical_details = technical_summary.locator("..")
+        self.assertIsNone(technical_details.get_attribute("open"))
+        technical_summary.click()
+        self.assertTrue(self.page.locator("[data-high-risk-context]").is_visible())
         self.assertIn(f"#{created['snapshot_id']}", self.page.locator("main").inner_text())
         apply_button = self.page.get_by_role("button", name="Apply 3 Changes")
         with patch.object(
@@ -1656,14 +1673,15 @@ class WebBrowserRegressionTests(unittest.TestCase):
     def test_apply_is_available_only_on_execution_surfaces(self):
         self._login()
         self.page.goto(f"{self.base_url}/jobs?lang=en", wait_until="networkidle")
+        primary_execution_links = self.page.locator(
+            "aside .sidebar-nav-group__links a[href^='/execution-center/']"
+        )
         self.assertEqual(
-            self.page.locator("aside a[href^='/execution-center/']").count(),
+            primary_execution_links.count(),
             1,
         )
         self.assertEqual(
-            self.page.locator("aside a[href^='/execution-center/']").first.get_attribute(
-                "href"
-            ),
+            primary_execution_links.first.get_attribute("href"),
             "/execution-center/dry-run",
         )
         self.assertEqual(
@@ -1996,6 +2014,27 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.assertGreater(float(first_field.bounding_box()["width"]), 0)
         self._capture("connectors-text-scale-200.png")
 
+    def test_policy_confirmation_masks_password_values(self):
+        self._login()
+        self.page.goto(
+            f"{self.base_url}/sync-policies/account-naming?lang=en",
+            wait_until="networkidle",
+        )
+        creation_form = self.page.locator(
+            "form[action='/sync-policies/account-naming/account-creation']"
+        )
+        secret = "BrowserAcceptanceSecret!2026"
+        creation_form.locator("input[name='default_password']").fill(secret)
+        creation_form.get_by_role(
+            "button", name="Save Account Creation Policy"
+        ).click()
+
+        dialog = self.page.locator("[data-confirm-dialog]")
+        self.assertTrue(dialog.is_visible())
+        details = dialog.locator("[data-confirm-details]").inner_text()
+        self.assertNotIn(secret, details)
+        self.assertIn("••••••••", details)
+
     def test_chinese_operating_pages_do_not_leak_known_dynamic_english_messages(self):
         self._login()
         for path in ("/dashboard?lang=zh-CN", "/jobs?lang=zh-CN"):
@@ -2147,6 +2186,14 @@ class WebBrowserRegressionTests(unittest.TestCase):
             )
             self.assertTrue(blocked_status.is_visible())
             self.assertEqual(self.page.locator("[data-high-risk-step]").count(), 5)
+            technical_summary = self.page.locator(
+                "details.detail-toggle > summary"
+            ).filter(has_text="Technical evidence").first
+            self.assertTrue(technical_summary.is_visible())
+            technical_details = technical_summary.locator("..")
+            self.assertIsNone(technical_details.get_attribute("open"))
+            self.assertFalse(self.page.locator("[data-high-risk-context]").is_visible())
+            technical_summary.click()
             self.assertTrue(self.page.locator("[data-high-risk-context]").is_visible())
             self.assertIn(
                 "action required",
@@ -2313,11 +2360,18 @@ class WebBrowserRegressionTests(unittest.TestCase):
         self.page.locator("input[name='conflict_ids']").check()
         self.assertTrue(bulk_button.is_enabled())
         self.page.locator("select[name='action']").select_option("dismiss")
+        bulk_confirmation = self.page.locator(
+            "#bulk-conflicts-form input[name='confirmation']"
+        )
+        self.assertTrue(
+            bulk_confirmation.evaluate("element => element.required")
+        )
+        bulk_confirmation.fill("CONFIRM")
         bulk_button.click()
         self.assertTrue(self.page.locator("[data-confirm-dialog]").is_visible())
         confirmation_details = self.page.locator("[data-confirm-details]").inner_text()
         self.assertIn("Selected Conflicts\n1", confirmation_details)
-        self.assertIn("Requested Action\nDismiss", confirmation_details)
+        self.assertIn("Requested Action\nIgnore", confirmation_details)
         self.page.keyboard.press("Escape")
         self.assertFalse(self.page.locator("[data-confirm-dialog]").is_visible())
         self.assertTrue(

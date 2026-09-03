@@ -88,28 +88,36 @@ class SyncDataQualitySupportMixin:
                 limit=200,
                 offset=offset,
             )
-            for item in page["items"]:
-                payload = dict(item.get("raw_payload") or {})
+            items = list(page.get("items") or [])
+            for row in items:
+                payload = dict(row.get("raw_payload") or {})
                 payload.update(
                     {
-                        "userid": item.get("source_user_id"),
-                        "name": item.get("display_name"),
-                        "email": item.get("email"),
-                        "employee_id": item.get("employee_id"),
-                        "position": item.get("position"),
-                        "department": item.get("department_ids") or [],
-                        "department_names": item.get("department_names") or [],
-                        "primary_department_id": item.get("primary_department_id"),
-                        "status": item.get("account_status"),
-                        "is_active": bool(item.get("is_active")),
+                        "userid": str(row.get("source_user_id") or ""),
+                        "name": str(row.get("display_name") or ""),
+                        "employee_id": str(row.get("employee_id") or ""),
+                        "email": str(row.get("email") or ""),
+                        "department": list(row.get("department_ids") or []),
+                        "department_names": list(
+                            row.get("department_names") or []
+                        ),
+                        "primary_department_id": row.get(
+                            "primary_department_id"
+                        ),
+                        "position": str(row.get("position") or ""),
+                        "account_status": str(
+                            row.get("account_status") or "active"
+                        ),
+                        "is_active": bool(row.get("is_active", True)),
                         "provider_id": config.source_provider,
                     }
                 )
-                user = SourceDirectoryUser.from_source_payload(payload)
-                user.raw_payload = payload
-                self._merge_source_directory_user(users_by_id, user)
-            offset += len(page["items"])
-            if offset >= int(page["total"] or 0) or not page["items"]:
+                self._merge_source_directory_user(
+                    users_by_id,
+                    SourceDirectoryUser.from_source_payload(payload),
+                )
+            offset += len(items)
+            if not items or offset >= int(page.get("total") or 0):
                 break
 
         runtime_context = self._build_runtime_connector_context(
@@ -519,7 +527,7 @@ class SyncDataQualitySupportMixin:
             },
             "source_mode": "immutable_snapshot",
             "analysis_notes": [
-                "Counts reflect unique source users merged across all returned department memberships.",
+                "Counts reflect unique source users from the latest successful persisted source snapshot.",
                 "Manual bindings and per-user department overrides are not expanded in this snapshot.",
             ],
             "summary": {

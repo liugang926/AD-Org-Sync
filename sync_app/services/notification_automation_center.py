@@ -92,13 +92,21 @@ def evaluate_scheduled_apply_readiness(
     pending_review_record: Optional[SyncPlanReviewRecord] = None
     review_required = False
 
-    _conflicts, open_conflict_total = conflict_repo.list_conflict_records_page(
+    _conflicts, all_open_conflict_total = conflict_repo.list_conflict_records_page(
         limit=1,
         offset=0,
         status="open",
         org_id=normalized_org_id,
     )
-    open_conflict_total = int(open_conflict_total or 0)
+    all_open_conflict_total = int(all_open_conflict_total or 0)
+    current_plan_id = str(
+        getattr(latest_successful_dry_run, "job_id", "") or ""
+    )
+    open_conflict_total = (
+        conflict_repo.count_unresolved_conflicts_for_plan(current_plan_id)
+        if current_plan_id
+        else 0
+    )
     reference_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     reasons: list[str] = []
 
@@ -115,6 +123,9 @@ def evaluate_scheduled_apply_readiness(
             "latest_apply": latest_apply,
             "latest_successful_manual_apply": latest_successful_manual_apply,
             "open_conflict_count": open_conflict_total,
+            "historical_open_conflict_count": max(
+                all_open_conflict_total - open_conflict_total, 0
+            ),
             "review_required": False,
             "review_record": None,
             "dry_run_age_hours": None,
@@ -141,6 +152,9 @@ def evaluate_scheduled_apply_readiness(
             "latest_apply": latest_apply,
             "latest_successful_manual_apply": latest_successful_manual_apply,
             "open_conflict_count": open_conflict_total,
+            "historical_open_conflict_count": max(
+                all_open_conflict_total - open_conflict_total, 0
+            ),
             "review_required": False,
             "review_record": None,
             "dry_run_age_hours": None,
@@ -197,6 +211,9 @@ def evaluate_scheduled_apply_readiness(
         "latest_apply": latest_apply,
         "latest_successful_manual_apply": latest_successful_manual_apply,
         "open_conflict_count": open_conflict_total,
+        "historical_open_conflict_count": max(
+            all_open_conflict_total - open_conflict_total, 0
+        ),
         "review_required": review_required,
         "review_record": pending_review_record,
         "dry_run_age_hours": dry_run_age_hours,

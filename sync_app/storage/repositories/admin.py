@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from sync_app.core.admin_roles import require_valid_role
 from sync_app.core.models import WebAdminUserRecord
 from sync_app.storage.local_db import BaseRepository, utcnow_iso
 
@@ -65,6 +66,7 @@ class WebAdminUserRepository(BaseRepository):
         is_enabled: bool = True,
         must_change_password: bool = False,
     ) -> int:
+        normalized_role = require_valid_role(role)
         now = utcnow_iso()
         with self.db.transaction() as conn:
             cursor = conn.execute(
@@ -77,7 +79,7 @@ class WebAdminUserRepository(BaseRepository):
                 (
                     username.strip(),
                     password_hash,
-                    role,
+                    normalized_role,
                     1 if is_enabled else 0,
                     1 if must_change_password else 0,
                     now,

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from sync_app.services.rollout_readiness import RolloutReadinessService
+from sync_app.services.config_release import build_config_release_center_data
 from sync_app.storage.local_db import (
     AccountTakeoverRepository,
     ADDirectorySnapshotRepository,
@@ -417,6 +418,85 @@ class RolloutReadinessIntegrationTests(unittest.TestCase):
     def test_complete_rollout_is_current_only_for_exact_evidence(self) -> None:
         _created, result = self._ready_result()
 
+        self.assertEqual(result["step_map"]["dry_run_current"]["status"], "complete")
+        self.assertEqual(result["step_map"]["approval_current"]["status"], "complete")
+        self.assertEqual(result["step_map"]["apply_allowed"]["status"], "ready")
+
+    def test_equivalent_snapshots_keep_rollout_and_approval_current(self) -> None:
+        created, _result = self._ready_result("equivalent-rollout")
+        source_snapshot_id = self.source_repo.start_refresh(
+            org_id="default",
+            provider_id=created["selection"]["provider_id"],
+            connector_id=created["selection"]["connector_id"],
+            created_by="test",
+        )
+        self.source_repo.replace_snapshot(
+            source_snapshot_id,
+            departments=[],
+            users=[],
+            fields=[],
+            fingerprint=created["summary"]["source_snapshot_fingerprint"],
+            ttl_minutes=240,
+        )
+        self.source_repo.save_scope_selection(
+            org_id="default",
+            provider_id=created["selection"]["provider_id"],
+            connector_id=created["selection"]["connector_id"],
+            scope_type=created["selection"]["scope_type"],
+            snapshot_id=source_snapshot_id,
+            requested_by="test",
+        )
+        job_scope = self.source_repo.get_job_scope(
+            "equivalent-rollout", org_id="default"
+        )
+        ad_snapshot_id = self.ad_snapshot_repo.start_snapshot(
+            org_id="default", connector_id="default", created_by="test"
+        )
+        self.ad_snapshot_repo.complete_snapshot(
+            ad_snapshot_id,
+            org_id="default",
+            user_count=0,
+            ou_count=1,
+            duplicate_employee_id_count=0,
+            duplicate_employee_number_count=0,
+            snapshot_fingerprint=job_scope["ad_snapshot_fingerprint"],
+            expires_at=(
+                datetime.now(timezone.utc) + timedelta(hours=4)
+            ).isoformat(timespec="seconds"),
+        )
+        config = OrganizationConfigRepository(self.db_manager).get_app_config(
+            "default", config_path="config.ini"
+        )
+
+        result = self.service.evaluate(
+            org_id="default",
+            org_name="Default Organization",
+            source_provider=config.source_provider,
+            config_fingerprint=str(created["job"].config_snapshot_hash or ""),
+            source_connector_configured=True,
+            ad_connector_configured=True,
+        ).to_dict()
+        release_data = build_config_release_center_data(
+            self.db_manager, "default"
+        )
+
+        self.assertEqual(
+            result["step_map"]["identity_match_run_current"]["status"],
+            "complete",
+        )
+        self.assertEqual(
+            result["step_map"]["policy_release_current"]["status"],
+            "complete",
+            {
+                "step": result["step_map"]["policy_release_current"],
+                "has_unpublished_changes": release_data[
+                    "has_unpublished_changes"
+                ],
+                "current_hash": release_data["current_bundle_hash"],
+                "latest_hash": release_data["latest_snapshot"].bundle_hash,
+                "diff": release_data["comparison_diff"],
+            },
+        )
         self.assertEqual(result["step_map"]["dry_run_current"]["status"], "complete")
         self.assertEqual(result["step_map"]["approval_current"]["status"], "complete")
         self.assertEqual(result["step_map"]["apply_allowed"]["status"], "ready")

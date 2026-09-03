@@ -94,12 +94,6 @@ class DashboardSupport:
         repositories = get_web_repositories(request)
         recent_jobs = repositories.job_repo.list_recent_job_records(limit=100, org_id=current_org.org_id)
         connector_count = repositories.connector_repo.count_connectors(org_id=current_org.org_id)
-        open_conflicts_total = repositories.conflict_repo.list_conflict_records_page(
-            limit=1,
-            offset=0,
-            status="open",
-            org_id=current_org.org_id,
-        )[1]
         successful_statuses = {"success", "completed"}
         dry_run_jobs = [
             job
@@ -108,6 +102,20 @@ class DashboardSupport:
             and str(job.status).lower() in successful_statuses
         ]
         dry_run_completed = bool(dry_run_jobs)
+        current_plan_id = str(dry_run_jobs[0].job_id or "") if dry_run_jobs else ""
+        open_conflicts_total = (
+            repositories.conflict_repo.count_unresolved_conflicts_for_plan(
+                current_plan_id
+            )
+            if current_plan_id
+            else 0
+        )
+        historical_open_conflict_count = repositories.conflict_repo.list_conflict_records_page(
+            limit=1,
+            offset=0,
+            status="open",
+            org_id=current_org.org_id,
+        )[1] - open_conflicts_total
         apply_completed = any(
             str(job.execution_mode).lower() == "apply"
             and str(job.status).lower() in successful_statuses
@@ -198,12 +206,12 @@ class DashboardSupport:
         checks.append(
             {
                 "key": "conflicts",
-                "label": "Open conflict queue",
+                "label": "Current plan conflicts",
                 "status": "success" if open_conflicts_total == 0 else "warning",
                 "detail": (
-                    "No unresolved identity conflicts are waiting."
+                    "The current plan has no unresolved identity conflicts."
                     if open_conflicts_total == 0
-                    else "There are {count} unresolved conflict(s) that still need review."
+                    else "The current plan has {count} unresolved conflict(s) that still need review."
                 ),
                 "detail_params": {"count": open_conflicts_total} if open_conflicts_total else {},
                 "action_url": "/identity-governance/conflicts",
@@ -240,7 +248,6 @@ class DashboardSupport:
         if include_live and normalized_live_check in {"all", "source"}:
             if (
                 config
-                and not validation_errors
                 and config.source_connector.corpid
                 and config.source_connector.corpsecret
             ):
@@ -279,7 +286,7 @@ class DashboardSupport:
                     }
                 )
         if include_live and normalized_live_check in {"all", "ldap"}:
-            if config and not validation_errors and config.ldap.server and config.ldap.domain and config.ldap.username and config.ldap.password:
+            if config and config.ldap.server and config.ldap.domain and config.ldap.username and config.ldap.password:
                 ldap_ok, ldap_message = self.test_ldap_connection(
                     config.ldap.server,
                     config.ldap.domain,
@@ -383,6 +390,8 @@ class DashboardSupport:
                 readiness_step_map.get("apply_allowed", {}).get("status") or ""
             ) == "complete",
             "open_conflict_count": open_conflicts_total,
+            "historical_open_conflict_count": max(historical_open_conflict_count, 0),
+            "current_plan_id": current_plan_id,
             "source_snapshot_ready": str(
                 readiness_step_map.get("source_snapshot_current", {}).get("status") or ""
             ) == "complete",

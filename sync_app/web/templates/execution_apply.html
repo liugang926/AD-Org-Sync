@@ -20,25 +20,51 @@
     (t("Reversible"), t("Database state is recoverable; AD reversibility varies by operation"))
   ] %}
   {% call ui.page_header(t("Apply (Formal execution)"), t("Confirm and execute one approved Dry Run plan. The plan is revalidated immediately before execution."), eyebrow=t("Execution Center"), badge_text=current_org.name, badge_level=("warning" if blocked else "success")) %}
-    {% if can("jobs.run") and not blocked %}
-    <form method="post" action="/execution-center/apply/run">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {{ high_risk.confirmation_fields(context) }}
-      {{ ui.button(t("Apply {count} Changes", count=context.impact_count), type="submit", icon="shield-check", confirm_text=t("You are about to apply the reviewed plan. Verify the impact before continuing."), confirm_title=t("Confirm Apply"), confirm_details=confirm_details) }}
-    </form>
-    {% else %}
-    {% set first_blocker = blockers[0] if blockers else none %}
-    {{ ui.button(t(first_blocker.next_action_code if first_blocker else "execution.action.run_dry_run"), href=(first_blocker.next_action_url if first_blocker else "/execution-center/dry-run"), icon="arrow-right") }}
-    {% endif %}
+    {{ ui.button(t("View locked evidence"), href="#execution-evidence", variant="secondary", icon="scan-search") }}
   {% endcall %}
 
   {{ execution.tabs("execution-apply") }}
   {% set apply_finished = latest_apply and latest_apply.status|upper in ["COMPLETED", "FAILED"] %}
+  {% set apply_succeeded = latest_apply and latest_apply.status|upper == "COMPLETED" %}
+  {% set apply_failed = latest_apply and latest_apply.status|upper == "FAILED" %}
+  {% set zero_change_completed = apply_succeeded and context.impact_count == 0 and latest_apply.error_count|int == 0 %}
   {{ execution.progress("execution-apply", dry_run_state=("complete" if evaluation.job else "pending"), review_state=("complete" if evaluation.review and evaluation.review.status == "approved" else "pending"), apply_state=("complete" if latest_apply and latest_apply.status|upper == "COMPLETED" else ("blocked" if blocked else "current")), audit_state=("complete" if apply_finished else "pending")) }}
   {{ high_risk.workflow(workflow, ui) }}
-  {{ high_risk.context_details(context) }}
-  {{ execution.status((blockers[0].message_code if blockers else ''), (blockers[0].next_action_code if blockers else ''), "The approved plan is eligible for one Apply execution.") }}
-  {{ execution.rollout_evidence(execution_context, selected=True) }}
+  {% if apply_succeeded %}
+    {{ execution.status("", "", "Verification complete. No AD changes were required." if zero_change_completed else "Verification complete. Apply results were recorded for this task.") }}
+  {% else %}
+    {{ execution.status((blockers[0].message_code if blockers else ''), (blockers[0].next_action_code if blockers else ''), "The approved plan is eligible for one Apply execution.") }}
+  {% endif %}
+  {% if apply_succeeded %}
+  <div class="callout callout--success" role="status" data-post-apply-verification="passed">
+    <strong>{{ t("Post-Apply verification") }}</strong>
+    <span>{{ t("Verification complete. No AD changes were required.") if zero_change_completed else t("Verification complete. Apply results were recorded for this task.") }}</span>
+  </div>
+  {% elif apply_failed %}
+  <div class="callout callout--danger" role="alert" data-post-apply-verification="failed">
+    <strong>{{ t("Post-Apply verification failed") }}</strong>
+    <span>{{ t("Verification did not complete. Review the failed Apply evidence before retrying.") }}</span>
+  </div>
+  {% endif %}
+  {% call ui.detail_toggle(t("Technical evidence"), t("Immutable plan, environment, snapshot, policy and confirmation values."), open=False) %}
+    {{ high_risk.context_details(context) }}
+    {{ execution.rollout_evidence(execution_context, selected=True) }}
+  {% endcall %}
+
+  {% call ui.workflow_action_bar("success" if apply_succeeded else ("failed" if apply_failed else ("blocked" if blocked else "success")), t("Verification complete") if apply_succeeded else (t("Execution failed") if apply_failed else (t("Apply blocked") if blocked else t("Ready to Apply"))), t("Verification complete. No AD changes were required.") if zero_change_completed else (t("Verification complete. Apply results were recorded for this task.") if apply_succeeded else (t(blockers[0].message_code, **blockers[0].params) if blockers else t("Run the reviewed plan with one final confirmation.")))) %}
+    {% if apply_succeeded %}
+    {{ ui.button(t("View Apply evidence"), href="/execution-center/jobs/" ~ latest_apply.job_id, variant="secondary", icon="file-check") }}
+    {% elif can("jobs.run") and not blocked %}
+    <form method="post" action="/execution-center/apply/run">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {{ high_risk.confirmation_fields(context) }}
+      {{ ui.button(t("Apply {count} Changes", count=context.impact_count), type="submit", variant=("secondary" if context.impact_count == 0 else "danger"), icon="shield-check", confirm_text=t("You are about to apply the reviewed plan. Verify the impact before continuing."), confirm_title=t("Confirm Apply"), confirm_details=confirm_details) }}
+    </form>
+    {% else %}
+    {% set first_blocker = blockers[0] if blockers else none %}
+    {{ ui.button(t(first_blocker.next_action_code if first_blocker else "execution.action.run_dry_run"), href=(first_blocker.next_action_url if first_blocker else "/execution-center/dry-run"), variant="primary", icon="arrow-right") }}
+    {% endif %}
+  {% endcall %}
 
   {% if blockers and blockers[0].message_code == "high_risk.blocker.environment_unlabeled" %}
   {% call ui.detail_toggle(t("Technical details"), t("Deployment administrators can use this variable when managing the service outside the web console."), open=False) %}
@@ -52,7 +78,8 @@
 
   {% if blockers|length > 1 %}<div class="blocker-list" aria-label="{{ t('Apply blockers') }}">{% for blocker in blockers[1:] %}<article class="blocker-item blocker-item--error"><div><strong>{{ t("Action required") }}</strong><p>{{ t(blocker.message_code, **blocker.params) }}</p></div><a href="{{ blocker.next_action_url }}">{{ t(blocker.next_action_code) }}</a></article>{% endfor %}</div>{% endif %}
 
-  {% call ui.panel(t("Execution Evidence"), description=t("These values are locked to the selected Dry Run. A change in environment, snapshot, scope, fingerprint, age, or approval blocks execution.")) %}
+  <div id="execution-evidence">
+  {% call ui.detail_toggle(t("Execution Evidence"), t("These values are locked to the selected Dry Run. A change in environment, snapshot, scope, fingerprint, age, or approval blocks execution."), open=False) %}
     <div class="detail-grid">
       <div class="detail-item"><div class="label">{{ t("Dry Run ID") }}</div><div class="value">{% if evaluation.job %}{{ ui.identifier(evaluation.job.job_id, t("Copy Dry Run ID"), t("Dry Run ID copied"), "/execution-center/jobs/" ~ evaluation.job.job_id) }}{% else %}-{% endif %}</div></div>
       <div class="detail-item"><div class="label">{{ t("Plan Generated") }}</div><div class="value">{{ ui.local_time(evaluation.plan_generated_at) }}</div></div>
@@ -61,13 +88,13 @@
       <div class="detail-item"><div class="label">{{ t("Approval Expires") }}</div><div class="value">{{ ui.local_time(evaluation.review.expires_at) if evaluation.review else "-" }}</div></div>
     </div>
   {% endcall %}
+  </div>
 
   {% call ui.panel(t("Approved business impact"), description=t("Apply will execute only this reviewed set of business changes.")) %}
     <div class="compact-stats">
       {{ ui.compact_stat(t("Create"), plan_review_summary.create_count) }}
       {{ ui.compact_stat(t("Update or move"), plan_review_summary.update_count) }}
-      {{ ui.compact_stat(t("Enable or rehire"), plan_review_summary.enable_count) }}
-      {{ ui.compact_stat(t("Disable"), plan_review_summary.disable_count) }}
+      {{ ui.compact_stat(t("Lifecycle changes"), plan_review_summary.enable_count + plan_review_summary.disable_count) }}
       {{ ui.compact_stat(t("Group relationships"), plan_review_summary.group_relation_count) }}
       {{ ui.compact_stat(t("Conflicts"), plan_review_summary.conflict_count) }}
       {{ ui.compact_stat(t("High-risk changes"), plan_review_summary.risk_count) }}

@@ -200,10 +200,13 @@ class WebDesignSystemComponentTests(unittest.TestCase):
             1,
         )
         self.assertEqual(
-            jobs.count('href=job_center_summary.next_action_url, icon="arrow-right"'),
+            jobs.count('href=job_center_summary.next_action_url'),
             1,
         )
-        self.assertIn('variant="danger", icon="shield-check"', jobs)
+        self.assertIn(
+            'variant=("secondary" if apply_context.impact_count == 0 else "danger")',
+            jobs,
+        )
         self.assertIn(
             'variant=("secondary" if config_change_preview else "primary")',
             config,
@@ -215,6 +218,43 @@ class WebDesignSystemComponentTests(unittest.TestCase):
         self.assertIn(
             'ui.button(t("Search"), type="submit", variant="secondary")',
             mappings,
+        )
+
+    def test_core_workflows_use_one_sticky_action_bar_and_four_to_six_summary_metrics(self):
+        targets = (
+            "getting_started.html",
+            "execution_dry_run.html",
+            "execution_plan_review.html",
+            "execution_apply.html",
+            "job_detail.html",
+        )
+        for name in targets:
+            with self.subTest(template=name):
+                text = (TEMPLATE_DIR / name).read_text(encoding="utf-8")
+                self.assertEqual(text.count("ui.workflow_action_bar("), 1)
+
+        getting_started = (TEMPLATE_DIR / "getting_started.html").read_text(encoding="utf-8")
+        rollout_summary = getting_started.split('class="rollout-summary"', 1)[1].split(
+            "</section>", 1
+        )[0]
+        self.assertEqual(rollout_summary.count("<div><span>"), 4)
+        for name in (
+            "execution_dry_run.html",
+            "execution_plan_review.html",
+            "execution_apply.html",
+        ):
+            with self.subTest(summary_template=name):
+                text = (TEMPLATE_DIR / name).read_text(encoding="utf-8")
+                self.assertEqual(text.count("ui.compact_stat("), 6)
+        job_detail = (TEMPLATE_DIR / "job_detail.html").read_text(encoding="utf-8")
+        self.assertEqual(job_detail.count('class="impact-card"'), 5)
+
+        apply_template = (TEMPLATE_DIR / "execution_apply.html").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'variant=("secondary" if context.impact_count == 0 else "danger")',
+            apply_template,
         )
 
 

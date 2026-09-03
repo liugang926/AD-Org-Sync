@@ -34,7 +34,7 @@
   </div>
 
   {% if source_snapshot %}
-  {% call ui.panel(t("Current Source Snapshot Review"), description=t("The audited conclusion is bound to this immutable snapshot fingerprint and may be reused by a newer snapshot only when its fingerprint is identical."), class_name="toolbar-card") %}
+  {% call ui.panel(t("Current Source Snapshot Review"), description=t("This audited confirmation follows the immutable content fingerprint. An equivalent newer snapshot reuses it; changed content requires a new review."), class_name="toolbar-card") %}
     <div class="detail-grid">
       <div class="detail-item"><div class="label">{{ t("Source Snapshot") }}</div><div class="value">#{{ source_snapshot.id }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Generated At") }}</div><div class="value">{{ ui.local_time(source_snapshot.completed_at) }}</div></div>

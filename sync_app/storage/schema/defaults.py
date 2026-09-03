@@ -14,6 +14,8 @@ DEFAULT_APP_SETTINGS = {
     "directory_root_ou_path": ("", "string"),
     "disabled_users_ou_path": ("Disabled Users", "string"),
     "job_history_retention_days": ("30", "int"),
+    "conflict_archive_after_days": ("30", "int"),
+    "conflict_retention_days": ("90", "int"),
     "event_history_retention_days": ("30", "int"),
     "audit_log_retention_days": ("90", "int"),
     "web_bind_host": ("127.0.0.1", "string"),

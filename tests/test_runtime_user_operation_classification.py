@@ -1,8 +1,12 @@
 import logging
 
-from sync_app.core.models import DirectoryUserRecord
+from sync_app.core.models import DirectoryGroupRecord, DirectoryUserRecord
 from sync_app.services.ad_sync import ADSyncLDAPS
-from sync_app.services.runtime_user_phase import classify_user_operation
+from sync_app.services.runtime_user_phase import (
+    classify_user_operation,
+    current_parent_group_sams,
+    should_plan_user_operation,
+)
 
 
 def test_new_ad_identity_is_planned_as_create():
@@ -49,6 +53,60 @@ def test_existing_identity_in_same_ou_is_planned_as_update_case_insensitively():
         )
         == "update_user"
     )
+
+
+def test_live_attribute_comparison_suppresses_only_a_true_noop_update():
+    class Target:
+        def __init__(self, changes):
+            self.changes = changes
+
+        def preview_user_attribute_changes(self, *_args, **_kwargs):
+            return self.changes
+
+    common = {
+        "operation_type": "update_user",
+        "username": "alice",
+        "display_name": "Alice",
+        "email": "alice@example.local",
+        "mapped_attributes": {"mail": {"value": "alice@example.local"}},
+    }
+
+    assert not should_plan_user_operation(
+        connector_ad_sync=Target({}),
+        **common,
+    )
+    assert should_plan_user_operation(
+        connector_ad_sync=Target({"mail": [(2, ["new@example.local"])]}),
+        **common,
+    )
+    assert should_plan_user_operation(
+        operation_type="move_user",
+        connector_ad_sync=Target({}),
+        username="alice",
+        display_name="Alice",
+        email="alice@example.local",
+        mapped_attributes={},
+    )
+
+
+def test_current_parent_group_lookup_supports_noop_membership_planning():
+    class Target:
+        def find_parent_groups_for_member(self, distinguished_name):
+            assert distinguished_name == "CN=Alice,OU=China,DC=example,DC=local"
+            return [
+                DirectoryGroupRecord(
+                    dn="CN=HQ,OU=China,DC=example,DC=local",
+                    cn="HQ",
+                    group_sam="WECOM_D1",
+                )
+            ]
+
+    existing = DirectoryUserRecord(
+        username="alice",
+        dn="CN=Alice,OU=China,DC=example,DC=local",
+    )
+
+    assert current_parent_group_sams(Target(), existing) == {"wecom_d1"}
 
 
 def test_rehire_reactivation_takes_precedence_over_ou_move():

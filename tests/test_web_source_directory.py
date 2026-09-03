@@ -324,6 +324,20 @@ class WebSourceDirectoryTests(WebAuthzBaseTestCase):
         )
         self.assertEqual(len(accepted_tasks.tasks), 1)
 
+        data_quality_tasks = BackgroundTasks()
+        data_quality_return = self._route("/source-directory/refresh", "POST")(
+            self._request("/source-directory/refresh", "POST"),
+            background_tasks=data_quality_tasks,
+            csrf_token=self.session["_csrf_token"],
+            return_url="/data-sources/data-quality",
+        )
+        self.assertEqual(data_quality_return.status_code, 303)
+        self.assertEqual(
+            data_quality_return.headers["location"],
+            "/data-sources/data-quality",
+        )
+        self.assertEqual(len(data_quality_tasks.tasks), 1)
+
         self._login("operator1")
         blocked_tasks = BackgroundTasks()
         blocked = self._route("/source-directory/refresh", "POST")(

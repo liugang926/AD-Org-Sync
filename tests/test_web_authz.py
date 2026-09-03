@@ -7,6 +7,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from sync_app.clients.dingtalk import DingTalkAPIError
+from sync_app.core.admin_roles import WEB_ADMIN_ROLES
 from sync_app.core.models import DepartmentNode, SourceDirectoryUser
 from sync_app.services.config_store import save_editable_config
 from sync_app.services.source_directory import SourceDirectoryService
@@ -18,6 +19,20 @@ from tests.helpers.web_authz_case import WebAuthzBaseTestCase
 
 
 class WebAuthorizationTests(WebAuthzBaseTestCase):
+    def test_every_supported_role_can_login_without_role_downgrade(self):
+        for role in WEB_ADMIN_ROLES:
+            username = f"login-{role}"
+            self.app.state.user_repo.create_user(
+                username,
+                self.app.state.user_repo.get_user_record_by_username(
+                    "superadmin"
+                ).password_hash,
+                role=role,
+            )
+            with self.subTest(role=role):
+                self._login(username)
+                self.assertEqual(self.session.get("role"), role)
+
     def test_operator_cannot_access_config_or_database_actions(self):
         self._login("operator1")
 
@@ -178,6 +193,25 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(response.headers["location"], "/users")
         self.assertIsNone(
             self.app.state.user_repo.get_user_record_by_username("weakuser")
+        )
+
+    def test_super_admin_cannot_create_user_with_unknown_role(self):
+        self._login("superadmin")
+        users_page = self._route("/users", "GET")(self._request("/users"))
+        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(users_page))
+        self.assertIsNotNone(match)
+
+        response = self._route("/users", "POST")(
+            self._request("/users", "POST"),
+            csrf_token=match.group(1),
+            username="invalidrole",
+            password="Admin123!",
+            role="database_owner",
+        )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIsNone(
+            self.app.state.user_repo.get_user_record_by_username("invalidrole")
         )
 
     def test_super_admin_can_create_user_with_simple_eight_character_password(self):
@@ -647,7 +681,6 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             username_template="",
             is_enabled=True,
         )
-
         response = self._route("/advanced-sync/username-preview", "POST")(
             self._request("/advanced-sync/username-preview", "POST"),
             connector_id="asia",
@@ -785,6 +818,62 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             username_template="",
             is_enabled=True,
         )
+        source_snapshot_id = self.app.state.source_directory_repo.start_refresh(
+            org_id="default",
+            provider_id="wecom",
+            created_by="superadmin",
+        )
+        self.app.state.source_directory_repo.replace_snapshot(
+            source_snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "1",
+                    "name": "Headquarters",
+                    "parent_department_id": "0",
+                },
+                {
+                    "source_department_id": "2",
+                    "name": "Sales",
+                    "parent_department_id": "1",
+                },
+            ],
+            users=[
+                {
+                    "source_user_id": "alice1",
+                    "display_name": "Alice One",
+                    "email": "alice@example.com",
+                    "employee_id": "1001",
+                    "department_ids": ["1"],
+                    "raw_payload": {"userid": "alice1"},
+                },
+                {
+                    "source_user_id": "alice2",
+                    "display_name": "Alice Two",
+                    "email": "alice@regional.example.com",
+                    "employee_id": "1002",
+                    "department_ids": ["1"],
+                    "raw_payload": {"userid": "alice2"},
+                },
+                {
+                    "source_user_id": "bob",
+                    "display_name": "Bob",
+                    "email": "",
+                    "employee_id": "",
+                    "department_ids": ["1"],
+                    "raw_payload": {"userid": "bob"},
+                },
+                {
+                    "source_user_id": "carol",
+                    "display_name": "Carol",
+                    "email": "carol@example.com",
+                    "employee_id": "",
+                    "department_ids": ["2"],
+                    "raw_payload": {"userid": "carol"},
+                },
+            ],
+            fields=[],
+            fingerprint="cached-advanced-data-quality-source",
+        )
 
         class FakeSourceProvider:
             def list_departments(self):
@@ -876,15 +965,19 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             provider=FakeSourceProvider(),
             created_by="superadmin",
         )
-        response = self._route("/advanced-sync/data-quality-snapshot", "GET")(
-            self._request(
-                "/advanced-sync/data-quality-snapshot",
-                query={
-                    "source_snapshot_id": str(source_snapshot["id"]),
-                    "fingerprint": str(source_snapshot["snapshot_fingerprint"]),
-                },
+        with patch(
+            "sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()
+        ) as build_source_provider:
+            response = self._route("/advanced-sync/data-quality-snapshot", "GET")(
+                self._request(
+                    "/advanced-sync/data-quality-snapshot",
+                    query={
+                        "source_snapshot_id": str(source_snapshot["id"]),
+                        "fingerprint": str(source_snapshot["snapshot_fingerprint"]),
+                    },
+                )
             )
-        )
+        build_source_provider.assert_not_called()
 
         self.assertEqual(response.status_code, 200)
         payload = json.loads(self._text(response))
@@ -922,6 +1015,70 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             username_collision_policy="append_employee_id",
             username_template="",
             is_enabled=True,
+        )
+        source_snapshot_id = self.app.state.source_directory_repo.start_refresh(
+            org_id="default",
+            provider_id="wecom",
+            created_by="superadmin",
+        )
+        self.app.state.source_directory_repo.replace_snapshot(
+            source_snapshot_id,
+            departments=[
+                {
+                    "source_department_id": "1",
+                    "name": "Headquarters",
+                    "parent_department_id": "0",
+                    "path_ids": ["1"],
+                    "path_names": ["Headquarters"],
+                },
+                {
+                    "source_department_id": "2",
+                    "name": "Sales",
+                    "parent_department_id": "1",
+                    "path_ids": ["1", "2"],
+                    "path_names": ["Headquarters", "Sales"],
+                },
+            ],
+            users=[
+                {
+                    "source_user_id": "alice1",
+                    "display_name": "Alice One",
+                    "email": "alice@example.com",
+                    "employee_id": "1001",
+                    "department_ids": ["1"],
+                    "department_names": ["Headquarters"],
+                    "raw_payload": {"userid": "alice1"},
+                },
+                {
+                    "source_user_id": "alice2",
+                    "display_name": "Alice Two",
+                    "email": "alice@regional.example.com",
+                    "employee_id": "1002",
+                    "department_ids": ["1"],
+                    "department_names": ["Headquarters"],
+                    "raw_payload": {"userid": "alice2"},
+                },
+                {
+                    "source_user_id": "bob",
+                    "display_name": "Bob",
+                    "email": "",
+                    "employee_id": "",
+                    "department_ids": ["1"],
+                    "department_names": ["Headquarters"],
+                    "raw_payload": {"userid": "bob"},
+                },
+                {
+                    "source_user_id": "carol",
+                    "display_name": "Carol",
+                    "email": "carol@example.com",
+                    "employee_id": "",
+                    "department_ids": ["2"],
+                    "department_names": ["Sales"],
+                    "raw_payload": {"userid": "carol"},
+                },
+            ],
+            fields=[],
+            fingerprint="cached-data-quality-source",
         )
 
         page = self._route("/data-sources/data-quality", "GET")(
@@ -1025,12 +1182,16 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             provider=FakeSourceProvider(),
             created_by="superadmin",
         )
-        run_response = self._route("/data-sources/data-quality/run", "POST")(
-            self._request("/data-sources/data-quality/run", "POST"),
-            csrf_token=match.group(1),
-            source_snapshot_id=source_snapshot["id"],
-            fingerprint=source_snapshot["snapshot_fingerprint"],
-        )
+        with patch(
+            "sync_app.web.app.build_source_provider", return_value=FakeSourceProvider()
+        ) as build_source_provider:
+            run_response = self._route("/data-sources/data-quality/run", "POST")(
+                self._request("/data-sources/data-quality/run", "POST"),
+                csrf_token=match.group(1),
+                source_snapshot_id=source_snapshot["id"],
+                fingerprint=source_snapshot["snapshot_fingerprint"],
+            )
+        build_source_provider.assert_not_called()
         self.assertEqual(run_response.status_code, 303)
         self.assertIn(
             "/data-sources/data-quality?snapshot_id=",
@@ -2232,6 +2393,7 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
             action="skip_user_sync",
             conflict_ids=[str(conflict_id_1), str(conflict_id_2)],
             notes="bulk skip",
+            confirmation="CONFIRM",
             return_query="",
             return_status="open",
             return_job_id="job-conflict-002",
@@ -2284,6 +2446,126 @@ class WebAuthorizationTests(WebAuthzBaseTestCase):
         self.assertEqual(reopened_conflict.status, "open")
         self.assertIsNone(reopened_conflict.resolution_payload)
         self.assertEqual(reopened_conflict.resolved_at, "")
+
+    def test_bulk_conflict_action_requires_server_verified_second_confirmation(self):
+        self._login("superadmin")
+        self.app.state.job_repo.create_job(
+            "job-conflict-confirm",
+            trigger_type="unit_test",
+            execution_mode="dry_run",
+            status="COMPLETED",
+        )
+        conflict_id = self.app.state.conflict_repo.add_conflict(
+            job_id="job-conflict-confirm",
+            conflict_type="identity_ambiguous",
+            source_id="alice",
+            message="confirm bulk mutation",
+        )
+        response = self._route("/conflicts", "GET")(self._request("/conflicts"))
+        match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(response))
+        self.assertIsNotNone(match)
+
+        rejected = self._route("/conflicts/bulk", "POST")(
+            self._request("/conflicts/bulk", "POST"),
+            csrf_token=match.group(1),
+            action="dismiss",
+            conflict_ids=[str(conflict_id)],
+            notes="reviewed",
+            confirmation="not-confirmed",
+        )
+        self.assertEqual(rejected.status_code, 303)
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status,
+            "open",
+        )
+
+        accepted = self._route("/conflicts/bulk", "POST")(
+            self._request("/conflicts/bulk", "POST"),
+            csrf_token=match.group(1),
+            action="dismiss",
+            conflict_ids=[str(conflict_id)],
+            notes="reviewed",
+            confirmation="CONFIRM",
+        )
+        self.assertEqual(accepted.status_code, 303)
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status,
+            "ignored",
+        )
+        history = self.app.state.conflict_repo.list_status_history(conflict_id)
+        self.assertEqual(history[-1]["to_status"], "ignored")
+        self.assertEqual(history[-1]["is_bulk"], 1)
+
+    def test_bulk_archive_expired_plans_requires_permission_and_typed_confirmation(self):
+        ended_at = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat(
+            timespec="seconds"
+        )
+        self.app.state.job_repo.create_job(
+            "job-conflict-expired",
+            trigger_type="unit_test",
+            execution_mode="dry_run",
+            status="COMPLETED",
+        )
+        with self.app.state.db_manager.transaction() as conn:
+            conn.execute(
+                "UPDATE sync_jobs SET ended_at = ? WHERE job_id = ?",
+                (ended_at, "job-conflict-expired"),
+            )
+        conflict_id = self.app.state.conflict_repo.add_conflict(
+            job_id="job-conflict-expired",
+            conflict_type="identity_ambiguous",
+            source_id="alice",
+            message="expired plan evidence",
+        )
+
+        self._login("operator1")
+        operator_page = self._route("/conflicts", "GET")(
+            self._request("/conflicts")
+        )
+        csrf_match = re.search(
+            r'name="csrf_token" value="([^"]+)"', self._text(operator_page)
+        )
+        self.assertIsNotNone(csrf_match)
+        denied = self._route("/conflicts/archive-expired", "POST")(
+            self._request("/conflicts/archive-expired", "POST"),
+            csrf_token=csrf_match.group(1),
+            confirmation="ARCHIVE default",
+        )
+        self.assertEqual(denied.status_code, 303)
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status,
+            "open",
+        )
+
+        self._login("superadmin")
+        page = self._route("/conflicts", "GET")(self._request("/conflicts"))
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', self._text(page))
+        self.assertIsNotNone(csrf_match)
+        rejected = self._route("/conflicts/archive-expired", "POST")(
+            self._request("/conflicts/archive-expired", "POST"),
+            csrf_token=csrf_match.group(1),
+            confirmation="ARCHIVE wrong",
+        )
+        self.assertEqual(rejected.status_code, 303)
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status,
+            "open",
+        )
+        accepted = self._route("/conflicts/archive-expired", "POST")(
+            self._request("/conflicts/archive-expired", "POST"),
+            csrf_token=csrf_match.group(1),
+            confirmation="ARCHIVE default",
+        )
+        self.assertEqual(accepted.status_code, 303)
+        self.assertEqual(
+            self.app.state.conflict_repo.get_conflict_record(conflict_id).status,
+            "archived",
+        )
+        audit_actions = {
+            item.action_type
+            for item in self.app.state.audit_repo.list_recent_logs(30)
+        }
+        self.assertIn("conflict.bulk_archive_expired", audit_actions)
 
     def test_super_admin_can_apply_conflict_recommendation(self):
         self._login("superadmin")

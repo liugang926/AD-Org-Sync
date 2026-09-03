@@ -240,9 +240,7 @@ FIELD_ORDER = {
         "username_strategy",
         "username_template",
         "source_field",
-        "snapshot_id",
         "source_snapshot_fingerprint",
-        "selection_fingerprint",
     ),
     "identity_match_rules": (
         "rule_order",
@@ -364,8 +362,16 @@ def _normalized_bundle_payload(bundle: dict[str, Any]) -> dict[str, Any]:
             ]
         ),
     )
+    normalized_sync_scopes = []
+    for raw_scope in list(normalized.get("sync_scopes") or []):
+        scope = copy.deepcopy(dict(raw_scope or {}))
+        # Snapshot IDs and derived selection hashes are evidence references, not
+        # business policy. The content fingerprint remains part of the release.
+        scope.pop("snapshot_id", None)
+        scope.pop("selection_fingerprint", None)
+        normalized_sync_scopes.append(scope)
     normalized["sync_scopes"] = _normalize_collection(
-        list(normalized.get("sync_scopes") or []),
+        normalized_sync_scopes,
         key_builder=lambda item: "|".join(
             [
                 str(item.get("provider_id") or ""),
@@ -968,7 +974,7 @@ def publish_current_config_release_snapshot(
     )
     if (
         latest_snapshot
-        and latest_snapshot.bundle_hash == current_hash
+        and build_config_release_bundle_hash(latest_snapshot.bundle) == current_hash
         and latest_snapshot.evidence_fingerprint == evidence_fingerprint
         and not force
     ):
@@ -1038,7 +1044,9 @@ def build_config_release_center_data(
     current_hash = build_config_release_bundle_hash(current_bundle)
     snapshots = repo.list_snapshot_records(org_id=normalized_org_id, limit=snapshot_limit)
     latest_snapshot = snapshots[0] if snapshots else None
-    has_unpublished_changes = latest_snapshot is None or latest_snapshot.bundle_hash != current_hash
+    has_unpublished_changes = latest_snapshot is None or (
+        build_config_release_bundle_hash(latest_snapshot.bundle) != current_hash
+    )
 
     snapshot_rows: list[dict[str, Any]] = []
     for index, snapshot in enumerate(snapshots):

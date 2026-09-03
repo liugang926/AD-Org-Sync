@@ -3051,7 +3051,7 @@ def register_source_directory_routes(
             return user
         requested_return_path = str(return_url or "").strip()
         allowed_return_paths = {
-            CANONICAL_ROUTE_PATHS["directory-preview"],
+            CANONICAL_ROUTE_PATHS["source-directory"],
             CANONICAL_ROUTE_PATHS["data-quality"],
         }
         return_path = (
