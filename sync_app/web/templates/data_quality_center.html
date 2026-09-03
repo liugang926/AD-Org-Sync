@@ -41,7 +41,7 @@
       <div class="detail-item"><div class="label">{{ t("Users") }}</div><div class="value">{{ source_snapshot.user_count or 0 }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Departments") }}</div><div class="value">{{ source_snapshot.department_count or 0 }}</div></div>
       <div class="detail-item"><div class="label">{{ t("Fields") }}</div><div class="value">{{ source_snapshot.field_count or 0 }}</div></div>
-      <div class="detail-item"><div class="label">{{ t("Quality Status") }}</div><div class="value">{{ ui.badge(t(quality_state.label), quality_state.level) }}</div></div>
+      <div class="detail-item"><div class="label">{{ t("Quality Status") }}</div><div class="value">{% if quality_review %}{{ ui.badge(t("Confirmed"), "success") }}{% else %}{{ ui.badge(t(quality_state.label), quality_state.level) }}{% endif %}</div></div>
     </div>
     {% if ui_presentation.is_advanced %}<details class="detail-toggle"><summary>{{ t("Technical evidence") }}</summary><div class="evidence-code"><div>{{ t("Source Snapshot ID") }}: <code>{{ source_snapshot.id }}</code></div><div>{{ t("Snapshot Fingerprint") }}: <code>{{ source_snapshot.snapshot_fingerprint }}</code></div></div></details>{% endif %}
     {% if quality_review %}
