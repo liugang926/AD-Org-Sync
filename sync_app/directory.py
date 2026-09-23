@@ -12,6 +12,7 @@ from ldap3.utils.conv import escape_filter_chars
 from ldap3.utils.dn import escape_rdn, parse_dn
 
 from .domain import RuleError, protected
+from .models import Configuration
 
 
 def under(dn, root):
@@ -117,6 +118,7 @@ class ActiveDirectory:
     MATCH = {"employee_id": "employeeID", "email": "mail", "source_id": "sAMAccountName"}
 
     def __init__(self):
+        self.extra_protected = {n.casefold() for n in Configuration.current().protected_usernames}
         if not all((settings.LDAP_HOST, settings.LDAP_BIND_DN, settings.LDAP_PASSWORD, settings.LDAP_BASE_DN)):
             raise RuleError("请配置 LDAPS 服务器、绑定账号和目录根 DN")
         try:
@@ -150,7 +152,7 @@ class ActiveDirectory:
             raise RuleError("AD 查询失败，请检查目录连接") from None
 
     @staticmethod
-    def account(entry):
+    def account(entry, protected_names=()):
         attrs = entry["attributes"]
         def value(name, default=""):
             item = attrs.get(name, default)
@@ -158,28 +160,29 @@ class ActiveDirectory:
         uac = int(value("userAccountControl", 0))
         sid = str(value("objectSid"))
         critical = str(value("isCriticalSystemObject")).lower() == "true"
+        explicit_protection = str(value("sAMAccountName")).casefold() in protected_names
         return {"guid": str(uuid.UUID(str(value("objectGUID")).strip("{}"))), "dn": entry["dn"],
                 "username": str(value("sAMAccountName")), "employee_id": str(value("employeeID")),
                 "email": str(value("mail")), "enabled": not bool(uac & 2), "uac": uac,
-                "protected": critical or int(value("adminCount", 0)) == 1 or sid.endswith(("-500", "-501", "-502")) or bool(uac & (2048 | 4096 | 8192)),
+                "protected": critical or explicit_protection or int(value("adminCount", 0)) == 1 or sid.endswith(("-500", "-501", "-502")) or bool(uac & (2048 | 4096 | 8192)),
                 "locked": bool(int(value("lockoutTime", 0))),
                 "attrs": {k: str(value(k)) for k in ["displayName", "mail", "title", "department", "telephoneNumber"]}}
 
     def accounts(self):
-        return [self.account(e) for e in self.search("(&(objectCategory=person)(objectClass=user))")]
+        return [self.account(e, self.extra_protected) for e in self.search("(&(objectCategory=person)(objectClass=user))")]
 
     def match(self, field, value):
         if field not in self.MATCH or not value:
             raise RuleError("可信身份字段为空，不能匹配 AD 账号")
         query = f"(&(objectCategory=person)(objectClass=user)({self.MATCH[field]}={escape_filter_chars(value)}))"
-        return [self.account(e) for e in self.search(query)]
+        return [self.account(e, self.extra_protected) for e in self.search(query)]
 
     def by_guid(self, guid):
         escaped = "".join(f"\\{b:02x}" for b in uuid.UUID(str(guid)).bytes_le)
         entries = self.search(f"(&(objectCategory=person)(objectClass=user)(objectGUID={escaped}))")
         if len(entries) != 1:
             raise RuleError("AD 目标对象不存在或不唯一")
-        return self.account(entries[0])
+        return self.account(entries[0], self.extra_protected)
 
     def check_account(self, guid):
         account = self.by_guid(guid)

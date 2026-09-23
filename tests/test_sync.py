@@ -91,3 +91,34 @@ def test_duplicate_enqueue_and_apply_replay_denied(configured):
         enqueue()
     with pytest.raises(RuleError):
         queue_apply(job.pk, "admin")
+
+
+@pytest.mark.django_db
+def test_empty_source_and_changed_binding_block_writes(configured):
+    ad = Directory()
+    with pytest.raises(RuleError):
+        plan(Job.objects.create(), Source([]), ad)
+    source = Source()
+    job = Job.objects.create()
+    job.plan = plan(job, source, ad)
+    Person.objects.update(excluded=True)
+    with pytest.raises(RuleError):
+        apply(job, source, ad)
+    assert not Binding.objects.exists()
+
+
+@pytest.mark.django_db
+def test_changed_enterprise_cannot_reuse_bindings(configured, settings):
+    plan(Job.objects.create(), Source(), Directory())
+    settings.DINGTALK_CORP_ID = "different-enterprise"
+    with pytest.raises(RuleError, match="企业"):
+        plan(Job.objects.create(), Source(), Directory())
+
+
+@pytest.mark.django_db
+def test_worker_marks_interrupted_job_and_never_replays_it(configured, monkeypatch):
+    from sync_app.synchronization import run_next
+    interrupted = Job.objects.create(status="running", kind="apply")
+    assert run_next() is False
+    interrupted.refresh_from_db()
+    assert interrupted.status == "failed"

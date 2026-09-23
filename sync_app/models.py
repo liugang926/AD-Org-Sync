@@ -11,6 +11,7 @@ class Configuration(models.Model):
     root_ou = models.CharField("同步 AD 根 OU DN", max_length=500, blank=True)
     naming = models.CharField("新账号命名", max_length=30, choices=[("employee_id", "工号"), ("source_id", "钉钉 userId"), ("email", "邮箱前缀")], default="employee_id")
     attributes = models.JSONField("同步属性", default=list, blank=True, help_text="displayName、mail、title、department、telephoneNumber")
+    protected_usernames = models.JSONField("额外保护账号", default=list, blank=True, help_text="填写服务账号、共享账号等 sAMAccountName；同步和密码重置均禁止操作")
     disable_missing = models.BooleanField("全量同步禁用离职人员", default=False)
     disable_limit = models.PositiveIntegerField("禁用人数阈值", default=5, validators=[MinValueValidator(1)])
     disable_percent = models.PositiveIntegerField("禁用比例阈值 %", default=10, validators=[MinValueValidator(1), MaxValueValidator(100)])
@@ -28,6 +29,8 @@ class Configuration(models.Model):
         allowed = {"displayName", "mail", "title", "department", "telephoneNumber"}
         if not isinstance(self.attributes, list) or any(x not in allowed for x in self.attributes):
             raise ValidationError("同步属性不合法")
+        if not isinstance(self.protected_usernames, list) or any(not isinstance(x, str) or not x.strip() for x in self.protected_usernames):
+            raise ValidationError("保护账号必须为非空账号名列表")
         previous = Configuration.objects.filter(pk=self.pk).first()
         if previous and (Binding.objects.exists() or DepartmentBinding.objects.exists()) and (previous.root_department != self.root_department or previous.root_ou != self.root_ou):
             raise ValidationError("已有同步绑定时不能直接更换管理范围，请先审查并解除原绑定")

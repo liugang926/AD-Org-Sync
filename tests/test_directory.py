@@ -44,6 +44,7 @@ def test_ldap_failures_never_return_partial_results():
         directory.search("(objectClass=user)")
 
 
+@pytest.mark.django_db
 def test_ldaps_requires_certificate_validation(monkeypatch, settings):
     settings.LDAP_HOST = "ad.example.com"
     settings.LDAP_BIND_DN = "CN=service,DC=example,DC=com"
