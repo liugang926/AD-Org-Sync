@@ -7,18 +7,20 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("scenario", ["success", "legacy_failure", "django_failure", "build_failure"])
+@pytest.mark.parametrize("scenario", ["success", "legacy_failure", "django_failure", "nginx_recreate_failure", "build_failure"])
 def test_deployment_preserves_retirement_and_verified_state(tmp_path, scenario):
     bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else shutil.which("bash")
     if not bash or not Path(bash).exists():
         pytest.skip("Bash is required to exercise the Linux deployment contract")
     root = Path(__file__).resolve().parents[1]
     (tmp_path / "scripts").mkdir()
+    (tmp_path / "deploy/nginx").mkdir(parents=True)
     (tmp_path / "bin").mkdir()
     (tmp_path / "state").mkdir()
     (tmp_path / "scripts/deploy-production.sh").write_text((root / "scripts/deploy-production.sh").read_text(), encoding="utf-8", newline="\n")
     (tmp_path / "scripts/install-scheduler.sh").write_text((root / "scripts/install-scheduler.sh").read_text(), encoding="utf-8", newline="\n")
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    (tmp_path / "deploy/nginx/default.conf").write_text("new nginx config\n")
     (tmp_path / "env").write_text("AD_ORG_SYNC_HTTP_PORT=80\n")
     (tmp_path / "env").chmod(0o600)
     old, new = "a" * 40, "b" * 40
@@ -26,14 +28,16 @@ def test_deployment_preserves_retirement_and_verified_state(tmp_path, scenario):
     (state / "last_successful_image_tag").write_text(old)
     (state / "last_successful_compose.yml").write_text("services: {}\n")
     (tmp_path / "crontab.state").write_text("0 3 * * * /usr/bin/true\n")
-    if scenario == "django_failure":
+    if scenario in {"django_failure", "nginx_recreate_failure"}:
         (state / "last_successful_django_image_tag").write_text(old)
     commands = {
         "docker": '''#!/usr/bin/env bash
 printf '%s|%s\n' "$AD_ORG_SYNC_IMAGE_TAG" "$*" >> "$PWD/commands.log"
-if [[ "$*" == *"ps --status running --services"* ]]; then echo web; fi
+if [[ "$*" == *"ps --status running --services"* ]]; then printf 'web\nnginx\n'; fi
+if [[ "$1" == cp ]]; then printf 'old nginx config\n' > "${@: -1}"; exit 0; fi
 if [[ "$SCENARIO" == build_failure && "$*" == *"build --pull"* ]]; then exit 1; fi
-if [[ "$SCENARIO" == *_failure && "$AD_ORG_SYNC_IMAGE_TAG" == b* && "$*" == *"up -d"* ]]; then exit 1; fi
+if [[ "$SCENARIO" == nginx_recreate_failure && "$AD_ORG_SYNC_IMAGE_TAG" == b* && "$*" == *"up -d --no-deps --force-recreate nginx"* ]]; then exit 1; fi
+if [[ "$SCENARIO" == legacy_failure || "$SCENARIO" == django_failure ]] && [[ "$AD_ORG_SYNC_IMAGE_TAG" == b* ]] && [[ "$*" == *"up -d --remove-orphans"* ]]; then exit 1; fi
 exit 0
 ''',
         "curl": "#!/usr/bin/env bash\nexit 0\n",
@@ -63,6 +67,7 @@ fi
         assert (state / "last_successful_image_tag").read_text().strip() == new
         assert (state / "last_successful_django_image_tag").read_text().strip() == new
         assert "db_check" in calls
+        assert calls.index("up -d --remove-orphans") < calls.index("up -d --no-deps --force-recreate nginx") < calls.index("db_check")
         installed = (tmp_path / "crontab.state").read_text()
         assert "0 3 * * * /usr/bin/true" in installed
         assert installed.count("AD_ORG_SYNC_SCHEDULER") == 1
@@ -78,9 +83,11 @@ fi
             assert "stop web worker nginx" in calls
             assert "--no-build" not in calls
             assert old + "|" not in calls
-        elif scenario == "django_failure":
+        elif scenario in {"django_failure", "nginx_recreate_failure"}:
             assert old + "|" in calls
             assert "up -d --no-build" in calls
+            assert "cp ad_org_sync-nginx-1:/etc/nginx/conf.d/default.conf" in calls
+            assert (tmp_path / "deploy/nginx/default.conf").read_text() == "old nginx config\n"
         else:
             assert "up -d" not in calls
             assert "stop worker" not in calls
