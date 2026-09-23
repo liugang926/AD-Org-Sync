@@ -472,7 +472,7 @@ def bind_person(person_id, confirmation, actor, reason):
                 raise RuleError("当前绑定已变化，请重新确认")
             if Binding.objects.filter(object_guid=account["guid"]).exclude(person=person).exists():
                 raise RuleError("目标已绑定其他人员")
-            Binding.objects.update_or_create(person=person, defaults={"object_guid": account["guid"], "username": account["username"], "manual": True, "enabled": True, "revision": uuid.uuid4()})
+            Binding.objects.update_or_create(person=person, defaults={"object_guid": account["guid"], "username": account["username"], "manual": True, "enabled": account["enabled"], "revision": uuid.uuid4()})
             audit(actor, "manual_bind", person.source_id, f"{str(old.object_guid) if old else '未绑定'} → {account['guid']}；{reason[:150]}")
 
 

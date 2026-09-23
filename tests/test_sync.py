@@ -177,6 +177,31 @@ def test_binding_confirmation_rejects_replaced_target_and_replay(configured, mon
 
 
 @pytest.mark.django_db
+def test_manual_binding_to_disabled_ad_account_waits_for_explicit_reactivation(configured, monkeypatch):
+    from sync_app import synchronization as sync
+
+    source = Source()
+    target = account()
+    target["enabled"] = False
+    ad = Directory([target])
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+
+    review = sync.binding_review(person.pk, "testuser")
+    sync.bind_person(person.pk, review["confirmation"], "admin", "人工确认已禁用账号")
+    binding = Binding.objects.get(person=person)
+    assert binding.manual and not binding.enabled
+    assert not ad.items[0]["enabled"]
+    assert plan(Job.objects.create(), source, ad)["operations"][0]["action"] == "skip"
+
+    sync.reactivate_person(person.pk, "admin", "核验后恢复", True)
+    binding.refresh_from_db()
+    assert binding.enabled and ad.items[0]["enabled"]
+    assert plan(Job.objects.create(), source, ad)["operations"][0]["action"] == "update"
+
+
+@pytest.mark.django_db
 def test_manual_binding_rechecks_live_source_scope(configured, monkeypatch):
     from sync_app import synchronization as sync
 
