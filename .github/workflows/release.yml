@@ -700,7 +700,7 @@ jobs:
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
   candidate-staged-sync-drill:
-    if: ${{ false }}
+    if: ${{ github.ref == 'refs/heads/codex/prod-verify-e9d9afb' }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 15
@@ -710,10 +710,10 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          ref: 80f06b170d122443d24b6a88b015a81051263825
+          ref: 60d9dffd6c6b6a4c0e09a31e5c0345f6340ab422
           path: candidate
           persist-credentials: false
-      - name: Exercise candidate sync code with isolated DB and dedicated test AD identity
+      - name: Exercise candidate staged-create recovery in isolated DB and test AD
         shell: bash
         run: |
           set -Eeuo pipefail

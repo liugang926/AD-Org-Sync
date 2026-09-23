@@ -16,7 +16,8 @@ from django.core.management import call_command
 
 from sync_app import synchronization
 from sync_app.directory import ActiveDirectory, under
-from sync_app.models import Binding, Configuration, Person
+from sync_app.domain import RuleError
+from sync_app.models import Binding, Configuration, Operation, Person
 
 
 run_id = os.environ["TEST_RUN_ID"]
@@ -82,9 +83,43 @@ try:
     assert [(op["source_id"], op["action"]) for op in preview.plan["operations"]] == [(source_id, "create")]
     assert not preview.plan["high_risk"]
     synchronization.queue_apply(preview.pk, "staged-drill")
-    assert synchronization.run_next()
+    original_update = ActiveDirectory.update
+    failure_injected = False
+
+    def fail_first_attribute_update(self, guid, attrs, ou, managed_root, *, allow_disabled=False):
+        global failure_injected
+        if not failure_injected and allow_disabled:
+            failure_injected = True
+            raise RuleError("诊断：模拟一次属性写入失败")
+        return original_update(self, guid, attrs, ou, managed_root, allow_disabled=allow_disabled)
+
+    ActiveDirectory.update = fail_first_attribute_update
+    try:
+        assert synchronization.run_next()
+    finally:
+        ActiveDirectory.update = original_update
     preview.refresh_from_db()
-    assert preview.status == "success", (preview.status, preview.message)
+    assert failure_injected and preview.status == "partial_failed", (preview.status, preview.message)
+    assert not Binding.objects.exists()
+    failed_create = Operation.objects.get(job=preview, source_id=source_id, action="create")
+    assert failed_create.status == "failed" and failed_create.target_guid
+    assert failed_create.evidence.get("created_fingerprint") and failed_create.evidence.get("created_config")
+    with closing(ActiveDirectory()) as ad:
+        matches = ad.match("employee_id", employee_id)
+        assert len(matches) == 1 and not matches[0]["enabled"]
+        assert matches[0]["guid"] == str(failed_create.target_guid)
+    print("initial_create_failed_after_disabled_ad_write_with_guid_evidence=true", flush=True)
+
+    retry = synchronization.enqueue(kind="preview", scope="full", actor="staged-drill-retry")
+    assert synchronization.run_next()
+    retry.refresh_from_db()
+    assert retry.status == "preview_ready", (retry.status, retry.message)
+    assert [(op["source_id"], op["action"]) for op in retry.plan["operations"]] == [(source_id, "resume_create")]
+    assert retry.plan["operations"][0]["target"]["guid"] == str(failed_create.target_guid)
+    synchronization.queue_apply(retry.pk, "staged-drill-retry")
+    assert synchronization.run_next()
+    retry.refresh_from_db()
+    assert retry.status == "success", (retry.status, retry.message)
     binding = Binding.objects.select_related("person").get(person__source_id=source_id)
     assert binding.username == employee_id and not binding.enabled
     with closing(ActiveDirectory()) as ad:
@@ -96,7 +131,7 @@ try:
         assert not account["enabled"] and under(account["dn"], root)
         assert account["attrs"]["displayName"] == name
         assert account["attrs"]["title"] == "Acceptance Test"
-    print("candidate_sync_created_initialized_and_held_disabled=true", flush=True)
+    print("candidate_sync_resumed_same_guid_initialized_and_held_disabled=true", flush=True)
 
     repeat = synchronization.enqueue(kind="preview", scope="full", actor="staged-drill-repeat")
     assert synchronization.run_next()
