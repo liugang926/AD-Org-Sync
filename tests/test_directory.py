@@ -24,6 +24,48 @@ def test_dingtalk_missing_page_list_fails_closed():
         source.collect("1")
 
 
+def test_dingtalk_inconsistent_department_parent_fails_closed():
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[
+        {"dept_id": 1, "name": "Root", "parent_id": 0},
+        [{"dept_id": 2}],
+        {"list": [{"userid": "u"}], "has_more": False},
+        {"dept_id": 2, "name": "Child", "parent_id": 999},
+    ])
+    source.user = Mock(return_value={"source_id": "u"})
+    with pytest.raises(RuleError, match="父级与子部门列表不一致"):
+        source.collect("1")
+
+
+def test_dingtalk_consistent_child_and_shared_member_are_collected_once():
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[
+        {"dept_id": 1, "name": "Root", "parent_id": 0},
+        [{"dept_id": 2}],
+        {"list": [{"userid": "u"}], "has_more": False},
+        {"dept_id": 2, "name": "Child", "parent_id": 1},
+        [],
+        {"list": [{"userid": "u"}], "has_more": False},
+    ])
+    source.user = Mock(return_value={"source_id": "u"})
+    users, departments = source.collect("1")
+    assert len(users) == 1 and len(departments) == 2
+    source.user.assert_called_once_with("u")
+
+
+@pytest.mark.parametrize("page", [
+    {"list": [{"userid": "u"}], "has_more": "false"},
+    {"list": [{"userid": "u"}], "has_more": True, "next_cursor": "bad"},
+    {"list": [None], "has_more": False},
+])
+def test_dingtalk_malformed_pagination_fails_closed(page):
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[{"dept_id": 1, "name": "Root", "parent_id": 0}, [], page])
+    source.user = Mock(return_value={"source_id": "u"})
+    with pytest.raises(RuleError, match="人员分页"):
+        source.collect("1")
+
+
 def test_ldap_match_escapes_untrusted_identity_values():
     directory = object.__new__(ActiveDirectory)
     directory.search = Mock(return_value=[])
@@ -42,6 +84,28 @@ def test_ldap_failures_never_return_partial_results():
     directory.conn.response = [{"type": "searchResEntry", "dn": "CN=one", "attributes": {}}]
     with pytest.raises(RuleError):
         directory.search("(objectClass=user)")
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ({"result": 19, "message": "problem 1005 (CONSTRAINT_ATT_TYPE), Att (employeeID):len 48"}, "工号不符合域控 employeeID 字段约束"),
+        ({"result": 19, "message": "untrusted directory diagnostic: hidden-value"}, "目录字段约束不满足"),
+        ({"result": 50, "message": "untrusted directory diagnostic: hidden-value"}, "LDAP 错误码 50"),
+    ],
+)
+def test_ad_create_rejection_reports_safe_cause(result, expected):
+    directory = object.__new__(ActiveDirectory)
+    directory.match = Mock(return_value=[])
+    directory.conn = Mock()
+    directory.conn.add.return_value = False
+    directory.conn.result = result
+    with pytest.raises(RuleError, match=expected) as error:
+        directory.create(
+            {"name": "Test User", "employee_id": "test-id"},
+            "test-user", "OU=Test,DC=example,DC=com", "OU=Test,DC=example,DC=com",
+        )
+    assert "hidden-value" not in str(error.value)
 
 
 @pytest.mark.parametrize("unlock_result", [False, RuntimeError("connection interrupted")])

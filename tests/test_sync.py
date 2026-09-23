@@ -340,3 +340,36 @@ def test_cleanup_preserves_unresolved_creation_evidence(configured):
     call_command("cleanup")
     assert Job.objects.filter(pk=previous.pk).exists()
     assert plan(Job.objects.create(), Source(), Directory([]))["operations"][0]["action"] == "conflict"
+
+
+@pytest.mark.django_db
+def test_scheduler_runs_daily_retention_when_sync_is_disabled(configured):
+    from datetime import timedelta
+    from django.core.management import call_command
+    from django.utils import timezone
+    from sync_app.models import Audit, RuntimeState, Snapshot
+
+    assert not configured.schedule_enabled
+    old = timezone.now() - timedelta(days=200)
+    snapshot = Snapshot.objects.create(fingerprint="old", root_department="1", users=[], departments=[])
+    Snapshot.objects.create(fingerprint="latest", root_department="1", users=[], departments=[])
+    Snapshot.objects.filter(pk=snapshot.pk).update(created_at=old)
+    preview = Job.objects.create(status="preview_ready")
+    Job.objects.filter(pk=preview.pk).update(created_at=old)
+    audit = Audit.objects.create(actor="test", action="preview", result="success")
+    Audit.objects.filter(pk=audit.pk).update(created_at=old)
+
+    call_command("enqueue_sync", due=True)
+    assert not Snapshot.objects.filter(pk=snapshot.pk).exists()
+    assert not Job.objects.filter(pk=preview.pk).exists()
+    assert not Audit.objects.filter(pk=audit.pk).exists()
+    assert RuntimeState.current().last_cleanup_at is not None
+    assert not Job.objects.exists()
+
+    later = Job.objects.create(status="needs_confirmation")
+    Job.objects.filter(pk=later.pk).update(created_at=old)
+    call_command("enqueue_sync", due=True)
+    assert Job.objects.filter(pk=later.pk).exists()
+    RuntimeState.objects.update(last_cleanup_at=old)
+    call_command("enqueue_sync", due=True)
+    assert not Job.objects.filter(pk=later.pk).exists()

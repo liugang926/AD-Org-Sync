@@ -10,4 +10,4 @@
 6. 副本检查通过且管理员确认替换后，在服务停止状态下替换数据库，并确保所属用户及权限正确。保留恢复前副本。先启动 Web 验证管理员登录和数据库，再启动 worker，确认中断任务没有重放。
 7. 重新生成同步预览，审查与真实目录的差异，再按明确授权执行。最后恢复系统调度和员工服务，并核验外部 HTTPS、`/healthz`、`/readyz` 与当前镜像 SHA。
 
-自动化证据：`tests/test_operations.py::test_application_backup_restore_preserves_config_and_requires_ad_recheck`。真实测试域演练尚未完成。
+自动化证据：`tests/test_operations.py::test_application_backup_restore_preserves_config_and_requires_ad_recheck`。真实测试域已使用在线备份在无网络的隔离副本中检查数据库、配置与绑定，并以实时 LDAPS 重新核验对应 AD objectGUID；未替换线上数据库或演练停机切换。[隔离恢复演练](https://github.com/liugang926/AD-Org-Sync/actions/runs/35846968662)

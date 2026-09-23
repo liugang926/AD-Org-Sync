@@ -1,4 +1,5 @@
 from datetime import timedelta
+from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from sync_app.domain import RuleError
@@ -13,6 +14,12 @@ class Command(BaseCommand):
         parser.add_argument("--due", action="store_true")
 
     def handle(self, *args, **options):
+        # The host has one cron entry; retention must run even while sync is disabled.
+        try:
+            call_command("cleanup", due=True)
+        except RuleError:
+            # An active sync owns the lock; the next minute will retry cleanup.
+            pass
         config = Configuration.current()
         if options["due"]:
             if not config.schedule_enabled:
