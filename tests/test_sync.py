@@ -98,6 +98,8 @@ def test_empty_source_and_changed_binding_block_writes(configured):
     ad = Directory()
     with pytest.raises(RuleError):
         plan(Job.objects.create(), Source([]), ad)
+    configured.refresh_from_db()
+    assert not configured.identity_anchor
     source = Source()
     job = Job.objects.create()
     job.plan = plan(job, source, ad)
@@ -110,6 +112,8 @@ def test_empty_source_and_changed_binding_block_writes(configured):
 @pytest.mark.django_db
 def test_changed_enterprise_cannot_reuse_bindings(configured, settings):
     plan(Job.objects.create(), Source(), Directory())
+    configured.refresh_from_db()
+    assert configured.identity_anchor
     settings.DINGTALK_CORP_ID = "different-enterprise"
     with pytest.raises(RuleError, match="企业"):
         plan(Job.objects.create(), Source(), Directory())
