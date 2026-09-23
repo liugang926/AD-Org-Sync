@@ -53,4 +53,5 @@ LDAP_HOST = os.environ.get("LDAP_HOST", "")
 LDAP_BIND_DN = os.environ.get("LDAP_BIND_DN", "")
 LDAP_PASSWORD = os.environ.get("LDAP_PASSWORD", "")
 LDAP_BASE_DN = os.environ.get("LDAP_BASE_DN", "")
-LDAP_CA_FILE = os.environ.get("LDAP_CA_FILE") or None
+LDAP_VERIFY_CERT = os.environ.get("LDAP_VERIFY_CERT", "false").strip().lower() not in {"0", "false", "no", "off"}
+LDAP_CA_FILE = os.environ.get("LDAP_CA_FILE") or ("/run/secrets/ad-ca.pem" if Path("/run/secrets/ad-ca.pem").is_file() else None)

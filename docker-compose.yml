@@ -15,7 +15,7 @@ x-app: &app
     LDAP_BASE_DN: ${LDAP_BASE_DN:-}
     LDAP_BIND_DN: ${LDAP_BIND_DN:-}
     LDAP_PASSWORD: ${LDAP_PASSWORD:-}
-    LDAP_CA_FILE: /run/secrets/ad-ca.pem
+    LDAP_VERIFY_CERT: ${LDAP_VERIFY_CERT:-false}
   volumes:
     - ad_org_sync_data:/data
     - ad_org_sync_logs:/app/logs
@@ -40,10 +40,10 @@ services:
         target: /source/admin_password
         read_only: true
       - type: bind
-        source: ${LDAP_CA_HOST_FILE:?Set trusted AD CA PEM file}
+        source: ${LDAP_CA_HOST_FILE:-/dev/null}
         target: /source/ad-ca.pem
         read_only: true
-    command: ["sh", "-ec", "chown -R 10001:10001 /data /app/logs /run/secrets; install -m 0400 -o 10001 -g 10001 /source/admin_password /run/secrets/admin_password; install -m 0444 -o 10001 -g 10001 /source/ad-ca.pem /run/secrets/ad-ca.pem"]
+    command: ["sh", "-ec", "chown -R 10001:10001 /data /app/logs /run/secrets; install -m 0400 -o 10001 -g 10001 /source/admin_password /run/secrets/admin_password; if [ -s /source/ad-ca.pem ]; then install -m 0444 -o 10001 -g 10001 /source/ad-ca.pem /run/secrets/ad-ca.pem; else rm -f /run/secrets/ad-ca.pem; fi"]
   web:
     <<: *app
     depends_on:

@@ -17,7 +17,7 @@ from .security import audit
 
 
 def configuration_signature(config):
-    return fingerprint([dict(Configuration.objects.filter(pk=config.pk).values().get()), settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN])
+    return fingerprint([dict(Configuration.objects.filter(pk=config.pk).values().get()), settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN, settings.LDAP_VERIFY_CERT, settings.LDAP_CA_FILE])
 
 
 def binding_signature():

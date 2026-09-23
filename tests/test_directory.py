@@ -45,16 +45,19 @@ def test_ldap_failures_never_return_partial_results():
 
 
 @pytest.mark.django_db
-def test_ldaps_requires_certificate_validation(monkeypatch, settings):
+@pytest.mark.parametrize("verify", [True, False])
+def test_ldaps_certificate_policy_preserves_encryption(monkeypatch, settings, verify):
     settings.LDAP_HOST = "ad.example.com"
     settings.LDAP_BIND_DN = "CN=service,DC=example,DC=com"
     settings.LDAP_PASSWORD = "test-placeholder"
     settings.LDAP_CA_FILE = "/test/ca.pem"
+    settings.LDAP_VERIFY_CERT = verify
     server, connection, tls = Mock(), Mock(), Mock()
     monkeypatch.setattr("sync_app.directory.Server", server)
     monkeypatch.setattr("sync_app.directory.Connection", connection)
     monkeypatch.setattr("sync_app.directory.Tls", tls)
     ActiveDirectory()
-    assert tls.call_args.kwargs["validate"] == ssl.CERT_REQUIRED
+    assert tls.call_args.kwargs["validate"] == (ssl.CERT_REQUIRED if verify else ssl.CERT_NONE)
+    assert tls.call_args.kwargs["ca_certs_file"] == ("/test/ca.pem" if verify else None)
     assert server.call_args.kwargs["use_ssl"] is True
     assert connection.call_args.kwargs["auto_referrals"] is False

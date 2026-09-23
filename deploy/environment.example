@@ -11,5 +11,7 @@ LDAP_HOST=
 LDAP_BASE_DN=
 LDAP_BIND_DN=
 LDAP_PASSWORD=
-LDAP_CA_HOST_FILE=/opt/ad-org-sync/shared/ad-ca.pem
-LDAP_CA_FILE=/run/secrets/ad-ca.pem
+LDAP_VERIFY_CERT=false
+# Optional: enable verification and supply a CA when desired.
+# LDAP_VERIFY_CERT=true
+# LDAP_CA_HOST_FILE=/opt/ad-org-sync/shared/ad-ca.pem

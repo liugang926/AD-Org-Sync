@@ -12,7 +12,7 @@ from .security import audit, rate_limit
 
 
 def config_signature(config):
-    return fingerprint([settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN, config.sspr_match, config.sspr_enabled, config.updated_at])
+    return fingerprint([settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN, settings.LDAP_VERIFY_CERT, settings.LDAP_CA_FILE, config.sspr_match, config.sspr_enabled, config.updated_at])
 
 
 def match_employee(source, ad, config, source_id=None, code=None):
