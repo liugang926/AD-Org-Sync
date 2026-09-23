@@ -112,3 +112,33 @@ jobs:
           finally:
               source.close()
           PY
+      - name: Preview one test employee without writing AD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker exec -i ad_org_sync-web-1 python - <<'PY'
+          import os
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          from sync_app import synchronization
+          from sync_app.models import Binding
+
+          source_id = "17757325700496563"
+          before = Binding.objects.count()
+          job = synchronization.enqueue(kind="preview", scope="users", selected=[source_id], actor="acceptance-preview")
+          synchronization.run_next()
+          job.refresh_from_db()
+          print("preview_job_id=" + str(job.pk))
+          print("preview_status=" + job.status)
+          operations = job.plan.get("operations", [])
+          print("preview_operation_count=" + str(len(operations)))
+          for operation in operations:
+              print("preview_action=" + operation["action"])
+              print("preview_reason=" + operation["reason"])
+              print("preview_target_username=" + operation["username"])
+              print("preview_change_fields=" + ",".join(change["field"] for change in operation.get("changes", [])))
+          print("preview_department_conflicts=" + str(sum(item["action"] == "conflict" for item in job.plan.get("departments", []))))
+          assert Binding.objects.count() == before, "preview changed a binding"
+          print("preview_bindings_unchanged=true")
+          PY
