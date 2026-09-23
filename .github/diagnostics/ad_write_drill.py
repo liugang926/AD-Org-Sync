@@ -26,7 +26,7 @@ assert config.root_ou.casefold() == root.casefold()
 assert config.schedule_enabled is False and config.sspr_enabled is False
 
 username = "cx" + run_id[-12:]
-employee_id = "CODEX-ACCEPT-" + run_id
+employee_id = "CX" + run_id[-8:]
 ou_a = f"OU=CodexAcceptanceA-{run_id},{root}"
 ou_b = f"OU=CodexAcceptanceB-{run_id},{root}"
 
@@ -47,7 +47,6 @@ with closing(ActiveDirectory()) as ad:
         except RuleError:
             print("create_ldap_result_code=" + str(ad.conn.result.get("result")), flush=True)
             print("create_ldap_result_class=" + str(ad.conn.result.get("description")), flush=True)
-            print("create_ldap_diagnostic=" + str(ad.conn.result.get("message", ""))[:300], flush=True)
             raise
         assert created["username"] == username and created["employee_id"] == employee_id
         assert created["enabled"] and under(created["dn"], ou_a)
