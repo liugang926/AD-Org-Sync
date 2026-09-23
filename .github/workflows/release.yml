@@ -351,3 +351,43 @@ jobs:
           print("sspr_match_without_binding=true")
           print("ad_account_unchanged=true")
           PY
+  probe-user-list:
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    steps:
+      - name: Compare DingTalk list fields with detail fields without exposing people
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker exec -i ad_org_sync-web-1 python - <<'PY'
+          import os
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          from contextlib import closing
+          from sync_app.directory import DingTalk
+
+          with closing(DingTalk()) as source:
+              page = source.call("/topapi/v2/user/list", {"dept_id": 559012149, "cursor": 0, "size": 100})
+              items = page["list"]
+              print("list_page_count=" + str(len(items)))
+              print("list_has_more=" + str(bool(page.get("has_more"))).lower())
+              if not items:
+                  raise SystemExit("selected department has no visible users")
+              print("list_item_keys=" + ",".join(sorted(items[0].keys())))
+              fields = ("userid", "name", "job_number", "org_email", "email", "title", "telephone", "dept_id_list", "main_department")
+              for index, item in enumerate(items[:3]):
+                  detail = source.user(str(item["userid"]))
+                  comparisons = {
+                      "userid": str(item.get("userid") or "") == detail["source_id"],
+                      "name": str(item.get("name") or "") == detail["name"],
+                      "job_number": str(item.get("job_number") or "").strip() == detail["employee_id"],
+                      "email": str(item.get("org_email") or item.get("email") or "").strip() == detail["email"],
+                      "title": str(item.get("title") or "") == detail["title"],
+                      "telephone": str(item.get("telephone") or "") == detail["phone"],
+                      "dept_id_list": [str(value) for value in item.get("dept_id_list", [])] == detail["departments"],
+                      "main_department": str(item.get("main_department") or "") == detail["primary_department"],
+                  }
+                  print("sample_" + str(index) + "_equal=" + ",".join(key + ":" + str(value).lower() for key, value in comparisons.items()))
+              print("required_fields_present=" + ",".join(field + ":" + str(field in items[0]).lower() for field in fields))
+          PY
