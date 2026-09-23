@@ -18,6 +18,7 @@ compose=(docker compose --project-name "${COMPOSE_PROJECT_NAME}" --env-file "${E
 previous_tag=""
 previous_django_tag=""
 deployment_started=0
+nginx_snapshot_ready=0
 if [[ -r "${LAST_SUCCESSFUL_FILE}" ]]; then previous_tag="$(tr -d '\r\n' < "${LAST_SUCCESSFUL_FILE}")"; fi
 if [[ -r "${DJANGO_SUCCESSFUL_FILE}" ]]; then previous_django_tag="$(tr -d '\r\n' < "${DJANGO_SUCCESSFUL_FILE}")"; fi
 
@@ -39,7 +40,12 @@ rollback() {
     echo "Deployment failed; restoring previous application revision." >&2
     export AD_ORG_SYNC_IMAGE_TAG="${previous_tag}"
     if [[ -r "${STATE_DIR}/last_successful_compose.yml" ]]; then
-      if docker compose --project-directory "${ROOT_DIR}" --project-name "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${STATE_DIR}/last_successful_compose.yml" up -d --no-build --remove-orphans && wait_for_readiness; then
+      local config_restored=1
+      if [[ "${nginx_snapshot_ready}" == "1" ]] && ! cp "${STATE_DIR}/previous_nginx.conf" "${ROOT_DIR}/deploy/nginx/default.conf"; then
+        echo "Failed to restore previous Nginx configuration." >&2
+        config_restored=0
+      fi
+      if [[ "${config_restored}" == "1" ]] && docker compose --project-directory "${ROOT_DIR}" --project-name "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${STATE_DIR}/last_successful_compose.yml" up -d --no-build --remove-orphans --force-recreate && wait_for_readiness; then
         echo "Previous application readiness recovered; database was not automatically restored." >&2
       else
         echo "ROLLBACK FAILED. Preserve database and backups for manual recovery." >&2
@@ -55,6 +61,13 @@ rollback() {
 }
 trap rollback ERR
 "${compose[@]}" config --quiet
+if [[ "${previous_tag}" =~ ^[0-9a-f]{40}$ && "${previous_tag}" == "${previous_django_tag}" ]] && "${compose[@]}" ps --status running --services | grep -qx nginx; then
+  # The old container retains the configuration inode from its original checkout.
+  docker cp "${COMPOSE_PROJECT_NAME}-nginx-1:/etc/nginx/conf.d/default.conf" "${STATE_DIR}/previous_nginx.conf.tmp"
+  chmod 0600 "${STATE_DIR}/previous_nginx.conf.tmp"
+  mv "${STATE_DIR}/previous_nginx.conf.tmp" "${STATE_DIR}/previous_nginx.conf"
+  nginx_snapshot_ready=1
+fi
 if "${compose[@]}" ps --status running --services | grep -qx web; then
   # Existing Django deployments use online SQLite backup before rollout.
   "${compose[@]}" exec -T web python -m sync_app.cli db_backup
@@ -64,6 +77,8 @@ deployment_started=1
 # Stop the worker before changing the schema; do not replace data volumes.
 "${compose[@]}" stop worker
 "${compose[@]}" up -d --remove-orphans
+# A bind-mounted file can keep the old inode when Actions checks out a new revision.
+"${compose[@]}" up -d --no-deps --force-recreate nginx
 wait_for_readiness
 "${compose[@]}" exec -T web python -m sync_app.cli db_check
 bash scripts/install-scheduler.sh
