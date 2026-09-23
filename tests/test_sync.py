@@ -744,6 +744,35 @@ def test_uncertain_creation_cannot_be_automatically_repeated(configured):
 
 
 @pytest.mark.django_db
+def test_creation_response_lost_after_ad_write_cannot_create_again(configured, monkeypatch):
+    from sync_app.models import Operation
+
+    source, ad = Source(), Directory([])
+    first = Job.objects.create()
+    first.plan = plan(first, source, ad)
+    original_create = ad.create
+
+    def create_then_lose_response(*args, **kwargs):
+        original_create(*args, **kwargs)
+        raise RuleError("创建响应丢失，结果需要人工核验")
+
+    monkeypatch.setattr(ad, "create", create_then_lose_response)
+    assert apply(first, source, ad) == "partial_failed"
+    record = Operation.objects.get(job=first, action="create")
+    assert record.status == "failed" and record.target_guid is None
+    assert ad.created == 1 and len(ad.items) == 1
+    assert not Binding.objects.exists()
+
+    retry = Job.objects.create()
+    retry.plan = plan(retry, source, ad)
+    assert retry.plan["operations"][0]["action"] == "conflict"
+    with pytest.raises(RuleError, match="人员冲突"):
+        apply(retry, source, ad)
+    assert ad.created == 1 and len(ad.items) == 1
+    assert not Binding.objects.exists()
+
+
+@pytest.mark.django_db
 def test_cleanup_preserves_unresolved_creation_evidence(configured):
     from datetime import timedelta
     from django.core.management import call_command
