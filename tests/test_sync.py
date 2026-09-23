@@ -312,6 +312,72 @@ def test_created_account_stays_disabled_until_attributes_finish(configured, enab
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("enable_failures", [1, 2])
+def test_enable_failure_resumes_initialized_account_without_recreating(configured, enable_failures):
+    from sync_app.domain import fingerprint
+    from sync_app.models import Operation
+
+    configured.attributes = ["displayName"]
+    configured.save()
+
+    class FailingEnable(Directory):
+        remaining = enable_failures
+
+        def enable(self, guid, root):
+            if self.remaining:
+                self.remaining -= 1
+                raise RuleError("模拟启用失败")
+            return super().enable(guid, root)
+
+    source, ad = Source(), FailingEnable([])
+    first = Job.objects.create()
+    first.plan = plan(first, source, ad)
+    assert apply(first, source, ad) == "partial_failed"
+    assert ad.created == 1 and not ad.items[0]["enabled"]
+    assert ad.items[0]["attrs"]["displayName"] == source.users[0]["name"]
+    assert not Binding.objects.exists()
+    creation = Operation.objects.get(job=first, action="create")
+    assert creation.evidence["initialized_fingerprint"] == fingerprint(ad.items[0])
+
+    while ad.remaining:
+        retry = Job.objects.create()
+        retry.plan = plan(retry, source, ad)
+        assert retry.plan["operations"][0]["action"] == "resume_create"
+        assert apply(retry, source, ad) == "partial_failed"
+        creation.refresh_from_db()
+        assert creation.evidence["initialized_fingerprint"] == fingerprint(ad.items[0])
+
+    final = Job.objects.create()
+    final.plan = plan(final, source, ad)
+    assert final.plan["operations"][0]["action"] == "resume_create"
+    assert apply(final, source, ad) == "success"
+    assert ad.created == 1 and ad.items[0]["enabled"]
+    assert str(Binding.objects.get().object_guid) == ad.items[0]["guid"]
+    creation.refresh_from_db()
+    assert creation.evidence["enabled_fingerprint"] == fingerprint(ad.items[0])
+
+
+@pytest.mark.django_db
+def test_initialized_account_changed_after_enable_failure_requires_manual_recovery(configured):
+    configured.attributes = ["displayName"]
+    configured.save()
+
+    class FailingEnable(Directory):
+        def enable(self, guid, root):
+            raise RuleError("模拟启用失败")
+
+    source, ad = Source(), FailingEnable([])
+    first = Job.objects.create()
+    first.plan = plan(first, source, ad)
+    assert apply(first, source, ad) == "partial_failed"
+    ad.items[0]["attrs"]["title"] = "外部修改"
+    retry = plan(Job.objects.create(), source, ad)["operations"][0]
+    assert retry["action"] == "conflict"
+    assert retry["target"]["guid"] == ad.items[0]["guid"]
+    assert not Binding.objects.exists()
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("change", ["ad", "configuration"])
 def test_created_account_changed_externally_requires_manual_recovery(configured, change):
     source, ad = Source(), Directory([])
@@ -525,6 +591,31 @@ def test_binding_commit_failure_recovers_by_guid_even_after_employee_change(conf
     assert apply(retry, source, ad) == "success"
     assert Binding.objects.get().object_guid == evidence.target_guid
     assert ad.created == 1
+
+
+@pytest.mark.django_db
+def test_enabled_unbound_account_changed_after_commit_failure_requires_manual_recovery(configured, monkeypatch):
+    from django.db import IntegrityError
+    from sync_app.models import Operation
+
+    source, ad = Source(), Directory([])
+    job = Job.objects.create()
+    job.plan = plan(job, source, ad)
+
+    def fail_commit(**kwargs):
+        raise IntegrityError("simulated binding commit failure")
+
+    monkeypatch.setattr(Binding.objects, "create", fail_commit)
+    assert apply(job, source, ad) == "partial_failed"
+    evidence = Operation.objects.get(job=job, action="create").evidence
+    assert evidence["enabled_fingerprint"]
+    assert ad.created == 1 and ad.items[0]["enabled"]
+    ad.items[0]["attrs"]["title"] = "外部修改"
+
+    retry = plan(Job.objects.create(), source, ad)["operations"][0]
+    assert retry["action"] == "conflict"
+    assert retry["target"]["guid"] == ad.items[0]["guid"]
+    assert not Binding.objects.exists()
 
 
 @pytest.mark.django_db

@@ -170,16 +170,25 @@ def plan(job, source, ad):
         if recovery and not recovery.target_guid:
             action, reason = "conflict", "此前建号结果缺少可靠对象证据，请人工核验并绑定，禁止自动重建"
         elif recovery and action == "update":
+            evidence = recovery.evidence if isinstance(recovery.evidence, dict) else {}
+            employee_id = user.get("employee_id", "").strip().casefold()
             reason = "核验此前已创建的 AD 对象，补全未完成的同步绑定"
             if target["guid"] in occupied:
                 action, reason = "conflict", "此前创建的 AD 对象已绑定其他人员，请人工核验"
+            elif not (recovery.status == "failed" and evidence.get("enabled_fingerprint")
+                      and fingerprint(target) == evidence["enabled_fingerprint"]
+                      and evidence.get("created_config") == configuration_signature(config)
+                      and target["username"] == evidence.get("username")
+                      and employee_id and actual_employee_counts[employee_id] == 1
+                      and not protected(target) and under(target["dn"], config.root_ou)):
+                action, reason = "conflict", "此前创建的 AD 对象状态或配置已变化，请人工核验后处理"
         elif recovery and action == "conflict" and target and not target["enabled"]:
             evidence = recovery.evidence if isinstance(recovery.evidence, dict) else {}
             employee_id = user.get("employee_id", "").strip().casefold()
             if target["guid"] in occupied:
                 reason = "此前创建的 AD 对象已绑定其他人员，请人工核验"
-            elif (recovery.status == "failed" and evidence.get("created_fingerprint")
-                  and fingerprint(target) == evidence["created_fingerprint"]
+            elif (recovery.status == "failed"
+                  and fingerprint(target) in {evidence.get("created_fingerprint"), evidence.get("initialized_fingerprint")}
                   and evidence.get("created_config") == configuration_signature(config)
                   and target["username"] == evidence.get("username")
                   and employee_id and actual_employee_counts[employee_id] == 1
@@ -317,9 +326,21 @@ def apply(job, source, ad):
                         record.status = "created"
                         record.evidence = {**record.evidence, "created_fingerprint": fingerprint(account), "created_config": saved["config"]}
                         record.save(update_fields=["target_guid", "status", "evidence"])
+                    creation_record = record if op["action"] == "create" else (
+                        Operation.objects.filter(source_id=op["source_id"], action="create").order_by("-pk").first()
+                        if op["action"] == "resume_create" else None
+                    )
+                    if op["action"] == "resume_create" and not creation_record:
+                        raise RuleError("此前建号证据已缺失，请人工核验，不能继续初始化")
                     account = ad.update(account["guid"], op["attrs"], op["ou"], config.root_ou, allow_disabled=op["action"] in {"create", "resume_create"})
+                    if creation_record:
+                        creation_record.evidence = {**creation_record.evidence, "initialized_fingerprint": fingerprint(account)}
+                        creation_record.save(update_fields=["evidence"])
                     if op["action"] in {"create", "resume_create"} and config.enable_new_accounts:
                         account = ad.enable(account["guid"], config.root_ou)
+                        if creation_record:
+                            creation_record.evidence = {**creation_record.evidence, "enabled_fingerprint": fingerprint(account)}
+                            creation_record.save(update_fields=["evidence"])
                     record.target_guid = account["guid"]
                     # Each successful user commits independently of later users.
                     with transaction.atomic():
