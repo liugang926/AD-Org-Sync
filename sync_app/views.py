@@ -35,6 +35,8 @@ def administrator(view):
             return view(request, *args, **kwargs)
         except RuleError as exc:
             messages.error(request, str(exc))
+            if request.resolver_match and request.resolver_match.url_name == "person_action":
+                return redirect("people")
             return redirect(request.path if request.method == "GET" else "/dashboard")
     return wrapped
 
@@ -113,8 +115,16 @@ def people(request):
     bindings = {b.person_id: b for b in Binding.objects.filter(person__in=page.object_list)}
     snapshot = Snapshot.objects.order_by("-pk").first()
     source = {u["source_id"]: u for u in snapshot.users} if snapshot else {}
+    department_names = {str(d["id"]): d["name"] for d in snapshot.departments} if snapshot else {}
     naming = Configuration.current().naming
-    rows = [(p, bindings.get(p.pk), source.get(p.source_id), candidate(source[p.source_id], naming) if p.source_id in source else "") for p in page]
+    rows = []
+    for person in page:
+        user = source.get(person.source_id)
+        department_ids = list(dict.fromkeys(str(value) for value in user.get("departments", []))) if user else []
+        options = [{"id": department_id, "name": department_names.get(department_id, department_id)} for department_id in department_ids]
+        if person.primary_department and person.primary_department not in department_ids:
+            options.insert(0, {"id": person.primary_department, "name": "已保存（当前不在来源部门）"})
+        rows.append((person, bindings.get(person.pk), user, candidate(user, naming) if user else "", options))
     return render(request, "people.html", {"page": page, "rows": rows, "query": query, "snapshot": snapshot})
 
 

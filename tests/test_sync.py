@@ -251,6 +251,15 @@ def test_email_match_requires_manual_confirmation(configured):
 
 
 @pytest.mark.django_db
+def test_configured_protected_username_blocks_new_account(configured):
+    configured.protected_usernames = ["1001"]
+    configured.save()
+    operation = plan(Job.objects.create(), Source(), Directory([]))["operations"][0]
+    assert operation["action"] == "conflict"
+    assert "受保护" in operation["reason"]
+
+
+@pytest.mark.django_db
 def test_department_transfer_preserves_bound_object(configured):
     class TransferredSource(Source):
         def collect(self, root):

@@ -166,7 +166,7 @@ def plan(job, source, ad):
                 # A prior AD write can outlive its local binding transaction.
                 # Preserve its object identity even if source attributes changed.
                 b = {"guid": str(recovery.target_guid), "enabled": True}
-        action, target, reason = resolve(user, b, accounts, occupied, config.naming, employee_counts, name_counts, config.match_field)
+        action, target, reason = resolve(user, b, accounts, occupied, config.naming, employee_counts, name_counts, config.match_field, config.protected_usernames)
         if recovery and not recovery.target_guid:
             action, reason = "conflict", "此前建号结果缺少可靠对象证据，请人工核验并绑定，禁止自动重建"
         elif recovery and action == "update":
@@ -493,6 +493,11 @@ def verify_binding(person_id):
 def change_person(person_id, actor, excluded, primary_department):
     with lock("sync"), transaction.atomic():
         person = Person.objects.get(pk=person_id)
+        if primary_department and primary_department != person.primary_department:
+            snapshot = Snapshot.objects.order_by("-pk").first()
+            user = next((item for item in snapshot.users if item["source_id"] == person.source_id), None) if snapshot else None
+            if not user or primary_department not in {str(value) for value in user.get("departments", [])}:
+                raise RuleError("指定主部门必须是该人员当前所属的来源部门")
         person.excluded = excluded
         person.primary_department = primary_department
         person.save()
