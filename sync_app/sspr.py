@@ -76,7 +76,9 @@ def reset(token, password, confirmation, ip):
         ad = None
         try:
             ad = ActiveDirectory()
-            _, account = match_employee(source, ad, config, source_id=item.source_id)
+            user, account = match_employee(source, ad, config, source_id=item.source_id)
+            if user["source_id"] != item.source_id:
+                raise RuleError("钉钉身份发生变化，请重新验证")
             if account["guid"] != str(item.object_guid):
                 raise RuleError("AD 匹配对象发生变化，请重新验证")
             if item.config_fingerprint != config_signature(Configuration.current()):

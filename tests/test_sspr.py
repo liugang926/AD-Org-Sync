@@ -5,7 +5,7 @@ from sync_app import sspr
 from sync_app.directory import PasswordResetOutcome
 from sync_app.domain import RuleError
 from sync_app.models import Configuration, Binding, Job, EmployeeSession, Audit
-from .fakes import Source, Directory, account
+from .fakes import Source, Directory, account, user
 
 
 @pytest.fixture
@@ -97,6 +97,16 @@ def test_rechecks_identity_and_guid_at_submission(setup_sspr):
     token, _ = sspr.verify("valid", "ip")
     ad.items = [account()]
     with pytest.raises(RuleError):
+        sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+    assert ad.resets == 0
+
+
+@pytest.mark.django_db
+def test_changed_dingtalk_user_id_cannot_reuse_verified_session(setup_sspr, monkeypatch):
+    source, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    monkeypatch.setattr(source, "user", lambda uid: user("different-user", "1001"))
+    with pytest.raises(RuleError, match="钉钉身份发生变化"):
         sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
     assert ad.resets == 0
 
