@@ -496,8 +496,10 @@ def change_person(person_id, actor, excluded, primary_department):
         if primary_department and primary_department != person.primary_department:
             snapshot = Snapshot.objects.order_by("-pk").first()
             user = next((item for item in snapshot.users if item["source_id"] == person.source_id), None) if snapshot else None
-            if not user or primary_department not in {str(value) for value in user.get("departments", [])}:
-                raise RuleError("指定主部门必须是该人员当前所属的来源部门")
+            in_scope = {str(department["id"]) for department in snapshot.departments} if snapshot else set()
+            memberships = {str(value) for value in user.get("departments", [])} if user else set()
+            if primary_department not in memberships or primary_department not in in_scope:
+                raise RuleError("指定主部门必须是该人员当前所属且在同步范围内的来源部门")
         person.excluded = excluded
         person.primary_department = primary_department
         person.save()

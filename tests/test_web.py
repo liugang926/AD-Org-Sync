@@ -71,7 +71,7 @@ def test_primary_department_is_chosen_from_current_employee_departments(admin_cl
     from .fakes import user
 
     employee = user()
-    employee["departments"] = ["1", "2"]
+    employee["departments"] = ["1", "2", "999"]
     employee["primary_department"] = ""
     Snapshot.objects.create(
         fingerprint="complete-source", root_department="1", users=[employee],
@@ -82,6 +82,7 @@ def test_primary_department_is_chosen_from_current_employee_departments(admin_cl
     assert page.status_code == 200
     assert 'name="department"' in page.content.decode()
     assert 'value="2"' in page.content.decode()
+    assert 'value="999"' not in page.content.decode()
     assert "研发（2）" in page.content.decode()
 
     invalid = admin_client.post(f"/people/{person.pk}", {"action": "policy", "department": "999", "excluded": "on"})

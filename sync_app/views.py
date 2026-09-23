@@ -131,7 +131,9 @@ def people(request):
     rows = []
     for person in page:
         user = source.get(person.source_id)
-        department_ids = list(dict.fromkeys(str(value) for value in user.get("departments", []))) if user else []
+        department_ids = list(dict.fromkeys(
+            str(value) for value in user.get("departments", []) if str(value) in department_names
+        )) if user else []
         options = [{"id": department_id, "name": department_names.get(department_id, department_id)} for department_id in department_ids]
         if person.primary_department and person.primary_department not in department_ids:
             options.insert(0, {"id": person.primary_department, "name": "已保存（当前不在来源部门）"})
