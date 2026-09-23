@@ -700,7 +700,7 @@ jobs:
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
   candidate-staged-sync-drill:
-    if: ${{ false }}
+    if: ${{ github.ref == 'refs/heads/codex/prod-verify-e9d9afb' }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 15
@@ -725,7 +725,7 @@ jobs:
           container="ad-org-sync-staged-drill-$GITHUB_RUN_ID"
           trap 'docker rm -f "$container" >/dev/null 2>&1 || true; docker image rm "$image" >/dev/null 2>&1 || true' EXIT
           docker build --pull --no-cache -t "$image" candidate
-          docker run --rm -i --name "$container" --network host --read-only --tmpfs /data:rw,size=64m --tmpfs /tmp:rw,size=64m --env-file /opt/ad-org-sync/shared/.env -e AD_ORG_SYNC_DATA_DIR=/data -e TEST_RUN_ID="$GITHUB_RUN_ID" "$image" python - < .github/diagnostics/staged_sync_drill.py
+          docker run --rm -i --name "$container" --network host --read-only --tmpfs /data:rw,size=64m,uid=10001,gid=10001 --tmpfs /tmp:rw,size=64m --env-file /opt/ad-org-sync/shared/.env -e AD_ORG_SYNC_DATA_DIR=/data -e TEST_RUN_ID="$GITHUB_RUN_ID" "$image" python - < .github/diagnostics/staged_sync_drill.py
       - name: Verify test identity cleanup and live production state
         if: always()
         shell: bash
@@ -734,6 +734,9 @@ jobs:
           test "$GITHUB_RUN_ID" != ""
           docker exec -i -e TEST_RUN_ID="$GITHUB_RUN_ID" ad_org_sync-web-1 python - <<'PY'
           import os
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
           from contextlib import closing
           from sync_app.directory import ActiveDirectory, under
           from sync_app.models import Binding, Configuration, Person
@@ -744,6 +747,8 @@ jobs:
           source_id = "codex-staged-source-" + run_id
           employee_id = "CXS" + run_id[-8:]
           with closing(ActiveDirectory()) as ad:
+              assert not ad.match("employee_id", "CXS81228086")
+              assert not ad.match("source_id", "CXS81228086")
               matches = ad.match("employee_id", employee_id)
               if matches:
                   assert len(matches) == 1
