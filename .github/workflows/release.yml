@@ -455,3 +455,17 @@ jobs:
           docker exec -e TEST_RUN_ID="$GITHUB_RUN_ID" ad_org_sync-web-1 python -m sync_app.cli shell -c 'import os; from sync_app.models import Binding, Configuration, EmployeeSession, Person; source_id="codex-sspr-"+os.environ["TEST_RUN_ID"]; assert not Person.objects.filter(source_id=source_id).exists(); assert not Binding.objects.filter(person__source_id=source_id).exists(); assert not EmployeeSession.objects.filter(source_id=source_id).exists(); c=Configuration.objects.get(pk=1); assert not c.sspr_enabled and not c.schedule_enabled; print("production_sspr_and_database_unchanged=true")'
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
+  source-guard-probe:
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check real DingTalk hierarchy and pagination without writes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=9f04c5f991573a6496a08ec881e2ebc571cd6367
+          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
+          test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
+          docker exec -i ad_org_sync-web-1 python - < .github/diagnostics/source_guard_probe.py
