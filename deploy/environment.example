@@ -7,6 +7,9 @@ AD_ORG_SYNC_ADMIN_PASSWORD_FILE=/opt/ad-org-sync/shared/admin_password.txt
 DINGTALK_CORP_ID=
 DINGTALK_APP_KEY=
 DINGTALK_APP_SECRET=
+# Optional pilot: comma-separated DingTalk userId values (not job numbers).
+# Unset means all uniquely matched employees can use SSPR once enabled.
+# SSPR_ALLOWED_DINGTALK_USER_IDS=user-id-1,user-id-2
 LDAP_HOST=
 LDAP_BASE_DN=
 LDAP_BIND_DN=

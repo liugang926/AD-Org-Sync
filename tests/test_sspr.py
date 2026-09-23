@@ -34,6 +34,26 @@ def test_unsynced_employee_can_reset_and_cannot_replay(setup_sspr):
 
 
 @pytest.mark.django_db
+def test_pilot_limits_dingtalk_user_and_invalidates_session_when_scope_changes(setup_sspr, settings):
+    _, ad, _ = setup_sspr
+    settings.SSPR_ALLOWED_DINGTALK_USER_IDS = frozenset({"somebody-else"})
+    with pytest.raises(RuleError, match="尚未对当前账号开放"):
+        sspr.verify("valid", "ip")
+    assert not EmployeeSession.objects.exists()
+    assert ad.resets == 0
+
+    settings.SSPR_ALLOWED_DINGTALK_USER_IDS = frozenset({"u1"})
+    token, _ = sspr.verify("valid", "ip")
+    assert sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+    assert ad.resets == 1
+    token, _ = sspr.verify("valid", "ip")
+    settings.SSPR_ALLOWED_DINGTALK_USER_IDS = frozenset({"somebody-else"})
+    with pytest.raises(RuleError, match="验证已失效"):
+        sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+    assert ad.resets == 1
+
+
+@pytest.mark.django_db
 def test_unlock_failure_is_audited_as_partial_and_session_is_consumed(setup_sspr, monkeypatch):
     _, ad, config = setup_sspr
     config.unlock_after_reset = True

@@ -27,6 +27,8 @@ python -m venv .venv
 
 同步匹配默认使用唯一工号，邮箱及 userId 匹配仅作人工确认候选；账号命名可选工号、userId、邮箱前缀。密码重置匹配单独配置，可选工号→employeeID、邮箱→mail、userId→sAMAccountName。AD 查询范围由 LDAP_BASE_DN 限定，同步写入进一步限制到配置的根 OU。LDAPS 始终加密，默认 `LDAP_VERIFY_CERT=false`，允许未受信任的自签证书；无需 CA 文件。如需验证可信链和主机名，设置 `LDAP_VERIFY_CERT=true`，可选提供 `LDAP_CA_HOST_FILE`（未提供时使用系统信任库）。
 
+受控验收可在受限环境文件中配置 `SSPR_ALLOWED_DINGTALK_USER_IDS`，用逗号列出允许的钉钉 userId（不是工号）。配置非空时，只有名单内员工通过钉钉验证后可继续实时 LDAPS 匹配与重置；名单变化使现有验证会话失效。不配置时维持原有的全员匹配行为；无论名单如何，后台的 `sspr_enabled` 开关仍须明确开启。
+
 ## CI/CD
 
 沿用原仓库流程：草稿 PR → Python 3.10/3.12 质量检查、Windows、容器、Wheel/迁移/SBOM、浏览器回归 → 人工批准合并 → main 的自托管 production runner → 全 SHA 镜像 → 备份、部署、就绪和数据库检查。
