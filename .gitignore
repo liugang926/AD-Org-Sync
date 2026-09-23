@@ -19,6 +19,10 @@ build_rebuild_*/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.wheel-smoke/
 sqlite_*.db
 workspace_*.db
 

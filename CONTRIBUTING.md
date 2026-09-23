@@ -11,16 +11,19 @@
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e ".[test]"
 ```
 
 ## Useful Commands
 
 ```powershell
-python -m sync_app.cli version
+python -m sync_app.cli --version
 python -m sync_app.cli --help
 python -m compileall sync_app
-.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean AD-Org-Sync.spec
+python manage.py check
+python manage.py makemigrations --check --dry-run
+python -m pytest -q --ignore=tests/test_browser.py
+python -m build --wheel
 ```
 
 ## Pull Requests
@@ -33,5 +36,5 @@ python -m compileall sync_app
 ## Design Expectations
 
 - Keep `sync_app/` as the only source of active implementation.
-- Root-level modules are compatibility wrappers.
+- Do not add legacy framework compatibility wrappers or multi-tenant abstractions.
 - New sync rules should be explicit, testable, and documented.

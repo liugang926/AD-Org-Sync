@@ -1,1 +1,1 @@
-"""Structured package for the AD Org Sync application."""
+"""Single-organization Django application."""

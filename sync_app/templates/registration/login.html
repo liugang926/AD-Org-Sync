@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block content %}<section class="card narrow"><p class="eyebrow">管理员入口</p><h1>登录组织同步</h1><p>管理通讯录同步、账号关联和操作记录。</p>{% if error %}<p role="alert">{{ error }}</p>{% endif %}<form method="post">{% csrf_token %}{{ form.as_p }}<button>登录</button></form><p><a href="/sspr">员工密码重置入口 →</a></p></section>{% endblock %}
