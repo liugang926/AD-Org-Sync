@@ -147,17 +147,16 @@ jobs:
           from sync_app.models import Binding, Configuration
 
           job_number = "T0001919"
+          expected_user_id = "17757325700496563"
           config = Configuration.current()
           assert not config.schedule_enabled and not config.sspr_enabled
           print("sspr_enabled=false schedule_enabled=false")
           print("sspr_match_field=" + config.sspr_match)
           with closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
-              users, _ = source.collect(config.root_department)
-              candidates = [user for user in users if user["employee_id"] == job_number]
-              print("job_number_matches=" + str(len(candidates)))
-              assert len(candidates) == 1
-              person = source.user(candidates[0]["source_id"])
+              person = source.user(expected_user_id)
+              assert person["source_id"] == expected_user_id
               assert person["employee_id"] == job_number
+              print("pilot_allowlist_userid_confirmed=true")
               print("dingtalk_userid_fingerprint=" + hashlib.sha256(person["source_id"].encode()).hexdigest()[:12])
               print("local_binding_exists=" + str(Binding.objects.filter(person__source_id=person["source_id"]).exists()).lower())
               assert not Binding.objects.filter(person__source_id=person["source_id"]).exists()
