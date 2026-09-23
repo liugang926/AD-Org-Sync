@@ -12,7 +12,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          expected=e9d9afb90d50be84a62d0ed3e8f1461825c359d9
+          expected=9f04c5f991573a6496a08ec881e2ebc571cd6367
           actual="$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)"
           test "$actual" = "$expected"
           echo "last_successful_image_tag=$actual"
@@ -39,12 +39,13 @@ jobs:
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
           nginx_config="$(docker exec ad_org_sync-nginx-1 nginx -T 2>&1 || true)"
-          echo "nginx_trusts_gateway=$(grep -Fq 'set_real_ip_from 10.106.1.119;' <<< "$nginx_config" && echo true || echo false)"
-          echo "nginx_reads_forwarded_for=$(grep -Fq 'real_ip_header X-Forwarded-For;' <<< "$nginx_config" && echo true || echo false)"
+          grep -Fq 'set_real_ip_from 10.106.1.119;' <<< "$nginx_config"
+          grep -Fq 'real_ip_header X-Forwarded-For;' <<< "$nginx_config"
+          echo 'nginx_trusts_gateway=true nginx_reads_forwarded_for=true'
           echo "nginx_sets_real_ip=$(grep -Fq 'proxy_set_header X-Real-IP $remote_addr;' <<< "$nginx_config" && echo true || echo false)"
           access_logs="$(docker logs --since 20m ad_org_sync-nginx-1 2>&1)"
-          normal="$(printf '%s\n' "$access_logs" | grep 'codex_ipdiag=e9d9afb-normal' | tail -n 1 || true)"
-          spoof="$(printf '%s\n' "$access_logs" | grep 'codex_ipdiag=e9d9afb-spoof' | tail -n 1 || true)"
+          normal="$(printf '%s\n' "$access_logs" | grep 'codex_ipdiag=9f04c5f-normal' | tail -n 1 || true)"
+          spoof="$(printf '%s\n' "$access_logs" | grep 'codex_ipdiag=9f04c5f-spoof' | tail -n 1 || true)"
           normal_ip="$(printf '%s\n' "$normal" | awk '{print $1}')"
           spoof_ip="$(printf '%s\n' "$spoof" | awk '{print $1}')"
           echo "normal_probe_found=$(test -n "$normal_ip" && echo true || echo false)"
@@ -62,3 +63,52 @@ jobs:
             echo 'per_client_ip_available=true'
           fi
           echo 'spoofed_header_ignored=true'
+      - name: Resolve dedicated test employee without changing AD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker exec -i ad_org_sync-web-1 python - <<'PY'
+          import os
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          from sync_app.directory import ActiveDirectory, DingTalk
+          from sync_app.domain import RuleError, protected
+          from sync_app.models import Configuration
+
+          identifier = "T0001919"
+          config = Configuration.current()
+          source = DingTalk()
+          try:
+              try:
+                  person = source.user(identifier)
+                  kind = "userid"
+              except RuleError:
+                  users, _ = source.collect(config.root_department)
+                  matches = [user for user in users if user["employee_id"] == identifier]
+                  print("dingtalk_job_number_matches=" + str(len(matches)))
+                  if len(matches) != 1:
+                      raise SystemExit(0)
+                  person = matches[0]
+                  kind = "job_number"
+              print("dingtalk_identifier_type=" + kind)
+              print("dingtalk_userid=" + person["source_id"])
+              print("dingtalk_job_number=" + person["employee_id"])
+              value = person.get(config.sspr_match, "")
+              print("ad_match_field=" + config.sspr_match)
+              if not value:
+                  print("ad_match_count=0")
+                  raise SystemExit(0)
+              ad = ActiveDirectory()
+              try:
+                  matches = ad.match(config.sspr_match, value)
+                  print("ad_match_count=" + str(len(matches)))
+                  if len(matches) == 1:
+                      account = matches[0]
+                      print("ad_username=" + account["username"])
+                      print("ad_eligible=" + str(account["enabled"] and not protected(account)).lower())
+              finally:
+                  ad.close()
+          finally:
+              source.close()
+          PY
