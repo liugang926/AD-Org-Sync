@@ -4,6 +4,49 @@ on:
 permissions:
   contents: read
 jobs:
+  conflict-summary-61:
+    if: ${{ true }}
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    timeout-minutes: 3
+    steps:
+      - name: Count conflict categories from the latest live preview without personal data
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=a480636d3dc40e4a9e98ef859831320b50ed7140
+          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
+          docker exec -i ad_org_sync-web-1 python - <<'PY'
+          import os
+          from collections import Counter
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          from sync_app.models import Job
+
+          job = Job.objects.get(pk="e28946c1-50c1-4c2d-85f3-89c9d3a8fecc")
+          assert job.kind == "preview" and job.status == "blocked" and job.scope == "full"
+          categories = {
+              "主部门不明确，请在人员页面指定": "main_department_ambiguous",
+              "新账号命名为空、重复、被占用或受保护": "account_name_collision",
+              "匹配字段缺失或重复": "match_field_missing_or_duplicate",
+              "工号缺失或重复": "job_number_missing_or_duplicate",
+              "工号重复，不能创建账号": "job_number_duplicate_on_create",
+              "多个 AD 账号命中同一标识": "multiple_ad_matches",
+              "AD 账号已占用、受保护或已禁用": "ad_account_occupied_or_protected",
+              "工号已存在于其他 AD 账号，请人工核验": "job_number_used_by_other_ad_account",
+              "目标受保护或已禁用，需人工处理": "bound_target_protected_or_disabled",
+              "绑定目标不存在或无法唯一确认": "bound_target_missing",
+          }
+          conflicts = [item for item in job.plan["operations"] if item["action"] == "conflict"]
+          counts = Counter(categories.get(item["reason"], "other") for item in conflicts)
+          print("person_conflicts=" + str(len(conflicts)))
+          for category, count in sorted(counts.items()):
+              print("conflict_" + category + "=" + str(count))
+          departments = [item for item in job.plan["departments"] if item["action"] == "conflict"]
+          print("department_conflicts=" + str(len(departments)))
+          assert len(conflicts) == 19
+          PY
   pilot-identity-preflight:
     if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
