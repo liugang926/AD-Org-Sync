@@ -6,3 +6,4 @@ from django.conf import settings
 def isolated_runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     monkeypatch.setattr(settings, "LDAP_BASE_DN", "DC=example,DC=com")
+    monkeypatch.setattr(settings, "DINGTALK_CORP_ID", "test-enterprise")

@@ -1,4 +1,5 @@
 from functools import wraps
+from datetime import timedelta
 import time
 from contextlib import closing
 
@@ -13,12 +14,14 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
+from django.utils.dateparse import parse_date
+from django.utils import timezone
 
 from . import sspr, synchronization
 from .directory import ActiveDirectory, DingTalk
-from .domain import RuleError
-from .models import Configuration, Person, Binding, Job, Audit, Snapshot
-from .security import rate_limit
+from .domain import RuleError, candidate
+from .models import Configuration, Person, Binding, Job, Audit, Snapshot, RuntimeState
+from .security import rate_limit, audit
 
 
 def administrator(view):
@@ -38,6 +41,15 @@ def administrator(view):
 
 class AdminLogin(LoginView):
     template_name = "registration/login.html"
+
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        audit(form.get_user().username, "admin_login", result="登录成功")
+        return response
+
+    def form_invalid(self, form):
+        audit("anonymous", "admin_login", result="登录失败", success=False)
+        return super().form_invalid(form)
 
     def post(self, request, *args, **kwargs):
         try:
@@ -70,10 +82,14 @@ def ready(request):
 @administrator
 def dashboard(request):
     if request.method == "POST":
-        synchronization.enqueue(scope=request.POST.get("scope", "full"), selected=request.POST.get("selected", "").split(), actor=request.user.username)
+        kind = "refresh" if request.POST.get("action") == "refresh" else "preview"
+        synchronization.enqueue(kind=kind, scope=request.POST.get("scope", "full"), selected=request.POST.get("selected", "").split(), actor=request.user.username)
         messages.success(request, "任务已排队，执行进程将生成预览")
         return redirect("dashboard")
-    return render(request, "dashboard.html", {"jobs": Job.objects.order_by("-created_at")[:30], "config": Configuration.current(), "snapshot": Snapshot.objects.order_by("-pk").first()})
+    config = Configuration.current()
+    latest = Job.objects.filter(actor="scheduler").order_by("-created_at").first()
+    next_run = max(timezone.now(), latest.created_at + timedelta(minutes=config.interval_minutes)) if latest else timezone.now()
+    return render(request, "dashboard.html", {"jobs": Job.objects.order_by("-created_at")[:30], "config": config, "snapshot": Snapshot.objects.order_by("-pk").first(), "runtime": RuntimeState.current(), "next_run": next_run if config.schedule_enabled else None})
 
 
 @administrator
@@ -95,7 +111,11 @@ def people(request):
         items = items.filter(Q(name__icontains=query) | Q(source_id__icontains=query))
     page = Paginator(items, 30).get_page(request.GET.get("page"))
     bindings = {b.person_id: b for b in Binding.objects.filter(person__in=page.object_list)}
-    return render(request, "people.html", {"page": page, "rows": [(p, bindings.get(p.pk)) for p in page], "query": query})
+    snapshot = Snapshot.objects.order_by("-pk").first()
+    source = {u["source_id"]: u for u in snapshot.users} if snapshot else {}
+    naming = Configuration.current().naming
+    rows = [(p, bindings.get(p.pk), source.get(p.source_id), candidate(source[p.source_id], naming) if p.source_id in source else "") for p in page]
+    return render(request, "people.html", {"page": page, "rows": rows, "query": query, "snapshot": snapshot})
 
 
 @administrator
@@ -104,7 +124,15 @@ def person_action(request, person_id):
     get_object_or_404(Person, pk=person_id)
     action = request.POST.get("action")
     if action == "bind":
-        synchronization.bind_person(person_id, request.POST.get("username", ""), request.user.username, request.POST.get("reason", ""))
+        review = synchronization.binding_review(person_id, request.POST.get("username", ""))
+        review["reason"] = request.POST.get("reason", "")
+        return render(request, "binding_confirm.html", review)
+    elif action == "confirm_bind":
+        synchronization.bind_person(person_id, request.POST.get("confirmation", ""), request.user.username, request.POST.get("reason", ""))
+    elif action == "verify":
+        return render(request, "binding_status.html", synchronization.verify_binding(person_id))
+    elif action == "reactivate":
+        synchronization.reactivate_person(person_id, request.user.username, request.POST.get("reason", ""), request.POST.get("confirmed") == "on")
     elif action == "unbind":
         synchronization.unbind_person(person_id, request.user.username)
     elif action == "policy":
@@ -117,17 +145,31 @@ def person_action(request, person_id):
 
 @administrator
 def logs(request):
-    return render(request, "logs.html", {"page": Paginator(Audit.objects.order_by("-pk"), 50).get_page(request.GET.get("page"))})
+    items = Audit.objects.order_by("-pk")
+    for parameter, lookup in [("start", "created_at__date__gte"), ("end", "created_at__date__lte")]:
+        value = request.GET.get(parameter, "")
+        try:
+            date = parse_date(value) if value else None
+        except ValueError:
+            date = None
+        if value and date is None:
+            messages.error(request, "日期格式无效，请选择有效日期")
+            items = items.none()
+        elif date:
+            items = items.filter(**{lookup: date})
+    result = request.GET.get("result", "")
+    if result in {"success", "failed"}:
+        items = items.filter(success=result == "success")
+    query = request.GET.copy()
+    query.pop("page", None)
+    return render(request, "logs.html", {"page": Paginator(items, 50).get_page(request.GET.get("page")), "filters": request.GET, "filter_query": query.urlencode()})
 
 
 @administrator
 @require_POST
 def test_connections(request):
-    with closing(DingTalk()) as source:
-        source.collect(Configuration.current().root_department)
-    with closing(ActiveDirectory()) as ad:
-        ad.accounts()
-    messages.success(request, "钉钉通讯录与 LDAPS 读取成功")
+    synchronization.enqueue(kind="connections", actor=request.user.username)
+    messages.success(request, "连接测试已排队，结果将显示在同步页面")
     return redirect("dashboard")
 
 
@@ -142,7 +184,7 @@ def employee(request):
             item, _ = sspr.session_for(token)
             with closing(ActiveDirectory()) as ad:
                 target = ad.check_account(item.object_guid)
-                account = {"username": target["username"][:2] + "***", "guid": str(item.object_guid)}
+                account = {"username": target["username"][:2] + "***", "guid": str(item.object_guid), "name": item.display_name}
         except RuleError as exc:
             error = str(exc)
     return render(request, "sspr.html", {"enabled": config.sspr_enabled, "account": account, "error": error, "corp_id": settings.DINGTALK_CORP_ID, "app_key": settings.DINGTALK_APP_KEY, "minimum": config.minimum_password_length})
@@ -162,7 +204,7 @@ def employee_auth(request):
         return response
     except RuleError as exc:
         from .security import audit
-        audit("employee", "sspr_auth_failed", result=str(exc))
+        audit("employee", "sspr_auth_failed", result=str(exc), success=False)
         return JsonResponse({"error": str(exc)}, status=400)
 
 

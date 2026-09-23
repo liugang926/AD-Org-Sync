@@ -37,6 +37,7 @@ class Directory:
         self.resets = 0
         self.disabled = []
         self.fail_update = set()
+        self.ous = {"ou=people,dc=example,dc=com": str(uuid.uuid4())}
 
     def accounts(self):
         return copy.deepcopy(self.items)
@@ -55,20 +56,36 @@ class Directory:
         return self.by_guid(guid)
 
     def ensure_ou(self, dn, root):
-        return str(uuid.uuid4())
+        return self.ous.setdefault(dn.casefold(), str(uuid.uuid4()))
 
     def verify_ou(self, dn, guid=None):
-        return guid or str(uuid.uuid4())
+        current = self.ous.get(dn.casefold())
+        if not current or (guid and guid != current):
+            raise RuleError("OU 不存在或已变化")
+        return current
 
-    def create(self, user, username, ou, root):
+    def ou_identity(self, dn):
+        return self.ous.get(dn.casefold())
+
+    def create(self, user, username, ou, root, *, enabled=True, require_change=True):
         self.created += 1
         item = account(user["employee_id"], username)
+        item["enabled"] = enabled
+        item["require_change"] = require_change
         self.items.append(item)
         return copy.deepcopy(item)
 
-    def update(self, guid, attrs, ou, root):
+    def update(self, guid, attrs, ou, root, *, allow_disabled=False):
         if str(guid) in self.fail_update:
             raise RuleError("属性更新失败")
+        item = next(a for a in self.items if a["guid"] == str(guid))
+        item["attrs"].update(attrs)
+        item["dn"] = item["dn"].split(",", 1)[0] + "," + ou
+        return self.by_guid(guid)
+
+    def enable(self, guid, root):
+        item = next(a for a in self.items if a["guid"] == str(guid))
+        item["enabled"] = True
         return self.by_guid(guid)
 
     def disable(self, guid, root):

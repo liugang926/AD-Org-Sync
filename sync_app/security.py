@@ -5,8 +5,8 @@ from .domain import RuleError, fingerprint
 from .models import Audit, RateWindow
 
 
-def audit(actor, action, target="", result="成功"):
-    Audit.objects.create(actor=actor, action=action, target=target, result=result)
+def audit(actor, action, target="", result="成功", *, success=True):
+    Audit.objects.create(actor=actor, action=action, target=target, result=result, success=success)
 
 
 def rate_limit(key, limit=10):

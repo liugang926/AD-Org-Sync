@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% block content %}
+<h1>实时绑定核验</h1><section class="card"><h2>{{ person.name }}</h2>
+{% if account %}<p>{{ account.username }} · {{ account.guid }}</p><p>{{ account.dn }}</p>
+<p>状态：{% if account.enabled %}已启用{% else %}已禁用{% endif %}</p>
+{% if not account.enabled %}<form method="post" action="{% url 'person_action' person.pk %}">{% csrf_token %}<input type="hidden" name="action" value="reactivate">
+<label>恢复原因<input name="reason" required maxlength="150"></label><label><input type="checkbox" name="confirmed" required>确认恢复此账号</label><button>恢复启用</button></form>{% endif %}
+{% else %}<p class="notice">绑定的 AD 对象已不存在，请重新核对绑定。</p>{% endif %}
+<a href="{% url 'people' %}">返回人员</a></section>{% endblock %}

@@ -31,6 +31,8 @@ def verify(code, ip):
     config = Configuration.current()
     if not config.sspr_enabled:
         raise RuleError("员工密码重置尚未开启")
+    if not settings.DINGTALK_CORP_ID:
+        raise RuleError("请管理员先配置钉钉企业 ID，再使用员工身份验证")
     source = DingTalk()
     ad = None
     try:
@@ -38,7 +40,7 @@ def verify(code, ip):
         user, account = match_employee(source, ad, config, code=code)
         rate_limit("sspr-user:" + user["source_id"], 5)
         token = secrets.token_urlsafe(32)
-        EmployeeSession.objects.create(digest=fingerprint(token), source_id=user["source_id"], object_guid=account["guid"], config_fingerprint=config_signature(config), expires_at=timezone.now() + timedelta(minutes=5))
+        EmployeeSession.objects.create(digest=fingerprint(token), source_id=user["source_id"], display_name=user["name"], object_guid=account["guid"], config_fingerprint=config_signature(config), expires_at=timezone.now() + timedelta(minutes=5))
         audit(user["source_id"], "sspr_verified", account["guid"])
         return token, account
     finally:
@@ -80,7 +82,7 @@ def reset(token, password, confirmation, ip):
             audit(item.source_id, "sspr_reset", str(item.object_guid), result)
             return result
         except RuleError as exc:
-            audit(item.source_id, "sspr_reset", str(item.object_guid), str(exc))
+            audit(item.source_id, "sspr_reset", str(item.object_guid), str(exc), success=False)
             raise
         finally:
             source.close()

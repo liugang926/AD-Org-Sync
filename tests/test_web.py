@@ -33,3 +33,36 @@ def test_admin_builtin_login_cannot_bypass_rate_limit(client):
     for _ in range(10):
         assert client.post("/login", {"username": "unknown", "password": "incorrect"}).status_code == 200
     assert client.post("/admin/login/", {"username": "unknown", "password": "incorrect"}).status_code == 429
+
+
+@pytest.mark.django_db
+def test_binding_requires_review_before_mutation(admin_client, monkeypatch):
+    from sync_app import synchronization as sync
+    from sync_app.models import Person, Binding
+    from .fakes import Source, Directory
+    config = Configuration.current()
+    config.root_ou = "OU=People,DC=example,DC=com"
+    config.save()
+    ad = Directory()
+    monkeypatch.setattr(sync, "DingTalk", Source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    response = admin_client.post(f"/people/{person.pk}", {"action": "bind", "username": "testuser", "reason": "核对工号"})
+    assert response.status_code == 200
+    assert not Binding.objects.exists()
+    confirmation = response.context["confirmation"]
+    response = admin_client.post(f"/people/{person.pk}", {"action": "confirm_bind", "confirmation": confirmation, "reason": "核对工号"})
+    assert response.status_code == 302
+    assert Binding.objects.get().username == "testuser"
+
+
+@pytest.mark.django_db
+def test_audit_filters_and_invalid_date(admin_client):
+    from sync_app.models import Audit
+    Audit.objects.create(actor="admin", action="sample_ok", success=True)
+    Audit.objects.create(actor="admin", action="sample_failed", success=False)
+    response = admin_client.get("/logs?result=failed")
+    assert [entry.action for entry in response.context["page"]] == ["sample_failed"]
+    response = admin_client.get("/logs?start=2026-99-99")
+    assert response.status_code == 200
+    assert list(response.context["page"]) == []

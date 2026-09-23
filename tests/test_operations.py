@@ -1,5 +1,9 @@
 import io
 import sqlite3
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from django.core.management import call_command
 from django.db import connection
@@ -60,3 +64,58 @@ def test_no_legacy_or_cache_runtime():
     assert compose["services"]["web"]["image"] == compose["services"]["worker"]["image"]
     assert not list((root / "sync_app/web").glob("*.py"))
     assert not list((root / "sync_app/ui").glob("*.py"))
+
+
+def test_application_backup_restore_preserves_config_and_requires_ad_recheck(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    live, restored = tmp_path / "live", tmp_path / "restored"
+    env = os.environ.copy()
+    env.update(AD_ORG_SYNC_DATA_DIR=str(live), DJANGO_SETTINGS_MODULE="sync_app.settings", LDAP_BASE_DN="DC=example,DC=com")
+    def run(code, environment):
+        result = subprocess.run([sys.executable, "-c", code], cwd=root, env=environment, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+    run('''
+import django
+django.setup()
+from django.core.management import call_command
+from sync_app.models import Configuration, Person, Binding
+call_command('migrate', verbosity=0, interactive=False)
+config=Configuration.current()
+config.root_ou='OU=People,DC=example,DC=com'
+config.attributes=['displayName']
+config.save()
+person=Person.objects.create(source_id='u1',name='Original employee')
+Binding.objects.create(person=person,object_guid='12345678-1234-1234-1234-123456789abc',username='testuser',manual=True)
+call_command('db_backup')
+config.attributes=[]
+config.save()
+Binding.objects.all().delete()
+''', env)
+    backup = next((live / "backups").glob("*.sqlite3"))
+    restored.mkdir()
+    shutil.copy2(backup, restored / "django.sqlite3")
+    env["AD_ORG_SYNC_DATA_DIR"] = str(restored)
+    output = run('''
+import django
+django.setup()
+from django.core.management import call_command
+from sync_app.models import Configuration, Binding, Job
+from sync_app.synchronization import plan
+from tests.fakes import Source, Directory, account
+call_command('db_check')
+assert Configuration.current().attributes == ['displayName']
+binding=Binding.objects.get()
+assert binding.manual and binding.username == 'testuser'
+# A restored binding remains unusable if the directory object has been replaced.
+ad=Directory([account()])
+job=Job.objects.create()
+assert plan(job,Source(),ad)['operations'][0]['action'] == 'conflict'
+assert ad.created == 0
+# Only rechecking the same directory identity produces an update plan.
+ad.items=[account(guid=str(binding.object_guid))]
+assert plan(Job.objects.create(),Source(),ad)['operations'][0]['action'] == 'update'
+assert ad.created == 0
+print('restored_config_and_binding_verified')
+''', env)
+    assert "restored_config_and_binding_verified" in output

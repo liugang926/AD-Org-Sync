@@ -24,7 +24,7 @@ def protected(account: dict) -> bool:
     return bool(account.get("protected")) or account.get("username", "").casefold() in {"admin", "administrator", "guest", "krbtgt", "defaultaccount", "wdagutilityaccount"}
 
 
-def resolve(user: dict, binding: dict | None, accounts: list[dict], occupied: set[str], naming: str, employee_counts: Counter, name_counts: Counter) -> tuple[str, dict | None, str]:
+def resolve(user: dict, binding: dict | None, accounts: list[dict], occupied: set[str], naming: str, employee_counts: Counter, name_counts: Counter, match_field: str = "employee_id") -> tuple[str, dict | None, str]:
     if binding:
         matches = [a for a in accounts if a["guid"] == binding["guid"]]
         if not binding["enabled"]:
@@ -35,17 +35,25 @@ def resolve(user: dict, binding: dict | None, accounts: list[dict], occupied: se
         if protected(target) or not target["enabled"]:
             return "conflict", target, "目标受保护或已禁用，需人工处理"
         return "update", target, "使用已有绑定"
-    employee = user.get("employee_id", "").casefold()
-    if not employee or employee_counts[employee] != 1:
+    identifier = user.get(match_field, "").strip().casefold()
+    if not identifier or employee_counts[identifier] != 1:
+        return "conflict", None, "匹配字段缺失或重复"
+    employee = user.get("employee_id", "").strip().casefold()
+    if not employee:
         return "conflict", None, "工号缺失或重复"
-    matches = [a for a in accounts if a.get("employee_id", "").casefold() == employee]
+    target_field = "username" if match_field == "source_id" else match_field
+    matches = [a for a in accounts if a.get(target_field, "").strip().casefold() == identifier]
     if len(matches) > 1:
-        return "conflict", None, "多个 AD 账号命中同一工号"
+        return "conflict", None, "多个 AD 账号命中同一标识"
     if matches:
         target = matches[0]
         if target["guid"] in occupied or protected(target) or not target["enabled"]:
             return "conflict", target, "AD 账号已占用、受保护或已禁用"
+        if match_field != "employee_id":
+            return "conflict", target, "建议关联此账号，请在人员页面人工确认"
         return "bind", target, "唯一工号匹配"
+    if any(a.get("employee_id", "").strip().casefold() == employee for a in accounts):
+        return "conflict", None, "工号已存在于其他 AD 账号，请人工核验"
     username = candidate(user, naming)
     if not username or name_counts[username.casefold()] != 1 or any(a["username"].casefold() == username.casefold() for a in accounts) or protected({"username": username}):
         return "conflict", None, "新账号命名为空、重复、被占用或受保护"

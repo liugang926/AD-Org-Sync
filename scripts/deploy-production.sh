@@ -5,6 +5,7 @@ readonly ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly ENV_FILE="${PRODUCTION_ENV_FILE:-/opt/ad-org-sync/shared/.env}"
 readonly STATE_DIR="${PRODUCTION_STATE_DIR:-/opt/ad-org-sync/shared}"
 readonly LAST_SUCCESSFUL_FILE="${STATE_DIR}/last_successful_image_tag"
+readonly DJANGO_SUCCESSFUL_FILE="${STATE_DIR}/last_successful_django_image_tag"
 readonly COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-ad_org_sync}"
 readonly IMAGE_TAG="${AD_ORG_SYNC_IMAGE_TAG:-${GITHUB_SHA:-}}"
 [[ -r "${ENV_FILE}" ]] || { echo "Missing protected environment file" >&2; exit 1; }
@@ -15,8 +16,10 @@ cd "${ROOT_DIR}"
 export AD_ORG_SYNC_IMAGE_TAG="${IMAGE_TAG}" COMPOSE_PROJECT_NAME
 compose=(docker compose --project-name "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}")
 previous_tag=""
+previous_django_tag=""
 deployment_started=0
 if [[ -r "${LAST_SUCCESSFUL_FILE}" ]]; then previous_tag="$(tr -d '\r\n' < "${LAST_SUCCESSFUL_FILE}")"; fi
+if [[ -r "${DJANGO_SUCCESSFUL_FILE}" ]]; then previous_django_tag="$(tr -d '\r\n' < "${DJANGO_SUCCESSFUL_FILE}")"; fi
 
 wait_for_readiness() {
   local port
@@ -32,7 +35,7 @@ wait_for_readiness() {
 rollback() {
   local code=$?
   trap - ERR
-  if [[ "${deployment_started}" == "1" && -n "${previous_tag}" && "${previous_tag}" != "${IMAGE_TAG}" ]]; then
+  if [[ "${deployment_started}" == "1" && "${previous_tag}" =~ ^[0-9a-f]{40}$ && "${previous_tag}" == "${previous_django_tag}" && "${previous_tag}" != "${IMAGE_TAG}" ]]; then
     echo "Deployment failed; restoring previous application revision." >&2
     export AD_ORG_SYNC_IMAGE_TAG="${previous_tag}"
     if [[ -r "${STATE_DIR}/last_successful_compose.yml" ]]; then
@@ -44,6 +47,9 @@ rollback() {
     else
       echo "No previous Compose contract saved; manual recovery required." >&2
     fi
+  elif [[ "${deployment_started}" == "1" ]]; then
+    echo "No verified Django rollback revision; retired legacy service will remain stopped." >&2
+    "${compose[@]}" stop web worker nginx || true
   fi
   exit "${code}"
 }
@@ -64,6 +70,8 @@ cp docker-compose.yml "${STATE_DIR}/last_successful_compose.yml.tmp"
 mv "${STATE_DIR}/last_successful_compose.yml.tmp" "${STATE_DIR}/last_successful_compose.yml"
 printf '%s\n' "${IMAGE_TAG}" > "${LAST_SUCCESSFUL_FILE}.tmp"
 mv "${LAST_SUCCESSFUL_FILE}.tmp" "${LAST_SUCCESSFUL_FILE}"
+printf '%s\n' "${IMAGE_TAG}" > "${DJANGO_SUCCESSFUL_FILE}.tmp"
+mv "${DJANGO_SUCCESSFUL_FILE}.tmp" "${DJANGO_SUCCESSFUL_FILE}"
 trap - ERR
 echo "Deployment and database checks succeeded for ${IMAGE_TAG}."
 "${compose[@]}" ps
