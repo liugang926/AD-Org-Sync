@@ -291,7 +291,9 @@ jobs:
               assert target.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
           print("online_backup_integrity=ok")
           PY
-          docker cp "ad_org_sync-web-1:$container_backup" "$restore_dir/django.sqlite3"
+          # Read through the container mount namespace; docker cp cannot see its /tmp tmpfs.
+          docker exec ad_org_sync-web-1 test -s "$container_backup"
+          docker exec ad_org_sync-web-1 cat "$container_backup" > "$restore_dir/django.sqlite3"
           chmod 600 "$restore_dir/django.sqlite3"
           docker exec ad_org_sync-web-1 rm -f -- "$container_backup"
           run_copy=(docker run --rm --network none --read-only --user "$(id -u):$(id -g)" --tmpfs /tmp -v "$restore_dir:/data:rw" -e AD_ORG_SYNC_DATA_DIR=/data -e DJANGO_SECRET_KEY=isolated-recovery-check "ad-org-sync-web:$expected" python -m sync_app.cli)
