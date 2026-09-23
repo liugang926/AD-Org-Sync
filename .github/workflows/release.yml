@@ -407,3 +407,27 @@ jobs:
           test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
           test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
           docker exec -i -e TEST_RUN_ID="$GITHUB_RUN_ID" ad_org_sync-web-1 python - < .github/diagnostics/ad_write_drill.py
+  sync-write-drill:
+    if: ${{ true }}
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run isolated business sync against dedicated test AD objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=9f04c5f991573a6496a08ec881e2ebc571cd6367
+          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
+          test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
+          docker exec ad_org_sync-web-1 python -m sync_app.cli shell -c 'from sync_app.models import Configuration; c=Configuration.objects.get(pk=1); assert c.root_ou.casefold()=="OU=ADOrgSync-SyncTest-8fa5fcdf,DC=tianjitest,DC=com".casefold() and not c.schedule_enabled and not c.sspr_enabled; print("production_test_root_and_disabled_flags_verified=true")'
+          docker exec -i -e TEST_RUN_ID="$GITHUB_RUN_ID" -e AD_ORG_SYNC_DATA_DIR="/tmp/ad-org-sync-sync-drill-$GITHUB_RUN_ID" ad_org_sync-web-1 python - < .github/diagnostics/sync_write_drill.py
+      - name: Confirm live database and readiness are unchanged
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker exec -e TEST_RUN_ID="$GITHUB_RUN_ID" ad_org_sync-web-1 python -m sync_app.cli shell -c 'import os; from sync_app.models import Binding, Configuration, Person; run_id=os.environ["TEST_RUN_ID"]; ids=["codex-source-a-"+run_id,"codex-source-b-"+run_id]; assert not Person.objects.filter(source_id__in=ids).exists(); assert not Binding.objects.filter(person__source_id__in=ids).exists(); c=Configuration.objects.get(pk=1); assert not c.schedule_enabled and not c.sspr_enabled; print("live_business_database_unchanged=true")'
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
+          echo 'localhost_readyz=200'
