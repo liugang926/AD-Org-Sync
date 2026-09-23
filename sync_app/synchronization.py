@@ -485,7 +485,11 @@ def binding_review(person_id, username):
         if Binding.objects.filter(object_guid=target["guid"]).exclude(person=person).exists():
             raise RuleError("目标已绑定其他人员")
         old = Binding.objects.filter(person=person).first()
-        payload = {"person": person.pk, "username": target["username"], "guid": target["guid"], "revision": str(old.revision) if old else ""}
+        payload = {
+            "person": person.pk, "username": target["username"], "guid": target["guid"],
+            "employee_id": target["employee_id"], "dn": target["dn"], "enabled": target["enabled"],
+            "revision": str(old.revision) if old else "",
+        }
         return {"person": person, "old": old, "target": target, "confirmation": signing.dumps(payload, salt="binding-review")}
 
 
@@ -510,16 +514,24 @@ def bind_person(person_id, confirmation, actor, reason):
         account = matches[0]
         if account["guid"] != reviewed["guid"]:
             raise RuleError("AD 目标已变化，请重新验证")
-        if not under(account["dn"], config.root_ou):
-            raise RuleError("目标不在同步管理范围内")
-        with lock("account:" + account["guid"]), transaction.atomic():
-            old = Binding.objects.filter(person=person).first()
-            if (str(old.revision) if old else "") != reviewed["revision"]:
-                raise RuleError("当前绑定已变化，请重新确认")
-            if Binding.objects.filter(object_guid=account["guid"]).exclude(person=person).exists():
-                raise RuleError("目标已绑定其他人员")
-            Binding.objects.update_or_create(person=person, defaults={"object_guid": account["guid"], "username": account["username"], "manual": True, "enabled": account["enabled"], "revision": uuid.uuid4()})
-            audit(actor, "manual_bind", person.source_id, f"{str(old.object_guid) if old else '未绑定'} → {account['guid']}；{reason[:150]}")
+        with lock("account:" + account["guid"]):
+            current = ad.by_guid(account["guid"])
+            if (current["guid"] != reviewed["guid"]
+                    or current["username"] != reviewed["username"]
+                    or current["employee_id"] != reviewed.get("employee_id")
+                    or current["dn"].casefold() != str(reviewed.get("dn", "")).casefold()
+                    or current["enabled"] is not reviewed.get("enabled")):
+                raise RuleError("AD 目标状态已变化，请重新验证")
+            if protected(current) or not under(current["dn"], config.root_ou):
+                raise RuleError("目标受保护或不在同步管理范围内")
+            with transaction.atomic():
+                old = Binding.objects.filter(person=person).first()
+                if (str(old.revision) if old else "") != reviewed["revision"]:
+                    raise RuleError("当前绑定已变化，请重新确认")
+                if Binding.objects.filter(object_guid=current["guid"]).exclude(person=person).exists():
+                    raise RuleError("目标已绑定其他人员")
+                Binding.objects.update_or_create(person=person, defaults={"object_guid": current["guid"], "username": current["username"], "manual": True, "enabled": current["enabled"], "revision": uuid.uuid4()})
+                audit(actor, "manual_bind", person.source_id, f"{str(old.object_guid) if old else '未绑定'} → {current['guid']}；{reason[:150]}")
 
 
 def reactivate_person(person_id, actor, reason, confirmed):

@@ -177,6 +177,69 @@ def test_binding_confirmation_rejects_replaced_target_and_replay(configured, mon
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("change", ["employee_id", "enabled", "dn"])
+def test_manual_binding_requires_new_review_when_ad_target_state_changes(configured, monkeypatch, change):
+    from sync_app import synchronization as sync
+
+    source, ad = Source(), Directory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    review = sync.binding_review(person.pk, "testuser")
+    if change == "employee_id":
+        ad.items[0]["employee_id"] = "another-person"
+    elif change == "enabled":
+        ad.items[0]["enabled"] = False
+    else:
+        ad.items[0]["dn"] = "CN=testuser,OU=Other,OU=People,DC=example,DC=com"
+
+    with pytest.raises(RuleError, match="目标状态已变化"):
+        sync.bind_person(person.pk, review["confirmation"], "admin", "确认身份")
+    assert not Binding.objects.exists()
+
+
+@pytest.mark.django_db
+def test_manual_binding_rechecks_protection_under_account_lock(configured, monkeypatch):
+    from sync_app import synchronization as sync
+
+    source, ad = Source(), Directory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    review = sync.binding_review(person.pk, "testuser")
+    original_by_guid = ad.by_guid
+
+    def protected_after_lookup(guid):
+        target = original_by_guid(guid)
+        target["protected"] = True
+        return target
+
+    monkeypatch.setattr(ad, "by_guid", protected_after_lookup)
+    with pytest.raises(RuleError, match="目标受保护"):
+        sync.bind_person(person.pk, review["confirmation"], "admin", "确认身份")
+    assert not Binding.objects.exists()
+
+
+@pytest.mark.django_db
+def test_old_binding_confirmation_without_ad_state_requires_new_review(configured, monkeypatch):
+    from django.core import signing
+    from sync_app import synchronization as sync
+
+    source, ad = Source(), Directory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    legacy_confirmation = signing.dumps({
+        "person": person.pk, "username": ad.items[0]["username"],
+        "guid": ad.items[0]["guid"], "revision": "",
+    }, salt="binding-review")
+
+    with pytest.raises(RuleError, match="目标状态已变化"):
+        sync.bind_person(person.pk, legacy_confirmation, "admin", "确认身份")
+    assert not Binding.objects.exists()
+
+
+@pytest.mark.django_db
 def test_manual_binding_to_disabled_ad_account_waits_for_explicit_reactivation(configured, monkeypatch):
     from sync_app import synchronization as sync
 
