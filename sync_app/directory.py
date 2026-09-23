@@ -1,9 +1,10 @@
-"""Bounded DingTalk reads and certificate-validated LDAPS operations."""
+"""Bounded DingTalk reads and encrypted LDAPS operations."""
 import secrets
 import ssl
 import string
 import uuid
 from collections import deque
+from dataclasses import dataclass
 
 import requests
 from django.conf import settings
@@ -13,6 +14,12 @@ from ldap3.utils.dn import escape_rdn, parse_dn
 
 from .domain import RuleError, protected
 from .models import Configuration
+
+
+@dataclass(frozen=True)
+class PasswordResetOutcome:
+    message: str
+    complete: bool
 
 
 def under(dn, root):
@@ -291,12 +298,16 @@ class ActiveDirectory:
     def reset_password(self, guid, password, unlock=False):
         account = self.check_account(guid)
         try:
-            if not self.conn.extend.microsoft.modify_password(account["dn"], password):
-                raise RuleError("AD 拒绝密码，请检查复杂度和密码历史要求")
-            if unlock and not self.conn.modify(account["dn"], {"lockoutTime": [(MODIFY_REPLACE, [0])]}):
-                return "密码已重置，但解锁失败，请联系管理员"
-            return "密码已成功重置"
-        except RuleError:
-            raise
+            changed = self.conn.extend.microsoft.modify_password(account["dn"], password)
         except Exception:
             raise RuleError("目录响应中断，密码修改结果不明；请先验证或联系管理员") from None
+        if not changed:
+            raise RuleError("AD 拒绝密码，请检查复杂度和密码历史要求")
+        if unlock:
+            try:
+                unlocked = self.conn.modify(account["dn"], {"lockoutTime": [(MODIFY_REPLACE, [0])]})
+            except Exception:
+                unlocked = False
+            if not unlocked:
+                return PasswordResetOutcome("密码已重置，但解锁失败，请联系管理员", False)
+        return PasswordResetOutcome("密码已成功重置", True)

@@ -2,6 +2,7 @@ import pytest
 from django.utils import timezone
 from datetime import timedelta
 from sync_app import sspr
+from sync_app.directory import PasswordResetOutcome
 from sync_app.domain import RuleError
 from sync_app.models import Configuration, Binding, Job, EmployeeSession, Audit
 from .fakes import Source, Directory, account
@@ -30,6 +31,27 @@ def test_unsynced_employee_can_reset_and_cannot_replay(setup_sspr):
         sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
     assert ad.resets == 1
     assert "Example-password" not in str(list(Audit.objects.values()))
+
+
+@pytest.mark.django_db
+def test_unlock_failure_is_audited_as_partial_and_session_is_consumed(setup_sspr, monkeypatch):
+    _, ad, config = setup_sspr
+    config.unlock_after_reset = True
+    config.save()
+    token, _ = sspr.verify("valid", "ip")
+
+    def partial_reset(guid, password, unlock=False):
+        assert unlock is True
+        ad.resets += 1
+        return PasswordResetOutcome("密码已重置，但解锁失败，请联系管理员", False)
+
+    monkeypatch.setattr(ad, "reset_password", partial_reset)
+    result = sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+    assert "密码已重置，但解锁失败" in result
+    assert Audit.objects.get(action="sspr_reset").success is False
+    with pytest.raises(RuleError):
+        sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+    assert ad.resets == 1
 
 
 @pytest.mark.django_db

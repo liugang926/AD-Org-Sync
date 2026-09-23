@@ -1,6 +1,7 @@
 import copy
 import uuid
 from sync_app.domain import RuleError
+from sync_app.directory import PasswordResetOutcome
 
 
 def user(uid="u1", employee="1001"):
@@ -94,7 +95,7 @@ class Directory:
 
     def reset_password(self, guid, password, unlock=False):
         self.resets += 1
-        return "密码已成功重置"
+        return PasswordResetOutcome("密码已成功重置", True)
 
     def close(self):
         pass

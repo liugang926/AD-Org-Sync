@@ -44,6 +44,32 @@ def test_ldap_failures_never_return_partial_results():
         directory.search("(objectClass=user)")
 
 
+@pytest.mark.parametrize("unlock_result", [False, RuntimeError("connection interrupted")])
+def test_password_reset_reports_unlock_failure_after_password_change(unlock_result):
+    directory = object.__new__(ActiveDirectory)
+    directory.check_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
+    directory.conn = Mock()
+    directory.conn.extend.microsoft.modify_password.return_value = True
+    if isinstance(unlock_result, Exception):
+        directory.conn.modify.side_effect = unlock_result
+    else:
+        directory.conn.modify.return_value = unlock_result
+    outcome = directory.reset_password("test-guid", "test-password", unlock=True)
+    assert outcome.complete is False
+    assert "密码已重置，但解锁失败" in outcome.message
+    directory.conn.extend.microsoft.modify_password.assert_called_once()
+
+
+def test_interrupted_password_change_remains_unknown():
+    directory = object.__new__(ActiveDirectory)
+    directory.check_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
+    directory.conn = Mock()
+    directory.conn.extend.microsoft.modify_password.side_effect = RuntimeError("connection interrupted")
+    with pytest.raises(RuleError, match="结果不明"):
+        directory.reset_password("test-guid", "test-password", unlock=True)
+    directory.conn.modify.assert_not_called()
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize("verify", [True, False])
 def test_ldaps_certificate_policy_preserves_encryption(monkeypatch, settings, verify):
