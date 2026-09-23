@@ -35,6 +35,8 @@ def administrator(view):
             return view(request, *args, **kwargs)
         except RuleError as exc:
             messages.error(request, str(exc))
+            if request.resolver_match and request.resolver_match.url_name == "person_action":
+                return redirect("people")
             return redirect(request.path if request.method == "GET" else "/dashboard")
     return wrapped
 
@@ -99,7 +101,18 @@ def job_detail(request, job_id):
         synchronization.queue_apply(job.pk, request.user.username, request.POST.get("confirmed") == "on")
         messages.success(request, "执行任务已排队")
         return redirect("job", job_id=job.pk)
-    return render(request, "job.html", {"job": job, "operations": job.operation_set.all()})
+    planned_operations = job.plan.get("operations", [])
+    conflict_count = sum(item.get("action") == "conflict" for item in planned_operations)
+    show_conflicts_only = request.GET.get("only") == "conflicts"
+    if show_conflicts_only:
+        planned_operations = [item for item in planned_operations if item.get("action") == "conflict"]
+    return render(request, "job.html", {
+        "job": job,
+        "operations": job.operation_set.all(),
+        "planned_operations": planned_operations,
+        "conflict_count": conflict_count,
+        "show_conflicts_only": show_conflicts_only,
+    })
 
 
 @administrator
@@ -113,8 +126,18 @@ def people(request):
     bindings = {b.person_id: b for b in Binding.objects.filter(person__in=page.object_list)}
     snapshot = Snapshot.objects.order_by("-pk").first()
     source = {u["source_id"]: u for u in snapshot.users} if snapshot else {}
+    department_names = {str(d["id"]): d["name"] for d in snapshot.departments} if snapshot else {}
     naming = Configuration.current().naming
-    rows = [(p, bindings.get(p.pk), source.get(p.source_id), candidate(source[p.source_id], naming) if p.source_id in source else "") for p in page]
+    rows = []
+    for person in page:
+        user = source.get(person.source_id)
+        department_ids = list(dict.fromkeys(
+            str(value) for value in user.get("departments", []) if str(value) in department_names
+        )) if user else []
+        options = [{"id": department_id, "name": department_names.get(department_id, department_id)} for department_id in department_ids]
+        if person.primary_department and person.primary_department not in department_ids:
+            options.insert(0, {"id": person.primary_department, "name": "已保存（当前不在来源部门）"})
+        rows.append((person, bindings.get(person.pk), user, candidate(user, naming) if user else "", options))
     return render(request, "people.html", {"page": page, "rows": rows, "query": query, "snapshot": snapshot})
 
 
