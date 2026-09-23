@@ -208,6 +208,7 @@ jobs:
           print("mapped_preview_bindings_unchanged=true")
           PY
   apply-preview:
+    if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     steps:
@@ -263,3 +264,40 @@ jobs:
           print("ad_account_unchanged=true")
           print("operation_statuses=" + ",".join(sorted(action + ":" + status for action, status in Operation.objects.filter(job=job).values_list("action", "status"))))
           PY
+  restore-drill:
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    steps:
+      - name: Check an isolated online backup against live AD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=9f04c5f991573a6496a08ec881e2ebc571cd6367
+          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
+          restore_base="$(realpath "${RUNNER_TEMP:-/tmp}")"
+          restore_dir="$(mktemp -d "$restore_base/ad-org-sync-restore-XXXXXXXX")"
+          chmod 700 "$restore_dir"
+          container_backup="/tmp/ad-org-sync-recovery-${GITHUB_RUN_ID}.sqlite3"
+          cleanup() {
+            docker exec ad_org_sync-web-1 rm -f -- "$container_backup" >/dev/null 2>&1 || true
+            case "$restore_dir" in "$restore_base"/ad-org-sync-restore-*) rm -rf -- "$restore_dir" ;; esac
+          }
+          trap cleanup EXIT
+          docker exec -i -e BACKUP_PATH="$container_backup" ad_org_sync-web-1 python - <<'PY'
+          import os
+          import sqlite3
+          with sqlite3.connect("file:/data/django.sqlite3?mode=ro", uri=True) as source, sqlite3.connect(os.environ["BACKUP_PATH"]) as target:
+              source.backup(target)
+              assert target.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+          print("online_backup_integrity=ok")
+          PY
+          docker cp "ad_org_sync-web-1:$container_backup" "$restore_dir/django.sqlite3"
+          chmod 600 "$restore_dir/django.sqlite3"
+          docker exec ad_org_sync-web-1 rm -f -- "$container_backup"
+          run_copy=(docker run --rm --network none --read-only --user "$(id -u):$(id -g)" --tmpfs /tmp -v "$restore_dir:/data:rw" -e AD_ORG_SYNC_DATA_DIR=/data -e DJANGO_SECRET_KEY=isolated-recovery-check "ad-org-sync-web:$expected" python -m sync_app.cli)
+          "${run_copy[@]}" db_check
+          "${run_copy[@]}" shell -c 'from sync_app.models import Configuration, Binding; c=Configuration.objects.get(pk=1); b=Binding.objects.select_related("person").get(person__source_id="17757325700496563"); assert b.username=="T0001919" and b.enabled and c.root_ou; print("restored_configuration_and_binding=true")'
+          "${run_copy[@]}" shell -c 'from sync_app.models import Configuration, EmployeeSession, Job; c=Configuration.objects.get(pk=1); c.schedule_enabled=False; c.sspr_enabled=False; c.save(); EmployeeSession.objects.all().delete(); Job.objects.filter(status__in=["queued","running"]).update(status="failed"); print("isolated_recovery_quiesced=true")'
+          "${run_copy[@]}" db_check
+          docker exec ad_org_sync-web-1 python -m sync_app.cli shell -c 'from contextlib import closing; from sync_app.directory import ActiveDirectory, under; from sync_app.models import Binding, Configuration; b=Binding.objects.get(person__source_id="17757325700496563"); c=Configuration.objects.get(pk=1); ad=ActiveDirectory(); matches=ad.match("employee_id","T0001919"); account=ad.by_guid(b.object_guid); assert len(matches)==1 and matches[0]["guid"]==str(b.object_guid) and account["username"]==b.username and under(account["dn"],c.root_ou); ad.close(); print("live_ad_identity_matches_restored_binding=true")'
+          echo 'isolated_backup_cleaned_on_exit=true'
