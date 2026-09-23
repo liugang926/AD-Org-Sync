@@ -4,6 +4,54 @@ on:
 permissions:
   contents: read
 jobs:
+  pilot-identity-preflight:
+    if: ${{ true }}
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    timeout-minutes: 6
+    steps:
+      - name: Resolve one dedicated employee and matching AD account read-only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=a480636d3dc40e4a9e98ef859831320b50ed7140
+          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
+          test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
+          docker exec -i ad_org_sync-web-1 python - <<'PY'
+          import hashlib
+          import os
+          from contextlib import closing
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          from sync_app.directory import ActiveDirectory, DingTalk
+          from sync_app.domain import protected
+          from sync_app.models import Binding, Configuration
+
+          job_number = "T0001919"
+          config = Configuration.current()
+          assert not config.schedule_enabled and not config.sspr_enabled
+          print("sspr_enabled=false schedule_enabled=false")
+          print("sspr_match_field=" + config.sspr_match)
+          with closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
+              users, _ = source.collect(config.root_department)
+              candidates = [user for user in users if user["employee_id"] == job_number]
+              print("job_number_matches=" + str(len(candidates)))
+              assert len(candidates) == 1
+              person = source.user(candidates[0]["source_id"])
+              assert person["employee_id"] == job_number
+              print("dingtalk_userid_fingerprint=" + hashlib.sha256(person["source_id"].encode()).hexdigest()[:12])
+              print("local_binding_exists=" + str(Binding.objects.filter(person__source_id=person["source_id"]).exists()).lower())
+              assert not Binding.objects.filter(person__source_id=person["source_id"]).exists()
+              value = person.get(config.sspr_match, "")
+              assert value
+              accounts = ad.match(config.sspr_match, value)
+              print("ad_match_count=" + str(len(accounts)))
+              assert len(accounts) == 1
+              eligible = accounts[0]["enabled"] and not protected(accounts[0])
+              print("ad_eligible=" + str(eligible).lower())
+              assert eligible
+          PY
   full-preview-61:
     if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
