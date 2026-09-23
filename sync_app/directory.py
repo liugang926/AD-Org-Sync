@@ -164,7 +164,7 @@ class DingTalk:
 
 
 class ActiveDirectory:
-    ATTRS = ["objectGUID", "sAMAccountName", "employeeID", "mail", "displayName", "title", "department", "telephoneNumber", "userAccountControl", "adminCount", "objectSid", "lockoutTime", "isCriticalSystemObject"]
+    ATTRS = ["objectGUID", "sAMAccountName", "employeeID", "mail", "displayName", "title", "department", "telephoneNumber", "userAccountControl", "adminCount", "objectSid", "lockoutTime", "isCriticalSystemObject", "uSNChanged"]
     MATCH = {"employee_id": "employeeID", "email": "mail", "source_id": "sAMAccountName"}
 
     def __init__(self):
@@ -212,7 +212,9 @@ class ActiveDirectory:
         sid = str(value("objectSid"))
         critical = str(value("isCriticalSystemObject")).lower() == "true"
         explicit_protection = str(value("sAMAccountName")).casefold() in protected_names
+        ad_revision = str(value("uSNChanged") or "").strip()
         return {"guid": str(uuid.UUID(str(value("objectGUID")).strip("{}"))), "dn": entry["dn"],
+                "ad_revision": ad_revision,
                 "username": str(value("sAMAccountName")).strip(), "employee_id": str(value("employeeID")).strip(),
                 "email": str(value("mail")).strip(), "enabled": not bool(uac & 2), "uac": uac,
                 "protected": critical or explicit_protection or int(value("adminCount", 0)) == 1 or sid.endswith(("-500", "-501", "-502")) or bool(uac & (2048 | 4096 | 8192)),

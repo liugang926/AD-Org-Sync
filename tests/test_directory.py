@@ -1,4 +1,5 @@
 import ssl
+import uuid
 from unittest.mock import Mock
 import pytest
 from sync_app.directory import DingTalk, ActiveDirectory
@@ -106,6 +107,20 @@ def test_ldap_match_escapes_untrusted_identity_values():
     assert "employeeID=" in query
     with pytest.raises(RuleError):
         directory.match("arbitraryLDAPAttribute", "x")
+
+
+def test_ad_account_fingerprint_includes_directory_change_revision():
+    assert "uSNChanged" in ActiveDirectory.ATTRS
+    guid = str(uuid.uuid4())
+    entry = {"dn": "CN=person,OU=People,DC=example,DC=com", "attributes": {
+        "objectGUID": guid, "sAMAccountName": "person", "employeeID": "1001",
+        "userAccountControl": 512, "uSNChanged": 42,
+    }}
+    account = ActiveDirectory.account(entry)
+    assert account["ad_revision"] == "42"
+    entry["attributes"]["uSNChanged"] = 43
+    from sync_app.domain import fingerprint
+    assert fingerprint(ActiveDirectory.account(entry)) != fingerprint(account)
 
 
 def test_ldap_failures_never_return_partial_results():

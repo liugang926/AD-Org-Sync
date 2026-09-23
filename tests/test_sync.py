@@ -312,6 +312,17 @@ def test_created_account_stays_disabled_until_attributes_finish(configured, enab
 
 
 @pytest.mark.django_db
+def test_ad_revision_change_invalidates_preview_before_write(configured):
+    source, ad = Source(), Directory()
+    job = Job.objects.create()
+    job.plan = plan(job, source, ad)
+    ad.items[0]["ad_revision"] = "2"  # e.g. password changed outside the app
+    with pytest.raises(RuleError, match="AD 状态已变化"):
+        apply(job, source, ad)
+    assert not Binding.objects.exists()
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("enable_failures", [1, 2])
 def test_enable_failure_resumes_initialized_account_without_recreating(configured, enable_failures):
     from sync_app.domain import fingerprint
@@ -371,6 +382,25 @@ def test_initialized_account_changed_after_enable_failure_requires_manual_recove
     first.plan = plan(first, source, ad)
     assert apply(first, source, ad) == "partial_failed"
     ad.items[0]["attrs"]["title"] = "外部修改"
+    retry = plan(Job.objects.create(), source, ad)["operations"][0]
+    assert retry["action"] == "conflict"
+    assert retry["target"]["guid"] == ad.items[0]["guid"]
+    assert not Binding.objects.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("ad_revision", ["2", "", "0"])
+def test_external_password_change_or_missing_revision_blocks_disabled_create_recovery(configured, ad_revision):
+    source, ad = Source(), Directory([])
+    def fail_update(*args, **kwargs):
+        raise RuleError("模拟属性更新失败")
+
+    ad.update = fail_update
+    first = Job.objects.create()
+    first.plan = plan(first, source, ad)
+    assert apply(first, source, ad) == "partial_failed"
+    assert ad.created == 1 and not ad.items[0]["enabled"]
+    ad.items[0]["ad_revision"] = ad_revision
     retry = plan(Job.objects.create(), source, ad)["operations"][0]
     assert retry["action"] == "conflict"
     assert retry["target"]["guid"] == ad.items[0]["guid"]
@@ -611,6 +641,28 @@ def test_enabled_unbound_account_changed_after_commit_failure_requires_manual_re
     assert evidence["enabled_fingerprint"]
     assert ad.created == 1 and ad.items[0]["enabled"]
     ad.items[0]["attrs"]["title"] = "外部修改"
+
+    retry = plan(Job.objects.create(), source, ad)["operations"][0]
+    assert retry["action"] == "conflict"
+    assert retry["target"]["guid"] == ad.items[0]["guid"]
+    assert not Binding.objects.exists()
+
+
+@pytest.mark.django_db
+def test_external_password_change_blocks_enabled_unbound_recovery(configured, monkeypatch):
+    from django.db import IntegrityError
+
+    source, ad = Source(), Directory([])
+    first = Job.objects.create()
+    first.plan = plan(first, source, ad)
+
+    def fail_commit(**kwargs):
+        raise IntegrityError("simulated binding commit failure")
+
+    monkeypatch.setattr(Binding.objects, "create", fail_commit)
+    assert apply(first, source, ad) == "partial_failed"
+    assert ad.items[0]["enabled"]
+    ad.items[0]["ad_revision"] = str(int(ad.items[0]["ad_revision"]) + 1)
 
     retry = plan(Job.objects.create(), source, ad)["operations"][0]
     assert retry["action"] == "conflict"

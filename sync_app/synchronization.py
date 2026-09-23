@@ -24,6 +24,11 @@ def binding_signature():
     return fingerprint([list(Binding.objects.order_by("pk").values()), list(Person.objects.order_by("pk").values()), list(DepartmentBinding.objects.order_by("pk").values())])
 
 
+def valid_ad_revision(account):
+    revision = str(account.get("ad_revision") or "")
+    return revision.isdecimal() and int(revision) > 0
+
+
 def collect(source, config):
     started_at = timezone.now()
     anchor = fingerprint([settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN])
@@ -175,7 +180,8 @@ def plan(job, source, ad):
             reason = "核验此前已创建的 AD 对象，补全未完成的同步绑定"
             if target["guid"] in occupied:
                 action, reason = "conflict", "此前创建的 AD 对象已绑定其他人员，请人工核验"
-            elif not (recovery.status == "failed" and evidence.get("enabled_fingerprint")
+            elif not (recovery.status == "failed" and valid_ad_revision(target)
+                      and evidence.get("enabled_fingerprint")
                       and fingerprint(target) == evidence["enabled_fingerprint"]
                       and evidence.get("created_config") == configuration_signature(config)
                       and target["username"] == evidence.get("username")
@@ -187,7 +193,7 @@ def plan(job, source, ad):
             employee_id = user.get("employee_id", "").strip().casefold()
             if target["guid"] in occupied:
                 reason = "此前创建的 AD 对象已绑定其他人员，请人工核验"
-            elif (recovery.status == "failed"
+            elif (recovery.status == "failed" and valid_ad_revision(target)
                   and fingerprint(target) in {evidence.get("created_fingerprint"), evidence.get("initialized_fingerprint")}
                   and evidence.get("created_config") == configuration_signature(config)
                   and target["username"] == evidence.get("username")
