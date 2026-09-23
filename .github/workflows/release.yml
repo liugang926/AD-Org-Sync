@@ -38,12 +38,19 @@ jobs:
           docker exec ad_org_sync-web-1 python -m sync_app.cli shell -c 'from sync_app.models import Configuration, Job; c=Configuration.objects.filter(pk=1).values("schedule_enabled","sspr_enabled").first(); assert c is not None; assert c["schedule_enabled"] is False; assert c["sspr_enabled"] is False; print("schedule_enabled=false sspr_enabled=false scheduler_jobs="+str(Job.objects.filter(actor="scheduler").count()))'
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
-          normal="$(docker logs --since 20m ad_org_sync-nginx-1 2>&1 | grep 'codex_ipdiag=e9d9afb-normal' | tail -n 1)"
-          spoof="$(docker logs --since 20m ad_org_sync-nginx-1 2>&1 | grep 'codex_ipdiag=e9d9afb-spoof' | tail -n 1)"
+          access_logs="$(docker logs --since 20m ad_org_sync-nginx-1 2>&1)"
+          normal="$(printf '%s\n' "$access_logs" | grep 'codex_ipdiag=e9d9afb-normal' | tail -n 1 || true)"
+          spoof="$(printf '%s\n' "$access_logs" | grep 'codex_ipdiag=e9d9afb-spoof' | tail -n 1 || true)"
           normal_ip="$(printf '%s\n' "$normal" | awk '{print $1}')"
           spoof_ip="$(printf '%s\n' "$spoof" | awk '{print $1}')"
+          echo "normal_probe_found=$(test -n "$normal_ip" && echo true || echo false)"
+          echo "spoof_probe_found=$(test -n "$spoof_ip" && echo true || echo false)"
+          echo "same_client_ip=$(test "$normal_ip" = "$spoof_ip" && echo true || echo false)"
+          echo "normal_is_gateway=$(test "$normal_ip" = 10.106.1.119 && echo true || echo false)"
+          echo "spoof_is_supplied_ip=$(test "$spoof_ip" = 203.0.113.55 && echo true || echo false)"
           test -n "$normal_ip"
+          test -n "$spoof_ip"
           test "$normal_ip" = "$spoof_ip"
           test "$normal_ip" != 10.106.1.119
-          test "$normal_ip" != 203.0.113.55
+          test "$spoof_ip" != 203.0.113.55
           echo 'gateway_client_ip_forwarding=true spoofed_header_ignored=true'
