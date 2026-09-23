@@ -1,0 +1,4 @@
+{% load static %}<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{% block title %}组织同步{% endblock %}</title><link rel="stylesheet" href="{% static 'app.css' %}"></head>
+<body><header><a class="brand" href="/dashboard">组织同步<span>钉钉 → Active Directory</span></a>{% if user.is_authenticated %}<nav aria-label="主导航"><a href="/dashboard">同步</a><a href="/people">人员与绑定</a><a href="/admin/sync_app/configuration/1/change/">设置</a><a href="/logs">日志</a><form action="/logout" method="post">{% csrf_token %}<button class="quiet">退出</button></form></nav>{% endif %}</header>
+<main>{% for message in messages %}<p class="notice" role="status">{{ message }}</p>{% endfor %}{% block content %}{% endblock %}</main><footer>单组织同步 · LDAPS 加密连接</footer></body></html>

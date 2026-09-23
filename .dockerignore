@@ -1,4 +1,9 @@
 .git
+.env
+.wheel-smoke
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 .venv
 __pycache__
 *.pyc

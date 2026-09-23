@@ -1,0 +1,2 @@
+# Host cron: enqueue due work, never execute directory writes in the web request.
+* * * * * cd /opt/ad-org-sync/current && docker compose --project-name ad_org_sync --env-file /opt/ad-org-sync/shared/.env exec -T web python -m sync_app.cli enqueue_sync --due

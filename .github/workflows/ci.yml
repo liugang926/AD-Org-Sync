@@ -5,6 +5,9 @@ on:
     branches: ["main", "master"]
   pull_request:
 
+env:
+  PIP_NO_CACHE_DIR: "1"
+
 jobs:
   quality:
     name: Quality / Python ${{ matrix.python-version }}
@@ -13,137 +16,75 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.12"]
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Python
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-
-      - name: Install quality dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[web,test]"
-
-      - name: Syntax and high-severity static analysis
+      - run: pip install -e ".[test]"
+      - name: Django, syntax and static checks
         run: |
           python -m compileall -q sync_app
-          python -m ruff check sync_app --select E9,F821,F841,B007,F541
-
-      - name: Incremental type boundary
-        run: |
-          python -m mypy sync_app/application sync_app/core/observability.py sync_app/core/slo.py sync_app/core/runtime_state_machine.py sync_app/core/fingerprints.py sync_app/core/value_coercion.py sync_app/services/config_resolution.py
-
-      - name: Fast architecture and contract tests
-        run: |
-          python -m pytest -q tests/test_fingerprints.py tests/test_observability.py tests/test_slo.py tests/test_runtime_state_machine.py tests/test_config_resolution.py tests/test_migration_integrity.py tests/test_backup_restore.py tests/test_provider_contracts.py tests/test_source_providers.py tests/test_target_providers.py tests/test_github_actions_contract.py
+          python -m ruff check sync_app tests --select E9,F821,F841,B007,F541
+          python -m mypy sync_app/domain.py
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+      - name: Business and deployment contracts
+        run: python -m pytest -q --ignore=tests/test_browser.py
 
   windows:
     needs: quality
     runs-on: windows-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Python
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-          cache: pip
-
-      - name: Install dependencies
+      - run: pip install -e ".[test]"
+      - name: Windows CLI and business regression
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Syntax check
-        run: |
-          python -m compileall -q sync_app
-
-      - name: Static analysis
-        run: |
-          python -m ruff check sync_app --select E9,F821,F841,B007,F541
-
-      - name: CLI smoke
-        run: |
-          python -m sync_app.cli version
-          python -m sync_app.cli --help
-
-      - name: Unit and integration tests
-        run: |
-          python -m pytest -q --ignore=tests/test_web_browser_regression.py
-
-      - name: Package smoke
-        run: |
-          python -m PyInstaller --noconfirm --clean AD-Org-Sync.spec
-          if (!(Test-Path "dist\\AD-Org-Sync.exe")) { exit 1 }
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ad-org-sync-windows
-          path: |
-            dist/AD-Org-Sync.exe
-            config.example.ini
+          python -m sync_app.cli --version
+          python manage.py check
+          python -m pytest -q --ignore=tests/test_browser.py
 
   container:
     needs: quality
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
+      - uses: actions/checkout@v7
       - name: Build production container
-        run: docker build --tag ad-org-sync:ci .
+        run: docker build --pull --tag ad-org-sync:ci .
+      - name: Check container database and packaged application
+        run: |
+          docker run --rm ad-org-sync:ci python -m sync_app.cli check
+          docker run --rm ad-org-sync:ci sh -ec 'python -m sync_app.cli migrate --noinput && python -m sync_app.cli db_check'
 
   package-supply-chain:
     name: Wheel / migrations / SBOM
     needs: quality
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Python
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-          cache: pip
-
-      - name: Install build dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[web,test,build]"
-
-      - name: Build wheel
-        run: python -m build --wheel --outdir dist/packages
-
-      - name: Verify clean wheel installation and package data
+      - run: pip install -e ".[test]"
+      - run: python -m build --wheel --outdir dist/packages
+      - name: Verify isolated wheel installation
         run: |
           python -m venv .wheel-smoke
-          WHEEL=$(ls dist/packages/*.whl)
-          .wheel-smoke/bin/python -m pip install --upgrade pip
-          .wheel-smoke/bin/python -m pip install "${WHEEL}[web]"
-          .wheel-smoke/bin/python -m sync_app.cli version
-          .wheel-smoke/bin/python -c "from importlib.resources import files; root=files('sync_app.web'); assert root.joinpath('templates/base.html').is_file(); assert root.joinpath('static/app.css').is_file()"
-
-      - name: Verify migrations and backup recovery drill
-        run: python -m pytest -q tests/test_migration_integrity.py tests/test_backup_restore.py
-
-      - name: Generate validated CycloneDX SBOM
-        run: |
-          python -m cyclonedx_py environment .wheel-smoke/bin/python --pyproject pyproject.toml --output-format JSON --output-reproducible --output-file dist/packages/ad-org-sync.sbom.cdx.json --validate
-          python -c "import json; payload=json.load(open('dist/packages/ad-org-sync.sbom.cdx.json', encoding='utf-8')); assert payload['bomFormat'] == 'CycloneDX'; assert payload.get('components')"
-
-      - name: Upload wheel and SBOM
-        uses: actions/upload-artifact@v7
+          .wheel-smoke/bin/pip install dist/packages/*.whl
+          PYTHON="$PWD/.wheel-smoke/bin/python"
+          cd "$(mktemp -d)"
+          "$PYTHON" -m sync_app.cli check
+          "$PYTHON" -m sync_app.cli migrate --noinput
+          "$PYTHON" -m sync_app.cli db_check
+          "$PYTHON" -c "from importlib.resources import files; p=files('sync_app'); assert p.joinpath('templates/sspr.html').is_file(); assert p.joinpath('static/app.css').is_file()"
+      - name: Backup and migration recovery tests
+        run: python -m pytest -q tests/test_operations.py
+      - name: Validated CycloneDX SBOM
+        run: python -m cyclonedx_py environment .wheel-smoke/bin/python --pyproject pyproject.toml --output-format JSON --output-reproducible --output-file dist/packages/ad-org-sync.sbom.cdx.json --validate
+      - uses: actions/upload-artifact@v7
         with:
           name: ad-org-sync-python-supply-chain
           path: |
@@ -153,47 +94,26 @@ jobs:
   browser-regression:
     needs: quality
     runs-on: windows-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Python
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Install Playwright Chromium
-        run: |
-          python -m playwright install chromium
-
-      - name: Browser regression
-        run: |
-          python -m unittest tests.test_web_browser_regression -v
-
-      - name: Upload browser artifacts
+      - run: pip install -e ".[test]"
+      - run: python -m playwright install chromium
+      - name: Administrator and employee browser regression
+        run: python -m pytest -q tests/test_browser.py
+      - uses: actions/upload-artifact@v7
         if: always()
-        uses: actions/upload-artifact@v7
         with:
           name: browser-regression-artifacts
           if-no-files-found: warn
-          path: |
-            test_artifacts/browser/*.png
+          path: test_artifacts/browser/*.png
 
   deploy-production:
     name: Deploy / Production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs:
-      - windows
-      - container
-      - package-supply-chain
-      - browser-regression
+    needs: [windows, container, package-supply-chain, browser-regression]
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     concurrency:
@@ -201,11 +121,9 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
-
     steps:
       - name: Checkout verified revision
         uses: actions/checkout@v7
-
       - name: Deploy verified containers
         env:
           AD_ORG_SYNC_IMAGE_TAG: ${{ github.sha }}

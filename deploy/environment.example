@@ -1,0 +1,15 @@
+# Protected production file: chmod 0600. Never commit real values.
+AD_ORG_SYNC_PUBLIC_BASE_URL=https://it-service.tianjizn.com:9443
+AD_ORG_SYNC_HTTP_BIND=127.0.0.1
+AD_ORG_SYNC_HTTP_PORT=80
+AD_ORG_SYNC_ADMIN_USERNAME=admin
+AD_ORG_SYNC_ADMIN_PASSWORD_FILE=/opt/ad-org-sync/shared/admin_password.txt
+DINGTALK_CORP_ID=
+DINGTALK_APP_KEY=
+DINGTALK_APP_SECRET=
+LDAP_HOST=
+LDAP_BASE_DN=
+LDAP_BIND_DN=
+LDAP_PASSWORD=
+LDAP_CA_HOST_FILE=/opt/ad-org-sync/shared/ad-ca.pem
+LDAP_CA_FILE=/run/secrets/ad-ca.pem
