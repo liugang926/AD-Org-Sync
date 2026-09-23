@@ -96,6 +96,23 @@ def test_primary_department_is_chosen_from_current_employee_departments(admin_cl
 
 
 @pytest.mark.django_db
+def test_job_conflicts_can_be_filtered_and_opened_in_people(admin_client):
+    from sync_app.models import Job
+
+    job = Job.objects.create(status="blocked", plan={"operations": [
+        {"source_id": "u/conflict", "user": {"name": "冲突员工"}, "action": "conflict", "reason": "主部门不明确"},
+        {"source_id": "u-ok", "user": {"name": "正常员工"}, "action": "bind", "reason": "唯一工号匹配"},
+    ]})
+    response = admin_client.get(f"/jobs/{job.pk}?only=conflicts")
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "人员冲突 1 项" in content
+    assert "冲突员工" in content and "正常员工" not in content
+    assert "/people?q=u/conflict" in content
+    assert admin_client.get(f"/jobs/{job.pk}").content.decode().count("正常员工") == 1
+
+
+@pytest.mark.django_db
 def test_audit_filters_and_invalid_date(admin_client):
     from sync_app.models import Audit
     Audit.objects.create(actor="admin", action="sample_ok", success=True)

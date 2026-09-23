@@ -101,7 +101,18 @@ def job_detail(request, job_id):
         synchronization.queue_apply(job.pk, request.user.username, request.POST.get("confirmed") == "on")
         messages.success(request, "执行任务已排队")
         return redirect("job", job_id=job.pk)
-    return render(request, "job.html", {"job": job, "operations": job.operation_set.all()})
+    planned_operations = job.plan.get("operations", [])
+    conflict_count = sum(item.get("action") == "conflict" for item in planned_operations)
+    show_conflicts_only = request.GET.get("only") == "conflicts"
+    if show_conflicts_only:
+        planned_operations = [item for item in planned_operations if item.get("action") == "conflict"]
+    return render(request, "job.html", {
+        "job": job,
+        "operations": job.operation_set.all(),
+        "planned_operations": planned_operations,
+        "conflict_count": conflict_count,
+        "show_conflicts_only": show_conflicts_only,
+    })
 
 
 @administrator
