@@ -54,6 +54,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build production container
         run: docker build --pull --tag ad-org-sync:ci .
+      - name: Check production Nginx configuration
+        run: docker run --rm -v "$PWD/deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro" nginx:stable-alpine nginx -t
       - name: Check container database and packaged application
         run: |
           docker run --rm ad-org-sync:ci python -m sync_app.cli check

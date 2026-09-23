@@ -58,6 +58,6 @@ python -m pytest -q tests/test_browser.py
 python -m build --wheel
 ```
 
-真实钉钉、AD 账号及企业证书未在测试中使用。自动化测试使用隔离的适配器替身，端到端真实目录验收应在专用测试 OU 和测试员工上进行。
+自动化测试使用隔离的适配器替身。开发测试环境已完成真实钉钉通讯录和测试 AD OU 的只读验证及全量预览；实际 AD 写入和员工本人密码重置仍需专用测试员工验收，详见 docs/acceptance-status.md。
 
 设计与验收见 docs/PRD-django-single-org.md；本次规则取舍见 docs/rebuild-notes.md。

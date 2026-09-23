@@ -29,15 +29,15 @@ def collect(source, config):
     anchor = fingerprint([settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN])
     if config.identity_anchor and config.identity_anchor != anchor:
         raise RuleError("企业或 AD 目录已更换，禁止复用旧组织绑定；请使用新的数据库")
-    if not config.identity_anchor:
-        config.identity_anchor = anchor
-        config.save(update_fields=["identity_anchor"])
     users, departments = source.collect(config.root_department)
     if not users or len({u["source_id"] for u in users}) != len(users):
         raise RuleError("通讯录为空或来源身份重复，禁止同步")
     signature = fingerprint([users, departments, config.root_department])
     # Persist only complete successful snapshots.
     with transaction.atomic():
+        if not config.identity_anchor:
+            config.identity_anchor = anchor
+            config.save(update_fields=["identity_anchor"])
         snap = Snapshot.objects.create(started_at=started_at, fingerprint=signature, root_department=config.root_department, users=users, departments=departments)
         for user in users:
             Person.objects.update_or_create(source_id=user["source_id"], defaults={"name": user["name"]})

@@ -1,8 +1,19 @@
 from datetime import timedelta
+from ipaddress import ip_address
 from django.db import transaction
 from django.utils import timezone
 from .domain import RuleError, fingerprint
 from .models import Audit, RateWindow
+
+
+def client_address(request):
+    # The private Nginx proxy overwrites X-Real-IP after checking its upstream.
+    for value in (request.META.get("HTTP_X_REAL_IP", ""), request.META.get("REMOTE_ADDR", "")):
+        try:
+            return str(ip_address(value))
+        except ValueError:
+            continue
+    return "unknown"
 
 
 def audit(actor, action, target="", result="成功", *, success=True):
