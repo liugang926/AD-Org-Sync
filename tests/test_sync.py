@@ -288,6 +288,14 @@ def test_manual_reactivation_enables_held_account_and_binding(configured, monkey
 
     monkeypatch.setattr(sync, "DingTalk", lambda: source)
     monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    source.user_in_scope = lambda employee, root: False
+    with pytest.raises(RuleError, match="当前同步范围"):
+        sync.reactivate_person(binding.person.pk, "admin", "核验后启用", True)
+    assert not ad.items[0]["enabled"]
+    binding.refresh_from_db()
+    assert not binding.enabled
+
+    source.user_in_scope = lambda employee, root: True
     sync.reactivate_person(binding.person.pk, "admin", "核验后启用", True)
     binding.refresh_from_db()
     assert binding.enabled and binding.revision != old_revision
