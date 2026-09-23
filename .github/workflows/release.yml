@@ -393,7 +393,7 @@ jobs:
               print("required_fields_present=" + ",".join(field + ":" + str(field in items[0]).lower() for field in fields))
           PY
   ad-write-drill:
-    if: ${{ true }}
+    if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 10
