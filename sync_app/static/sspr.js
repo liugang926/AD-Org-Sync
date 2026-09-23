@@ -10,7 +10,7 @@ if (form) form.addEventListener("submit", event => {
   status.textContent = "正在验证身份并匹配 AD 账号…";
   window.dd.requestAuthCode({
     corpId: form.dataset.corp, clientId: form.dataset.client,
-    onSuccess: async result => {
+    success: async result => {
       try {
         const body = new URLSearchParams({code: result.code || result.authCode || "", csrfmiddlewaretoken: form.querySelector("[name=csrfmiddlewaretoken]").value});
         const response = await fetch("/sspr/auth/dingtalk", {method: "POST", credentials: "same-origin", body});
@@ -19,6 +19,6 @@ if (form) form.addEventListener("submit", event => {
         window.location.replace(data.next);
       } catch (_) { fail("网络请求失败，请重试。"); }
     },
-    onFail: () => fail("钉钉验证失败，请重新打开应用。")
+    fail: () => fail("钉钉验证失败，请重新打开应用。")
   });
 });

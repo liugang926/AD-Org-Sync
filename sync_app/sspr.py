@@ -78,9 +78,9 @@ def reset(token, password, confirmation, ip):
                 raise RuleError("AD 匹配对象发生变化，请重新验证")
             if item.config_fingerprint != config_signature(Configuration.current()):
                 raise RuleError("配置发生变化，请重新验证")
-            result = ad.reset_password(item.object_guid, password, config.unlock_after_reset)
-            audit(item.source_id, "sspr_reset", str(item.object_guid), result)
-            return result
+            outcome = ad.reset_password(item.object_guid, password, config.unlock_after_reset)
+            audit(item.source_id, "sspr_reset", str(item.object_guid), outcome.message, success=outcome.complete)
+            return outcome.message
         except RuleError as exc:
             audit(item.source_id, "sspr_reset", str(item.object_guid), str(exc), success=False)
             raise
