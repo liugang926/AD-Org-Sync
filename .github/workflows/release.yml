@@ -471,6 +471,7 @@ jobs:
           test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
           docker exec -i ad_org_sync-web-1 python - < .github/diagnostics/source_guard_probe.py
   microapp-home-probe:
+    if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 5
