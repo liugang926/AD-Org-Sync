@@ -53,6 +53,37 @@ def test_dingtalk_consistent_child_and_shared_member_are_collected_once():
     source.user.assert_called_once_with("u")
 
 
+def test_dingtalk_user_scope_checks_live_department_ancestry():
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[
+        {"dept_id": 3, "parent_id": 2},
+        {"dept_id": 2, "parent_id": 1},
+    ])
+    assert source.user_in_scope({"departments": ["3"]}, "1")
+    assert source.call.call_count == 2
+    source.call.reset_mock()
+    assert source.user_in_scope({"departments": ["1"]}, "1")
+    source.call.assert_not_called()
+
+
+def test_dingtalk_user_scope_rejects_outside_or_uncertain_membership():
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[{"dept_id": 3, "parent_id": 0}])
+    assert not source.user_in_scope({"departments": ["3"]}, "1")
+    source.call = Mock(side_effect=[{"dept_id": 3, "parent_id": 3}])
+    with pytest.raises(RuleError, match="循环"):
+        source.user_in_scope({"departments": ["3"]}, "1")
+
+
+def test_dingtalk_user_scope_accepts_another_verified_membership():
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[
+        RuleError("另一部门不可访问"),
+        {"dept_id": 4, "parent_id": 1},
+    ])
+    assert source.user_in_scope({"departments": ["3", "4"]}, "1")
+
+
 @pytest.mark.parametrize("page", [
     {"list": [{"userid": "u"}], "has_more": "false"},
     {"list": [{"userid": "u"}], "has_more": True, "next_cursor": "bad"},

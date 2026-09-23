@@ -177,6 +177,49 @@ def test_binding_confirmation_rejects_replaced_target_and_replay(configured, mon
 
 
 @pytest.mark.django_db
+def test_manual_binding_rechecks_live_source_scope(configured, monkeypatch):
+    from sync_app import synchronization as sync
+
+    source, ad = Source(), Directory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    source.user_in_scope = lambda employee, root: False
+    with pytest.raises(RuleError, match="当前同步范围"):
+        sync.binding_review(person.pk, "testuser")
+
+    source.user_in_scope = lambda employee, root: True
+    review = sync.binding_review(person.pk, "testuser")
+    source.user_in_scope = lambda employee, root: False
+    with pytest.raises(RuleError, match="当前同步范围"):
+        sync.bind_person(person.pk, review["confirmation"], "admin", "确认身份")
+    assert not Binding.objects.exists()
+
+
+@pytest.mark.django_db
+def test_reactivation_rechecks_live_source_scope(configured, monkeypatch):
+    from sync_app import synchronization as sync
+
+    source = Source()
+    target = account()
+    target["enabled"] = False
+    ad = Directory([target])
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    Binding.objects.create(person=person, object_guid=target["guid"], username=target["username"])
+
+    source.user_in_scope = lambda employee, root: False
+    with pytest.raises(RuleError, match="当前同步范围"):
+        sync.reactivate_person(person.pk, "admin", "人工确认", True)
+    assert not ad.items[0]["enabled"]
+
+    source.user_in_scope = lambda employee, root: True
+    sync.reactivate_person(person.pk, "admin", "人工确认", True)
+    assert ad.items[0]["enabled"]
+
+
+@pytest.mark.django_db
 def test_new_account_policy_can_keep_account_disabled(configured):
     configured.enable_new_accounts = False
     configured.require_password_change = False

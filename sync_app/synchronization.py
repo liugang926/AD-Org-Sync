@@ -424,12 +424,15 @@ def run_sync_job(job):
 def binding_review(person_id, username):
     with closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
         person = Person.objects.get(pk=person_id)
-        source.user(person.source_id)
+        config = Configuration.current()
+        user = source.user(person.source_id)
+        if not source.user_in_scope(user, config.root_department):
+            raise RuleError("来源人员已不在当前同步范围，不能建立绑定")
         matches = ad.match("source_id", username.strip())
         if len(matches) != 1 or protected(matches[0]):
             raise RuleError("目标不存在、不唯一或受保护")
         target = matches[0]
-        if not under(target["dn"], Configuration.current().root_ou):
+        if not under(target["dn"], config.root_ou):
             raise RuleError("目标不在同步管理范围内")
         if Binding.objects.filter(object_guid=target["guid"]).exclude(person=person).exists():
             raise RuleError("目标已绑定其他人员")
@@ -449,14 +452,17 @@ def bind_person(person_id, confirmation, actor, reason):
         raise RuleError("绑定确认对象不一致")
     with lock("sync"), closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
         person = Person.objects.get(pk=person_id)
-        source.user(person.source_id)
+        config = Configuration.current()
+        user = source.user(person.source_id)
+        if not source.user_in_scope(user, config.root_department):
+            raise RuleError("来源人员已不在当前同步范围，不能建立绑定")
         matches = ad.match("source_id", reviewed["username"])
         if len(matches) != 1 or protected(matches[0]):
             raise RuleError("目标不存在、不唯一或受保护")
         account = matches[0]
         if account["guid"] != reviewed["guid"]:
             raise RuleError("AD 目标已变化，请重新验证")
-        if not under(account["dn"], Configuration.current().root_ou):
+        if not under(account["dn"], config.root_ou):
             raise RuleError("目标不在同步管理范围内")
         with lock("account:" + account["guid"]), transaction.atomic():
             old = Binding.objects.filter(person=person).first()
@@ -475,9 +481,12 @@ def reactivate_person(person_id, actor, reason, confirmed):
         binding = Binding.objects.select_related("person").filter(person_id=person_id, enabled=True).first()
         if not binding or binding.person.excluded:
             raise RuleError("请先确认有效绑定且人员未排除同步")
-        source.user(binding.person.source_id)
+        config = Configuration.current()
+        user = source.user(binding.person.source_id)
+        if not source.user_in_scope(user, config.root_department):
+            raise RuleError("来源人员已不在当前同步范围，不能恢复 AD 账号")
         with lock("account:" + str(binding.object_guid)):
-            ad.enable(binding.object_guid, Configuration.current().root_ou)
+            ad.enable(binding.object_guid, config.root_ou)
             audit(actor, "reactivate", binding.person.source_id, f"恢复 {binding.object_guid}；{reason[:150]}")
 
 
