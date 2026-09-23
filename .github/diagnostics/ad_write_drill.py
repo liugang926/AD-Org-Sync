@@ -47,6 +47,7 @@ with closing(ActiveDirectory()) as ad:
         except RuleError:
             print("create_ldap_result_code=" + str(ad.conn.result.get("result")), flush=True)
             print("create_ldap_result_class=" + str(ad.conn.result.get("description")), flush=True)
+            print("create_ldap_diagnostic=" + str(ad.conn.result.get("message", ""))[:300], flush=True)
             raise
         assert created["username"] == username and created["employee_id"] == employee_id
         assert created["enabled"] and under(created["dn"], ou_a)
