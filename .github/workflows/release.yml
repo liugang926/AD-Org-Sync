@@ -114,6 +114,7 @@ jobs:
               source.close()
           PY
   inspect-plan:
+    if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     steps:
@@ -205,4 +206,60 @@ jobs:
           print("mapped_preview_new_ou_count=" + str(sum(item["guid"] is None for item in latest.plan.get("departments", []))))
           assert Binding.objects.count() == before_bindings, "preview changed a binding"
           print("mapped_preview_bindings_unchanged=true")
+          PY
+  apply-preview:
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    steps:
+      - name: Apply the reviewed single-person binding and verify AD identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker exec -i ad_org_sync-web-1 python - <<'PY'
+          import os
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          import time
+          from contextlib import closing
+          from sync_app import synchronization
+          from sync_app.directory import ActiveDirectory
+          from sync_app.domain import fingerprint
+          from sync_app.models import Binding, Job, Operation
+
+          source_id = "17757325700496563"
+          job = Job.objects.get(pk="bf283e38-7fde-4b0f-ae01-9dac6559bf67")
+          assert job.scope == "users" and job.selected == [source_id]
+          assert not job.plan["high_risk"]
+          assert len(job.plan["operations"]) == 1
+          operation = job.plan["operations"][0]
+          assert operation["action"] == "bind" and operation["target"]["username"] == "T0001919"
+          assert not operation["changes"]
+          assert synchronization.parent_dn(operation["target"]["dn"]).casefold() == operation["ou"].casefold()
+          assert all(department["action"] != "conflict" and department["guid"] for department in job.plan["departments"])
+          with closing(ActiveDirectory()) as ad:
+              before = ad.by_guid(operation["target"]["guid"])
+              assert fingerprint(before) == fingerprint(operation["target"])
+          if job.status == "preview_ready":
+              assert job.kind == "preview"
+              assert not Binding.objects.filter(person__source_id=source_id).exists()
+              synchronization.queue_apply(job.pk, "acceptance", confirmed=False)
+              synchronization.run_next()
+          for _ in range(60):
+              job.refresh_from_db()
+              if job.status not in {"queued", "running"}:
+                  break
+              time.sleep(3)
+          print("apply_status=" + job.status)
+          assert job.status == "success", job.message
+          binding = Binding.objects.get(person__source_id=source_id)
+          assert str(binding.object_guid) == operation["target"]["guid"]
+          assert binding.username == "T0001919" and binding.enabled and not binding.manual
+          print("binding_guid_matches=true")
+          print("binding_username=" + binding.username)
+          with closing(ActiveDirectory()) as ad:
+              after = ad.by_guid(operation["target"]["guid"])
+          assert fingerprint(after) == fingerprint(before)
+          print("ad_account_unchanged=true")
+          print("operation_statuses=" + ",".join(sorted(action + ":" + status for action, status in Operation.objects.filter(job=job).values_list("action", "status"))))
           PY
