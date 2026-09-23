@@ -123,7 +123,7 @@ jobs:
           assert len(conflicts) == 19
           PY
   pilot-identity-preflight:
-    if: ${{ true }}
+    if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 6
