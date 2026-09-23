@@ -763,7 +763,7 @@ jobs:
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
   candidate-staged-sync-drill:
-    if: ${{ false }}
+    if: ${{ true }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 15
@@ -773,10 +773,10 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          ref: ea05ecc995dc55a56eb5cfa2b2f0ee76fa0faa5f
+          ref: ef112c96bd129840837b390f5852822c2b67a33b
           path: candidate
           persist-credentials: false
-      - name: Exercise candidate enable-failure recovery in isolated DB and test AD
+      - name: Block candidate recovery after a real password change in test AD
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -811,7 +811,7 @@ jobs:
           docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' ad_org_sync-web-1 | grep -E '^(LDAP_HOST|LDAP_BASE_DN|LDAP_BIND_DN|LDAP_PASSWORD|LDAP_VERIFY_CERT|LDAP_CA_FILE)=' > "$env_file"
           test "$(grep -c '^LDAP_' "$env_file")" -ge 5
           docker build --pull --no-cache -t "$image" candidate
-          docker run --rm -i --name "$container" --network host --read-only --tmpfs /data:rw,size=64m,uid=10001,gid=10001 --tmpfs /tmp:rw,size=64m --env-file "$env_file" -e AD_ORG_SYNC_DATA_DIR=/data -e TEST_RUN_ID="$GITHUB_RUN_ID" "$image" python - < .github/diagnostics/staged_sync_drill.py
+          docker run --rm -i --name "$container" --network host --read-only --tmpfs /data:rw,size=64m,uid=10001,gid=10001 --tmpfs /tmp:rw,size=64m --env-file "$env_file" -e AD_ORG_SYNC_DATA_DIR=/data -e TEST_RUN_ID="$GITHUB_RUN_ID" "$image" python - < .github/diagnostics/ad_revision_recovery_drill.py
       - name: Verify test identity cleanup and unchanged production state
         if: always()
         shell: bash
