@@ -49,6 +49,9 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 65536
 DINGTALK_CORP_ID = os.environ.get("DINGTALK_CORP_ID", "")
 DINGTALK_APP_KEY = os.environ.get("DINGTALK_APP_KEY", "")
 DINGTALK_APP_SECRET = os.environ.get("DINGTALK_APP_SECRET", "")
+SSPR_ALLOWED_DINGTALK_USER_IDS = frozenset(
+    value.strip() for value in os.environ.get("SSPR_ALLOWED_DINGTALK_USER_IDS", "").split(",") if value.strip()
+)
 LDAP_HOST = os.environ.get("LDAP_HOST", "")
 LDAP_BIND_DN = os.environ.get("LDAP_BIND_DN", "")
 LDAP_PASSWORD = os.environ.get("LDAP_PASSWORD", "")

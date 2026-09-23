@@ -12,11 +12,14 @@ from .security import audit, rate_limit
 
 
 def config_signature(config):
-    return fingerprint([settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN, settings.LDAP_VERIFY_CERT, settings.LDAP_CA_FILE, config.sspr_match, config.sspr_enabled, config.updated_at])
+    return fingerprint([settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN, settings.LDAP_VERIFY_CERT, settings.LDAP_CA_FILE, sorted(settings.SSPR_ALLOWED_DINGTALK_USER_IDS), config.sspr_match, config.sspr_enabled, config.updated_at])
 
 
 def match_employee(source, ad, config, source_id=None, code=None):
     user = source.employee(code) if code is not None else source.user(source_id)
+    allowed = settings.SSPR_ALLOWED_DINGTALK_USER_IDS
+    if allowed and user["source_id"] not in allowed:
+        raise RuleError("员工密码重置尚未对当前账号开放")
     matches = ad.match(config.sspr_match, user.get(config.sspr_match, ""))
     if len(matches) != 1:
         raise RuleError("未唯一匹配 AD 账号，请联系管理员核对身份字段")
@@ -73,7 +76,9 @@ def reset(token, password, confirmation, ip):
         ad = None
         try:
             ad = ActiveDirectory()
-            _, account = match_employee(source, ad, config, source_id=item.source_id)
+            user, account = match_employee(source, ad, config, source_id=item.source_id)
+            if user["source_id"] != item.source_id:
+                raise RuleError("钉钉身份发生变化，请重新验证")
             if account["guid"] != str(item.object_guid):
                 raise RuleError("AD 匹配对象发生变化，请重新验证")
             if item.config_fingerprint != config_signature(Configuration.current()):
