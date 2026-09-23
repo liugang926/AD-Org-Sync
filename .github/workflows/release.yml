@@ -35,7 +35,7 @@ jobs:
           printf '%s\n' "$cron" | grep -Fq 'docker exec ad_org_sync-web-1 python -m sync_app.cli enqueue_sync --due'
           test "$(systemctl is-active cron)" = active
           echo 'scheduler_entry_count=1 cron_service=active'
-          docker exec ad_org_sync-web-1 python manage.py shell -c 'from sync_app.models import Configuration, Job; c=Configuration.objects.filter(pk=1).values("schedule_enabled","sspr_enabled").first(); assert c is not None; assert c["schedule_enabled"] is False; assert c["sspr_enabled"] is False; print("schedule_enabled=false sspr_enabled=false scheduler_jobs="+str(Job.objects.filter(actor="scheduler").count()))'
+          docker exec ad_org_sync-web-1 python -m sync_app.cli shell -c 'from sync_app.models import Configuration, Job; c=Configuration.objects.filter(pk=1).values("schedule_enabled","sspr_enabled").first(); assert c is not None; assert c["schedule_enabled"] is False; assert c["sspr_enabled"] is False; print("schedule_enabled=false sspr_enabled=false scheduler_jobs="+str(Job.objects.filter(actor="scheduler").count()))'
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
           normal="$(docker logs --since 20m ad_org_sync-nginx-1 2>&1 | grep 'codex_ipdiag=e9d9afb-normal' | tail -n 1)"
