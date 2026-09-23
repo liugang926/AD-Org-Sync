@@ -408,7 +408,6 @@ jobs:
           test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
           docker exec -i -e TEST_RUN_ID="$GITHUB_RUN_ID" ad_org_sync-web-1 python - < .github/diagnostics/ad_write_drill.py
   sync-write-drill:
-    if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 15
@@ -422,7 +421,26 @@ jobs:
           test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
           test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
           docker exec ad_org_sync-web-1 python -m sync_app.cli shell -c 'from sync_app.models import Configuration; c=Configuration.objects.get(pk=1); assert c.root_ou.casefold()=="OU=ADOrgSync-SyncTest-8fa5fcdf,DC=tianjitest,DC=com".casefold() and not c.schedule_enabled and not c.sspr_enabled; print("production_test_root_and_disabled_flags_verified=true")'
-          docker exec -i -e TEST_RUN_ID="$GITHUB_RUN_ID" -e AD_ORG_SYNC_DATA_DIR="/tmp/ad-org-sync-sync-drill-$GITHUB_RUN_ID" ad_org_sync-web-1 python - < .github/diagnostics/sync_write_drill.py
+          output="$(mktemp)"
+          drill_pid=""
+          trap 'if test -n "$drill_pid"; then wait "$drill_pid" || true; fi; rm -f -- "$output"' EXIT
+          docker exec -i -e TEST_RUN_ID="$GITHUB_RUN_ID" -e TEST_PROBE_CONCURRENCY=1 -e AD_ORG_SYNC_DATA_DIR="/tmp/ad-org-sync-sync-drill-$GITHUB_RUN_ID" ad_org_sync-web-1 python - < .github/diagnostics/sync_write_drill.py > "$output" 2>&1 &
+          drill_pid=$!
+          for _ in $(seq 1 150); do
+            if grep -Fq 'ad_write_window_open=true' "$output"; then break; fi
+            if ! kill -0 "$drill_pid" 2>/dev/null; then cat "$output"; wait "$drill_pid"; exit 1; fi
+            sleep 0.2
+          done
+          grep -Fq 'ad_write_window_open=true' "$output"
+          employee_probe="$(curl --silent --show-error --max-time 5 --output /dev/null --write-out '%{http_code} %{time_total}' https://it-service.tianjizn.com:9443/sspr)"
+          ready_probe="$(curl --silent --show-error --max-time 5 --output /dev/null --write-out '%{http_code} %{time_total}' https://it-service.tianjizn.com:9443/readyz)"
+          test "${employee_probe%% *}" = 200
+          test "${ready_probe%% *}" = 200
+          echo "employee_during_ad_write_status=200 seconds=${employee_probe#* }"
+          echo "readyz_during_ad_write_status=200 seconds=${ready_probe#* }"
+          wait "$drill_pid"
+          drill_pid=""
+          cat "$output"
       - name: Confirm live database and readiness are unchanged
         if: always()
         shell: bash

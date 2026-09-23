@@ -3,6 +3,7 @@
 import copy
 import os
 import shutil
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -37,6 +38,21 @@ ou_a = f"OU=CodexSyncA-{run_id},{root_ou}"
 ou_b = f"OU=CodexSyncB-{run_id},{root_ou}"
 source_ids = ["codex-source-a-" + run_id, "codex-source-b-" + run_id]
 employee_ids = ["CX" + run_id[-8:] + "A", "CX" + run_id[-8:] + "B"]
+
+if os.environ.get("TEST_PROBE_CONCURRENCY") == "1":
+    original_create = ActiveDirectory.create
+    probe_opened = False
+
+    def create_with_probe_window(self, *args, **kwargs):
+        global probe_opened
+        account = original_create(self, *args, **kwargs)
+        if not probe_opened:
+            probe_opened = True
+            print("ad_write_window_open=true", flush=True)
+            time.sleep(15)
+        return account
+
+    ActiveDirectory.create = create_with_probe_window
 
 
 def user(index, department):
