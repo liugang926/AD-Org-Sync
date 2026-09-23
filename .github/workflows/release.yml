@@ -4,6 +4,59 @@ on:
 permissions:
   contents: read
 jobs:
+  source-scope-readonly:
+    if: ${{ true }}
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: afd5de084e5f3b46d2f17ae12063c6d4561bfba0
+          persist-credentials: false
+      - name: Verify source-scope method against live DingTalk without writes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=a480636d3dc40e4a9e98ef859831320b50ed7140
+          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
+          test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
+          method_source="$(base64 -w0 sync_app/directory.py)"
+          docker exec -i -e SCOPE_METHOD_SOURCE_B64="$method_source" ad_org_sync-web-1 python - <<'PY'
+          import ast
+          import base64
+          import os
+          from contextlib import closing
+
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          from sync_app.directory import DingTalk
+          from sync_app.domain import RuleError
+          from sync_app.models import Configuration
+
+          source_text = base64.b64decode(os.environ["SCOPE_METHOD_SOURCE_B64"]).decode()
+          source_tree = ast.parse(source_text)
+          source_class = next(node for node in source_tree.body if isinstance(node, ast.ClassDef) and node.name == "DingTalk")
+          method = next(node for node in source_class.body if isinstance(node, ast.FunctionDef) and node.name == "user_in_scope")
+          namespace = {"RuleError": RuleError}
+          exec(compile(ast.Module(body=[method], type_ignores=[]), "pr65-source-scope", "exec"), namespace)
+          DingTalk.user_in_scope = namespace["user_in_scope"]
+
+          config = Configuration.objects.get(pk=1)
+          assert not config.schedule_enabled and not config.sspr_enabled
+          with closing(DingTalk()) as source:
+              users, departments = source.collect(config.root_department)
+              candidates = [user for user in users if user["employee_id"] == "T0001919"]
+              assert len(candidates) == 1
+              person = source.user(candidates[0]["source_id"])
+              assert person["employee_id"] == "T0001919"
+              assert source.user_in_scope(person, config.root_department)
+          print("live_source_scope_verified=true")
+          print("source_user_count=" + str(len(users)))
+          print("source_department_count=" + str(len(departments)))
+          print("production_sspr_and_schedule_still_disabled=true")
+          PY
   conflict-summary-61:
     if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
