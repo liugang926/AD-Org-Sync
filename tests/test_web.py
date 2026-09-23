@@ -1,6 +1,14 @@
 import pytest
 from django.conf import settings
 from sync_app.models import Configuration
+from sync_app.security import client_address
+
+
+def test_client_address_uses_proxy_header_and_validates_it(rf):
+    request = rf.get("/", REMOTE_ADDR="172.18.0.4", HTTP_X_REAL_IP="198.51.100.17")
+    assert client_address(request) == "198.51.100.17"
+    request = rf.get("/", REMOTE_ADDR="172.18.0.4", HTTP_X_REAL_IP="spoofed, 198.51.100.17")
+    assert client_address(request) == "172.18.0.4"
 
 
 @pytest.mark.django_db
@@ -31,8 +39,9 @@ def test_non_admin_cannot_mutate(client, django_user_model):
 @pytest.mark.django_db
 def test_admin_builtin_login_cannot_bypass_rate_limit(client):
     for _ in range(10):
-        assert client.post("/login", {"username": "unknown", "password": "incorrect"}).status_code == 200
-    assert client.post("/admin/login/", {"username": "unknown", "password": "incorrect"}).status_code == 429
+        assert client.post("/login", {"username": "unknown", "password": "incorrect"}, HTTP_X_REAL_IP="198.51.100.17").status_code == 200
+    assert client.post("/admin/login/", {"username": "unknown", "password": "incorrect"}, HTTP_X_REAL_IP="198.51.100.17").status_code == 429
+    assert client.post("/login", {"username": "unknown", "password": "incorrect"}, HTTP_X_REAL_IP="198.51.100.18").status_code == 200
 
 
 @pytest.mark.django_db

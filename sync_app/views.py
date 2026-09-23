@@ -21,7 +21,7 @@ from . import sspr, synchronization
 from .directory import ActiveDirectory, DingTalk
 from .domain import RuleError, candidate
 from .models import Configuration, Person, Binding, Job, Audit, Snapshot, RuntimeState
-from .security import rate_limit, audit
+from .security import rate_limit, audit, client_address
 
 
 def administrator(view):
@@ -53,7 +53,7 @@ class AdminLogin(LoginView):
 
     def post(self, request, *args, **kwargs):
         try:
-            rate_limit("admin-login:" + request.META.get("REMOTE_ADDR", ""), 10)
+            rate_limit("admin-login:" + client_address(request), 10)
         except RuleError as exc:
             return render(request, self.template_name, {"error": str(exc)}, status=429)
         return super().post(request, *args, **kwargs)
@@ -198,7 +198,7 @@ def employee_auth(request):
         code = request.POST.get("code", "")
         if not code or len(code) > 4096:
             raise RuleError("缺少有效钉钉授权码")
-        token, _ = sspr.verify(code, request.META.get("REMOTE_ADDR", ""))
+        token, _ = sspr.verify(code, client_address(request))
         response = JsonResponse({"next": "/sspr"})
         response.set_cookie("employee_verification", token, max_age=300, secure=True, httponly=True, samesite="Strict", path="/sspr")
         return response
@@ -213,7 +213,7 @@ def employee_auth(request):
 @sensitive_post_parameters()
 def employee_reset(request):
     try:
-        result = sspr.reset(request.COOKIES.get("employee_verification", ""), request.POST.get("password", ""), request.POST.get("confirmation", ""), request.META.get("REMOTE_ADDR", ""))
+        result = sspr.reset(request.COOKIES.get("employee_verification", ""), request.POST.get("password", ""), request.POST.get("confirmation", ""), client_address(request))
         response = render(request, "sspr.html", {"result": result, "enabled": True})
         response.delete_cookie("employee_verification", path="/sspr", samesite="Strict")
         return response
