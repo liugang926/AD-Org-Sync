@@ -1,2 +1,3 @@
-# Host cron: enqueue due work, never execute directory writes in the web request.
-* * * * * cd /opt/ad-org-sync/current && docker compose --project-name ad_org_sync --env-file /opt/ad-org-sync/shared/.env exec -T web python -m sync_app.cli enqueue_sync --due
+# Installed for the production runner account by scripts/install-scheduler.sh.
+# The command only queues work; Configuration.schedule_enabled controls whether it runs.
+* * * * * /usr/bin/docker exec ad_org_sync-web-1 python -m sync_app.cli enqueue_sync --due 2>&1 | /usr/bin/logger -t ad-org-sync-scheduler # AD_ORG_SYNC_SCHEDULER
