@@ -124,7 +124,8 @@ class ActiveDirectory:
         if not all((settings.LDAP_HOST, settings.LDAP_BIND_DN, settings.LDAP_PASSWORD, settings.LDAP_BASE_DN)):
             raise RuleError("请配置 LDAPS 服务器、绑定账号和目录根 DN")
         try:
-            server = Server(settings.LDAP_HOST, port=636, use_ssl=True, tls=Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=settings.LDAP_CA_FILE), connect_timeout=10)
+            tls = Tls(validate=ssl.CERT_REQUIRED if settings.LDAP_VERIFY_CERT else ssl.CERT_NONE, ca_certs_file=settings.LDAP_CA_FILE if settings.LDAP_VERIFY_CERT else None)
+            server = Server(settings.LDAP_HOST, port=636, use_ssl=True, tls=tls, connect_timeout=10)
             self.conn = Connection(server, user=settings.LDAP_BIND_DN, password=settings.LDAP_PASSWORD, auto_bind=True, auto_referrals=False, receive_timeout=20)
         except Exception:
             raise RuleError("LDAPS 连接失败，请检查证书、网络和凭据") from None

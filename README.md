@@ -25,7 +25,7 @@ python -m venv .venv
 钉钉应用须具备部门和人员详情读取权限，配置可信域名和企业内部应用首页：
 `https://<对外域名>/sspr?corpid=$CORPID$`。服务器只使用配置的企业身份，不信任查询字符串中的企业或人员。员工验证 Cookie 始终 Secure，员工端需通过 HTTPS 测试。
 
-同步匹配固定使用唯一工号；账号命名可选工号、userId、邮箱前缀。密码重置匹配单独配置，可选工号→employeeID、邮箱→mail、userId→sAMAccountName。AD 查询范围由 LDAP_BASE_DN 限定，同步写入进一步限制到配置的根 OU。LDAPS 强制校验证书。
+同步匹配默认使用唯一工号，邮箱及 userId 匹配仅作人工确认候选；账号命名可选工号、userId、邮箱前缀。密码重置匹配单独配置，可选工号→employeeID、邮箱→mail、userId→sAMAccountName。AD 查询范围由 LDAP_BASE_DN 限定，同步写入进一步限制到配置的根 OU。LDAPS 始终加密，默认 `LDAP_VERIFY_CERT=false`，允许未受信任的自签证书；无需 CA 文件。如需验证可信链和主机名，设置 `LDAP_VERIFY_CERT=true`，可选提供 `LDAP_CA_HOST_FILE`（未提供时使用系统信任库）。
 
 ## CI/CD
 
@@ -33,7 +33,7 @@ python -m venv .venv
 
 部署入口仍为 scripts/deploy-production.sh。没有镜像缓存或代理服务，没有 Redis/Celery。Compose 运行 web、worker、Nginx，以及一次性权限初始化服务；web 和 worker 使用同一镜像及数据卷。
 
-生产环境文件、管理员密码文件权限 0600。LDAP CA 由初始化服务复制进只读 secrets 卷。对外必须经 HTTPS 网关，Nginx 默认仅监听宿主 127.0.0.1。若网关位于另一台主机，明确配置私有绑定地址和访问限制。切勿将应用 8010 端口直接公开。
+生产环境文件、管理员密码文件权限 0600。LDAP CA 可选提供，提供时由初始化服务复制进只读 secrets 卷。对外必须经 HTTPS 网关，Nginx 默认仅监听宿主 127.0.0.1。若网关位于另一台主机，明确配置私有绑定地址和访问限制。切勿将应用 8010 端口直接公开。
 
 首次重构使用新的 django.sqlite3，不接管旧平台 app.db。部署前应停用旧应用；若旧服务仍在运行，旧 CLI 的备份命令与新版本不同，部署脚本将停止，要求先按旧流程完成备份与退役，不会跳过检查。
 
