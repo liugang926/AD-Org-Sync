@@ -860,7 +860,7 @@ jobs:
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
   live-source-write-drill:
-    if: ${{ false }}
+    if: ${{ true }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 20
@@ -870,7 +870,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          ref: 0cde22f5490c2e17d1bd04bb5fccaaf696727078
+          ref: b89d265c9fad0308ad0aa4faa8c4680f4b7149fa
           path: candidate
           persist-credentials: false
       - name: Exercise live DingTalk source update and move on a disposable test AD account
