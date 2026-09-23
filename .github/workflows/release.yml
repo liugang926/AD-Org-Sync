@@ -574,7 +574,7 @@ jobs:
           test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
           docker exec -i ad_org_sync-web-1 python - < .github/diagnostics/source_guard_probe.py
   microapp-home-probe:
-    if: ${{ false }}
+    if: ${{ true }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 5
@@ -584,7 +584,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          expected=9f04c5f991573a6496a08ec881e2ebc571cd6367
+          expected=a480636d3dc40e4a9e98ef859831320b50ed7140
           test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
           test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
           docker exec -i ad_org_sync-web-1 python - < .github/diagnostics/microapp_home_probe.py
