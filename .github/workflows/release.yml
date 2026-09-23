@@ -773,10 +773,10 @@ jobs:
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
   live-source-write-drill:
-    if: ${{ false }}
+    if: ${{ github.ref == 'refs/heads/codex/prod-verify-e9d9afb' }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -786,7 +786,7 @@ jobs:
           ref: 0cde22f5490c2e17d1bd04bb5fccaaf696727078
           path: candidate
           persist-credentials: false
-      - name: Exercise live DingTalk source writes only on a disposable test AD account
+      - name: Exercise live DingTalk source update and move on a disposable test AD account
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -808,6 +808,8 @@ jobs:
           with closing(ActiveDirectory()) as ad:
               assert not ad.match("employee_id", "CXR" + run_id[-8:])
               assert not ad.match("source_id", "cxsource" + run_id[-8:])
+              move_ou = "OU=CodexSourceMove" + run_id[-8:] + ",OU=ADOrgSync-SyncTest-8fa5fcdf,DC=tianjitest,DC=com"
+              assert ad.ou_identity(move_ou) is None
           print("disposable_identity_absent_before_run=true")
           PY
           umask 077
@@ -838,7 +840,7 @@ jobs:
           test "$(grep -c -E '^(LDAP_|DINGTALK_|TEST_)' "$env_file")" -ge 10
           docker build --pull --no-cache -t "$image" candidate
           docker run --rm -i --name "$container" --network host --read-only --tmpfs /data:rw,size=64m,uid=10001,gid=10001 --tmpfs /tmp:rw,size=64m --env-file "$env_file" -e AD_ORG_SYNC_DATA_DIR=/data -e TEST_RUN_ID="$GITHUB_RUN_ID" "$image" python - < .github/diagnostics/live_source_write_drill.py
-      - name: Verify disposable account cleanup and unchanged production state
+      - name: Verify disposable account and OU cleanup with unchanged production state
         if: always()
         shell: bash
         run: |
@@ -861,6 +863,7 @@ jobs:
           username = "cxsource" + run_id[-8:]
           employee_id = "CXR" + run_id[-8:]
           root = "OU=ADOrgSync-SyncTest-8fa5fcdf,DC=tianjitest,DC=com"
+          move_ou = "OU=CodexSourceMove" + run_id[-8:] + "," + root
           with closing(ActiveDirectory()) as ad:
               matches = ad.match("employee_id", employee_id)
               if matches:
@@ -872,6 +875,13 @@ jobs:
                   assert ad.conn.delete(account["dn"]), "disposable account cleanup failed"
               assert not ad.match("employee_id", employee_id)
               assert not ad.match("source_id", username)
+              if ad.ou_identity(move_ou) is not None:
+                  assert os.environ["TEST_CLEANUP_ALLOWED"] == "1", "initial OU absence was not verified"
+                  assert under(move_ou, root)
+                  contents = ad.search("(objectClass=*)", base=move_ou)
+                  assert len(contents) == 1 and contents[0]["dn"].casefold() == move_ou.casefold()
+                  assert ad.conn.delete(move_ou), "disposable move OU cleanup failed"
+              assert ad.ou_identity(move_ou) is None
           assert not Binding.objects.filter(username=username).exists()
           config = Configuration.objects.get(pk=1)
           assert not config.schedule_enabled and not config.sspr_enabled

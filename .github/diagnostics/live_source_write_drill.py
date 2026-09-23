@@ -33,10 +33,12 @@ assert under(root_ou, settings.LDAP_BASE_DN) and settings.LDAP_VERIFY_CERT is Fa
 username = "cxsource" + run_id[-8:]
 employee_id = "CXR" + run_id[-8:]
 before_name = "Codex Source Before " + run_id[-8:]
+move_ou = "OU=CodexSourceMove" + run_id[-8:] + "," + root_ou
 
 absence_confirmed = False
 real_before = None
 real_guid = None
+move_guid = None
 try:
     call_command("migrate", interactive=False, verbosity=0)
     config = Configuration.current()
@@ -79,6 +81,7 @@ try:
         assert real_before["enabled"] and not real_before["protected"]
         assert not ad.match("employee_id", employee_id)
         assert not ad.match("source_id", username)
+        assert ad.ou_identity(move_ou) is None
     absence_confirmed = True
     print("test_identity_absent_and_real_ad_account_read_only=true", flush=True)
 
@@ -129,6 +132,41 @@ try:
     binding.refresh_from_db()
     assert str(binding.object_guid) == synthetic_guid and binding.enabled
     print("real_dingtalk_source_updated_disposable_ad_same_guid=true", flush=True)
+
+    with closing(ActiveDirectory()) as ad:
+        move_guid = ad.ensure_ou(move_ou, root_ou)
+    department_binding = DepartmentBinding.objects.get(source_id=primary)
+    department_binding.dn = move_ou
+    department_binding.object_guid = move_guid
+    department_binding.save(update_fields=["dn", "object_guid"])
+
+    move_preview = synchronization.enqueue(kind="preview", scope="users", selected=[source_id], actor="acceptance")
+    assert synchronization.run_next()
+    move_preview.refresh_from_db()
+    assert move_preview.status == "preview_ready", (move_preview.status, move_preview.message)
+    move_operations = move_preview.plan["operations"]
+    assert len(move_operations) == 1
+    assert move_operations[0]["action"] == "move"
+    assert move_operations[0]["target"]["guid"] == synthetic_guid
+    assert move_operations[0]["ou"].casefold() == move_ou.casefold()
+    assert not move_preview.plan["high_risk"]
+    with closing(ActiveDirectory()) as ad:
+        assert synchronization.parent_dn(ad.by_guid(synthetic_guid)["dn"]).casefold() == root_ou.casefold()
+        assert fingerprint(ad.by_guid(real_guid)) == fingerprint(real_before)
+    print("live_source_mapping_move_preview_read_only=true", flush=True)
+
+    synchronization.queue_apply(move_preview.pk, "acceptance")
+    assert synchronization.run_next()
+    move_preview.refresh_from_db()
+    assert move_preview.status == "success", (move_preview.status, move_preview.message)
+    with closing(ActiveDirectory()) as ad:
+        moved = ad.by_guid(synthetic_guid)
+        assert moved["username"] == username and moved["employee_id"] == employee_id
+        assert synchronization.parent_dn(moved["dn"]).casefold() == move_ou.casefold()
+        assert fingerprint(ad.by_guid(real_guid)) == fingerprint(real_before)
+    binding.refresh_from_db()
+    assert str(binding.object_guid) == synthetic_guid and binding.enabled
+    print("real_dingtalk_source_mapping_moved_disposable_ad_same_guid=true", flush=True)
 finally:
     if absence_confirmed:
         with closing(ActiveDirectory()) as ad:
@@ -141,6 +179,12 @@ finally:
                 assert ad.conn.delete(account["dn"]), "disposable account cleanup failed"
             assert not ad.match("employee_id", employee_id)
             assert not ad.match("source_id", username)
+            if move_guid is not None:
+                ad.verify_ou(move_ou, move_guid)
+                contents = ad.search("(objectClass=*)", base=move_ou)
+                assert len(contents) == 1 and contents[0]["dn"].casefold() == move_ou.casefold()
+                assert ad.conn.delete(move_ou), "disposable move OU cleanup failed"
+                assert ad.ou_identity(move_ou) is None
             if real_before is not None:
                 assert fingerprint(ad.by_guid(real_guid)) == fingerprint(real_before)
         print("disposable_ad_removed_real_employee_ad_unchanged=true", flush=True)
