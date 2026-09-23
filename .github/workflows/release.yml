@@ -700,7 +700,7 @@ jobs:
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
   candidate-staged-sync-drill:
-    if: ${{ github.ref == 'refs/heads/codex/prod-verify-e9d9afb' }}
+    if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 15
