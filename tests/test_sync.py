@@ -287,3 +287,52 @@ def test_partial_success_does_not_replace_full_success_marker(configured, monkey
     partial.refresh_from_db()
     assert partial.status == "success"
     assert RuntimeState.current().last_full_success == marker
+
+
+@pytest.mark.django_db
+def test_binding_commit_failure_recovers_by_guid_even_after_employee_change(configured, monkeypatch):
+    from django.db import IntegrityError
+    from sync_app.models import Operation
+    source, ad = Source(), Directory([])
+    job = Job.objects.create()
+    job.plan = plan(job, source, ad)
+    original_create = Binding.objects.create
+    def fail_commit(**kwargs):
+        raise IntegrityError("simulated binding commit failure")
+    monkeypatch.setattr(Binding.objects, "create", fail_commit)
+    assert apply(job, source, ad) == "partial_failed"
+    assert not Binding.objects.exists()
+    evidence = Operation.objects.get(job=job, action="create")
+    assert evidence.target_guid is not None and evidence.status == "failed"
+    monkeypatch.setattr(Binding.objects, "create", original_create)
+    source.users[0]["employee_id"] = "changed-employee-id"
+    retry = Job.objects.create()
+    retry.plan = plan(retry, source, ad)
+    assert retry.plan["operations"][0]["action"] == "update"
+    assert apply(retry, source, ad) == "success"
+    assert Binding.objects.get().object_guid == evidence.target_guid
+    assert ad.created == 1
+
+
+@pytest.mark.django_db
+def test_uncertain_creation_cannot_be_automatically_repeated(configured):
+    from sync_app.models import Operation
+    previous = Job.objects.create(status="failed")
+    Operation.objects.create(job=previous, source_id="u1", action="create", status="failed")
+    result = plan(Job.objects.create(), Source(), Directory([]))
+    assert result["operations"][0]["action"] == "conflict"
+    assert "可靠对象证据" in result["operations"][0]["reason"]
+
+
+@pytest.mark.django_db
+def test_cleanup_preserves_unresolved_creation_evidence(configured):
+    from datetime import timedelta
+    from django.core.management import call_command
+    from django.utils import timezone
+    from sync_app.models import Operation
+    previous = Job.objects.create(status="failed")
+    Job.objects.filter(pk=previous.pk).update(created_at=timezone.now() - timedelta(days=100))
+    Operation.objects.create(job=previous, source_id="u1", action="create", status="failed")
+    call_command("cleanup")
+    assert Job.objects.filter(pk=previous.pk).exists()
+    assert plan(Job.objects.create(), Source(), Directory([]))["operations"][0]["action"] == "conflict"

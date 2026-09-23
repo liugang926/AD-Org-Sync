@@ -26,7 +26,7 @@ def binding_signature():
 
 def collect(source, config):
     started_at = timezone.now()
-    anchor = fingerprint([settings.DINGTALK_CORP_ID, settings.LDAP_HOST, settings.LDAP_BASE_DN])
+    anchor = fingerprint([settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN])
     if config.identity_anchor and config.identity_anchor != anchor:
         raise RuleError("企业或 AD 目录已更换，禁止复用旧组织绑定；请使用新的数据库")
     if not config.identity_anchor:
@@ -159,7 +159,20 @@ def plan(job, source, ad):
     for user in chosen_users:
         person, binding = people[user["source_id"]], bindings.get(user["source_id"])
         b = {"guid": str(binding.object_guid), "enabled": binding.enabled} if binding else None
+        recovery = None
+        if not binding:
+            recovery = Operation.objects.filter(source_id=user["source_id"], action="create").order_by("-pk").first()
+            if recovery and recovery.target_guid:
+                # A prior AD write can outlive its local binding transaction.
+                # Preserve its object identity even if source attributes changed.
+                b = {"guid": str(recovery.target_guid), "enabled": True}
         action, target, reason = resolve(user, b, accounts, occupied, config.naming, employee_counts, name_counts, config.match_field)
+        if recovery and not recovery.target_guid:
+            action, reason = "conflict", "此前建号结果缺少可靠对象证据，请人工核验并绑定，禁止自动重建"
+        elif recovery and action == "update":
+            reason = "核验此前已创建的 AD 对象，补全未完成的同步绑定"
+            if target["guid"] in occupied:
+                action, reason = "conflict", "此前创建的 AD 对象已绑定其他人员，请人工核验"
         if action == "create" and actual_employee_counts[user.get("employee_id", "").strip().casefold()] != 1:
             action, reason = "conflict", "工号重复，不能创建账号"
         if person.excluded:

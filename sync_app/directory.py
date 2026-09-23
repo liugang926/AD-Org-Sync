@@ -26,8 +26,8 @@ def under(dn, root):
 
 class DingTalk:
     def __init__(self):
-        if not all((settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.DINGTALK_APP_SECRET)):
-            raise RuleError("请配置钉钉企业 ID、AppKey 和 AppSecret")
+        if not all((settings.DINGTALK_APP_KEY, settings.DINGTALK_APP_SECRET)):
+            raise RuleError("请配置钉钉 AppKey 和 AppSecret")
         self.http = requests.Session()
         self.token = ""
 
@@ -46,7 +46,9 @@ class DingTalk:
             response.raise_for_status()
             data = response.json()
             if data.get("errcode") != 0:
-                raise RuleError("钉钉请求失败，请检查权限、可见范围和服务器 IP 白名单")
+                code = data.get("errcode")
+                safe_code = str(code) if isinstance(code, int) else "未知"
+                raise RuleError(f"钉钉请求失败（错误码 {safe_code}），请检查应用权限、可见范围和服务器 IP 白名单")
             if "result" not in data:
                 raise RuleError("钉钉返回数据不完整")
             return data["result"]

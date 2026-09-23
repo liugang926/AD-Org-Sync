@@ -31,6 +31,8 @@ def verify(code, ip):
     config = Configuration.current()
     if not config.sspr_enabled:
         raise RuleError("员工密码重置尚未开启")
+    if not settings.DINGTALK_CORP_ID:
+        raise RuleError("请管理员先配置钉钉企业 ID，再使用员工身份验证")
     source = DingTalk()
     ad = None
     try:

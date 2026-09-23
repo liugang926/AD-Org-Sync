@@ -1,7 +1,7 @@
 from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from sync_app.models import EmployeeSession, RateWindow, Snapshot, Job, Audit
+from sync_app.models import EmployeeSession, RateWindow, Snapshot, Job, Audit, Operation, Binding
 from sync_app.locking import lock
 
 
@@ -18,6 +18,7 @@ class Command(BaseCommand):
             if latest:
                 old = old.exclude(pk=latest.pk)
             old.delete()
-            Job.objects.filter(created_at__lt=now - timedelta(days=90)).exclude(status__in=["queued", "running", "needs_confirmation", "preview_ready"]).delete()
+            unresolved = Operation.objects.filter(action="create").exclude(source_id__in=Binding.objects.values("person__source_id")).values("job_id")
+            Job.objects.filter(created_at__lt=now - timedelta(days=90)).exclude(status__in=["queued", "running", "needs_confirmation", "preview_ready"]).exclude(pk__in=unresolved).delete()
             Audit.objects.filter(created_at__lt=now - timedelta(days=180)).delete()
         self.stdout.write("Expired operational records removed; bindings retained.")

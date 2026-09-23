@@ -87,3 +87,11 @@ def test_input_identity_is_not_trusted(client, setup_sspr):
 def test_csrf_is_required(setup_sspr):
     from django.test import Client
     assert Client(enforce_csrf_checks=True).post("/sspr/auth/dingtalk", {"code": "valid"}).status_code == 403
+
+
+@pytest.mark.django_db
+def test_missing_enterprise_id_blocks_employee_auth(setup_sspr, settings):
+    settings.DINGTALK_CORP_ID = ""
+    with pytest.raises(RuleError, match="企业 ID"):
+        sspr.verify("valid", "ip")
+    assert not EmployeeSession.objects.exists()
