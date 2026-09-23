@@ -85,28 +85,38 @@ class DingTalk:
         }
 
     def collect(self, root_id):
-        queue, departments, users = deque([str(root_id)]), {}, {}
+        if not str(root_id).isdigit() or int(root_id) <= 0:
+            raise RuleError("钉钉根部门 ID 无效")
+        queue, departments, users = deque([(str(root_id), None)]), {}, {}
         while queue:
-            dept_id = queue.popleft()
+            dept_id, expected_parent = queue.popleft()
             if dept_id in departments:
                 raise RuleError("部门结构重复或存在循环")
             detail = self.call("/topapi/v2/department/get", {"dept_id": int(dept_id)})
-            if str(detail.get("dept_id")) != dept_id or not detail.get("name"):
+            if not isinstance(detail, dict) or str(detail.get("dept_id")) != dept_id or not detail.get("name"):
                 raise RuleError("部门详情不完整")
+            if expected_parent is not None and str(detail.get("parent_id")) != expected_parent:
+                raise RuleError("部门父级与子部门列表不一致，禁止同步")
             departments[dept_id] = {"id": dept_id, "name": detail["name"], "parent": str(detail.get("parent_id", ""))}
             children = self.call("/topapi/v2/department/listsub", {"dept_id": int(dept_id)})
             if not isinstance(children, list):
                 raise RuleError("部门列表不完整")
-            queue.extend(str(d["dept_id"]) for d in children)
+            for child in children:
+                child_id = str(child.get("dept_id", "")) if isinstance(child, dict) else ""
+                if not child_id.isdigit() or int(child_id) <= 0:
+                    raise RuleError("子部门 ID 缺失或无效，禁止同步")
+                queue.append((child_id, dept_id))
             cursor, seen = 0, set()
             while True:
                 if cursor in seen:
                     raise RuleError("人员分页未前进，本次采集已停止")
                 seen.add(cursor)
                 page = self.call("/topapi/v2/user/list", {"dept_id": int(dept_id), "cursor": cursor, "size": 100})
-                if not isinstance(page, dict) or not isinstance(page.get("list"), list):
+                if not isinstance(page, dict) or not isinstance(page.get("list"), list) or not isinstance(page.get("has_more"), bool):
                     raise RuleError("人员分页格式不完整")
                 for item in page["list"]:
+                    if not isinstance(item, dict):
+                        raise RuleError("人员分页条目不完整")
                     uid = str(item.get("userid") or "")
                     if not uid:
                         raise RuleError("人员缺少稳定 userId")
@@ -116,7 +126,10 @@ class DingTalk:
                     break
                 if not page.get("list") or page.get("next_cursor") is None:
                     raise RuleError("人员分页不完整")
-                cursor = int(page["next_cursor"])
+                next_cursor = page["next_cursor"]
+                if isinstance(next_cursor, bool) or not str(next_cursor).isdigit():
+                    raise RuleError("人员分页游标无效，本次采集已停止")
+                cursor = int(next_cursor)
         if not users:
             raise RuleError("通讯录为空，禁止执行同步；请检查应用可见范围")
         return sorted(users.values(), key=lambda u: u["source_id"]), sorted(departments.values(), key=lambda d: d["id"])

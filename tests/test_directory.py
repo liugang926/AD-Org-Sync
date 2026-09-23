@@ -24,6 +24,48 @@ def test_dingtalk_missing_page_list_fails_closed():
         source.collect("1")
 
 
+def test_dingtalk_inconsistent_department_parent_fails_closed():
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[
+        {"dept_id": 1, "name": "Root", "parent_id": 0},
+        [{"dept_id": 2}],
+        {"list": [{"userid": "u"}], "has_more": False},
+        {"dept_id": 2, "name": "Child", "parent_id": 999},
+    ])
+    source.user = Mock(return_value={"source_id": "u"})
+    with pytest.raises(RuleError, match="父级与子部门列表不一致"):
+        source.collect("1")
+
+
+def test_dingtalk_consistent_child_and_shared_member_are_collected_once():
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[
+        {"dept_id": 1, "name": "Root", "parent_id": 0},
+        [{"dept_id": 2}],
+        {"list": [{"userid": "u"}], "has_more": False},
+        {"dept_id": 2, "name": "Child", "parent_id": 1},
+        [],
+        {"list": [{"userid": "u"}], "has_more": False},
+    ])
+    source.user = Mock(return_value={"source_id": "u"})
+    users, departments = source.collect("1")
+    assert len(users) == 1 and len(departments) == 2
+    source.user.assert_called_once_with("u")
+
+
+@pytest.mark.parametrize("page", [
+    {"list": [{"userid": "u"}], "has_more": "false"},
+    {"list": [{"userid": "u"}], "has_more": True, "next_cursor": "bad"},
+    {"list": [None], "has_more": False},
+])
+def test_dingtalk_malformed_pagination_fails_closed(page):
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[{"dept_id": 1, "name": "Root", "parent_id": 0}, [], page])
+    source.user = Mock(return_value={"source_id": "u"})
+    with pytest.raises(RuleError, match="人员分页"):
+        source.collect("1")
+
+
 def test_ldap_match_escapes_untrusted_identity_values():
     directory = object.__new__(ActiveDirectory)
     directory.search = Mock(return_value=[])
