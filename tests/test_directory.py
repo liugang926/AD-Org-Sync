@@ -85,6 +85,24 @@ def test_dingtalk_user_scope_accepts_another_verified_membership():
     assert source.user_in_scope({"departments": ["3", "4"]}, "1")
 
 
+@pytest.mark.parametrize(
+    ("sub_code", "expected"),
+    [(60011, "子错误码 60011"), ("60012", "子错误码 60012"), ("60013\nprivate", "错误码 88")],
+)
+def test_dingtalk_error_reports_only_safe_numeric_sub_code(sub_code, expected):
+    source = object.__new__(DingTalk)
+    source.token = "test-token"
+    response = Mock()
+    response.json.return_value = {"errcode": 88, "sub_code": sub_code, "sub_msg": "private details"}
+    source.http = Mock()
+    source.http.post.return_value = response
+
+    with pytest.raises(RuleError, match=expected) as failure:
+        source.call("/topapi/v2/department/get", {"dept_id": 1})
+    assert "private details" not in str(failure.value)
+    assert "private" not in str(failure.value)
+
+
 @pytest.mark.parametrize("page", [
     {"list": [{"userid": "u"}], "has_more": "false"},
     {"list": [{"userid": "u"}], "has_more": True, "next_cursor": "bad"},

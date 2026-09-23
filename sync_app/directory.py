@@ -55,7 +55,14 @@ class DingTalk:
             if data.get("errcode") != 0:
                 code = data.get("errcode")
                 safe_code = str(code) if isinstance(code, int) else "未知"
-                raise RuleError(f"钉钉请求失败（错误码 {safe_code}），请检查应用权限、可见范围和服务器 IP 白名单")
+                sub_code = data.get("sub_code") or data.get("subCode")
+                safe_sub_code = str(sub_code)
+                suffix = (
+                    f"，子错误码 {safe_sub_code}"
+                    if safe_sub_code.isascii() and safe_sub_code.isdecimal() and len(safe_sub_code) <= 12
+                    else ""
+                )
+                raise RuleError(f"钉钉请求失败（错误码 {safe_code}{suffix}），请检查应用权限、可见范围和服务器 IP 白名单")
             if "result" not in data:
                 raise RuleError("钉钉返回数据不完整")
             return data["result"]
