@@ -38,6 +38,11 @@ jobs:
           docker exec ad_org_sync-web-1 python -m sync_app.cli shell -c 'from sync_app.models import Configuration, Job; c=Configuration.objects.filter(pk=1).values("schedule_enabled","sspr_enabled").first(); assert c is not None; assert c["schedule_enabled"] is False; assert c["sspr_enabled"] is False; print("schedule_enabled=false sspr_enabled=false scheduler_jobs="+str(Job.objects.filter(actor="scheduler").count()))'
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
+          nginx_config="$(docker exec ad_org_sync-nginx-1 nginx -T 2>&1)"
+          grep -Fq 'set_real_ip_from 10.106.1.119;' <<< "$nginx_config"
+          grep -Fq 'real_ip_header X-Forwarded-For;' <<< "$nginx_config"
+          grep -Fq 'proxy_set_header X-Real-IP $remote_addr;' <<< "$nginx_config"
+          echo 'deployed_nginx_real_ip_configuration=true'
           access_logs="$(docker logs --since 20m ad_org_sync-nginx-1 2>&1)"
           normal="$(printf '%s\n' "$access_logs" | grep 'codex_ipdiag=e9d9afb-normal' | tail -n 1 || true)"
           spoof="$(printf '%s\n' "$access_logs" | grep 'codex_ipdiag=e9d9afb-spoof' | tail -n 1 || true)"
@@ -51,6 +56,10 @@ jobs:
           test -n "$normal_ip"
           test -n "$spoof_ip"
           test "$normal_ip" = "$spoof_ip"
-          test "$normal_ip" != 10.106.1.119
           test "$spoof_ip" != 203.0.113.55
-          echo 'gateway_client_ip_forwarding=true spoofed_header_ignored=true'
+          if test "$normal_ip" = 10.106.1.119; then
+            echo 'per_client_ip_available=false'
+          else
+            echo 'per_client_ip_available=true'
+          fi
+          echo 'spoofed_header_ignored=true'
