@@ -6,6 +6,7 @@
 
 - 测试 AD 域控重启后，生产容器在 `LDAP_VERIFY_CERT=false` 下完成 TLS 1.3 握手，成功绑定并读取测试 OU 及其 427 个账号；自签证书未导入信任库。[连接验证任务](https://github.com/liugang926/AD-Org-Sync/actions/runs/35823677780)
 - 同一任务完整读取钉钉 488 名人员、52 个部门。原项目保存的测试连接凭据迁入生产宿主受限 `.env`，未写入仓库；临时传递用的 GitHub Environment secrets 已删除。
+- 新增来源完整性校验后，从生产白名单出口执行只读结构探针：52 个部门的父子关系与子部门列表一致，53 页人员列表的分页标记及游标格式有效，去重后为 488 人。探针只读取钉钉 API 与现有配置，不访问 AD 或写入业务数据库；它验证了当前真实数据与新增校验条件相容，但不替代新版本部署后的完整同步验收。诊断分支已重新停用该任务。[真实目录结构探针](https://github.com/liugang926/AD-Org-Sync/actions/runs/35855480214)
 - 为测试 OU 配置同步根范围并运行一次全量**预览**，耗时约 86 秒。计划包含 358 个关联、111 个新建、19 个冲突及 52 个部门 OU 项。该次全量任务因冲突停在 `blocked`，未执行 AD 写入或绑定。[预览任务](https://github.com/liugang926/AD-Org-Sync/actions/runs/35823938289)、[聚合核验](https://github.com/liugang926/AD-Org-Sync/actions/runs/35824229431)
 - 19 个冲突中，11 个主部门不明确、7 个账号命名为空/重复/占用/受保护、1 个匹配字段缺失或重复。同步期间员工入口和就绪接口仍返回 200；这只验证了预览阶段的页面可访问性，不等于实际 AD 写入期间的性能验收。
 - 全量预览读取 488 人、52 个部门约需 86 秒；指定 `T0001919` 的单人预览仍约需 85 秒，因为当前会先完整采集来源目录。只读探针确认钉钉 `user/list` 对抽样员工返回工号等字段，但不返回 `main_department` 和 `org_email`；抽样的其他字段与 `user/get` 一致。直接以列表结果替代逐人详情会改变主部门和邮箱的判定，故没有采用这种不完整的提速或增加镜像缓存。[列表字段探针](https://github.com/liugang926/AD-Org-Sync/actions/runs/35848224280)、[单人预览](https://github.com/liugang926/AD-Org-Sync/actions/runs/35844754662)
@@ -24,7 +25,7 @@
 
 | PRD 范围 | 证据位置与覆盖内容 |
 | --- | --- |
-| FR-01 来源完整性与范围 | `tests/test_directory.py`、`tests/test_sync.py`：分页错误、空目录、局部范围；独立刷新不依赖 AD |
+| FR-01 来源完整性与范围 | `tests/test_directory.py`、`tests/test_sync.py`：分页错误、父子部门不一致、空目录、局部范围；独立刷新不依赖 AD。真实目录结构已完成只读探针核验 |
 | FR-02～05 匹配、命名、绑定 | `tests/test_domain.py`、`tests/test_sync.py`、`tests/test_web.py`：稳定绑定、冲突、邮箱需人工确认、签名确认防替换与重放、预览不绑定 |
 | FR-06 部门 OU | `tests/test_sync.py`：空部门创建、人员换部门后保留 GUID；真实测试 AD 与合成来源的业务同步已验证空部门 OU 和跨 OU 移动，尚需真实钉钉来源验收 |
 | FR-07 属性与离职 | `tests/test_sync.py`：空值默认保留、显式清除、局部不禁用、全量阈值确认、初始化策略；隔离业务同步已在真实测试 AD 验证完整全量缺失只禁用目标账号 |
