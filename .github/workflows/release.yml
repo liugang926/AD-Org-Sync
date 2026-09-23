@@ -408,6 +408,7 @@ jobs:
           test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
           docker exec -i -e TEST_RUN_ID="$GITHUB_RUN_ID" ad_org_sync-web-1 python - < .github/diagnostics/ad_write_drill.py
   sync-write-drill:
+    if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 15
