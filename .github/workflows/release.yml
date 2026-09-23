@@ -352,6 +352,7 @@ jobs:
           print("ad_account_unchanged=true")
           PY
   probe-user-list:
+    if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     steps:
