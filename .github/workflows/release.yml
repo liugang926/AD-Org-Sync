@@ -1,26 +1,44 @@
-name: Release
+name: Stop legacy service (one-time operator task)
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  stop-legacy:
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    timeout-minutes: 10
+    concurrency:
+      group: production
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - run: pip install -e ".[test]"
-      - run: python -m pytest -q --ignore=tests/test_browser.py
-      - run: python -m build --wheel --outdir dist/packages
-      - uses: actions/upload-artifact@v7
-        with:
-          name: ad-org-sync-release
-          path: dist/packages/*.whl
-      - uses: softprops/action-gh-release@v3
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: dist/packages/*.whl
+      - name: Back up and stop only the verified legacy Compose project
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t web_ids < <(docker ps -q --filter label=com.docker.compose.project=ad_org_sync --filter label=com.docker.compose.service=web)
+          if [[ ${#web_ids[@]} == 0 ]]; then
+            echo 'No running web service; no containers changed.'
+            exit 0
+          fi
+          [[ ${#web_ids[@]} == 1 ]] || { echo 'Ambiguous web container'; exit 1; }
+          web="${web_ids[0]}"
+          version="$(docker exec "$web" python -c 'import importlib.metadata; print(importlib.metadata.version("ad-org-sync"))')"
+          [[ "$version" == 2.* ]] || { echo "Refusing to stop non-legacy version: $version"; exit 1; }
+          echo "Verified legacy application version: $version"
+          docker exec "$web" python -m sync_app.cli db-backup --db-path /data/app.db --label pre-legacy-shutdown --json
+          mapfile -t ids < <(docker ps -aq --filter label=com.docker.compose.project=ad_org_sync)
+          for id in "${ids[@]}"; do
+            service="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$id")"
+            case "$service" in
+              web|nginx|worker)
+                docker update --restart=no "$id" >/dev/null
+                docker stop --time 30 "$id"
+                ;;
+            esac
+          done
+          if docker ps --filter label=com.docker.compose.project=ad_org_sync --format '{{.Label "com.docker.compose.service"}}' | grep -Eq '^(web|nginx|worker)$'; then
+            echo 'Legacy service still running'; exit 1
+          fi
+          docker ps -a --filter label=com.docker.compose.project=ad_org_sync --format '{{.Names}}|{{.Image}}|{{.Status}}'
+          echo 'Legacy containers stopped with restart disabled. Volumes and backups preserved.'
