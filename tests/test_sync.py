@@ -177,6 +177,74 @@ def test_binding_confirmation_rejects_replaced_target_and_replay(configured, mon
 
 
 @pytest.mark.django_db
+def test_manual_binding_to_disabled_ad_account_waits_for_explicit_reactivation(configured, monkeypatch):
+    from sync_app import synchronization as sync
+
+    source = Source()
+    target = account()
+    target["enabled"] = False
+    ad = Directory([target])
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+
+    review = sync.binding_review(person.pk, "testuser")
+    sync.bind_person(person.pk, review["confirmation"], "admin", "人工确认已禁用账号")
+    binding = Binding.objects.get(person=person)
+    assert binding.manual and not binding.enabled
+    assert not ad.items[0]["enabled"]
+    assert plan(Job.objects.create(), source, ad)["operations"][0]["action"] == "skip"
+
+    sync.reactivate_person(person.pk, "admin", "核验后恢复", True)
+    binding.refresh_from_db()
+    assert binding.enabled and ad.items[0]["enabled"]
+    assert plan(Job.objects.create(), source, ad)["operations"][0]["action"] == "update"
+
+
+@pytest.mark.django_db
+def test_manual_binding_rechecks_live_source_scope(configured, monkeypatch):
+    from sync_app import synchronization as sync
+
+    source, ad = Source(), Directory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    source.user_in_scope = lambda employee, root: False
+    with pytest.raises(RuleError, match="当前同步范围"):
+        sync.binding_review(person.pk, "testuser")
+
+    source.user_in_scope = lambda employee, root: True
+    review = sync.binding_review(person.pk, "testuser")
+    source.user_in_scope = lambda employee, root: False
+    with pytest.raises(RuleError, match="当前同步范围"):
+        sync.bind_person(person.pk, review["confirmation"], "admin", "确认身份")
+    assert not Binding.objects.exists()
+
+
+@pytest.mark.django_db
+def test_reactivation_rechecks_live_source_scope(configured, monkeypatch):
+    from sync_app import synchronization as sync
+
+    source = Source()
+    target = account()
+    target["enabled"] = False
+    ad = Directory([target])
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    Binding.objects.create(person=person, object_guid=target["guid"], username=target["username"])
+
+    source.user_in_scope = lambda employee, root: False
+    with pytest.raises(RuleError, match="当前同步范围"):
+        sync.reactivate_person(person.pk, "admin", "人工确认", True)
+    assert not ad.items[0]["enabled"]
+
+    source.user_in_scope = lambda employee, root: True
+    sync.reactivate_person(person.pk, "admin", "人工确认", True)
+    assert ad.items[0]["enabled"]
+
+
+@pytest.mark.django_db
 def test_new_account_policy_can_keep_account_disabled(configured):
     configured.enable_new_accounts = False
     configured.require_password_change = False
@@ -187,6 +255,98 @@ def test_new_account_policy_can_keep_account_disabled(configured):
     assert apply(job, source, ad) == "success"
     assert ad.items[0]["enabled"] is False
     assert ad.items[0]["require_change"] is False
+    assert not Binding.objects.get().enabled
+
+    repeat = Job.objects.create()
+    repeat.plan = plan(repeat, source, ad)
+    assert repeat.plan["operations"][0]["action"] == "skip"
+    assert apply(repeat, source, ad) == "success"
+    assert ad.created == 1
+
+
+@pytest.mark.django_db
+def test_disabled_binding_with_externally_enabled_ad_target_is_conflict(configured):
+    configured.enable_new_accounts = False
+    configured.save()
+    source, ad = Source(), Directory([])
+    first = Job.objects.create()
+    first.plan = plan(first, source, ad)
+    assert apply(first, source, ad) == "success"
+    ad.items[0]["enabled"] = True
+    operation = plan(Job.objects.create(), source, ad)["operations"][0]
+    assert operation["action"] == "conflict"
+    assert "停用绑定" in operation["reason"]
+
+
+@pytest.mark.django_db
+def test_created_account_stays_disabled_until_attributes_finish(configured):
+    class FailingUpdate(Directory):
+        def update(self, guid, attrs, ou, root, *, allow_disabled=False):
+            assert allow_disabled and not self.by_guid(guid)["enabled"]
+            raise RuleError("模拟属性更新失败")
+
+    source, ad = Source(), FailingUpdate([])
+    job = Job.objects.create()
+    job.plan = plan(job, source, ad)
+    assert apply(job, source, ad) == "partial_failed"
+    assert ad.created == 1 and not ad.items[0]["enabled"]
+    assert not Binding.objects.exists()
+    retry = plan(Job.objects.create(), source, ad)["operations"][0]
+    assert retry["action"] == "conflict"
+    assert retry["target"]["guid"] == ad.items[0]["guid"]
+    assert ad.created == 1
+
+
+@pytest.mark.django_db
+def test_manual_reactivation_enables_held_account_and_binding(configured, monkeypatch):
+    from sync_app import synchronization as sync
+
+    configured.enable_new_accounts = False
+    configured.save()
+    source, ad = Source(), Directory([])
+    first = Job.objects.create()
+    first.plan = plan(first, source, ad)
+    assert apply(first, source, ad) == "success"
+    binding = Binding.objects.get()
+    old_revision = binding.revision
+    assert not binding.enabled and not ad.items[0]["enabled"]
+
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    source.user_in_scope = lambda employee, root: False
+    with pytest.raises(RuleError, match="当前同步范围"):
+        sync.reactivate_person(binding.person.pk, "admin", "核验后启用", True)
+    assert not ad.items[0]["enabled"]
+    binding.refresh_from_db()
+    assert not binding.enabled
+
+    source.user_in_scope = lambda employee, root: True
+    sync.reactivate_person(binding.person.pk, "admin", "核验后启用", True)
+    binding.refresh_from_db()
+    assert binding.enabled and binding.revision != old_revision
+    assert ad.items[0]["enabled"]
+    assert plan(Job.objects.create(), source, ad)["operations"][0]["action"] == "update"
+
+
+@pytest.mark.django_db
+def test_manual_reactivation_can_reconcile_external_enable(configured, monkeypatch):
+    from sync_app import synchronization as sync
+
+    configured.enable_new_accounts = False
+    configured.save()
+    source, ad = Source(), Directory([])
+    first = Job.objects.create()
+    first.plan = plan(first, source, ad)
+    assert apply(first, source, ad) == "success"
+    binding = Binding.objects.get()
+    ad.items[0]["enabled"] = True
+
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    sync.reactivate_person(binding.person.pk, "admin", "核验外部启用", True)
+    binding.refresh_from_db()
+    assert binding.enabled and ad.items[0]["enabled"]
+    assert plan(Job.objects.create(), source, ad)["operations"][0]["action"] == "update"
 
 
 @pytest.mark.django_db

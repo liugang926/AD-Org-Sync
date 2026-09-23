@@ -27,6 +27,9 @@ class Source:
     def user(self, uid):
         return next(copy.deepcopy(u) for u in self.users if u["source_id"] == uid)
 
+    def user_in_scope(self, employee, root_id):
+        return str(root_id) in employee["departments"]
+
     def close(self):
         pass
 

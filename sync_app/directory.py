@@ -84,6 +84,34 @@ class DingTalk:
             "primary_department": str(data.get("main_department") or (departments[0] if len(departments) == 1 else "")),
         }
 
+    def user_in_scope(self, user, root_id):
+        root_id = str(root_id)
+        if not root_id.isdigit() or int(root_id) <= 0:
+            raise RuleError("钉钉根部门 ID 无效")
+        departments = [str(value) for value in user.get("departments", [])]
+        if root_id in departments:
+            return True
+        first_error = None
+        for department_id in departments:
+            current, seen = department_id, set()
+            try:
+                while current != "0":
+                    if not current.isdigit() or int(current) <= 0 or current in seen or len(seen) >= 100:
+                        raise RuleError("员工部门层级不完整或存在循环，不能确认同步范围")
+                    seen.add(current)
+                    detail = self.call("/topapi/v2/department/get", {"dept_id": int(current)})
+                    if not isinstance(detail, dict) or str(detail.get("dept_id")) != current:
+                        raise RuleError("员工部门详情不完整，不能确认同步范围")
+                    current = str(detail.get("parent_id", ""))
+                    if current == root_id:
+                        return True
+            except RuleError as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error:
+            raise first_error
+        return False
+
     def collect(self, root_id):
         if not str(root_id).isdigit() or int(root_id) <= 0:
             raise RuleError("钉钉根部门 ID 无效")
