@@ -78,6 +78,9 @@ class Directory:
     def update(self, guid, attrs, ou, root, *, allow_disabled=False):
         if str(guid) in self.fail_update:
             raise RuleError("属性更新失败")
+        item = next(a for a in self.items if a["guid"] == str(guid))
+        item["attrs"].update(attrs)
+        item["dn"] = item["dn"].split(",", 1)[0] + "," + ou
         return self.by_guid(guid)
 
     def enable(self, guid, root):

@@ -244,3 +244,46 @@ def test_email_match_requires_manual_confirmation(configured):
     assert "人工确认" in operation["reason"]
     assert operation["target"]["username"] == "testuser"
     assert not Binding.objects.exists()
+
+
+@pytest.mark.django_db
+def test_department_transfer_preserves_bound_object(configured):
+    class TransferredSource(Source):
+        def collect(self, root):
+            users, departments = super().collect(root)
+            users[0]["departments"] = ["2"]
+            users[0]["primary_department"] = "2"
+            return users, departments + [{"id": "2", "name": "研发", "parent": "1"}]
+    source, ad = Source(), Directory()
+    initial = Job.objects.create()
+    initial.plan = plan(initial, source, ad)
+    assert apply(initial, source, ad) == "success"
+    old_guid = Binding.objects.get().object_guid
+    transfer = Job.objects.create()
+    transfer.plan = plan(transfer, TransferredSource(), ad)
+    operation = transfer.plan["operations"][0]
+    assert operation["action"] == "move"
+    assert apply(transfer, TransferredSource(), ad) == "success"
+    assert Binding.objects.get().object_guid == old_guid
+    assert ad.items[0]["dn"].startswith("CN=testuser,OU=研发,")
+    assert ad.created == 0
+
+
+@pytest.mark.django_db
+def test_partial_success_does_not_replace_full_success_marker(configured, monkeypatch):
+    from sync_app import synchronization as sync
+    from sync_app.models import RuntimeState
+    source, ad = Source(), Directory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    full = enqueue(kind="scheduled")
+    sync.run_next()
+    full.refresh_from_db()
+    assert full.status == "success"
+    marker = RuntimeState.current().last_full_success
+    assert marker is not None
+    partial = enqueue(kind="scheduled", scope="users", selected=["u1"])
+    sync.run_next()
+    partial.refresh_from_db()
+    assert partial.status == "success"
+    assert RuntimeState.current().last_full_success == marker
