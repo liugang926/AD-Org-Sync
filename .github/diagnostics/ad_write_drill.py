@@ -18,7 +18,7 @@ from sync_app.models import Configuration
 run_id = os.environ["TEST_RUN_ID"]
 assert run_id.isdecimal() and len(run_id) <= 20
 root = "OU=ADOrgSync-SyncTest-8fa5fcdf,DC=tianjitest,DC=com"
-assert settings.LDAP_BASE_DN.casefold() == "DC=tianjitest,DC=com".casefold()
+assert under(root, settings.LDAP_BASE_DN)
 assert settings.LDAP_VERIFY_CERT is False
 config = Configuration.objects.get(pk=1)
 assert config.root_ou.casefold() == root.casefold()
