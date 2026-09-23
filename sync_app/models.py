@@ -2,6 +2,7 @@ import uuid
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
+from django.utils import timezone
 
 
 class Configuration(models.Model):
@@ -10,7 +11,11 @@ class Configuration(models.Model):
     identity_anchor = models.CharField(max_length=64, blank=True, editable=False)
     root_ou = models.CharField("同步 AD 根 OU DN", max_length=500, blank=True)
     naming = models.CharField("新账号命名", max_length=30, choices=[("employee_id", "工号"), ("source_id", "钉钉 userId"), ("email", "邮箱前缀")], default="employee_id")
+    match_field = models.CharField("同步匹配字段", max_length=30, choices=[("employee_id", "工号（唯一精确匹配可自动绑定）"), ("email", "邮箱（仅建议，需人工确认）"), ("source_id", "userId 与 AD 账号名（仅建议）")], default="employee_id")
     attributes = models.JSONField("同步属性", default=list, blank=True, help_text="displayName、mail、title、department、telephoneNumber")
+    clear_attributes = models.JSONField("允许来源空值清除的属性", default=list, blank=True, help_text="必须属于已启用的同步属性；默认空值不覆盖 AD")
+    enable_new_accounts = models.BooleanField("新建账号初始化成功后启用", default=True)
+    require_password_change = models.BooleanField("新建账号首次登录必须改密", default=True)
     protected_usernames = models.JSONField("额外保护账号", default=list, blank=True, help_text="填写服务账号、共享账号等 sAMAccountName；同步和密码重置均禁止操作")
     disable_missing = models.BooleanField("全量同步禁用离职人员", default=False)
     disable_limit = models.PositiveIntegerField("禁用人数阈值", default=5, validators=[MinValueValidator(1)])
@@ -29,6 +34,8 @@ class Configuration(models.Model):
         allowed = {"displayName", "mail", "title", "department", "telephoneNumber"}
         if not isinstance(self.attributes, list) or any(x not in allowed for x in self.attributes):
             raise ValidationError("同步属性不合法")
+        if not isinstance(self.clear_attributes, list) or any(x not in self.attributes for x in self.clear_attributes):
+            raise ValidationError("允许空值清除的属性必须属于已启用的同步属性")
         if not isinstance(self.protected_usernames, list) or any(not isinstance(x, str) or not x.strip() for x in self.protected_usernames):
             raise ValidationError("保护账号必须为非空账号名列表")
         previous = Configuration.objects.filter(pk=self.pk).first()
@@ -44,6 +51,7 @@ class Configuration(models.Model):
 
 
 class Snapshot(models.Model):
+    started_at = models.DateTimeField(default=timezone.now)
     created_at = models.DateTimeField(auto_now_add=True)
     fingerprint = models.CharField(max_length=64)
     root_department = models.CharField(max_length=100)
@@ -89,6 +97,7 @@ class Job(models.Model):
     message = models.CharField(max_length=500, blank=True)
     confirmed = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True)
     finished_at = models.DateTimeField(null=True)
 
 
@@ -108,11 +117,13 @@ class Audit(models.Model):
     action = models.CharField(max_length=40)
     target = models.CharField(max_length=150, blank=True)
     result = models.CharField(max_length=300)
+    success = models.BooleanField(default=True)
 
 
 class EmployeeSession(models.Model):
     digest = models.CharField(max_length=64, primary_key=True)
     source_id = models.CharField(max_length=100)
+    display_name = models.CharField(max_length=200, blank=True)
     object_guid = models.UUIDField()
     config_fingerprint = models.CharField(max_length=64)
     expires_at = models.DateTimeField()
@@ -123,3 +134,15 @@ class RateWindow(models.Model):
     key = models.CharField(max_length=64, primary_key=True)
     starts_at = models.DateTimeField()
     count = models.PositiveIntegerField(default=0)
+
+
+class RuntimeState(models.Model):
+    """Operational observations do not invalidate configuration fingerprints."""
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1)
+    last_full_success = models.DateTimeField(null=True)
+    connection_checks = models.JSONField(default=dict)
+    connections_checked_at = models.DateTimeField(null=True)
+
+    @classmethod
+    def current(cls):
+        return cls.objects.get_or_create(pk=1)[0]

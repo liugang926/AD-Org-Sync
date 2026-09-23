@@ -162,8 +162,8 @@ class ActiveDirectory:
         critical = str(value("isCriticalSystemObject")).lower() == "true"
         explicit_protection = str(value("sAMAccountName")).casefold() in protected_names
         return {"guid": str(uuid.UUID(str(value("objectGUID")).strip("{}"))), "dn": entry["dn"],
-                "username": str(value("sAMAccountName")), "employee_id": str(value("employeeID")),
-                "email": str(value("mail")), "enabled": not bool(uac & 2), "uac": uac,
+                "username": str(value("sAMAccountName")).strip(), "employee_id": str(value("employeeID")).strip(),
+                "email": str(value("mail")).strip(), "enabled": not bool(uac & 2), "uac": uac,
                 "protected": critical or explicit_protection or int(value("adminCount", 0)) == 1 or sid.endswith(("-500", "-501", "-502")) or bool(uac & (2048 | 4096 | 8192)),
                 "locked": bool(int(value("lockoutTime", 0))),
                 "attrs": {k: str(value(k)) for k in ["displayName", "mail", "title", "department", "telephoneNumber"]}}
@@ -222,9 +222,19 @@ class ActiveDirectory:
             raise RuleError("OU 对象已被替换，请重新确认部门关联")
         return current
 
-    def create(self, user, username, ou, root):
+    def ou_identity(self, dn):
+        try:
+            return self.verify_ou(dn)
+        except RuleError:
+            if self.conn.result.get("result") == 32:
+                return None
+            raise
+
+    def create(self, user, username, ou, root, *, enabled=True, require_change=True):
         if self.match("source_id", username):
             raise RuleError("AD 用户名已存在，需重新预览")
+        if self.match("employee_id", user["employee_id"]):
+            raise RuleError("工号已被 AD 账号使用，请重新预览")
         if not under(ou, root):
             raise RuleError("目标 OU 超出管理范围")
         dn = f"CN={escape_rdn(username)},{ou}"
@@ -239,15 +249,17 @@ class ActiveDirectory:
         password = "Aa1!" + "".join(secrets.choice(alphabet) for _ in range(28))
         if not self.conn.extend.microsoft.modify_password(dn, password):
             raise RuleError("账号已创建但初始化密码失败，已保持禁用，请人工处理")
-        if not self.conn.modify(dn, {"userAccountControl": [(MODIFY_REPLACE, [512])], "pwdLastSet": [(MODIFY_REPLACE, [0])]}):
+        if not self.conn.modify(dn, {"userAccountControl": [(MODIFY_REPLACE, [512 if enabled else 514])], "pwdLastSet": [(MODIFY_REPLACE, [0 if require_change else -1])]}):
             raise RuleError("账号初始化未完成，需人工处理")
         return self.by_guid(account["guid"])
 
-    def update(self, guid, attrs, ou, root):
-        account = self.check_account(guid)
+    def update(self, guid, attrs, ou, root, *, allow_disabled=False):
+        account = self.by_guid(guid)
+        if protected(account) or (not account["enabled"] and not allow_disabled):
+            raise RuleError("账号受保护或已禁用，不能更新")
         if not under(account["dn"], root) or not under(ou, root):
             raise RuleError("账号或目标 OU 超出管理范围")
-        changes = {k: [(MODIFY_REPLACE, [v])] for k, v in attrs.items() if v and account["attrs"].get(k) != v}
+        changes = {k: [(MODIFY_REPLACE, [v] if v else [])] for k, v in attrs.items() if account["attrs"].get(k, "") != v}
         if changes and not self.conn.modify(account["dn"], changes):
             raise RuleError("AD 属性更新失败")
         components = parse_dn(account["dn"])
@@ -264,6 +276,14 @@ class ActiveDirectory:
             raise RuleError("账号超出管理范围")
         if not self.conn.modify(account["dn"], {"userAccountControl": [(MODIFY_REPLACE, [account["uac"] | 2])]}):
             raise RuleError("AD 禁用失败")
+
+    def enable(self, guid, root):
+        account = self.by_guid(guid)
+        if protected(account) or not under(account["dn"], root):
+            raise RuleError("目标受保护或不在管理范围内")
+        if not self.conn.modify(account["dn"], {"userAccountControl": [(MODIFY_REPLACE, [account["uac"] & ~2])]}):
+            raise RuleError("AD 账号恢复启用失败")
+        return self.by_guid(guid)
 
     def reset_password(self, guid, password, unlock=False):
         account = self.check_account(guid)

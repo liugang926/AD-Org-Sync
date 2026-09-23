@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block content %}
+<h1>确认修改同步绑定</h1><section class="card">
+<p>人员：{{ person.name }} · {{ person.source_id }}</p>
+<p>原账号：{{ old.username|default:"未绑定" }} · {{ old.object_guid|default:"—" }}</p>
+<p>目标账号：{{ target.username }} · {{ target.guid }}</p>
+<p>目标位置：{{ target.dn }}</p>
+<p>目标状态：{% if target.enabled %}已启用{% else %}已禁用；绑定后仍需单独确认恢复启用{% endif %}</p>
+<form method="post" action="{% url 'person_action' person.pk %}">{% csrf_token %}
+<input type="hidden" name="action" value="confirm_bind"><input type="hidden" name="confirmation" value="{{ confirmation }}">
+<label>修改原因<input name="reason" required maxlength="150" value="{{ reason }}"></label>
+<button>确认绑定此账号</button> <a href="{% url 'people' %}">取消</a></form></section>
+{% endblock %}
