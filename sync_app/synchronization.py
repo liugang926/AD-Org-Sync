@@ -173,6 +173,20 @@ def plan(job, source, ad):
             reason = "核验此前已创建的 AD 对象，补全未完成的同步绑定"
             if target["guid"] in occupied:
                 action, reason = "conflict", "此前创建的 AD 对象已绑定其他人员，请人工核验"
+        elif recovery and action == "conflict" and target and not target["enabled"]:
+            evidence = recovery.evidence if isinstance(recovery.evidence, dict) else {}
+            employee_id = user.get("employee_id", "").strip().casefold()
+            if target["guid"] in occupied:
+                reason = "此前创建的 AD 对象已绑定其他人员，请人工核验"
+            elif (recovery.status == "failed" and evidence.get("created_fingerprint")
+                  and fingerprint(target) == evidence["created_fingerprint"]
+                  and evidence.get("created_config") == configuration_signature(config)
+                  and target["username"] == evidence.get("username")
+                  and employee_id and actual_employee_counts[employee_id] == 1
+                  and not protected(target) and under(target["dn"], config.root_ou)):
+                action, reason = "resume_create", "此前建号已保持禁用且状态未变化，继续初始化并补全绑定"
+            else:
+                reason = "此前建号对象已禁用或状态变化，请人工核验后处理"
         if action == "create" and actual_employee_counts[user.get("employee_id", "").strip().casefold()] != 1:
             action, reason = "conflict", "工号重复，不能创建账号"
         if person.excluded:
@@ -190,12 +204,16 @@ def plan(job, source, ad):
                     ad.verify_ou(overrides[dept].dn, str(overrides[dept].object_guid))
                 if target and not under(target["dn"], config.root_ou):
                     raise RuleError("已有账号不在受管 OU 内")
+                if action == "resume_create" and parent_dn(target["dn"]).casefold() != ou.casefold():
+                    raise RuleError("此前未完成建号的目标 OU 与当前部门不一致，请人工核验")
         except RuleError as exc:
             action, reason = "conflict", str(exc)
         values = {"displayName": user["name"], "mail": user["email"], "title": user["title"], "telephoneNumber": user["phone"], "department": departments.get(person.primary_department or user["primary_department"], {}).get("name", "")}
         attrs = {k: v for k, v in values.items() if k in config.attributes and (v or k in config.clear_attributes)}
         before = dict(target["attrs"]) if target else {}
         changes = [{"field": k, "before": before.get(k, ""), "after": v} for k, v in attrs.items() if before.get(k, "") != v]
+        if action == "resume_create" and config.enable_new_accounts:
+            changes.append({"field": "enabled", "before": False, "after": True})
         if target and action in {"update", "bind"} and parent_dn(target["dn"]).casefold() != ou.casefold():
             changes.append({"field": "OU", "before": parent_dn(target["dn"]), "after": ou})
             if action == "update":
@@ -297,9 +315,10 @@ def apply(job, source, ad):
                         # Write recovery evidence before any additional AD operation.
                         record.target_guid = account["guid"]
                         record.status = "created"
-                        record.save()
-                    account = ad.update(account["guid"], op["attrs"], op["ou"], config.root_ou, allow_disabled=op["action"] == "create")
-                    if op["action"] == "create" and config.enable_new_accounts:
+                        record.evidence = {**record.evidence, "created_fingerprint": fingerprint(account), "created_config": saved["config"]}
+                        record.save(update_fields=["target_guid", "status", "evidence"])
+                    account = ad.update(account["guid"], op["attrs"], op["ou"], config.root_ou, allow_disabled=op["action"] in {"create", "resume_create"})
+                    if op["action"] in {"create", "resume_create"} and config.enable_new_accounts:
                         account = ad.enable(account["guid"], config.root_ou)
                     record.target_guid = account["guid"]
                     # Each successful user commits independently of later users.
@@ -309,7 +328,7 @@ def apply(job, source, ad):
                         if existing and str(existing.object_guid) != account["guid"]:
                             raise RuleError("绑定发生变化")
                         if not existing:
-                            Binding.objects.create(person=person, object_guid=account["guid"], username=account["username"], enabled=op["action"] != "create" or config.enable_new_accounts)
+                            Binding.objects.create(person=person, object_guid=account["guid"], username=account["username"], enabled=op["action"] not in {"create", "resume_create"} or config.enable_new_accounts)
                         else:
                             existing.username = account["username"]
                             existing.save(update_fields=["username", "updated_at"])

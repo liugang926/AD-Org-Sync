@@ -279,11 +279,20 @@ def test_disabled_binding_with_externally_enabled_ad_target_is_conflict(configur
 
 
 @pytest.mark.django_db
-def test_created_account_stays_disabled_until_attributes_finish(configured):
+@pytest.mark.parametrize("enable_new_accounts", [True, False])
+def test_created_account_stays_disabled_until_attributes_finish(configured, enable_new_accounts):
+    configured.enable_new_accounts = enable_new_accounts
+    configured.save()
+
     class FailingUpdate(Directory):
+        fail_once = True
+
         def update(self, guid, attrs, ou, root, *, allow_disabled=False):
             assert allow_disabled and not self.by_guid(guid)["enabled"]
-            raise RuleError("模拟属性更新失败")
+            if self.fail_once:
+                self.fail_once = False
+                raise RuleError("模拟属性更新失败")
+            return super().update(guid, attrs, ou, root, allow_disabled=allow_disabled)
 
     source, ad = Source(), FailingUpdate([])
     job = Job.objects.create()
@@ -291,10 +300,41 @@ def test_created_account_stays_disabled_until_attributes_finish(configured):
     assert apply(job, source, ad) == "partial_failed"
     assert ad.created == 1 and not ad.items[0]["enabled"]
     assert not Binding.objects.exists()
+    retry_job = Job.objects.create()
+    retry_job.plan = plan(retry_job, source, ad)
+    retry = retry_job.plan["operations"][0]
+    assert retry["action"] == "resume_create"
+    assert retry["target"]["guid"] == ad.items[0]["guid"]
+    assert apply(retry_job, source, ad) == "success"
+    assert Binding.objects.get().enabled is enable_new_accounts
+    assert ad.items[0]["enabled"] is enable_new_accounts
+    assert ad.created == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("change", ["ad", "configuration"])
+def test_created_account_changed_externally_requires_manual_recovery(configured, change):
+    source, ad = Source(), Directory([])
+    original_update = ad.update
+
+    def fail_update(*args, **kwargs):
+        raise RuleError("模拟属性更新失败")
+
+    ad.update = fail_update
+    job = Job.objects.create()
+    job.plan = plan(job, source, ad)
+    assert apply(job, source, ad) == "partial_failed"
+    assert ad.created == 1 and not ad.items[0]["enabled"]
+    ad.update = original_update
+    if change == "ad":
+        ad.items[0]["attrs"]["title"] = "外部修改"
+    else:
+        configured.attributes = ["title"]
+        configured.save()
     retry = plan(Job.objects.create(), source, ad)["operations"][0]
     assert retry["action"] == "conflict"
     assert retry["target"]["guid"] == ad.items[0]["guid"]
-    assert ad.created == 1
+    assert not Binding.objects.exists()
 
 
 @pytest.mark.django_db
