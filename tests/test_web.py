@@ -20,6 +20,23 @@ def test_administrator_pages_require_login(client):
 
 
 @pytest.mark.django_db
+def test_dingtalk_workbench_homepage_alias_renders_employee_verification(client, settings):
+    settings.DINGTALK_CORP_ID = "ding-test-corp"
+    settings.DINGTALK_APP_KEY = "test-client-id"
+    config = Configuration.current()
+    config.sspr_enabled = True
+    config.save()
+    for path in ("/sspr", "/sspr/callback/dingtalk"):
+        response = client.get(path)
+        assert response.status_code == 200
+        html = response.content.decode()
+        assert 'id="verify"' in html
+        assert 'data-corp="ding-test-corp"' in html
+        assert 'data-client="test-client-id"' in html
+        assert '/static/sspr.js' in html
+
+
+@pytest.mark.django_db
 def test_pages_and_readiness(admin_client):
     Configuration.current()
     (settings.DATA_DIR / "worker-heartbeat").touch()
