@@ -140,6 +140,7 @@ class RuntimeState(models.Model):
     """Operational observations do not invalidate configuration fingerprints."""
     id = models.PositiveSmallIntegerField(primary_key=True, default=1)
     last_full_success = models.DateTimeField(null=True)
+    last_cleanup_at = models.DateTimeField(null=True)
     connection_checks = models.JSONField(default=dict)
     connections_checked_at = models.DateTimeField(null=True)
 

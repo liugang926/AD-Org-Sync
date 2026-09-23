@@ -41,7 +41,7 @@ python -m venv .venv
 
 连接测试和独立通讯录刷新通过同一个后台任务队列执行。连接测试结果会显示检测时间；通讯录刷新不写 AD，也不会更新全量同步成功时间。
 
-定时同步只有一个入口：生产部署脚本为 runner 账号安装宿主 cron，每分钟在运行中的 Web 容器调用 `enqueue_sync --due`，按后台配置间隔入队，任务仍由 worker 执行。安装会保留宿主其他 cron 项，并可重复执行；示例见 deploy/scheduler.cron.example。`schedule_enabled` 默认关闭，完成真实目录验收后才在设置中开启。无需依赖 Actions checkout 或旧发布目录的软链接。
+定时同步只有一个入口：生产部署脚本为 runner 账号安装宿主 cron，每分钟在运行中的 Web 容器调用 `enqueue_sync --due`，按后台配置间隔入队，任务仍由 worker 执行。同一入口每天清理过期会话、旧快照、任务和审计；即使定时同步关闭也执行清理，遇到正在运行的同步则下一分钟重试。安装会保留宿主其他 cron 项，并可重复执行；示例见 deploy/scheduler.cron.example。`schedule_enabled` 默认关闭，完成真实目录验收后才在设置中开启。无需依赖 Actions checkout 或旧发布目录的软链接。
 
 管理员确认只对当前预览生效；来源、配置、绑定或 AD 状态变化后必须重新预览。每个人成功后提交绑定，部分失败不回滚已经发生的 AD 写入。恢复数据库也不等于回滚 AD。失败或中断时核验逐项结果并重新预览。
 
