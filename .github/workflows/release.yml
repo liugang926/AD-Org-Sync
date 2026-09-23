@@ -4,6 +4,28 @@ on:
 permissions:
   contents: read
 jobs:
+  ad-revision-password-drill:
+    if: ${{ true }}
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Reset a disposable AD account and verify revision change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=a480636d3dc40e4a9e98ef859831320b50ed7140
+          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
+          test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
+          docker exec -i -e TEST_RUN_ID="$GITHUB_RUN_ID" ad_org_sync-web-1 python - < .github/diagnostics/ad_revision_password_drill.py
+      - name: Check production readiness after drill
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
+          echo 'localhost_readyz=200'
   ad-revision-readonly:
     if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
