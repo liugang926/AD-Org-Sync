@@ -998,6 +998,101 @@ jobs:
           PY
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
+  replaced-guid-guard:
+    if: ${{ false }}
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: 30178e38ba144298dccfe02a497f5bffa31969dd
+          path: candidate
+          persist-credentials: false
+      - name: Reject stale sync and SSPR target after disposable AD object replacement
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=a480636d3dc40e4a9e98ef859831320b50ed7140
+          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
+          test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
+          docker exec ad_org_sync-web-1 python -m sync_app.cli shell -c 'from sync_app.models import Configuration; c=Configuration.objects.get(pk=1); assert c.root_ou.casefold()=="OU=ADOrgSync-SyncTest-8fa5fcdf,DC=tianjitest,DC=com".casefold() and not c.sspr_enabled and not c.schedule_enabled; print("production_sspr_and_schedule_disabled=true")'
+          sentinel="$RUNNER_TEMP/ad-org-sync-guid-verified-$GITHUB_RUN_ID"
+          test ! -e "$sentinel"
+          docker exec -i -e TEST_RUN_ID="$GITHUB_RUN_ID" ad_org_sync-web-1 python - <<'PY'
+          import os
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          from contextlib import closing
+          from sync_app.directory import ActiveDirectory
+          run_id = os.environ["TEST_RUN_ID"]
+          assert run_id.isdecimal() and len(run_id) <= 20
+          suffix = run_id[-8:]
+          with closing(ActiveDirectory()) as ad:
+              assert not ad.match("employee_id", "CG" + suffix)
+              assert not ad.match("source_id", "cg" + suffix)
+          print("disposable_identity_absent_before_run=true")
+          PY
+          umask 077
+          : > "$sentinel"
+          image="ad-org-sync-web:guid-guard-$GITHUB_RUN_ID"
+          container="ad-org-sync-guid-guard-$GITHUB_RUN_ID"
+          env_file="$(mktemp)"
+          chmod 600 "$env_file"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true; docker image rm "$image" >/dev/null 2>&1 || true; rm -f -- "$env_file"' EXIT
+          docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' ad_org_sync-web-1 | grep -E '^(LDAP_HOST|LDAP_BASE_DN|LDAP_BIND_DN|LDAP_PASSWORD|LDAP_VERIFY_CERT|LDAP_CA_FILE|DINGTALK_CORP_ID|DINGTALK_APP_KEY|DINGTALK_APP_SECRET)=' > "$env_file"
+          test "$(grep -c -E '^(LDAP_|DINGTALK_)' "$env_file")" -ge 7
+          docker build --pull --no-cache -t "$image" candidate
+          docker run --rm -i --name "$container" --network host --read-only --tmpfs /data:rw,size=64m,uid=10001,gid=10001 --tmpfs /tmp:rw,size=64m --env-file "$env_file" -e AD_ORG_SYNC_DATA_DIR=/data -e SSPR_ALLOWED_DINGTALK_USER_IDS= -e TEST_RUN_ID="$GITHUB_RUN_ID" "$image" python - < .github/diagnostics/replaced_guid_guard_drill.py
+      - name: Verify replacement cleanup and unchanged production state
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sentinel="$RUNNER_TEMP/ad-org-sync-guid-verified-$GITHUB_RUN_ID"
+          trap 'rm -f -- "$sentinel"' EXIT
+          cleanup_allowed=0
+          if test -f "$sentinel"; then cleanup_allowed=1; fi
+          docker exec -i -e TEST_RUN_ID="$GITHUB_RUN_ID" -e TEST_CLEANUP_ALLOWED="$cleanup_allowed" ad_org_sync-web-1 python - <<'PY'
+          import os
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          from contextlib import closing
+          from sync_app.directory import ActiveDirectory, under
+          from sync_app.models import Binding, Configuration, EmployeeSession, Person
+
+          run_id = os.environ["TEST_RUN_ID"]
+          assert run_id.isdecimal() and len(run_id) <= 20
+          suffix = run_id[-8:]
+          username = "cg" + suffix
+          employee_id = "CG" + suffix
+          source_id = "codex-guid-" + suffix
+          root = "OU=ADOrgSync-SyncTest-8fa5fcdf,DC=tianjitest,DC=com"
+          with closing(ActiveDirectory()) as ad:
+              matches = ad.match("employee_id", employee_id)
+              if matches:
+                  assert os.environ["TEST_CLEANUP_ALLOWED"] == "1", "initial absence was not verified"
+                  assert len(matches) == 1
+                  account = matches[0]
+                  assert account["username"].casefold() == username.casefold()
+                  assert under(account["dn"], root)
+                  assert ad.conn.delete(account["dn"]), "disposable account cleanup failed"
+              assert not ad.match("employee_id", employee_id)
+              assert not ad.match("source_id", username)
+          assert not Person.objects.filter(source_id=source_id).exists()
+          assert not Binding.objects.filter(person__source_id=source_id).exists()
+          assert not EmployeeSession.objects.filter(source_id=source_id).exists()
+          config = Configuration.objects.get(pk=1)
+          assert not config.sspr_enabled and not config.schedule_enabled
+          print("disposable_identity_absent_and_production_database_unchanged=true")
+          PY
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
+          echo 'localhost_readyz=200'
   full-sync-sspr-overlap:
     if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
