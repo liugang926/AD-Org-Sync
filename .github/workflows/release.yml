@@ -4,6 +4,59 @@ on:
 permissions:
   contents: read
 jobs:
+  full-preview-61:
+    if: ${{ true }}
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    timeout-minutes: 7
+    steps:
+      - name: Preview the live DingTalk directory against test AD without writes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=a480636d3dc40e4a9e98ef859831320b50ed7140
+          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
+          test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
+          docker exec -i ad_org_sync-web-1 python - <<'PY'
+          import os
+          import time
+          from collections import Counter
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          from sync_app.models import Binding, Configuration, Job, Operation, Snapshot
+          from sync_app.synchronization import enqueue
+
+          config = Configuration.current()
+          assert config.root_ou.casefold() == "OU=ADOrgSync-SyncTest-8fa5fcdf,DC=tianjitest,DC=com".casefold()
+          assert not config.schedule_enabled and not config.sspr_enabled
+          assert not Job.objects.filter(status__in=["queued", "running"]).exists()
+          bindings_before = Binding.objects.count()
+          operations_before = Operation.objects.count()
+          job = enqueue(kind="preview", scope="full", actor="acceptance-61")
+          print("preview_job_id=" + str(job.pk), flush=True)
+          for _ in range(210):
+              job.refresh_from_db()
+              if job.status not in {"queued", "running"}:
+                  break
+              time.sleep(2)
+          else:
+              raise SystemExit("preview did not finish within seven minutes")
+          print("preview_status=" + job.status)
+          print("preview_duration_seconds=" + str(round((job.finished_at - job.started_at).total_seconds(), 1)) if job.finished_at and job.started_at else "preview_duration_seconds=unknown")
+          assert job.kind == "preview"
+          assert job.status in {"preview_ready", "blocked", "needs_confirmation"}, job.message
+          snapshot = Snapshot.objects.get(pk=job.plan["snapshot"])
+          assert snapshot.users and snapshot.departments
+          print("source_user_count=" + str(len(snapshot.users)))
+          print("source_department_count=" + str(len(snapshot.departments)))
+          for action, count in sorted(Counter(item["action"] for item in job.plan["operations"]).items()):
+              print("planned_" + action + "=" + str(count))
+          print("planned_department_count=" + str(len(job.plan["departments"])))
+          assert Binding.objects.count() == bindings_before
+          assert Operation.objects.count() == operations_before
+          print("business_operation_rows_added=0 binding_changes=0")
+          PY
   verify-pr-61:
     if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
