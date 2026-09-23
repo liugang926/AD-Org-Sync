@@ -144,3 +144,65 @@ jobs:
           for department in job.plan["departments"]:
               print("department=" + department["source_id"] + "|" + department["action"] + "|" + department["dn"] + "|" + department["reason"])
           PY
+      - name: Preserve the existing test OU and refresh the preview
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker exec -i ad_org_sync-web-1 python - <<'PY'
+          import os
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          from contextlib import closing
+          from sync_app import synchronization
+          from sync_app.directory import ActiveDirectory, under
+          from sync_app.locking import lock
+          from sync_app.models import Binding, Configuration, DepartmentBinding, Job
+          from sync_app.security import audit
+
+          source_id = "17757325700496563"
+          department_id = "555858155"
+          before_bindings = Binding.objects.count()
+          original = Job.objects.get(pk="9c82e776-1eb9-480f-8a9c-ee0923a20d95")
+          assert original.kind == "preview" and original.status == "preview_ready"
+          assert original.scope == "users" and original.selected == [source_id]
+          operation = original.plan["operations"][0]
+          assert len(original.plan["operations"]) == 1 and operation["action"] == "bind"
+          assert operation["target"]["username"] == "T0001919"
+          assert [d["name"] for d in original.plan["departments"] if d["source_id"] == department_id] == ["天机智能"]
+          existing_ou = operation["target"]["dn"]
+          for _ in range(3):
+              existing_ou = synchronization.parent_dn(existing_ou)
+          config = Configuration.current()
+          assert original.plan["config"] == synchronization.configuration_signature(config)
+          assert original.plan["bindings"] == synchronization.binding_signature()
+          assert under(existing_ou, config.root_ou)
+          with lock("sync"), closing(ActiveDirectory()) as ad:
+              assert ad.by_guid(operation["target"]["guid"])["dn"] == operation["target"]["dn"]
+              guid = ad.verify_ou(existing_ou)
+              mapping, created = DepartmentBinding.objects.get_or_create(
+                  source_id=department_id,
+                  defaults={"dn": existing_ou, "object_guid": guid, "manual": True},
+              )
+              assert mapping.dn == existing_ou and str(mapping.object_guid) == guid and mapping.manual
+              if created:
+                  audit("acceptance", "department_binding", department_id, "保留现有测试 OU")
+          print("existing_ou_mapping_created=" + str(created).lower())
+          latest = Job.objects.filter(actor="acceptance-preview-mapped").order_by("-created_at").first()
+          if latest is None:
+              latest = synchronization.enqueue(kind="preview", scope="users", selected=[source_id], actor="acceptance-preview-mapped")
+              synchronization.run_next()
+          latest.refresh_from_db()
+          assert latest.scope == "users" and latest.selected == [source_id]
+          print("mapped_preview_job_id=" + str(latest.pk))
+          print("mapped_preview_status=" + latest.status)
+          print("mapped_preview_operation_count=" + str(len(latest.plan.get("operations", []))))
+          for item in latest.plan.get("operations", []):
+              print("mapped_preview_action=" + item["action"])
+              print("mapped_preview_change_fields=" + ",".join(change["field"] for change in item.get("changes", [])))
+              print("mapped_preview_ou_is_current=" + str(synchronization.parent_dn(item["target"]["dn"]).casefold() == item["ou"].casefold()).lower())
+          print("mapped_preview_department_conflicts=" + str(sum(item["action"] == "conflict" for item in latest.plan.get("departments", []))))
+          print("mapped_preview_new_ou_count=" + str(sum(item["guid"] is None for item in latest.plan.get("departments", []))))
+          assert Binding.objects.count() == before_bindings, "preview changed a binding"
+          print("mapped_preview_bindings_unchanged=true")
+          PY
