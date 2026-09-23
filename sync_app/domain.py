@@ -28,6 +28,8 @@ def resolve(user: dict, binding: dict | None, accounts: list[dict], occupied: se
     if binding:
         matches = [a for a in accounts if a["guid"] == binding["guid"]]
         if not binding["enabled"]:
+            if len(matches) == 1 and matches[0]["enabled"]:
+                return "conflict", matches[0], "停用绑定的 AD 账号已启用，请人工核验"
             return "skip", None, "绑定已停用"
         if len(matches) != 1:
             return "conflict", None, "绑定目标不存在或无法唯一确认"

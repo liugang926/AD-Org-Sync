@@ -293,12 +293,14 @@ def apply(job, source, ad):
                         DepartmentBinding.objects.create(source_id=op["department_id"], dn=op["ou"], object_guid=ou_guid)
                     account = op["target"]
                     if op["action"] == "create":
-                        account = ad.create(op["user"], op["username"], op["ou"], config.root_ou, enabled=config.enable_new_accounts, require_change=config.require_password_change)
+                        account = ad.create(op["user"], op["username"], op["ou"], config.root_ou, enabled=False, require_change=config.require_password_change)
                         # Write recovery evidence before any additional AD operation.
                         record.target_guid = account["guid"]
                         record.status = "created"
                         record.save()
-                    account = ad.update(account["guid"], op["attrs"], op["ou"], config.root_ou, allow_disabled=op["action"] == "create" and not config.enable_new_accounts)
+                    account = ad.update(account["guid"], op["attrs"], op["ou"], config.root_ou, allow_disabled=op["action"] == "create")
+                    if op["action"] == "create" and config.enable_new_accounts:
+                        account = ad.enable(account["guid"], config.root_ou)
                     record.target_guid = account["guid"]
                     # Each successful user commits independently of later users.
                     with transaction.atomic():
@@ -307,7 +309,7 @@ def apply(job, source, ad):
                         if existing and str(existing.object_guid) != account["guid"]:
                             raise RuleError("绑定发生变化")
                         if not existing:
-                            Binding.objects.create(person=person, object_guid=account["guid"], username=account["username"])
+                            Binding.objects.create(person=person, object_guid=account["guid"], username=account["username"], enabled=op["action"] != "create" or config.enable_new_accounts)
                         else:
                             existing.username = account["username"]
                             existing.save(update_fields=["username", "updated_at"])
@@ -478,16 +480,27 @@ def reactivate_person(person_id, actor, reason, confirmed):
     if not confirmed or not reason.strip():
         raise RuleError("恢复启用必须确认并填写原因")
     with lock("sync"), closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
-        binding = Binding.objects.select_related("person").filter(person_id=person_id, enabled=True).first()
+        binding = Binding.objects.select_related("person").filter(person_id=person_id).first()
         if not binding or binding.person.excluded:
-            raise RuleError("请先确认有效绑定且人员未排除同步")
+            raise RuleError("请先确认绑定且人员未排除同步")
         config = Configuration.current()
         user = source.user(binding.person.source_id)
         if not source.user_in_scope(user, config.root_department):
             raise RuleError("来源人员已不在当前同步范围，不能恢复 AD 账号")
         with lock("account:" + str(binding.object_guid)):
-            ad.enable(binding.object_guid, config.root_ou)
-            audit(actor, "reactivate", binding.person.source_id, f"恢复 {binding.object_guid}；{reason[:150]}")
+            target = ad.by_guid(binding.object_guid)
+            if target["enabled"]:
+                if binding.enabled:
+                    raise RuleError("AD 账号与同步绑定均已启用")
+                if protected(target) or not under(target["dn"], config.root_ou):
+                    raise RuleError("目标受保护或不在管理范围内")
+            else:
+                ad.enable(binding.object_guid, config.root_ou)
+            with transaction.atomic():
+                binding.enabled = True
+                binding.revision = uuid.uuid4()
+                binding.save(update_fields=["enabled", "revision", "updated_at"])
+                audit(actor, "reactivate", binding.person.source_id, f"恢复 {binding.object_guid}；{reason[:150]}")
 
 
 def verify_binding(person_id):
@@ -496,7 +509,7 @@ def verify_binding(person_id):
         raise RuleError("该人员尚未绑定")
     with closing(ActiveDirectory()) as ad:
         account = ad.by_guid(binding.object_guid)
-        return {"person": binding.person, "account": account}
+        return {"person": binding.person, "binding": binding, "account": account}
 
 
 def change_person(person_id, actor, excluded, primary_department):

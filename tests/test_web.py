@@ -66,6 +66,23 @@ def test_binding_requires_review_before_mutation(admin_client, monkeypatch):
 
 
 @pytest.mark.django_db
+def test_held_disabled_account_can_be_reviewed_for_reactivation(admin_client, monkeypatch):
+    from sync_app import synchronization as sync
+    from sync_app.models import Person, Binding
+    from .fakes import Directory, account
+
+    target = account()
+    target["enabled"] = False
+    ad = Directory([target])
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    Binding.objects.create(person=person, object_guid=target["guid"], username=target["username"], enabled=False)
+    response = admin_client.post(f"/people/{person.pk}", {"action": "verify"})
+    assert response.status_code == 200
+    assert "恢复 AD 账号及同步绑定" in response.content.decode()
+
+
+@pytest.mark.django_db
 def test_audit_filters_and_invalid_date(admin_client):
     from sync_app.models import Audit
     Audit.objects.create(actor="admin", action="sample_ok", success=True)
