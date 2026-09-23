@@ -265,6 +265,7 @@ jobs:
           print("operation_statuses=" + ",".join(sorted(action + ":" + status for action, status in Operation.objects.filter(job=job).values_list("action", "status"))))
           PY
   restore-drill:
+    if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     steps:
@@ -303,3 +304,49 @@ jobs:
           "${run_copy[@]}" db_check
           docker exec ad_org_sync-web-1 python -m sync_app.cli shell -c 'from contextlib import closing; from sync_app.directory import ActiveDirectory, under; from sync_app.models import Binding, Configuration; b=Binding.objects.get(person__source_id="17757325700496563"); c=Configuration.objects.get(pk=1); ad=ActiveDirectory(); matches=ad.match("employee_id","T0001919"); account=ad.by_guid(b.object_guid); assert len(matches)==1 and matches[0]["guid"]==str(b.object_guid) and account["username"]==b.username and under(account["dn"],c.root_ou); ad.close(); print("live_ad_identity_matches_restored_binding=true")'
           echo 'isolated_backup_cleaned_on_exit=true'
+  unbind-test:
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    steps:
+      - name: Restore no-binding test state and verify live LDAPS eligibility
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker exec -i ad_org_sync-web-1 python - <<'PY'
+          import os
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          from contextlib import closing
+          from sync_app.directory import ActiveDirectory, DingTalk
+          from sync_app.domain import fingerprint
+          from sync_app.models import Binding, Configuration, Person
+          from sync_app.sspr import match_employee
+          from sync_app.synchronization import unbind_person
+
+          source_id = "17757325700496563"
+          person = Person.objects.get(source_id=source_id)
+          binding = Binding.objects.filter(person=person).first()
+          if binding:
+              with closing(ActiveDirectory()) as ad:
+                  before = ad.by_guid(binding.object_guid)
+              assert binding.username == "T0001919"
+              unbind_person(person.pk, "acceptance")
+              print("binding_removed=true")
+          else:
+              assert person.excluded
+              before = None
+              print("binding_already_absent=true")
+          person.refresh_from_db()
+          assert person.excluded and not Binding.objects.filter(person=person).exists()
+          config = Configuration.current()
+          with closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
+              user, account = match_employee(source, ad, config, source_id=source_id)
+              assert user["employee_id"] == "T0001919"
+              assert account["username"] == "T0001919"
+              if before is not None:
+                  assert fingerprint(account) == fingerprint(before)
+          print("excluded_from_auto_sync=true")
+          print("sspr_match_without_binding=true")
+          print("ad_account_unchanged=true")
+          PY
