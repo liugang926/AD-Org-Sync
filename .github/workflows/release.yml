@@ -700,7 +700,7 @@ jobs:
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
           echo 'localhost_readyz=200'
   candidate-staged-sync-drill:
-    if: ${{ false }}
+    if: ${{ github.ref == 'refs/heads/codex/prod-verify-e9d9afb' }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 15
@@ -723,9 +723,13 @@ jobs:
           docker exec ad_org_sync-web-1 python -m sync_app.cli shell -c 'from sync_app.models import Configuration; c=Configuration.objects.get(pk=1); assert c.root_ou.casefold()=="OU=ADOrgSync-SyncTest-8fa5fcdf,DC=tianjitest,DC=com".casefold() and not c.schedule_enabled and not c.sspr_enabled; print("production_test_root_and_disabled_flags_verified=true")'
           image="ad-org-sync-web:staged-drill-$GITHUB_RUN_ID"
           container="ad-org-sync-staged-drill-$GITHUB_RUN_ID"
-          trap 'docker rm -f "$container" >/dev/null 2>&1 || true; docker image rm "$image" >/dev/null 2>&1 || true' EXIT
+          env_file="$(mktemp)"
+          chmod 600 "$env_file"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true; docker image rm "$image" >/dev/null 2>&1 || true; rm -f -- "$env_file"' EXIT
+          docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' ad_org_sync-web-1 | grep -E '^(LDAP_HOST|LDAP_BASE_DN|LDAP_BIND_DN|LDAP_PASSWORD|LDAP_VERIFY_CERT|LDAP_CA_FILE)=' > "$env_file"
+          test "$(grep -c '^LDAP_' "$env_file")" -ge 5
           docker build --pull --no-cache -t "$image" candidate
-          docker run --rm -i --name "$container" --network host --read-only --tmpfs /data:rw,size=64m,uid=10001,gid=10001 --tmpfs /tmp:rw,size=64m --env-file /opt/ad-org-sync/shared/.env -e AD_ORG_SYNC_DATA_DIR=/data -e TEST_RUN_ID="$GITHUB_RUN_ID" "$image" python - < .github/diagnostics/staged_sync_drill.py
+          docker run --rm -i --name "$container" --network host --read-only --tmpfs /data:rw,size=64m,uid=10001,gid=10001 --tmpfs /tmp:rw,size=64m --env-file "$env_file" -e AD_ORG_SYNC_DATA_DIR=/data -e TEST_RUN_ID="$GITHUB_RUN_ID" "$image" python - < .github/diagnostics/staged_sync_drill.py
       - name: Verify test identity cleanup and live production state
         if: always()
         shell: bash
@@ -749,6 +753,8 @@ jobs:
           with closing(ActiveDirectory()) as ad:
               assert not ad.match("employee_id", "CXS81228086")
               assert not ad.match("source_id", "CXS81228086")
+              assert not ad.match("employee_id", "CXS81763194")
+              assert not ad.match("source_id", "CXS81763194")
               matches = ad.match("employee_id", employee_id)
               if matches:
                   assert len(matches) == 1
