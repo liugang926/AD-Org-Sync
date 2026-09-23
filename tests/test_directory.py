@@ -44,6 +44,28 @@ def test_ldap_failures_never_return_partial_results():
         directory.search("(objectClass=user)")
 
 
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ({"result": 19, "message": "problem 1005 (CONSTRAINT_ATT_TYPE), Att (employeeID):len 48"}, "工号不符合域控 employeeID 字段约束"),
+        ({"result": 19, "message": "untrusted directory diagnostic: hidden-value"}, "目录字段约束不满足"),
+        ({"result": 50, "message": "untrusted directory diagnostic: hidden-value"}, "LDAP 错误码 50"),
+    ],
+)
+def test_ad_create_rejection_reports_safe_cause(result, expected):
+    directory = object.__new__(ActiveDirectory)
+    directory.match = Mock(return_value=[])
+    directory.conn = Mock()
+    directory.conn.add.return_value = False
+    directory.conn.result = result
+    with pytest.raises(RuleError, match=expected) as error:
+        directory.create(
+            {"name": "Test User", "employee_id": "test-id"},
+            "test-user", "OU=Test,DC=example,DC=com", "OU=Test,DC=example,DC=com",
+        )
+    assert "hidden-value" not in str(error.value)
+
+
 @pytest.mark.parametrize("unlock_result", [False, RuntimeError("connection interrupted")])
 def test_password_reset_reports_unlock_failure_after_password_change(unlock_result):
     directory = object.__new__(ActiveDirectory)

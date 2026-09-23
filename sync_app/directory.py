@@ -250,7 +250,14 @@ class ActiveDirectory:
         dn = f"CN={escape_rdn(username)},{ou}"
         attrs = {"sAMAccountName": username, "displayName": user["name"], "employeeID": user["employee_id"], "userAccountControl": 514}
         if not self.conn.add(dn, ["top", "person", "organizationalPerson", "user"], attrs):
-            raise RuleError("AD 创建账号失败")
+            result = self.conn.result or {}
+            code = result.get("result")
+            if code == 19:
+                if "employeeid" in str(result.get("message", "")).casefold():
+                    raise RuleError("AD 创建账号失败：工号不符合域控 employeeID 字段约束，请检查长度或格式")
+                raise RuleError("AD 创建账号失败：目录字段约束不满足，请检查账号属性")
+            safe_code = str(code) if isinstance(code, int) else "未知"
+            raise RuleError(f"AD 创建账号失败（LDAP 错误码 {safe_code}），请检查目标 OU 权限和目录规则")
         matches = self.match("source_id", username)
         if len(matches) != 1:
             raise RuleError("AD 已创建但无法确认对象，需人工核验")
