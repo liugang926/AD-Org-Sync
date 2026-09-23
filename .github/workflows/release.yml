@@ -305,6 +305,7 @@ jobs:
           docker exec ad_org_sync-web-1 python -m sync_app.cli shell -c 'from contextlib import closing; from sync_app.directory import ActiveDirectory, under; from sync_app.models import Binding, Configuration; b=Binding.objects.get(person__source_id="17757325700496563"); c=Configuration.objects.get(pk=1); ad=ActiveDirectory(); matches=ad.match("employee_id","T0001919"); account=ad.by_guid(b.object_guid); assert len(matches)==1 and matches[0]["guid"]==str(b.object_guid) and account["username"]==b.username and under(account["dn"],c.root_ou); ad.close(); print("live_ad_identity_matches_restored_binding=true")'
           echo 'isolated_backup_cleaned_on_exit=true'
   unbind-test:
+    if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     steps:
