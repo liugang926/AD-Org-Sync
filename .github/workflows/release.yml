@@ -1,4 +1,4 @@
-name: Production read-only verification
+name: Production acceptance diagnostics
 on:
   workflow_dispatch:
 permissions:
@@ -392,3 +392,18 @@ jobs:
                   print("sample_" + str(index) + "_equal=" + ",".join(key + ":" + str(value).lower() for key, value in comparisons.items()))
               print("required_fields_present=" + ",".join(field + ":" + str(field in items[0]).lower() for field in fields))
           PY
+  ad-write-drill:
+    if: ${{ true }}
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Exercise dedicated test-domain AD writes and remove test objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=9f04c5f991573a6496a08ec881e2ebc571cd6367
+          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
+          test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
+          docker exec -i -e TEST_RUN_ID="$GITHUB_RUN_ID" ad_org_sync-web-1 python - < .github/diagnostics/ad_write_drill.py
