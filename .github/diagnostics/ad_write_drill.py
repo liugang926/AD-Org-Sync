@@ -12,6 +12,7 @@ django.setup()
 from django.conf import settings
 
 from sync_app.directory import ActiveDirectory, under
+from sync_app.domain import RuleError
 from sync_app.models import Configuration
 
 
@@ -41,7 +42,12 @@ with closing(ActiveDirectory()) as ad:
         print("dedicated_ous_created=true", flush=True)
 
         user = {"name": "Codex Acceptance Test", "employee_id": employee_id}
-        created = ad.create(user, username, ou_a, root)
+        try:
+            created = ad.create(user, username, ou_a, root)
+        except RuleError:
+            print("create_ldap_result_code=" + str(ad.conn.result.get("result")), flush=True)
+            print("create_ldap_result_class=" + str(ad.conn.result.get("description")), flush=True)
+            raise
         assert created["username"] == username and created["employee_id"] == employee_id
         assert created["enabled"] and under(created["dn"], ou_a)
         guid = created["guid"]
