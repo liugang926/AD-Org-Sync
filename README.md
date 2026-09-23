@@ -22,8 +22,8 @@ python -m venv .venv
 
 管理员入口 /login，后台 /dashboard，员工入口 /sspr。设置通过 Django Admin 管理。连接凭据通过环境变量提供，参考 deploy/environment.example；应用不自动加载 .env 文件。
 
-钉钉应用须具备部门和人员详情读取权限，配置可信域名和企业内部应用首页：
-`https://<对外域名>/sspr?corpid=$CORPID$`。服务器只使用配置的企业身份，不信任查询字符串中的企业或人员。员工验证 Cookie 始终 Secure，员工端需通过 HTTPS 测试。
+钉钉应用须具备部门和人员详情读取权限，配置可信域名和企业内部微应用首页；当前生产对外地址为
+`https://it-service.tianjizn.com:9443/sspr?corpid=$CORPID$`，如需 PC 端使用也应核对 PC 端首页。前端按[钉钉微应用免登 JSAPI](https://open.dingtalk.com/tools/explorer/jsapi?id=11723)传入 Client ID（原 AppKey）和 CorpId；AgentId 不是 Client ID。服务器只使用配置的企业身份，不信任查询字符串中的企业或人员。员工验证 Cookie 始终 Secure，员工端需通过 HTTPS 测试。
 
 同步匹配默认使用唯一工号，邮箱及 userId 匹配仅作人工确认候选；账号命名可选工号、userId、邮箱前缀。密码重置匹配单独配置，可选工号→employeeID、邮箱→mail、userId→sAMAccountName。AD 查询范围由 LDAP_BASE_DN 限定，同步写入进一步限制到配置的根 OU。LDAPS 始终加密，默认 `LDAP_VERIFY_CERT=false`，允许未受信任的自签证书；无需 CA 文件。如需验证可信链和主机名，设置 `LDAP_VERIFY_CERT=true`，可选提供 `LDAP_CA_HOST_FILE`（未提供时使用系统信任库）。
 
@@ -58,6 +58,6 @@ python -m pytest -q tests/test_browser.py
 python -m build --wheel
 ```
 
-自动化测试使用隔离的适配器替身。开发测试环境已完成真实钉钉通讯录和测试 AD OU 的只读验证及全量预览；实际 AD 写入和员工本人密码重置仍需专用测试员工验收，详见 docs/acceptance-status.md。
+自动化测试使用隔离的适配器替身。开发测试环境已完成真实钉钉通讯录读取、测试 AD OU 的只读验证与全量预览；使用合成来源和隔离数据库的真实 AD 同步写入及无绑定 LDAPS 密码重置也已演练并清理。真实钉钉应用首页、员工授权码、本人重置及真实来源的端到端写入仍需专用测试员工验收，详见 docs/acceptance-status.md。
 
 设计与验收见 docs/PRD-django-single-org.md；本次规则取舍见 docs/rebuild-notes.md。
