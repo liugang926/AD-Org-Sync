@@ -4,6 +4,28 @@ on:
 permissions:
   contents: read
 jobs:
+  dingtalk-auth-readonly:
+    if: ${{ true }}
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read redacted DingTalk authorization codes without writes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=a480636d3dc40e4a9e98ef859831320b50ed7140
+          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
+          test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
+          docker exec -i ad_org_sync-web-1 python - < .github/diagnostics/dingtalk_auth_probe.py
+      - name: Check production readiness after read-only probe
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1/readyz >/dev/null
+          echo 'localhost_readyz=200'
   ad-revision-password-drill:
     if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
