@@ -54,6 +54,7 @@ def test_ci_preserves_production_gates():
     script = (root / "scripts/deploy-production.sh").read_text()
     assert script.index("db_backup") < script.index("build --pull")
     assert script.index('exec -T web python -m sync_app.cli db_check') < script.index('cp docker-compose.yml')
+    assert script.index('exec -T web python -m sync_app.cli db_check') < script.index('bash scripts/install-scheduler.sh') < script.index('cp docker-compose.yml')
     assert "ROLLBACK FAILED" in script and "--no-build" in script
 
 

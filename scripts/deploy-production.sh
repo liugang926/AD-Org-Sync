@@ -66,6 +66,7 @@ deployment_started=1
 "${compose[@]}" up -d --remove-orphans
 wait_for_readiness
 "${compose[@]}" exec -T web python -m sync_app.cli db_check
+bash scripts/install-scheduler.sh
 cp docker-compose.yml "${STATE_DIR}/last_successful_compose.yml.tmp"
 mv "${STATE_DIR}/last_successful_compose.yml.tmp" "${STATE_DIR}/last_successful_compose.yml"
 printf '%s\n' "${IMAGE_TAG}" > "${LAST_SUCCESSFUL_FILE}.tmp"
