@@ -4,6 +4,37 @@ on:
 permissions:
   contents: read
 jobs:
+  verify-pr-61:
+    if: ${{ true }}
+    runs-on: [self-hosted, linux, x64, production]
+    environment: production
+    timeout-minutes: 5
+    steps:
+      - name: Verify deployed PR 61 revision and read-only health
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=a480636d3dc40e4a9e98ef859831320b50ed7140
+          actual="$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)"
+          test "$actual" = "$expected"
+          echo "last_successful_image_tag=$actual"
+          for service in web nginx; do
+            container="ad_org_sync-$service-1"
+            image="$(docker inspect --format '{{.Config.Image}}' "$container")"
+            state="$(docker inspect --format '{{.State.Status}}' "$container")"
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+            test "$state" = running
+            test "$health" = healthy
+            if test "$service" = web; then test "$image" = "ad-org-sync-web:$expected"; fi
+            echo "container=$container image=$image state=$state health=$health"
+          done
+          docker exec ad_org_sync-web-1 python -m sync_app.cli db_check
+          docker exec ad_org_sync-web-1 python -m sync_app.cli shell -c 'from sync_app.models import Configuration; c=Configuration.objects.get(pk=1); assert not c.schedule_enabled and not c.sspr_enabled; print("schedule_enabled=false sspr_enabled=false")'
+          for path in healthz readyz login sspr; do
+            code="$(curl --silent --show-error --max-time 10 --output /dev/null --write-out '%{http_code}' "http://127.0.0.1/$path")"
+            test "$code" = 200
+            echo "localhost_$path=$code"
+          done
   verify:
     if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
