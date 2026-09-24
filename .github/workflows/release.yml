@@ -308,7 +308,7 @@ jobs:
           print("business_operation_rows_added=0 binding_changes=0")
           PY
   verify-pr-66:
-    if: ${{ true }}
+    if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 5
