@@ -72,9 +72,9 @@ def reset(token, password, confirmation, ip):
             claimed = EmployeeSession.objects.filter(pk=item.pk, used=False, expires_at__gt=timezone.now()).update(used=True)
             if not claimed:
                 raise RuleError("验证已被使用，请重新验证")
-        source = DingTalk()
-        ad = None
+        source = ad = None
         try:
+            source = DingTalk()
             ad = ActiveDirectory()
             user, account = match_employee(source, ad, config, source_id=item.source_id)
             if user["source_id"] != item.source_id:
@@ -90,6 +90,7 @@ def reset(token, password, confirmation, ip):
             audit(item.source_id, "sspr_reset", str(item.object_guid), str(exc), success=False)
             raise
         finally:
-            source.close()
+            if source:
+                source.close()
             if ad:
                 ad.close()
