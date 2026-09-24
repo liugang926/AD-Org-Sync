@@ -4,66 +4,6 @@ on:
 permissions:
   contents: read
 jobs:
-  admin-credential-encrypted-transfer:
-    if: ${{ false }}
-    runs-on: [self-hosted, linux, x64, production]
-    environment: production
-    timeout-minutes: 4
-    steps:
-      - name: Encrypt protected administrator password for local-only retrieval
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          expected=9298975b241a5cc62a2f64e15871b5217bc7b37f
-          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
-          test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
-          umask 077
-          transfer_dir="$(mktemp -d)"
-          trap 'rm -rf "$transfer_dir"' EXIT
-          cat > "$transfer_dir/public.pem" <<'PEM'
-          -----BEGIN PUBLIC KEY-----
-          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAsazGEyAR8OWc2ZB6iA10
-          yjVExyOOqXufTE6AlvKS3mM+bXFY/jqD2f+JhijGlaugJNpRnURXGQGATpTadaMU
-          RVoT6Sj8c80bmE9gM0N4Mgi9toSrkNfqjqOgm0Y++EE5NpHtIy1zyX6gqG1VUS5a
-          drCZ0mhmh3KZ4O3mGePyBmuvGC+3pSit2tFdoRuYG8eNaWqMxcVGhq5rCMqHUHZn
-          5XavOHEtXSjRf7SUX0Gq/t49oY0+j5mG+CJQjhQMqOw15wsDG9/7pvYV/4vsV7BH
-          5z2QAw9ZCvmZxu/rIAqYdr+ZKdxmeepTCWRLHlDnFhz0YVYEpUIHnlAOzMIzoX4D
-          mX1SG56CN2lKL57P64ja0XvHwCNWR4FSBeQhBujbpB7K4L47xtuzOjvaLgm/q+pV
-          W/Gx5LKOv8N/MPnbOAHjQ20R9KR5lKfGuHPQ3ZBw0858Ph051wn1nkbqBoa+aJEy
-          ++lqSIiUHGm79pJnvSaKFf4TUHFpa2hzKo0vU9L6RtPRAgMBAAE=
-          -----END PUBLIC KEY-----
-          PEM
-          openssl pkeyutl -encrypt -pubin -inkey "$transfer_dir/public.pem" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in /opt/ad-org-sync/shared/admin_password.txt -out "$transfer_dir/ciphertext.bin"
-          printf 'encrypted_credential='
-          base64 -w0 "$transfer_dir/ciphertext.bin"
-          printf '\n'
-  admin-credential-readonly:
-    if: ${{ false }}
-    runs-on: [self-hosted, linux, x64, production]
-    environment: production
-    timeout-minutes: 4
-    steps:
-      - name: Confirm administrator identity and protected password match without disclosure
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          expected=9298975b241a5cc62a2f64e15871b5217bc7b37f
-          test "$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)" = "$expected"
-          test "$(docker inspect --format '{{.Config.Image}}' ad_org_sync-web-1)" = "ad-org-sync-web:$expected"
-          docker exec -i ad_org_sync-web-1 python -m sync_app.cli shell <<'PY'
-          import os
-          from pathlib import Path
-          from django.contrib.auth import authenticate, get_user_model
-
-          username = os.environ.get("AD_ORG_SYNC_ADMIN_USERNAME", "admin")
-          path = Path(os.environ["AD_ORG_SYNC_ADMIN_PASSWORD_FILE"])
-          account = get_user_model().objects.filter(username=username, is_superuser=True, is_active=True).first()
-          matches = bool(account and path.is_file() and authenticate(username=username, password=path.read_text().strip()))
-          print("admin_username=" + username)
-          print("password_file_present=" + str(path.is_file()).lower())
-          print("password_matches_active_admin=" + str(matches).lower())
-          assert matches
-          PY
   dingtalk-auth-readonly:
     if: ${{ false }}
     runs-on: [self-hosted, linux, x64, production]
