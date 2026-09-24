@@ -111,6 +111,25 @@ def test_unlock_failure_is_audited_as_partial_and_session_is_consumed(setup_sspr
 
 
 @pytest.mark.django_db
+def test_reset_audits_dingtalk_client_initialization_failure(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, matched = sspr.verify("valid", "ip")
+
+    def unavailable_client():
+        raise RuleError("钉钉客户端暂时不可用")
+
+    monkeypatch.setattr(sspr, "DingTalk", unavailable_client)
+    with pytest.raises(RuleError, match="钉钉客户端暂时不可用"):
+        sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+
+    attempt = Audit.objects.get(action="sspr_reset")
+    assert attempt.target == matched["guid"] and not attempt.success
+    assert "Example-password-42!" not in attempt.result
+    assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+    assert ad.resets == 0
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("mode", ["ambiguous", "missing", "protected", "disabled"])
 def test_unsafe_matching_is_denied(setup_sspr, mode):
     _, ad, _ = setup_sspr
