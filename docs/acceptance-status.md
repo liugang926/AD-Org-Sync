@@ -1,6 +1,6 @@
 # Django 重构验收状态
 
-2026-09-24 更新：PR [#66](https://github.com/liugang926/AD-Org-Sync/pull/66)、[#67](https://github.com/liugang926/AD-Org-Sync/pull/67) 和 [#68](https://github.com/liugang926/AD-Org-Sync/pull/68) 已依次合并并由原 CI/CD 部署。当前运行 Web 与 worker 镜像、`last_successful_image_tag` 均为 #68 的合并提交 `423c5875647af41b4661d72c42b61154c0cf4905`；六项 CI 和生产部署成功，容器健康，公开 HTTPS 的 `/healthz`、`/readyz`、`/login` 通过。[最新部署](https://github.com/liugang926/AD-Org-Sync/actions/runs/35951379219)。此项只证明发布状态，不替代下文业务验收。
+2026-09-24 更新：PR [#66](https://github.com/liugang926/AD-Org-Sync/pull/66)、[#67](https://github.com/liugang926/AD-Org-Sync/pull/67)、[#68](https://github.com/liugang926/AD-Org-Sync/pull/68) 和 [#70](https://github.com/liugang926/AD-Org-Sync/pull/70) 已依次合并并由原 CI/CD 部署。当前运行 Web 与 worker 镜像、`last_successful_image_tag` 均为 #70 的合并提交 `d0095b1557fcc6976e54d9b06fe4ce6ea6bfcf96`；六项 CI 和生产部署成功，Web/Nginx 健康，独立 `db_check` 通过，公开 HTTPS 的 `/healthz`、`/readyz`、`/login`、`/sspr`、`/sspr/callback/dingtalk`、`/sspr/oauth/start` 均返回 200，runner 在线空闲。未验证访客的员工页面不展示账号，已部署的静态脚本包含自动验证入口。[#70 合并部署](https://github.com/liugang926/AD-Org-Sync/actions/runs/35963852423)。这些只证明发布与未验证页面行为，不能替代员工在钉钉内的真实授权和本人改密验收。
 
 同日开启 `T0001919` 的单人密码重置试点：重新完整读取钉钉目录后，工号在 487 人中唯一；实时 LDAPS 唯一匹配已启用、未受保护的 AD 账号，且没有本地绑定。生产环境仅把该员工的钉钉 userId 加入白名单，重建 Web 并验证名单只有一人，然后开启 `sspr_enabled`；`schedule_enabled` 继续关闭。公开 `/sspr`、`/sspr/callback/dingtalk` 和 `/sspr/oauth/start` 均返回 200，显示钉钉验证入口，不向未验证访客展示账号，CSRF Cookie 为 Secure。开启时尚未发生真实员工授权或密码重置，AC-14～17、AC-21 仍待本人操作和审计核验。
 
@@ -53,7 +53,7 @@
 | FR-06 部门 OU | `tests/test_sync.py`：空部门创建、人员换部门后保留 GUID；真实测试 AD 与合成来源的业务同步已验证空部门 OU 和跨 OU 移动；真实钉钉来源配合人工 OU 映射变化已验证既有账号移动及 GUID 不变，尚需真实部门变更验收 |
 | FR-07 属性与离职 | `tests/test_sync.py`：空值默认保留、显式清除、局部不禁用、全量阈值确认、初始化策略；隔离业务同步已在真实测试 AD 验证完整全量缺失只禁用目标账号 |
 | FR-08 任务与恢复 | `tests/test_sync.py`：计划过期、重复入队、逐人保存、进程中断、局部成功不改变全量标记；本地绑定提交失败后依据建号 GUID 恢复，即使工号改变也不重复建号；候选代码在禁用建号后及属性初始化后的两个明确失败点，均只在 AD 状态与配置未变化时续做，真实测试 AD 演练见上文；启用前外部改密使 AD 修订号变化时重预览转冲突，不自动续做；无可靠 GUID 时阻断并保留未解决证据 |
-| FR-09～10 员工重置 | `tests/test_sspr.py`、`tests/test_browser.py`：未同步未绑定员工可重置、服务端身份、GUID/配置/过期/重放/CSRF 检查；跨线程占用同一账号锁时改密被拒且会话未消费，锁释放后可用原会话重试；隔离合成身份已在真实测试 AD 验证密码生效、LDAPS 登录、会话消费和无明文，真实钉钉授权仍待验收 |
+| FR-09～10 员工重置 | `tests/test_sspr.py`、`tests/test_browser.py`：未同步未绑定员工可重置、服务端身份、GUID/配置/过期/重放/CSRF 检查；#70 的浏览器回归验证自动免登、完整账号显示、失败重试和未验证访客不可见账号；跨线程占用同一账号锁时改密被拒且会话未消费，锁释放后可用原会话重试；隔离合成身份已在真实测试 AD 验证密码生效、LDAPS 登录、会话消费和无明文，真实钉钉授权仍待验收 |
 | 部署退役保护 | `tests/test_deployment.py`：执行真实部署脚本，替代 Docker/HTTP 命令，验证成功、构建失败、首次发布失败不恢复旧版、Nginx 配置重建失败时回退旧配置与已验证 Django 版本 |
 | CI/CD 合约 | `tests/test_operations.py`：原有门禁、部署触发、SHA、备份及数据库检查顺序；需以最新 PR 的远端结果为准 |
 | AC-20 备份恢复 | `tests/test_operations.py` 覆盖在线备份、隔离恢复与同名异 GUID 阻断；真实环境已完成在线备份的隔离副本检查，并用实时 LDAPS 核验恢复绑定。未替换线上数据库，也未演练线上切换 |
@@ -85,6 +85,7 @@
 | AC-19 同步时员工入口 | 真实测试 AD 写入期间公网 `/sspr` 与 `/readyz` 均为 200；完整单人同步任务持锁时合成身份改密被拒但会话仍可用，执行后重试成功且后续同步未覆盖密码 | 尚未并发运行真实员工钉钉授权重置；公网页面探针与并发改密演练分别进行 |
 | AC-20 备份恢复 | 线上一致性备份的隔离副本恢复及实时 GUID 核验 | 未进行线上数据库切换；恢复本地数据不回滚 AD |
 | AC-21 未同步无绑定重置 | 合成身份与真实 LDAPS 改密；`T0001919` 无绑定且唯一匹配 | 缺真实钉钉授权码和该员工本人重置 |
+| AC-22 自动展示本人账号 | #70 浏览器回归覆盖自动授权成功、失败重试、完整账号展示和未验证不泄露；生产 HTTPS 页面与静态脚本已部署 | 专用员工在真实钉钉工作台的自动授权及账号展示尚未验收 |
 
 ## 完成前仍需核验
 
