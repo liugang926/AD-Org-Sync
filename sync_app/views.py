@@ -321,7 +321,7 @@ def employee(request):
             item, _ = sspr.session_for(token)
             with closing(ActiveDirectory()) as ad:
                 target = ad.check_account(item.object_guid)
-                account = {"username": target["username"][:2] + "***", "guid": str(item.object_guid), "name": item.display_name}
+                account = {"username": target["username"], "name": item.display_name}
         except RuleError as exc:
             error = str(exc)
     return render(request, "sspr.html", {"enabled": config.sspr_enabled, "account": account, "error": error, "corp_id": settings.DINGTALK_CORP_ID, "app_key": settings.DINGTALK_APP_KEY, "minimum": config.minimum_password_length})
