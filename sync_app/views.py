@@ -24,6 +24,48 @@ from .models import Configuration, Person, Binding, DepartmentBinding, Job, Audi
 from .security import rate_limit, audit, client_address
 
 
+JOB_STATUS_LABELS = {
+    "queued": "排队中", "running": "执行中", "preview_ready": "待审阅",
+    "needs_confirmation": "需确认", "blocked": "已阻断", "completed": "已完成",
+    "success": "已完成", "failed": "失败", "partial": "部分完成", "partial_failed": "部分失败",
+}
+JOB_KIND_LABELS = {
+    "preview": "同步预览", "refresh": "通讯录刷新", "connections": "连接检测",
+    "apply": "执行同步", "scheduled": "定时同步",
+}
+ACTION_LABELS = {
+    "create": "新建账号", "resume_create": "继续建号", "update": "更新属性",
+    "move": "移动 OU", "bind": "关联账号", "disable": "禁用账号",
+    "skip": "跳过", "conflict": "冲突", "ensure_ou": "建立 OU",
+}
+AUDIT_LABELS = {
+    "admin_login": "管理员登录", "settings": "配置变更",
+    "department_binding": "部门映射变更", "sspr_verified": "员工身份验证",
+    "sspr_auth_failed": "员工验证失败", "sspr_reset": "员工密码重置",
+    "manual_bind": "人工绑定", "reactivate": "恢复账号或绑定",
+    "person_policy": "人员同步设置", "unbind": "解除绑定",
+    "preview": "同步预览", "refresh": "通讯录刷新",
+    "connections": "连接检测", "apply": "执行同步", "scheduled": "定时同步",
+}
+OPERATION_STATUS_LABELS = {
+    "success": "已完成", "created": "已创建", "failed": "失败",
+    "skipped": "已跳过", "pending": "待执行",
+}
+
+
+def status_tone(status):
+    if status in {"failed", "partial", "partial_failed", "blocked", "conflict", "disable"}:
+        return "warning"
+    if status in {
+        "queued", "running", "preview_ready", "needs_confirmation",
+        "create", "resume_create", "update", "move", "bind", "ensure_ou",
+    }:
+        return "active"
+    if status in {"success", "completed", "created"}:
+        return "success"
+    return "neutral"
+
+
 def administrator(view):
     @wraps(view)
     def wrapped(request, *args, **kwargs):
@@ -93,10 +135,8 @@ def dashboard(request):
     latest = Job.objects.filter(actor="scheduler").order_by("-created_at").first()
     next_run = max(timezone.now(), latest.created_at + timedelta(minutes=config.interval_minutes)) if latest else timezone.now()
     jobs = list(Job.objects.order_by("-created_at")[:12])
-    kind_labels = {"preview": "同步预览", "refresh": "通讯录刷新", "connections": "连接检测", "apply": "执行同步"}
-    status_labels = {"queued": "排队中", "running": "执行中", "preview_ready": "待确认", "needs_confirmation": "待确认", "blocked": "已阻断", "completed": "已完成", "success": "已完成", "failed": "失败", "partial": "部分完成"}
     job_rows = [
-        {"job": job, "kind": kind_labels.get(job.kind, job.kind), "status": status_labels.get(job.status, job.status), "tone": "warning" if job.status in {"failed", "partial", "blocked"} else "active" if job.status in {"queued", "running", "preview_ready", "needs_confirmation"} else "success"}
+        {"job": job, "kind": JOB_KIND_LABELS.get(job.kind, job.kind), "status": JOB_STATUS_LABELS.get(job.status, job.status), "tone": status_tone(job.status)}
         for job in jobs
     ]
     snapshot = Snapshot.objects.order_by("-pk").first()
@@ -160,11 +200,29 @@ def job_detail(request, job_id):
     show_conflicts_only = request.GET.get("only") == "conflicts"
     if show_conflicts_only:
         planned_operations = [item for item in planned_operations if item.get("action") == "conflict"]
+    planned_rows = [
+        {"item": item, "label": ACTION_LABELS.get(item.get("action"), item.get("action", "—")),
+         "tone": status_tone(item.get("action"))}
+        for item in planned_operations
+    ]
+    operation_rows = [
+        {"operation": operation, "label": ACTION_LABELS.get(operation.action, operation.action),
+         "status": OPERATION_STATUS_LABELS.get(operation.status, operation.status),
+         "tone": status_tone(operation.status)}
+        for operation in job.operation_set.all()
+    ]
     return render(request, "job.html", {
         "job": job,
         "operations": job.operation_set.all(),
         "planned_operations": planned_operations,
+        "planned_rows": planned_rows,
+        "operation_rows": operation_rows,
+        "job_status_label": JOB_STATUS_LABELS.get(job.status, job.status),
+        "job_status_tone": status_tone(job.status),
+        "job_kind_label": JOB_KIND_LABELS.get(job.kind, job.kind),
+        "job_scope_label": {"full": "完整管理范围", "department": "指定部门及子部门", "users": "指定人员"}.get(job.scope, job.scope),
         "conflict_count": conflict_count,
+        "plan_has_conflicts": synchronization.has_conflicts(job.plan),
         "show_conflicts_only": show_conflicts_only,
     })
 
@@ -239,7 +297,9 @@ def logs(request):
         items = items.filter(success=result == "success")
     query = request.GET.copy()
     query.pop("page", None)
-    return render(request, "logs.html", {"page": Paginator(items, 50).get_page(request.GET.get("page")), "filters": request.GET, "filter_query": query.urlencode()})
+    page = Paginator(items, 50).get_page(request.GET.get("page"))
+    audit_rows = [{"item": item, "label": AUDIT_LABELS.get(item.action, item.action)} for item in page]
+    return render(request, "logs.html", {"page": page, "audit_rows": audit_rows, "filters": request.GET, "filter_query": query.urlencode()})
 
 
 @administrator

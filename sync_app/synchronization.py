@@ -386,6 +386,8 @@ def queue_apply(job_id, actor, confirmed=False):
         job = Job.objects.get(pk=job_id)
         if job.status not in {"preview_ready", "needs_confirmation"} or job.kind != "preview":
             raise RuleError("此预览不可重复执行")
+        if has_conflicts(job.plan):
+            raise RuleError("请先处理计划冲突，再重新预览")
         if Job.objects.filter(status__in=["queued", "running"]).exists():
             raise RuleError("已有排队或执行中的任务")
         if job.plan.get("high_risk") and not confirmed:

@@ -180,6 +180,9 @@ def test_job_conflicts_can_be_filtered_and_opened_in_people(admin_client):
     assert "冲突员工" in content and "正常员工" not in content
     assert "/people?q=u/conflict" in content
     assert admin_client.get(f"/jobs/{job.pk}").content.decode().count("正常员工") == 1
+    job.status = "preview_ready"
+    job.save(update_fields=["status"])
+    assert "执行此计划" not in admin_client.get(f"/jobs/{job.pk}").content.decode()
 
 
 @pytest.mark.django_db

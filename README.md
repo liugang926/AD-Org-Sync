@@ -20,7 +20,7 @@ python -m venv .venv
 .venv/Scripts/python manage.py worker
 ```
 
-管理员入口 `/login`，日常控制台 `/dashboard`，部门映射 `/departments`，员工入口 `/sspr`。访问 `/admin/` 会进入日常控制台；底层配置编辑仍通过 Django Admin 管理，并按同步边界、账号规则、自助重置和调度分组。连接凭据通过环境变量提供，参考 deploy/environment.example；应用不自动加载 .env 文件。
+管理员入口 `/login`，日常控制台 `/dashboard`，人员关联 `/people`，部门映射 `/departments`，操作审计 `/logs`，员工入口 `/sspr`。访问 `/admin/` 会进入日常控制台；底层配置编辑仍通过 Django Admin 管理，并按同步边界、账号规则、自助重置和调度分组。连接凭据通过环境变量提供，参考 deploy/environment.example；应用不自动加载 .env 文件。
 
 钉钉应用须具备部门和人员详情读取权限，配置可信域名和企业内部微应用首页。新配置可使用规范入口 `https://it-service.tianjizn.com:9443/sspr`；当前移动端和 PC 端首页均在相同 HTTPS 域名和端口的 `/sspr/callback/dingtalk`，该路径与 `/sspr` 映射到同一员工页面，可直接用作工作台入口。前端按[钉钉微应用免登 JSAPI](https://open.dingtalk.com/tools/explorer/jsapi?id=11723)传入 Client ID（原 AppKey）和服务器配置的 CorpId；AgentId 不是 Client ID。首页的 `corpid=$CORPID$` 占位符是可选的传值方式，本应用不依赖它，也不信任查询字符串中的企业或人员。员工验证 Cookie 始终 Secure；生产密码重置仍关闭，需先确定测试范围，再由专用员工在工作台完成真实授权与本人重置验收。
 

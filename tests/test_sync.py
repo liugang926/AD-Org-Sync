@@ -94,6 +94,17 @@ def test_duplicate_enqueue_and_apply_replay_denied(configured):
 
 
 @pytest.mark.django_db
+def test_conflicting_preview_cannot_be_queued_for_apply(configured):
+    job = Job.objects.create(status="preview_ready", plan={
+        "operations": [{"action": "conflict"}], "departments": [], "high_risk": False,
+    })
+    with pytest.raises(RuleError, match="处理计划冲突"):
+        queue_apply(job.pk, "admin")
+    job.refresh_from_db()
+    assert job.kind == "preview" and job.status == "preview_ready"
+
+
+@pytest.mark.django_db
 def test_empty_source_and_changed_binding_block_writes(configured):
     ad = Directory()
     with pytest.raises(RuleError):
