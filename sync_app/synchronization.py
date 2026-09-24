@@ -24,6 +24,11 @@ def binding_signature():
     return fingerprint([list(Binding.objects.order_by("pk").values()), list(Person.objects.order_by("pk").values()), list(DepartmentBinding.objects.order_by("pk").values())])
 
 
+def valid_ad_revision(account):
+    revision = str(account.get("ad_revision") or "")
+    return revision.isdecimal() and int(revision) > 0
+
+
 def collect(source, config):
     started_at = timezone.now()
     anchor = fingerprint([settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN])
@@ -166,13 +171,37 @@ def plan(job, source, ad):
                 # A prior AD write can outlive its local binding transaction.
                 # Preserve its object identity even if source attributes changed.
                 b = {"guid": str(recovery.target_guid), "enabled": True}
-        action, target, reason = resolve(user, b, accounts, occupied, config.naming, employee_counts, name_counts, config.match_field)
+        action, target, reason = resolve(user, b, accounts, occupied, config.naming, employee_counts, name_counts, config.match_field, config.protected_usernames)
         if recovery and not recovery.target_guid:
             action, reason = "conflict", "此前建号结果缺少可靠对象证据，请人工核验并绑定，禁止自动重建"
         elif recovery and action == "update":
+            evidence = recovery.evidence if isinstance(recovery.evidence, dict) else {}
+            employee_id = user.get("employee_id", "").strip().casefold()
             reason = "核验此前已创建的 AD 对象，补全未完成的同步绑定"
             if target["guid"] in occupied:
                 action, reason = "conflict", "此前创建的 AD 对象已绑定其他人员，请人工核验"
+            elif not (recovery.status == "failed" and valid_ad_revision(target)
+                      and evidence.get("enabled_fingerprint")
+                      and fingerprint(target) == evidence["enabled_fingerprint"]
+                      and evidence.get("created_config") == configuration_signature(config)
+                      and target["username"] == evidence.get("username")
+                      and employee_id and actual_employee_counts[employee_id] == 1
+                      and not protected(target) and under(target["dn"], config.root_ou)):
+                action, reason = "conflict", "此前创建的 AD 对象状态或配置已变化，请人工核验后处理"
+        elif recovery and action == "conflict" and target and not target["enabled"]:
+            evidence = recovery.evidence if isinstance(recovery.evidence, dict) else {}
+            employee_id = user.get("employee_id", "").strip().casefold()
+            if target["guid"] in occupied:
+                reason = "此前创建的 AD 对象已绑定其他人员，请人工核验"
+            elif (recovery.status == "failed" and valid_ad_revision(target)
+                  and fingerprint(target) in {evidence.get("created_fingerprint"), evidence.get("initialized_fingerprint")}
+                  and evidence.get("created_config") == configuration_signature(config)
+                  and target["username"] == evidence.get("username")
+                  and employee_id and actual_employee_counts[employee_id] == 1
+                  and not protected(target) and under(target["dn"], config.root_ou)):
+                action, reason = "resume_create", "此前建号已保持禁用且状态未变化，继续初始化并补全绑定"
+            else:
+                reason = "此前建号对象已禁用或状态变化，请人工核验后处理"
         if action == "create" and actual_employee_counts[user.get("employee_id", "").strip().casefold()] != 1:
             action, reason = "conflict", "工号重复，不能创建账号"
         if person.excluded:
@@ -190,12 +219,16 @@ def plan(job, source, ad):
                     ad.verify_ou(overrides[dept].dn, str(overrides[dept].object_guid))
                 if target and not under(target["dn"], config.root_ou):
                     raise RuleError("已有账号不在受管 OU 内")
+                if action == "resume_create" and parent_dn(target["dn"]).casefold() != ou.casefold():
+                    raise RuleError("此前未完成建号的目标 OU 与当前部门不一致，请人工核验")
         except RuleError as exc:
             action, reason = "conflict", str(exc)
         values = {"displayName": user["name"], "mail": user["email"], "title": user["title"], "telephoneNumber": user["phone"], "department": departments.get(person.primary_department or user["primary_department"], {}).get("name", "")}
         attrs = {k: v for k, v in values.items() if k in config.attributes and (v or k in config.clear_attributes)}
         before = dict(target["attrs"]) if target else {}
         changes = [{"field": k, "before": before.get(k, ""), "after": v} for k, v in attrs.items() if before.get(k, "") != v]
+        if action == "resume_create" and config.enable_new_accounts:
+            changes.append({"field": "enabled", "before": False, "after": True})
         if target and action in {"update", "bind"} and parent_dn(target["dn"]).casefold() != ou.casefold():
             changes.append({"field": "OU", "before": parent_dn(target["dn"]), "after": ou})
             if action == "update":
@@ -293,12 +326,27 @@ def apply(job, source, ad):
                         DepartmentBinding.objects.create(source_id=op["department_id"], dn=op["ou"], object_guid=ou_guid)
                     account = op["target"]
                     if op["action"] == "create":
-                        account = ad.create(op["user"], op["username"], op["ou"], config.root_ou, enabled=config.enable_new_accounts, require_change=config.require_password_change)
+                        account = ad.create(op["user"], op["username"], op["ou"], config.root_ou, enabled=False, require_change=config.require_password_change)
                         # Write recovery evidence before any additional AD operation.
                         record.target_guid = account["guid"]
                         record.status = "created"
-                        record.save()
-                    account = ad.update(account["guid"], op["attrs"], op["ou"], config.root_ou, allow_disabled=op["action"] == "create" and not config.enable_new_accounts)
+                        record.evidence = {**record.evidence, "created_fingerprint": fingerprint(account), "created_config": saved["config"]}
+                        record.save(update_fields=["target_guid", "status", "evidence"])
+                    creation_record = record if op["action"] == "create" else (
+                        Operation.objects.filter(source_id=op["source_id"], action="create").order_by("-pk").first()
+                        if op["action"] == "resume_create" else None
+                    )
+                    if op["action"] == "resume_create" and not creation_record:
+                        raise RuleError("此前建号证据已缺失，请人工核验，不能继续初始化")
+                    account = ad.update(account["guid"], op["attrs"], op["ou"], config.root_ou, allow_disabled=op["action"] in {"create", "resume_create"})
+                    if creation_record:
+                        creation_record.evidence = {**creation_record.evidence, "initialized_fingerprint": fingerprint(account)}
+                        creation_record.save(update_fields=["evidence"])
+                    if op["action"] in {"create", "resume_create"} and config.enable_new_accounts:
+                        account = ad.enable(account["guid"], config.root_ou)
+                        if creation_record:
+                            creation_record.evidence = {**creation_record.evidence, "enabled_fingerprint": fingerprint(account)}
+                            creation_record.save(update_fields=["evidence"])
                     record.target_guid = account["guid"]
                     # Each successful user commits independently of later users.
                     with transaction.atomic():
@@ -307,7 +355,7 @@ def apply(job, source, ad):
                         if existing and str(existing.object_guid) != account["guid"]:
                             raise RuleError("绑定发生变化")
                         if not existing:
-                            Binding.objects.create(person=person, object_guid=account["guid"], username=account["username"])
+                            Binding.objects.create(person=person, object_guid=account["guid"], username=account["username"], enabled=op["action"] not in {"create", "resume_create"} or config.enable_new_accounts)
                         else:
                             existing.username = account["username"]
                             existing.save(update_fields=["username", "updated_at"])
@@ -424,17 +472,24 @@ def run_sync_job(job):
 def binding_review(person_id, username):
     with closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
         person = Person.objects.get(pk=person_id)
-        source.user(person.source_id)
+        config = Configuration.current()
+        user = source.user(person.source_id)
+        if not source.user_in_scope(user, config.root_department):
+            raise RuleError("来源人员已不在当前同步范围，不能建立绑定")
         matches = ad.match("source_id", username.strip())
         if len(matches) != 1 or protected(matches[0]):
             raise RuleError("目标不存在、不唯一或受保护")
         target = matches[0]
-        if not under(target["dn"], Configuration.current().root_ou):
+        if not under(target["dn"], config.root_ou):
             raise RuleError("目标不在同步管理范围内")
         if Binding.objects.filter(object_guid=target["guid"]).exclude(person=person).exists():
             raise RuleError("目标已绑定其他人员")
         old = Binding.objects.filter(person=person).first()
-        payload = {"person": person.pk, "username": target["username"], "guid": target["guid"], "revision": str(old.revision) if old else ""}
+        payload = {
+            "person": person.pk, "username": target["username"], "guid": target["guid"],
+            "employee_id": target["employee_id"], "dn": target["dn"], "enabled": target["enabled"],
+            "revision": str(old.revision) if old else "",
+        }
         return {"person": person, "old": old, "target": target, "confirmation": signing.dumps(payload, salt="binding-review")}
 
 
@@ -449,36 +504,61 @@ def bind_person(person_id, confirmation, actor, reason):
         raise RuleError("绑定确认对象不一致")
     with lock("sync"), closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
         person = Person.objects.get(pk=person_id)
-        source.user(person.source_id)
+        config = Configuration.current()
+        user = source.user(person.source_id)
+        if not source.user_in_scope(user, config.root_department):
+            raise RuleError("来源人员已不在当前同步范围，不能建立绑定")
         matches = ad.match("source_id", reviewed["username"])
         if len(matches) != 1 or protected(matches[0]):
             raise RuleError("目标不存在、不唯一或受保护")
         account = matches[0]
         if account["guid"] != reviewed["guid"]:
             raise RuleError("AD 目标已变化，请重新验证")
-        if not under(account["dn"], Configuration.current().root_ou):
-            raise RuleError("目标不在同步管理范围内")
-        with lock("account:" + account["guid"]), transaction.atomic():
-            old = Binding.objects.filter(person=person).first()
-            if (str(old.revision) if old else "") != reviewed["revision"]:
-                raise RuleError("当前绑定已变化，请重新确认")
-            if Binding.objects.filter(object_guid=account["guid"]).exclude(person=person).exists():
-                raise RuleError("目标已绑定其他人员")
-            Binding.objects.update_or_create(person=person, defaults={"object_guid": account["guid"], "username": account["username"], "manual": True, "enabled": True, "revision": uuid.uuid4()})
-            audit(actor, "manual_bind", person.source_id, f"{str(old.object_guid) if old else '未绑定'} → {account['guid']}；{reason[:150]}")
+        with lock("account:" + account["guid"]):
+            current = ad.by_guid(account["guid"])
+            if (current["guid"] != reviewed["guid"]
+                    or current["username"] != reviewed["username"]
+                    or current["employee_id"] != reviewed.get("employee_id")
+                    or current["dn"].casefold() != str(reviewed.get("dn", "")).casefold()
+                    or current["enabled"] is not reviewed.get("enabled")):
+                raise RuleError("AD 目标状态已变化，请重新验证")
+            if protected(current) or not under(current["dn"], config.root_ou):
+                raise RuleError("目标受保护或不在同步管理范围内")
+            with transaction.atomic():
+                old = Binding.objects.filter(person=person).first()
+                if (str(old.revision) if old else "") != reviewed["revision"]:
+                    raise RuleError("当前绑定已变化，请重新确认")
+                if Binding.objects.filter(object_guid=current["guid"]).exclude(person=person).exists():
+                    raise RuleError("目标已绑定其他人员")
+                Binding.objects.update_or_create(person=person, defaults={"object_guid": current["guid"], "username": current["username"], "manual": True, "enabled": current["enabled"], "revision": uuid.uuid4()})
+                audit(actor, "manual_bind", person.source_id, f"{str(old.object_guid) if old else '未绑定'} → {current['guid']}；{reason[:150]}")
 
 
 def reactivate_person(person_id, actor, reason, confirmed):
     if not confirmed or not reason.strip():
         raise RuleError("恢复启用必须确认并填写原因")
     with lock("sync"), closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
-        binding = Binding.objects.select_related("person").filter(person_id=person_id, enabled=True).first()
+        binding = Binding.objects.select_related("person").filter(person_id=person_id).first()
         if not binding or binding.person.excluded:
-            raise RuleError("请先确认有效绑定且人员未排除同步")
-        source.user(binding.person.source_id)
+            raise RuleError("请先确认绑定且人员未排除同步")
+        config = Configuration.current()
+        user = source.user(binding.person.source_id)
+        if not source.user_in_scope(user, config.root_department):
+            raise RuleError("来源人员已不在当前同步范围，不能恢复 AD 账号")
         with lock("account:" + str(binding.object_guid)):
-            ad.enable(binding.object_guid, Configuration.current().root_ou)
-            audit(actor, "reactivate", binding.person.source_id, f"恢复 {binding.object_guid}；{reason[:150]}")
+            target = ad.by_guid(binding.object_guid)
+            if target["enabled"]:
+                if binding.enabled:
+                    raise RuleError("AD 账号与同步绑定均已启用")
+                if protected(target) or not under(target["dn"], config.root_ou):
+                    raise RuleError("目标受保护或不在管理范围内")
+            else:
+                ad.enable(binding.object_guid, config.root_ou)
+            with transaction.atomic():
+                binding.enabled = True
+                binding.revision = uuid.uuid4()
+                binding.save(update_fields=["enabled", "revision", "updated_at"])
+                audit(actor, "reactivate", binding.person.source_id, f"恢复 {binding.object_guid}；{reason[:150]}")
 
 
 def verify_binding(person_id):
@@ -487,12 +567,19 @@ def verify_binding(person_id):
         raise RuleError("该人员尚未绑定")
     with closing(ActiveDirectory()) as ad:
         account = ad.by_guid(binding.object_guid)
-        return {"person": binding.person, "account": account}
+        return {"person": binding.person, "binding": binding, "account": account}
 
 
 def change_person(person_id, actor, excluded, primary_department):
     with lock("sync"), transaction.atomic():
         person = Person.objects.get(pk=person_id)
+        if primary_department and primary_department != person.primary_department:
+            snapshot = Snapshot.objects.order_by("-pk").first()
+            user = next((item for item in snapshot.users if item["source_id"] == person.source_id), None) if snapshot else None
+            in_scope = {str(department["id"]) for department in snapshot.departments} if snapshot else set()
+            memberships = {str(value) for value in user.get("departments", [])} if user else set()
+            if primary_department not in memberships or primary_department not in in_scope:
+                raise RuleError("指定主部门必须是该人员当前所属且在同步范围内的来源部门")
         person.excluded = excluded
         person.primary_department = primary_department
         person.save()

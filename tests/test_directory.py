@@ -1,4 +1,5 @@
 import ssl
+import uuid
 from unittest.mock import Mock
 import pytest
 from sync_app.directory import DingTalk, ActiveDirectory
@@ -53,6 +54,55 @@ def test_dingtalk_consistent_child_and_shared_member_are_collected_once():
     source.user.assert_called_once_with("u")
 
 
+def test_dingtalk_user_scope_checks_live_department_ancestry():
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[
+        {"dept_id": 3, "parent_id": 2},
+        {"dept_id": 2, "parent_id": 1},
+    ])
+    assert source.user_in_scope({"departments": ["3"]}, "1")
+    assert source.call.call_count == 2
+    source.call.reset_mock()
+    assert source.user_in_scope({"departments": ["1"]}, "1")
+    source.call.assert_not_called()
+
+
+def test_dingtalk_user_scope_rejects_outside_or_uncertain_membership():
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[{"dept_id": 3, "parent_id": 0}])
+    assert not source.user_in_scope({"departments": ["3"]}, "1")
+    source.call = Mock(side_effect=[{"dept_id": 3, "parent_id": 3}])
+    with pytest.raises(RuleError, match="循环"):
+        source.user_in_scope({"departments": ["3"]}, "1")
+
+
+def test_dingtalk_user_scope_accepts_another_verified_membership():
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[
+        RuleError("另一部门不可访问"),
+        {"dept_id": 4, "parent_id": 1},
+    ])
+    assert source.user_in_scope({"departments": ["3", "4"]}, "1")
+
+
+@pytest.mark.parametrize(
+    ("sub_code", "expected"),
+    [(60011, "子错误码 60011"), ("60012", "子错误码 60012"), ("60013\nprivate", "错误码 88")],
+)
+def test_dingtalk_error_reports_only_safe_numeric_sub_code(sub_code, expected):
+    source = object.__new__(DingTalk)
+    source.token = "test-token"
+    response = Mock()
+    response.json.return_value = {"errcode": 88, "sub_code": sub_code, "sub_msg": "private details"}
+    source.http = Mock()
+    source.http.post.return_value = response
+
+    with pytest.raises(RuleError, match=expected) as failure:
+        source.call("/topapi/v2/department/get", {"dept_id": 1})
+    assert "private details" not in str(failure.value)
+    assert "private" not in str(failure.value)
+
+
 @pytest.mark.parametrize("page", [
     {"list": [{"userid": "u"}], "has_more": "false"},
     {"list": [{"userid": "u"}], "has_more": True, "next_cursor": "bad"},
@@ -75,6 +125,20 @@ def test_ldap_match_escapes_untrusted_identity_values():
     assert "employeeID=" in query
     with pytest.raises(RuleError):
         directory.match("arbitraryLDAPAttribute", "x")
+
+
+def test_ad_account_fingerprint_includes_directory_change_revision():
+    assert "uSNChanged" in ActiveDirectory.ATTRS
+    guid = str(uuid.uuid4())
+    entry = {"dn": "CN=person,OU=People,DC=example,DC=com", "attributes": {
+        "objectGUID": guid, "sAMAccountName": "person", "employeeID": "1001",
+        "userAccountControl": 512, "uSNChanged": 42,
+    }}
+    account = ActiveDirectory.account(entry)
+    assert account["ad_revision"] == "42"
+    entry["attributes"]["uSNChanged"] = 43
+    from sync_app.domain import fingerprint
+    assert fingerprint(ActiveDirectory.account(entry)) != fingerprint(account)
 
 
 def test_ldap_failures_never_return_partial_results():

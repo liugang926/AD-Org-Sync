@@ -1,11 +1,13 @@
 import pytest
 from django.utils import timezone
 from datetime import timedelta
+from threading import Event, Thread
 from sync_app import sspr
 from sync_app.directory import PasswordResetOutcome
 from sync_app.domain import RuleError
+from sync_app.locking import lock
 from sync_app.models import Configuration, Binding, Job, EmployeeSession, Audit
-from .fakes import Source, Directory, account
+from .fakes import Source, Directory, account, user
 
 
 @pytest.fixture
@@ -31,6 +33,60 @@ def test_unsynced_employee_can_reset_and_cannot_replay(setup_sspr):
         sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
     assert ad.resets == 1
     assert "Example-password" not in str(list(Audit.objects.values()))
+
+
+@pytest.mark.django_db
+def test_reset_can_retry_after_sync_holds_same_account_lock(setup_sspr):
+    _, ad, _ = setup_sspr
+    token, matched = sspr.verify("valid", "ip")
+    held, release = Event(), Event()
+    failures = []
+
+    def hold_account_lock():
+        try:
+            with lock("account:" + matched["guid"]):
+                held.set()
+                if not release.wait(10):
+                    raise AssertionError("account lock was not released")
+        except Exception as exc:
+            failures.append(exc)
+            held.set()
+
+    worker = Thread(target=hold_account_lock)
+    worker.start()
+    try:
+        assert held.wait(10)
+        assert not failures
+        with pytest.raises(RuleError, match="操作正在执行"):
+            sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+        assert not EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+        assert ad.resets == 0
+    finally:
+        release.set()
+        worker.join(10)
+    assert not worker.is_alive() and not failures
+    assert sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+    assert ad.resets == 1
+
+
+@pytest.mark.django_db
+def test_pilot_limits_dingtalk_user_and_invalidates_session_when_scope_changes(setup_sspr, settings):
+    _, ad, _ = setup_sspr
+    settings.SSPR_ALLOWED_DINGTALK_USER_IDS = frozenset({"somebody-else"})
+    with pytest.raises(RuleError, match="尚未对当前账号开放"):
+        sspr.verify("valid", "ip")
+    assert not EmployeeSession.objects.exists()
+    assert ad.resets == 0
+
+    settings.SSPR_ALLOWED_DINGTALK_USER_IDS = frozenset({"u1"})
+    token, _ = sspr.verify("valid", "ip")
+    assert sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+    assert ad.resets == 1
+    token, _ = sspr.verify("valid", "ip")
+    settings.SSPR_ALLOWED_DINGTALK_USER_IDS = frozenset({"somebody-else"})
+    with pytest.raises(RuleError, match="验证已失效"):
+        sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+    assert ad.resets == 1
 
 
 @pytest.mark.django_db
@@ -77,6 +133,16 @@ def test_rechecks_identity_and_guid_at_submission(setup_sspr):
     token, _ = sspr.verify("valid", "ip")
     ad.items = [account()]
     with pytest.raises(RuleError):
+        sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+    assert ad.resets == 0
+
+
+@pytest.mark.django_db
+def test_changed_dingtalk_user_id_cannot_reuse_verified_session(setup_sspr, monkeypatch):
+    source, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    monkeypatch.setattr(source, "user", lambda uid: user("different-user", "1001"))
+    with pytest.raises(RuleError, match="钉钉身份发生变化"):
         sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
     assert ad.resets == 0
 

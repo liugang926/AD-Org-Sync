@@ -24,10 +24,12 @@ def protected(account: dict) -> bool:
     return bool(account.get("protected")) or account.get("username", "").casefold() in {"admin", "administrator", "guest", "krbtgt", "defaultaccount", "wdagutilityaccount"}
 
 
-def resolve(user: dict, binding: dict | None, accounts: list[dict], occupied: set[str], naming: str, employee_counts: Counter, name_counts: Counter, match_field: str = "employee_id") -> tuple[str, dict | None, str]:
+def resolve(user: dict, binding: dict | None, accounts: list[dict], occupied: set[str], naming: str, employee_counts: Counter, name_counts: Counter, match_field: str = "employee_id", protected_usernames=()) -> tuple[str, dict | None, str]:
     if binding:
         matches = [a for a in accounts if a["guid"] == binding["guid"]]
         if not binding["enabled"]:
+            if len(matches) == 1 and matches[0]["enabled"]:
+                return "conflict", matches[0], "停用绑定的 AD 账号已启用，请人工核验"
             return "skip", None, "绑定已停用"
         if len(matches) != 1:
             return "conflict", None, "绑定目标不存在或无法唯一确认"
@@ -55,6 +57,12 @@ def resolve(user: dict, binding: dict | None, accounts: list[dict], occupied: se
     if any(a.get("employee_id", "").strip().casefold() == employee for a in accounts):
         return "conflict", None, "工号已存在于其他 AD 账号，请人工核验"
     username = candidate(user, naming)
-    if not username or name_counts[username.casefold()] != 1 or any(a["username"].casefold() == username.casefold() for a in accounts) or protected({"username": username}):
-        return "conflict", None, "新账号命名为空、重复、被占用或受保护"
+    if not username:
+        return "conflict", None, "新账号命名字段为空或规范化后为空，请修正来源信息"
+    if name_counts[username.casefold()] != 1:
+        return "conflict", None, "新账号名在来源内重复或截断碰撞，请修正来源信息"
+    if protected({"username": username}) or username.casefold() in {value.casefold() for value in protected_usernames}:
+        return "conflict", None, "新账号名受保护，不能自动创建"
+    if any(a["username"].casefold() == username.casefold() for a in accounts):
+        return "conflict", None, "新账号名已被 AD 占用，请核验后人工绑定"
     return "create", None, "创建新账号"

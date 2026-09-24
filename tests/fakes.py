@@ -9,7 +9,7 @@ def user(uid="u1", employee="1001"):
 
 
 def account(employee="1001", name="testuser", guid=None):
-    return {"guid": guid or str(uuid.uuid4()), "dn": "CN=" + name + ",OU=People,DC=example,DC=com", "username": name, "employee_id": employee, "email": "u1@example.com", "enabled": True, "protected": False, "locked": False, "uac": 512, "attrs": {}}
+    return {"guid": guid or str(uuid.uuid4()), "dn": "CN=" + name + ",OU=People,DC=example,DC=com", "username": name, "employee_id": employee, "email": "u1@example.com", "enabled": True, "protected": False, "locked": False, "uac": 512, "ad_revision": "1", "attrs": {}}
 
 
 class Source:
@@ -26,6 +26,9 @@ class Source:
 
     def user(self, uid):
         return next(copy.deepcopy(u) for u in self.users if u["source_id"] == uid)
+
+    def user_in_scope(self, employee, root_id):
+        return str(root_id) in employee["departments"]
 
     def close(self):
         pass
@@ -80,21 +83,30 @@ class Directory:
         if str(guid) in self.fail_update:
             raise RuleError("属性更新失败")
         item = next(a for a in self.items if a["guid"] == str(guid))
+        new_dn = item["dn"].split(",", 1)[0] + "," + ou
+        changed = new_dn != item["dn"] or any(item["attrs"].get(key, "") != value for key, value in attrs.items())
         item["attrs"].update(attrs)
-        item["dn"] = item["dn"].split(",", 1)[0] + "," + ou
+        item["dn"] = new_dn
+        if changed:
+            item["ad_revision"] = str(int(item["ad_revision"]) + 1)
         return self.by_guid(guid)
 
     def enable(self, guid, root):
         item = next(a for a in self.items if a["guid"] == str(guid))
         item["enabled"] = True
+        item["ad_revision"] = str(int(item["ad_revision"]) + 1)
         return self.by_guid(guid)
 
     def disable(self, guid, root):
         self.disabled.append(guid)
-        next(a for a in self.items if a["guid"] == guid)["enabled"] = False
+        item = next(a for a in self.items if a["guid"] == guid)
+        item["enabled"] = False
+        item["ad_revision"] = str(int(item["ad_revision"]) + 1)
 
     def reset_password(self, guid, password, unlock=False):
         self.resets += 1
+        item = next(a for a in self.items if a["guid"] == str(guid))
+        item["ad_revision"] = str(int(item["ad_revision"]) + 1)
         return PasswordResetOutcome("密码已成功重置", True)
 
     def close(self):

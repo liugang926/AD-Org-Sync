@@ -55,7 +55,14 @@ class DingTalk:
             if data.get("errcode") != 0:
                 code = data.get("errcode")
                 safe_code = str(code) if isinstance(code, int) else "未知"
-                raise RuleError(f"钉钉请求失败（错误码 {safe_code}），请检查应用权限、可见范围和服务器 IP 白名单")
+                sub_code = data.get("sub_code") or data.get("subCode")
+                safe_sub_code = str(sub_code)
+                suffix = (
+                    f"，子错误码 {safe_sub_code}"
+                    if safe_sub_code.isascii() and safe_sub_code.isdecimal() and len(safe_sub_code) <= 12
+                    else ""
+                )
+                raise RuleError(f"钉钉请求失败（错误码 {safe_code}{suffix}），请检查应用权限、可见范围和服务器 IP 白名单")
             if "result" not in data:
                 raise RuleError("钉钉返回数据不完整")
             return data["result"]
@@ -83,6 +90,34 @@ class DingTalk:
             "departments": departments,
             "primary_department": str(data.get("main_department") or (departments[0] if len(departments) == 1 else "")),
         }
+
+    def user_in_scope(self, user, root_id):
+        root_id = str(root_id)
+        if not root_id.isdigit() or int(root_id) <= 0:
+            raise RuleError("钉钉根部门 ID 无效")
+        departments = [str(value) for value in user.get("departments", [])]
+        if root_id in departments:
+            return True
+        first_error = None
+        for department_id in departments:
+            current, seen = department_id, set()
+            try:
+                while current != "0":
+                    if not current.isdigit() or int(current) <= 0 or current in seen or len(seen) >= 100:
+                        raise RuleError("员工部门层级不完整或存在循环，不能确认同步范围")
+                    seen.add(current)
+                    detail = self.call("/topapi/v2/department/get", {"dept_id": int(current)})
+                    if not isinstance(detail, dict) or str(detail.get("dept_id")) != current:
+                        raise RuleError("员工部门详情不完整，不能确认同步范围")
+                    current = str(detail.get("parent_id", ""))
+                    if current == root_id:
+                        return True
+            except RuleError as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error:
+            raise first_error
+        return False
 
     def collect(self, root_id):
         if not str(root_id).isdigit() or int(root_id) <= 0:
@@ -136,7 +171,7 @@ class DingTalk:
 
 
 class ActiveDirectory:
-    ATTRS = ["objectGUID", "sAMAccountName", "employeeID", "mail", "displayName", "title", "department", "telephoneNumber", "userAccountControl", "adminCount", "objectSid", "lockoutTime", "isCriticalSystemObject"]
+    ATTRS = ["objectGUID", "sAMAccountName", "employeeID", "mail", "displayName", "title", "department", "telephoneNumber", "userAccountControl", "adminCount", "objectSid", "lockoutTime", "isCriticalSystemObject", "uSNChanged"]
     MATCH = {"employee_id": "employeeID", "email": "mail", "source_id": "sAMAccountName"}
 
     def __init__(self):
@@ -184,7 +219,9 @@ class ActiveDirectory:
         sid = str(value("objectSid"))
         critical = str(value("isCriticalSystemObject")).lower() == "true"
         explicit_protection = str(value("sAMAccountName")).casefold() in protected_names
+        ad_revision = str(value("uSNChanged") or "").strip()
         return {"guid": str(uuid.UUID(str(value("objectGUID")).strip("{}"))), "dn": entry["dn"],
+                "ad_revision": ad_revision,
                 "username": str(value("sAMAccountName")).strip(), "employee_id": str(value("employeeID")).strip(),
                 "email": str(value("mail")).strip(), "enabled": not bool(uac & 2), "uac": uac,
                 "protected": critical or explicit_protection or int(value("adminCount", 0)) == 1 or sid.endswith(("-500", "-501", "-502")) or bool(uac & (2048 | 4096 | 8192)),

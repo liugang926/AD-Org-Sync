@@ -20,6 +20,23 @@ def test_administrator_pages_require_login(client):
 
 
 @pytest.mark.django_db
+def test_dingtalk_workbench_homepage_alias_renders_employee_verification(client, settings):
+    settings.DINGTALK_CORP_ID = "ding-test-corp"
+    settings.DINGTALK_APP_KEY = "test-client-id"
+    config = Configuration.current()
+    config.sspr_enabled = True
+    config.save()
+    for path in ("/sspr", "/sspr/callback/dingtalk"):
+        response = client.get(path)
+        assert response.status_code == 200
+        html = response.content.decode()
+        assert 'id="verify"' in html
+        assert 'data-corp="ding-test-corp"' in html
+        assert 'data-client="test-client-id"' in html
+        assert '/static/sspr.js' in html
+
+
+@pytest.mark.django_db
 def test_pages_and_readiness(admin_client):
     Configuration.current()
     (settings.DATA_DIR / "worker-heartbeat").touch()
@@ -63,6 +80,71 @@ def test_binding_requires_review_before_mutation(admin_client, monkeypatch):
     response = admin_client.post(f"/people/{person.pk}", {"action": "confirm_bind", "confirmation": confirmation, "reason": "核对工号"})
     assert response.status_code == 302
     assert Binding.objects.get().username == "testuser"
+
+
+@pytest.mark.django_db
+def test_primary_department_is_chosen_from_current_employee_departments(admin_client):
+    from sync_app.models import Person, Snapshot
+    from .fakes import user
+
+    employee = user()
+    employee["departments"] = ["1", "2", "999"]
+    employee["primary_department"] = ""
+    Snapshot.objects.create(
+        fingerprint="complete-source", root_department="1", users=[employee],
+        departments=[{"id": "1", "name": "公司"}, {"id": "2", "name": "研发"}],
+    )
+    person = Person.objects.create(source_id=employee["source_id"], name=employee["name"])
+    page = admin_client.get("/people")
+    assert page.status_code == 200
+    assert 'name="department"' in page.content.decode()
+    assert 'value="2"' in page.content.decode()
+    assert 'value="999"' not in page.content.decode()
+    assert "研发（2）" in page.content.decode()
+
+    invalid = admin_client.post(f"/people/{person.pk}", {"action": "policy", "department": "999", "excluded": "on"})
+    assert invalid.status_code == 302 and invalid["Location"] == "/people"
+    person.refresh_from_db()
+    assert person.primary_department == "" and not person.excluded
+
+    valid = admin_client.post(f"/people/{person.pk}", {"action": "policy", "department": "2"})
+    assert valid.status_code == 302
+    person.refresh_from_db()
+    assert person.primary_department == "2"
+
+
+@pytest.mark.django_db
+def test_job_conflicts_can_be_filtered_and_opened_in_people(admin_client):
+    from sync_app.models import Job
+
+    job = Job.objects.create(status="blocked", plan={"operations": [
+        {"source_id": "u/conflict", "user": {"name": "冲突员工"}, "action": "conflict", "reason": "主部门不明确"},
+        {"source_id": "u-ok", "user": {"name": "正常员工"}, "action": "bind", "reason": "唯一工号匹配"},
+    ]})
+    response = admin_client.get(f"/jobs/{job.pk}?only=conflicts")
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "人员冲突 1 项" in content
+    assert "冲突员工" in content and "正常员工" not in content
+    assert "/people?q=u/conflict" in content
+    assert admin_client.get(f"/jobs/{job.pk}").content.decode().count("正常员工") == 1
+
+
+@pytest.mark.django_db
+def test_held_disabled_account_can_be_reviewed_for_reactivation(admin_client, monkeypatch):
+    from sync_app import synchronization as sync
+    from sync_app.models import Person, Binding
+    from .fakes import Directory, account
+
+    target = account()
+    target["enabled"] = False
+    ad = Directory([target])
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    Binding.objects.create(person=person, object_guid=target["guid"], username=target["username"], enabled=False)
+    response = admin_client.post(f"/people/{person.pk}", {"action": "verify"})
+    assert response.status_code == 200
+    assert "恢复 AD 账号及同步绑定" in response.content.decode()
 
 
 @pytest.mark.django_db
