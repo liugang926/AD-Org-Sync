@@ -1,0 +1,6 @@
+{% extends "admin/base.html" %}
+{% load static %}
+{% block title %}{{ title }} · 组织同步控制台{% endblock %}
+{% block extrastyle %}{{ block.super }}<link rel="stylesheet" href="{% static 'admin_theme.css' %}">{% endblock %}
+{% block branding %}<a class="console-brand" href="/dashboard">组织同步 <span>系统管理</span></a>{% endblock %}
+{% block nav-global %}<a class="console-return" href="/dashboard">返回工作台</a>{% endblock %}

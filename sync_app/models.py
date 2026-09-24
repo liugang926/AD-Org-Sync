@@ -6,6 +6,10 @@ from django.utils import timezone
 
 
 class Configuration(models.Model):
+    class Meta:
+        verbose_name = "组织配置"
+        verbose_name_plural = "组织配置"
+
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     root_department = models.CharField("钉钉根部门 ID", max_length=100, default="1")
     identity_anchor = models.CharField(max_length=64, blank=True, editable=False)
@@ -80,6 +84,10 @@ class Binding(models.Model):
 
 
 class DepartmentBinding(models.Model):
+    class Meta:
+        verbose_name = "部门映射"
+        verbose_name_plural = "部门映射"
+
     source_id = models.CharField(max_length=100, unique=True)
     dn = models.CharField(max_length=500)
     object_guid = models.UUIDField()
@@ -87,6 +95,10 @@ class DepartmentBinding(models.Model):
 
 
 class Job(models.Model):
+    class Meta:
+        verbose_name = "同步任务"
+        verbose_name_plural = "同步任务"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     kind = models.CharField(max_length=20, default="preview")
     status = models.CharField(max_length=30, default="queued")
@@ -102,6 +114,10 @@ class Job(models.Model):
 
 
 class Operation(models.Model):
+    class Meta:
+        verbose_name = "执行记录"
+        verbose_name_plural = "执行记录"
+
     job = models.ForeignKey(Job, on_delete=models.CASCADE)
     source_id = models.CharField(max_length=100)
     action = models.CharField(max_length=30)
@@ -112,6 +128,10 @@ class Operation(models.Model):
 
 
 class Audit(models.Model):
+    class Meta:
+        verbose_name = "审计日志"
+        verbose_name_plural = "审计日志"
+
     created_at = models.DateTimeField(auto_now_add=True)
     actor = models.CharField(max_length=150)
     action = models.CharField(max_length=40)

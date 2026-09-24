@@ -20,7 +20,7 @@ from django.utils import timezone
 from . import sspr, synchronization
 from .directory import ActiveDirectory, DingTalk
 from .domain import RuleError, candidate
-from .models import Configuration, Person, Binding, Job, Audit, Snapshot, RuntimeState
+from .models import Configuration, Person, Binding, DepartmentBinding, Job, Audit, Snapshot, RuntimeState
 from .security import rate_limit, audit, client_address
 
 
@@ -43,6 +43,7 @@ def administrator(view):
 
 class AdminLogin(LoginView):
     template_name = "registration/login.html"
+    redirect_authenticated_user = True
 
     def form_valid(self, form):
         response = super().form_valid(form)
@@ -91,7 +92,60 @@ def dashboard(request):
     config = Configuration.current()
     latest = Job.objects.filter(actor="scheduler").order_by("-created_at").first()
     next_run = max(timezone.now(), latest.created_at + timedelta(minutes=config.interval_minutes)) if latest else timezone.now()
-    return render(request, "dashboard.html", {"jobs": Job.objects.order_by("-created_at")[:30], "config": config, "snapshot": Snapshot.objects.order_by("-pk").first(), "runtime": RuntimeState.current(), "next_run": next_run if config.schedule_enabled else None})
+    jobs = list(Job.objects.order_by("-created_at")[:12])
+    kind_labels = {"preview": "同步预览", "refresh": "通讯录刷新", "connections": "连接检测", "apply": "执行同步"}
+    status_labels = {"queued": "排队中", "running": "执行中", "preview_ready": "待确认", "needs_confirmation": "待确认", "blocked": "已阻断", "completed": "已完成", "success": "已完成", "failed": "失败", "partial": "部分完成"}
+    job_rows = [
+        {"job": job, "kind": kind_labels.get(job.kind, job.kind), "status": status_labels.get(job.status, job.status), "tone": "warning" if job.status in {"failed", "partial", "blocked"} else "active" if job.status in {"queued", "running", "preview_ready", "needs_confirmation"} else "success"}
+        for job in jobs
+    ]
+    snapshot = Snapshot.objects.order_by("-pk").first()
+    latest_job = jobs[0] if jobs else None
+    conflict_count = sum(item.get("action") == "conflict" for item in latest_job.plan.get("operations", [])) if latest_job and isinstance(latest_job.plan, dict) else 0
+    return render(request, "dashboard.html", {
+        "jobs": jobs, "job_rows": job_rows, "config": config, "snapshot": snapshot,
+        "runtime": RuntimeState.current(), "next_run": next_run if config.schedule_enabled else None,
+        "person_count": Person.objects.count(), "binding_count": Binding.objects.count(),
+        "department_binding_count": DepartmentBinding.objects.count(), "conflict_count": conflict_count,
+    })
+
+
+@administrator
+def admin_home(request):
+    return redirect("dashboard")
+
+
+@administrator
+def departments(request):
+    snapshot = Snapshot.objects.order_by("-pk").first()
+    source = {str(item["id"]): item for item in snapshot.departments} if snapshot else {}
+    query = request.GET.get("q", "").strip()[:100]
+    status_filter = request.GET.get("status", "")
+    if status_filter not in {"", "mapped", "unmapped", "stale"}:
+        status_filter = ""
+    bindings = {item.source_id: item for item in DepartmentBinding.objects.all()}
+    rows = []
+    for source_id, department in sorted(source.items(), key=lambda item: str(item[1].get("name", ""))):
+        binding = bindings.get(source_id)
+        name = department.get("name") or "未命名部门"
+        if status_filter == "stale" or (status_filter == "mapped" and binding is None) or (status_filter == "unmapped" and binding is not None):
+            continue
+        if query and not any(query.casefold() in str(value).casefold() for value in (source_id, name, binding.dn if binding else "")):
+            continue
+        rows.append({"source_id": source_id, "binding": binding, "name": name, "target": binding.dn.split(",", 1)[0] if binding else "", "status": "mapped" if binding else "unmapped"})
+    for source_id, binding in sorted(bindings.items()):
+        if source_id in source or status_filter in {"mapped", "unmapped"}:
+            continue
+        name = "来源部门未在最近采集中"
+        if query and not any(query.casefold() in str(value).casefold() for value in (source_id, name, binding.dn)):
+            continue
+        rows.append({"source_id": source_id, "binding": binding, "name": name, "target": binding.dn.split(",", 1)[0], "status": "stale"})
+    return render(request, "departments.html", {
+        "page": Paginator(rows, 25).get_page(request.GET.get("page")), "query": query,
+        "status_filter": status_filter, "snapshot": snapshot,
+        "total_count": len(bindings), "source_count": len(source),
+        "unmapped_count": sum(source_id not in bindings for source_id in source),
+    })
 
 
 @administrator
