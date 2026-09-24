@@ -159,6 +159,10 @@ details[open] summary{margin-top:3px}
 .form-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-top:19px}
 .narrow{max-width:480px;margin:48px auto}
 .narrow button{width:100%}
+#verify button[hidden]{display:none}
+.sspr-account{margin:18px 0 22px;padding:15px 17px;border:1px solid #c7dcef;border-radius:9px;background:#f2f8ff;overflow-wrap:anywhere}
+.sspr-account span{display:block;color:#5d7187;font-size:12px}
+.sspr-account strong{display:block;margin-top:3px;color:#174e83;font-size:22px;line-height:1.3}
 label{display:block;margin:10px 0 6px;color:#344d67;font-size:12px;font-weight:650}
 input,select,textarea{display:block;width:100%;min-height:40px;padding:9px 11px;border:1px solid #cad7e5;border-radius:8px;background:#fff;color:#263e58}
 input::placeholder{color:#a0adba}
