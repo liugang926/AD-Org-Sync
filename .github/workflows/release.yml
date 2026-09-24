@@ -307,17 +307,17 @@ jobs:
           assert Operation.objects.count() == operations_before
           print("business_operation_rows_added=0 binding_changes=0")
           PY
-  verify-pr-61:
-    if: ${{ false }}
+  verify-pr-66:
+    if: ${{ true }}
     runs-on: [self-hosted, linux, x64, production]
     environment: production
     timeout-minutes: 5
     steps:
-      - name: Verify deployed PR 61 revision and read-only health
+      - name: Verify deployed PR 66 revision and read-only health
         shell: bash
         run: |
           set -Eeuo pipefail
-          expected=a480636d3dc40e4a9e98ef859831320b50ed7140
+          expected=9298975b241a5cc62a2f64e15871b5217bc7b37f
           actual="$(tr -d '\r\n' < /opt/ad-org-sync/shared/last_successful_image_tag)"
           test "$actual" = "$expected"
           echo "last_successful_image_tag=$actual"
