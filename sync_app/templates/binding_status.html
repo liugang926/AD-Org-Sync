@@ -1,8 +1,12 @@
-{% extends "base.html" %}{% block content %}
-<h1>实时绑定核验</h1><section class="card"><h2>{{ person.name }}</h2>
-{% if account %}<p>{{ account.username }} · {{ account.guid }}</p><p>{{ account.dn }}</p>
-<p>AD 账号：{% if account.enabled %}已启用{% else %}已禁用{% endif %} · 同步绑定：{% if binding.enabled %}有效{% else %}已停用{% endif %}</p>
-{% if not account.enabled or not binding.enabled %}<form method="post" action="{% url 'person_action' person.pk %}">{% csrf_token %}<input type="hidden" name="action" value="reactivate">
-<label>恢复原因<input name="reason" required maxlength="150"></label><label><input type="checkbox" name="confirmed" required>我已核对当前 AD 对象，确认恢复</label><button>{% if account.enabled %}恢复同步绑定{% elif binding.enabled %}恢复 AD 账号{% else %}恢复 AD 账号及同步绑定{% endif %}</button></form>{% endif %}
-{% else %}<p class="notice">绑定的 AD 对象已不存在，请重新核对绑定。</p>{% endif %}
-<a href="{% url 'people' %}">返回人员</a></section>{% endblock %}
+{% extends "base.html" %}
+{% block title %}实时绑定核验 · 组织同步控制台{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow"><a href="{% url 'people' %}">人员与账号关联</a> / 实时核验</p><h1>实时绑定核验</h1><p class="page-subtitle">依据当前 AD 对象状态检查同步绑定，恢复操作需再次确认。</p></div></div>
+<section class="card review-card">
+  <div class="card-head"><h2>{{ person.name }}</h2>{% if account %}<span class="status-pill {% if account.enabled and binding.enabled %}tone-success{% else %}tone-warning{% endif %}">{% if account.enabled and binding.enabled %}绑定可用{% else %}需要处理{% endif %}</span>{% endif %}</div>
+  {% if account %}
+    <dl class="detail-list"><div><dt>AD 账号</dt><dd>{{ account.username }}<small>objectGUID：{{ account.guid }}</small></dd></div><div><dt>目标位置</dt><dd class="long-value">{{ account.dn }}</dd></div><div><dt>账号状态</dt><dd>{% if account.enabled %}已启用{% else %}已禁用{% endif %}</dd></div><div><dt>同步绑定</dt><dd>{% if binding.enabled %}有效{% else %}已停用{% endif %}</dd></div></dl>
+    {% if not account.enabled or not binding.enabled %}<form method="post" action="{% url 'person_action' person.pk %}">{% csrf_token %}<input type="hidden" name="action" value="reactivate"><label for="reactivate-reason">恢复原因</label><input id="reactivate-reason" name="reason" required maxlength="150"><label class="inline-check"><input type="checkbox" name="confirmed" required>我已核对当前 AD 对象，确认恢复</label><div class="form-actions"><button type="submit">{% if account.enabled %}恢复同步绑定{% elif binding.enabled %}恢复 AD 账号{% else %}恢复 AD 账号及同步绑定{% endif %}</button><a class="button-link secondary" href="{% url 'people' %}">返回人员</a></div></form>{% else %}<div class="form-actions"><a class="button-link secondary" href="{% url 'people' %}">返回人员</a></div>{% endif %}
+  {% else %}<p class="notice" role="alert">绑定的 AD 对象已不存在，请重新核对绑定。</p><a class="button-link secondary" href="{% url 'people' %}">返回人员</a>{% endif %}
+</section>
+{% endblock %}

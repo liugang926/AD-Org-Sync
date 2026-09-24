@@ -1,43 +1,43 @@
 {% extends "base.html" %}
+{% block title %}任务详情 · 组织同步控制台{% endblock %}
 {% block content %}
-<p><a href="/dashboard">← 返回同步</a></p>
-<h1>任务详情</h1>
-<p>{{ job.id }} · {{ job.status }}</p>
-{% if job.message %}<p class="notice">{{ job.message }}</p>{% endif %}
+<div class="page-heading">
+  <div><p class="eyebrow"><a href="{% url 'dashboard' %}">同步概览</a> / 任务详情</p><h1>任务详情</h1><p class="page-subtitle">先审阅计划，再决定是否执行。预览只描述拟议变更，不代表 AD 已被修改。</p></div>
+  <a class="button-link secondary" href="{% url 'job' job.id %}">刷新任务状态</a>
+</div>
 
-<section class="card">
-  <h2>部门 OU 计划</h2>
-  {% for item in job.plan.departments %}
-  <p>{{ item.name }} · {{ item.dn }} · {% if item.action == "conflict" %}冲突：{{ item.reason }}{% elif item.guid %}已存在{% else %}待创建{% endif %}</p>
-  {% empty %}<p>此范围没有部门变更。</p>{% endfor %}
+<section class="card task-overview">
+  <div class="task-overview-head"><div><h2>当前任务</h2><small>任务 ID：{{ job.id }}</small></div><span class="status-pill tone-{{ job_status_tone }}">{{ job_status_label }}</span></div>
+  <dl class="task-facts"><div><dt>任务类型</dt><dd>{{ job_kind_label }}</dd></div><div><dt>创建时间</dt><dd>{{ job.created_at|date:"Y-m-d H:i:s" }}</dd></div><div><dt>同步范围</dt><dd>{{ job_scope_label }}</dd></div><div><dt>发起人</dt><dd>{{ job.actor }}</dd></div><div><dt>人员冲突</dt><dd>{{ conflict_count }} 项</dd></div></dl>
+  {% if job.message %}<p class="hint-block">{{ job.message }}</p>{% endif %}
+  {% if job.plan.high_risk %}<p class="notice" role="alert">该计划超过禁用保护阈值。请逐项核对受影响账号，再确认执行。</p>{% endif %}
 </section>
 
-<section class="card">
-  <h2>计划变更</h2>
-  {% if conflict_count %}
-  <p>人员冲突 {{ conflict_count }} 项 · {% if show_conflicts_only %}<a href="{% url 'job' job.id %}">查看全部</a>{% else %}<a href="{% url 'job' job.id %}?only=conflicts">仅看冲突</a>{% endif %}</p>
-  {% endif %}
-  <div class="table-wrap"><table>
-    <thead><tr><th>人员</th><th>操作</th><th>AD 账号</th><th>原因</th><th>目标 OU / 属性</th></tr></thead>
-    <tbody>
-      {% for item in planned_operations %}
-      <tr>
-        <td>{{ item.user.name|default:item.source_id }}<small>{{ item.source_id }}</small>{% if item.action == "conflict" %}<small><a href="{% url 'people' %}?q={{ item.source_id|urlencode }}">查看人员并处理</a></small>{% endif %}</td>
-        <td>{{ item.action }}</td>
-        <td>{{ item.username|default:"—" }}<small>命名原值：{{ item.raw_naming_value|default:"—" }} → {{ item.candidate|default:"—" }}</small><small>已保存绑定：{{ item.binding.username|default:"未绑定" }}</small></td>
-        <td>{{ item.reason }}</td>
-        <td>{{ item.ou }}{% for change in item.changes %}<small>{{ change.field }}：{{ change.before|default_if_none:"空" }} → {{ change.after|default_if_none:"空" }}</small>{% endfor %}</td>
-      </tr>
-      {% empty %}<tr><td colspan="5">{% if show_conflicts_only %}没有人员冲突。{% else %}尚未生成计划，请稍后刷新。{% endif %}</td></tr>{% endfor %}
-    </tbody>
-  </table></div>
-  {% if job.status == "preview_ready" or job.status == "needs_confirmation" %}
-  <form method="post">{% csrf_token %}{% if job.plan.high_risk %}<label><input type="checkbox" name="confirmed" required>我已核对上述禁用账号清单，确认执行</label>{% endif %}<button>执行此计划</button></form>
-  {% endif %}
+<section class="card listing-card">
+  <div class="card-head"><div><h2>部门 OU 计划</h2><p>部门名称优先展示，完整目标 DN 可按需展开。</p></div><span class="section-note">{{ job.plan.departments|length }} 项</span></div>
+  <div class="table-wrap"><table><thead><tr><th>部门</th><th>目标组织单位</th><th>状态</th></tr></thead><tbody>
+    {% for item in job.plan.departments %}<tr><td><strong>{{ item.name }}</strong></td><td>{% if item.dn %}<span class="ou-label">{{ item.dn|truncatechars:72 }}</span><details><summary>查看完整 DN</summary><code class="dn-value">{{ item.dn }}</code></details>{% else %}<span class="muted">待确认</span>{% endif %}</td><td>{% if item.action == "conflict" %}<span class="status-pill tone-warning">冲突</span><small>{{ item.reason }}</small>{% elif item.guid %}<span class="status-pill tone-success">已存在</span>{% else %}<span class="status-pill tone-active">待创建</span>{% endif %}</td></tr>
+    {% empty %}<tr><td colspan="3" class="empty-cell">此范围没有部门变更。</td></tr>{% endfor %}
+  </tbody></table></div>
 </section>
 
-<section class="card">
-  <h2>实际执行结果</h2>
-  {% for op in operations %}<p>{{ op.source_id }} · {{ op.action }} · {{ op.status }} · {{ op.message }}</p>{% empty %}<p>尚未执行。预览不代表 AD 已完成变更。</p>{% endfor %}
+<section class="card listing-card">
+  <div class="card-head"><div><h2>人员计划变更</h2><p>命名候选、已保存绑定与将要执行的操作分别列出。</p></div><span class="section-note">人员冲突 {{ conflict_count }} 项</span></div>
+  {% if conflict_count %}<nav class="filter-tabs" aria-label="计划筛选"><a href="{% url 'job' job.id %}" {% if not show_conflicts_only %}aria-current="page"{% endif %}>全部变更</a><a href="{% url 'job' job.id %}?only=conflicts" {% if show_conflicts_only %}aria-current="page"{% endif %}>仅看冲突</a></nav>{% endif %}
+  <div class="table-wrap"><table><thead><tr><th>人员</th><th>计划操作</th><th>AD 账号</th><th>原因</th><th>目标与属性变化</th></tr></thead><tbody>
+    {% for row in planned_rows %}{% with item=row.item %}<tr>
+      <td><strong>{{ item.user.name|default:item.source_id }}</strong><small>userId：{{ item.source_id }}</small>{% if item.action == "conflict" %}<small><a href="{% url 'people' %}?q={{ item.source_id|urlencode }}">查看人员并处理</a></small>{% endif %}</td>
+      <td><span class="status-pill tone-{{ row.tone }}">{{ row.label }}</span></td>
+      <td>{{ item.username|default:"—" }}<small>命名原值：{{ item.raw_naming_value|default:"—" }} → {{ item.candidate|default:"—" }}</small><small>已保存绑定：{{ item.binding.username|default:"未绑定" }}</small></td>
+      <td class="result-cell">{{ item.reason|default:"—" }}</td>
+      <td>{% if item.ou %}<span class="ou-label">{{ item.ou|truncatechars:50 }}</span>{% endif %}{% for change in item.changes %}<small>{{ change.field }}：{{ change.before|default_if_none:"空" }} → {{ change.after|default_if_none:"空" }}</small>{% empty %}{% if not item.ou %}<span class="muted">无属性变更</span>{% endif %}{% endfor %}</td>
+    </tr>{% endwith %}{% empty %}<tr><td colspan="5" class="empty-cell">{% if show_conflicts_only %}没有人员冲突。{% else %}尚未生成计划，请稍后刷新。{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% if plan_has_conflicts %}<div class="execution-confirm"><p>当前计划包含冲突，请先处理后重新生成预览。</p></div>{% elif job.status == "preview_ready" or job.status == "needs_confirmation" %}<div class="execution-confirm"><p>执行会写入 AD；范围、来源或绑定改变后，需要重新生成预览。</p><form method="post">{% csrf_token %}{% if job.plan.high_risk %}<label class="inline-check"><input type="checkbox" name="confirmed" required>我已核对上述禁用账号清单，确认执行</label>{% endif %}<button type="submit">执行此计划</button></form></div>{% endif %}
+</section>
+
+<section class="card listing-card">
+  <div class="card-head"><div><h2>实际执行结果</h2><p>逐项记录已经完成的操作；部分失败不等于整体成功。</p></div></div>
+  <div class="table-wrap"><table><thead><tr><th>来源 userId</th><th>操作</th><th>状态</th><th>结果</th></tr></thead><tbody>{% for row in operation_rows %}<tr><td>{{ row.operation.source_id }}</td><td>{{ row.label }}</td><td><span class="status-pill tone-{{ row.tone }}">{{ row.status }}</span></td><td class="result-cell">{{ row.operation.message|default:"—" }}</td></tr>{% empty %}<tr><td colspan="4" class="empty-cell">尚未执行。预览不代表 AD 已完成变更。</td></tr>{% endfor %}</tbody></table></div>
 </section>
 {% endblock %}

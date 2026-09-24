@@ -1,0 +1,30 @@
+:root{--primary:#102941;--secondary:#176ac7;--accent:#176ac7;--header-color:#fff;--header-branding-color:#fff;--link-fg:#1765b5;--link-hover-color:#0d57aa;--body-bg:#f3f6fb;--body-fg:#233b54;--border-color:#dce6f0;--hairline-color:#e7eef5;--darkened-bg:#f6f9fc}
+body{font-family:Inter,"Microsoft YaHei UI","PingFang SC",system-ui,sans-serif;font-size:14px}
+#header{min-height:60px;padding:8px 28px;box-shadow:0 1px 5px #183a5d18}
+#branding h1{margin:0;font-size:18px;line-height:1.5}
+.console-brand{color:#fff!important;font-weight:750;text-decoration:none}
+.console-brand span{margin-left:8px;color:#a9c5dc;font-size:12px;font-weight:500}
+.console-return{display:inline-block;margin:7px 0;color:#d3e8fa!important;font-size:12px;font-weight:650}
+#content{max-width:1320px;margin:25px auto;padding:20px 28px 55px}
+#content h1{margin:0 0 22px;color:#173452;font-size:26px;font-weight:750}
+.breadcrumbs{padding:10px 28px;background:#e6eff8;color:#426482}
+.breadcrumbs a{color:#215c91}
+#nav-sidebar{border-right:1px solid #dce6f0;background:#fff}
+#nav-sidebar .module th,#nav-sidebar .module caption{background:#f5f8fc;color:#365673}
+#nav-sidebar a{color:#31587c}
+#nav-sidebar .current-model{background:#eaf3fd}
+.module,.inline-group{overflow:hidden;border:1px solid #dce6f0;border-radius:10px;background:#fff;box-shadow:0 5px 20px #213f5d08}
+.module caption,.module h2{background:#eaf3fc;color:#244f79}
+.module table th{background:#f7faff}
+.form-row{padding:15px 20px;border-bottom:1px solid #eef2f6}
+fieldset.module{margin-bottom:22px}
+fieldset.module h2{padding:13px 18px;font-size:14px}
+fieldset .description{padding:10px 18px;color:#607992;font-size:12px}
+input[type=text],input[type=password],input[type=number],textarea,select{max-width:680px;padding:9px 11px;border:1px solid #c8d7e5;border-radius:7px;background:#fff;color:#233b54;font:inherit}
+input[type=text]:focus,textarea:focus,select:focus{outline:3px solid #9ac7f4;outline-offset:1px}
+.submit-row{padding:15px 20px;border:1px solid #dce6f0;border-radius:10px;background:#fff}
+.button,input[type=submit],input[type=button],.submit-row input{border-radius:7px;background:#176ac7;color:#fff}
+.button:hover,input[type=submit]:hover{background:#0d57aa}
+.help{color:#768a9f;font-size:12px}
+.errorlist{border-radius:7px}
+@media(max-width:767px){#header{padding:10px 16px}#content{margin:10px auto;padding:18px 14px 40px}.breadcrumbs{padding:10px 16px}.form-row{padding:13px 14px}}

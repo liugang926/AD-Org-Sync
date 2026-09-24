@@ -13,7 +13,7 @@ def test_client_address_uses_proxy_header_and_validates_it(rf):
 
 @pytest.mark.django_db
 def test_administrator_pages_require_login(client):
-    for path in ["/dashboard", "/people", "/logs"]:
+    for path in ["/dashboard", "/people", "/departments", "/logs"]:
         assert client.get(path).status_code == 302
     assert client.get("/sspr").status_code == 200
     assert client.get("/sspr/callback/dingtalk").status_code == 200
@@ -40,10 +40,62 @@ def test_dingtalk_workbench_homepage_alias_renders_employee_verification(client,
 def test_pages_and_readiness(admin_client):
     Configuration.current()
     (settings.DATA_DIR / "worker-heartbeat").touch()
-    for path in ["/dashboard", "/people", "/logs", "/admin/sync_app/configuration/1/change/"]:
+    for path in ["/dashboard", "/people", "/departments", "/logs", "/admin/sync_app/configuration/1/change/"]:
         assert admin_client.get(path).status_code == 200
+    assert admin_client.get("/admin/")["Location"] == "/dashboard"
+    assert admin_client.get("/admin/sync_app/departmentbinding/")["Location"] == "/departments"
+    assert admin_client.get("/login")["Location"] == "/dashboard"
     assert admin_client.get("/healthz").status_code == 200
     assert admin_client.get("/readyz").json()["checks"] == {"database": True, "schema": True, "worker": True}
+
+
+@pytest.mark.django_db
+def test_department_console_prioritizes_names_and_filters_mapping_state(admin_client):
+    import uuid
+    from sync_app.models import DepartmentBinding, Snapshot
+
+    Snapshot.objects.create(
+        fingerprint="complete-source", root_department="1", users=[],
+        departments=[{"id": "1", "name": "公司"}, {"id": "2", "name": "研发"}],
+    )
+    DepartmentBinding.objects.create(source_id="2", dn="OU=研发,OU=同步,DC=example,DC=com", object_guid=uuid.uuid4())
+    response = admin_client.get("/departments")
+    html = response.content.decode()
+    assert response.status_code == 200
+    assert "研发" in html and "公司" in html
+    assert "查看完整 DN" in html
+    assert "已映射" in html and "待映射" in html
+    assert "部门 ID：2" in html
+    assert [row["status"] for row in admin_client.get("/departments?status=unmapped").context["page"].object_list] == ["unmapped"]
+    assert [row["source_id"] for row in admin_client.get("/departments?q=研发").context["page"].object_list] == ["2"]
+
+
+@pytest.mark.django_db
+def test_configuration_editor_uses_guided_chinese_fields(admin_client):
+    Configuration.current()
+    html = admin_client.get("/admin/sync_app/configuration/1/change/").content.decode()
+    assert "同步边界" in html and "员工自助重置" in html
+    assert "同步到 AD 的属性" in html
+    assert 'name="attributes"' in html
+
+
+@pytest.mark.django_db
+def test_configuration_editor_saves_attribute_choices_and_protected_accounts():
+    from sync_app.admin import ConfigurationForm
+
+    form = ConfigurationForm(data={
+        "root_department": "1", "root_ou": "OU=Sync,DC=example,DC=com",
+        "match_field": "employee_id", "naming": "employee_id",
+        "attributes": ["displayName", "mail"], "clear_attributes": ["mail"],
+        "protected_usernames": "svc-sync\nshared-admin\nsvc-sync",
+        "disable_limit": 5, "disable_percent": 10, "sspr_match": "employee_id",
+        "minimum_password_length": 12, "interval_minutes": 60,
+    }, instance=Configuration.current())
+    assert form.is_valid(), form.errors
+    saved = form.save()
+    assert saved.attributes == ["displayName", "mail"]
+    assert saved.clear_attributes == ["mail"]
+    assert saved.protected_usernames == ["svc-sync", "shared-admin"]
 
 
 @pytest.mark.django_db
@@ -128,6 +180,9 @@ def test_job_conflicts_can_be_filtered_and_opened_in_people(admin_client):
     assert "冲突员工" in content and "正常员工" not in content
     assert "/people?q=u/conflict" in content
     assert admin_client.get(f"/jobs/{job.pk}").content.decode().count("正常员工") == 1
+    job.status = "preview_ready"
+    job.save(update_fields=["status"])
+    assert "执行此计划" not in admin_client.get(f"/jobs/{job.pk}").content.decode()
 
 
 @pytest.mark.django_db
