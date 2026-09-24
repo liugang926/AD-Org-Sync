@@ -27,6 +27,7 @@ sqlite_*.db
 workspace_*.db
 
 .pytest_cache/
+.test-tmp/
 .pytest-*/
 .mypy_cache/
 *.egg-info/

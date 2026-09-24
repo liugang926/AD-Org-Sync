@@ -1,4 +1,45 @@
 {% load static %}<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{% block title %}组织同步{% endblock %}</title><link rel="stylesheet" href="{% static 'app.css' %}"></head>
-<body><header><a class="brand" href="/dashboard">组织同步<span>钉钉 → Active Directory</span></a>{% if user.is_authenticated %}<nav aria-label="主导航"><a href="/dashboard">同步</a><a href="/people">人员与绑定</a><a href="/admin/sync_app/configuration/1/change/">设置</a><a href="/logs">日志</a><form action="/logout" method="post">{% csrf_token %}<button class="quiet">退出</button></form></nav>{% endif %}</header>
-<main>{% for message in messages %}<p class="notice" role="status">{{ message }}</p>{% endfor %}{% block content %}{% endblock %}</main><footer>单组织同步 · LDAPS 加密连接</footer></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}组织同步控制台{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+</head>
+<body class="{% if user.is_authenticated %}console-body{% else %}auth-body{% endif %}">
+  <a class="skip-link" href="#main-content">跳转到主要内容</a>
+  {% if user.is_authenticated %}
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="控制台导航">
+      <a class="brand" href="{% url 'dashboard' %}" aria-label="组织同步控制台首页">
+        <span class="brand-mark" aria-hidden="true">AD</span>
+        <span><strong>组织同步</strong><small>身份与目录控制台</small></span>
+      </a>
+      <div class="sidebar-section-title">工作台</div>
+      <nav class="side-nav" aria-label="主导航">
+        <a href="{% url 'dashboard' %}" {% if request.path == '/dashboard' or request.path == '/' or request.path == '/admin/' %}aria-current="page"{% endif %}>同步概览</a>
+        <a href="{% url 'people' %}" {% if request.path == '/people' %}aria-current="page"{% endif %}>人员与账号关联</a>
+        <a href="{% url 'departments' %}" {% if request.path == '/departments' %}aria-current="page"{% endif %}>部门映射</a>
+        <a href="{% url 'logs' %}" {% if request.path == '/logs' %}aria-current="page"{% endif %}>操作审计</a>
+      </nav>
+      <div class="sidebar-section-title">系统管理</div>
+      <nav class="side-nav" aria-label="系统管理">
+        <a href="/admin/sync_app/configuration/1/change/">组织配置</a>
+      </nav>
+      <div class="sidebar-foot"><span class="sidebar-foot-dot" aria-hidden="true"></span>单组织 · LDAPS 加密连接</div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="topbar-context">钉钉 / Active Directory <span aria-hidden="true">·</span> 管理工作台</div>
+        <div class="topbar-actions"><span class="account-name">{{ user.username }}</span><form action="/logout" method="post">{% csrf_token %}<button class="text-button" type="submit">退出登录</button></form></div>
+      </header>
+  {% else %}
+  <header class="public-header"><a class="brand" href="/login"><span class="brand-mark" aria-hidden="true">AD</span><span><strong>组织同步</strong><small>身份与目录控制台</small></span></a></header>
+  {% endif %}
+  <main id="main-content" class="{% if user.is_authenticated %}content-area{% else %}auth-main{% endif %}">
+    {% for message in messages %}<div class="notice" role="status">{{ message }}</div>{% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+  {% if user.is_authenticated %}</div></div>{% endif %}
+</body>
+</html>

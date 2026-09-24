@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}部门映射 · 组织同步控制台{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><p class="eyebrow">工作台 / 部门映射</p><h1>部门映射</h1><p class="page-subtitle">核对钉钉部门与目标 AD 组织单位的对应关系。修改目标前，请确认它位于管理根 OU 内。</p></div>
+  <a class="button-link" href="/admin/sync_app/departmentbinding/add/">新增映射</a>
+</div>
+
+<div class="metrics metrics-three" aria-label="部门映射概况">
+  <section class="metric"><span class="metric-label">已采集部门</span><strong>{{ source_count }}</strong><span>最近一次完整通讯录</span></section>
+  <section class="metric"><span class="metric-label">已映射部门</span><strong>{{ total_count }}</strong><span>包含来源已变化的映射</span></section>
+  <section class="metric"><span class="metric-label">待映射部门</span><strong>{{ unmapped_count }}</strong><span>需先核对目标 OU</span></section>
+</div>
+
+<section class="card listing-card">
+  <div class="card-head"><div><h2>部门清单</h2><p>以部门名称为主；完整 DN 仅在展开详情时显示。</p></div><span class="section-note">数据更新时间：{{ snapshot.created_at|default:"尚未采集" }}</span></div>
+  <form class="filter-bar" method="get">
+    <label for="department-search">搜索部门、ID 或目标 OU</label>
+    <div class="filter-controls"><input id="department-search" name="q" value="{{ query }}" placeholder="输入部门名称或 ID"><input type="hidden" name="status" value="{{ status_filter }}"><button type="submit" class="secondary">搜索</button>{% if query %}<a href="{% url 'departments' %}?status={{ status_filter }}">清除</a>{% endif %}</div>
+  </form>
+  <nav class="filter-tabs" aria-label="映射状态筛选">
+    <a href="{% url 'departments' %}?q={{ query|urlencode }}" {% if not status_filter %}aria-current="page"{% endif %}>全部</a>
+    <a href="{% url 'departments' %}?status=mapped&amp;q={{ query|urlencode }}" {% if status_filter == 'mapped' %}aria-current="page"{% endif %}>已映射</a>
+    <a href="{% url 'departments' %}?status=unmapped&amp;q={{ query|urlencode }}" {% if status_filter == 'unmapped' %}aria-current="page"{% endif %}>待映射</a>
+    <a href="{% url 'departments' %}?status=stale&amp;q={{ query|urlencode }}" {% if status_filter == 'stale' %}aria-current="page"{% endif %}>来源需核对</a>
+  </nav>
+  <div class="table-wrap"><table class="department-table"><thead><tr><th>钉钉部门</th><th>目标 AD 组织单位</th><th>状态</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
+    {% for row in page %}<tr><td><strong>{{ row.name }}</strong><small>部门 ID：{{ row.source_id }}</small></td><td>{% if row.binding %}<span class="ou-label">{{ row.target }}</span><details><summary>查看完整 DN</summary><code class="dn-value">{{ row.binding.dn }}</code></details>{% else %}<span class="muted">尚未设置目标 OU</span>{% endif %}</td><td>{% if row.status == 'mapped' %}<span class="status-pill tone-success">已映射</span>{% elif row.status == 'stale' %}<span class="status-pill tone-warning">来源需核对</span>{% else %}<span class="status-pill tone-neutral">待映射</span>{% endif %}</td><td>{% if row.binding %}<a href="/admin/sync_app/departmentbinding/{{ row.binding.pk }}/change/">编辑映射</a>{% else %}<a href="/admin/sync_app/departmentbinding/add/?source_id={{ row.source_id|urlencode }}">设置映射</a>{% endif %}</td></tr>
+    {% empty %}<tr><td colspan="4" class="empty-cell">{% if not snapshot %}尚未采集通讯录。请先返回同步概览刷新来源。{% elif query %}没有匹配的部门，请调整搜索条件。{% else %}当前筛选条件下没有部门。{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>
+  <div class="pagination">{% if page.has_previous %}<a href="?status={{ status_filter }}&amp;q={{ query|urlencode }}&amp;page={{ page.previous_page_number }}">上一页</a>{% endif %}<span>第 {{ page.number }} / {{ page.paginator.num_pages }} 页</span>{% if page.has_next %}<a href="?status={{ status_filter }}&amp;q={{ query|urlencode }}&amp;page={{ page.next_page_number }}">下一页</a>{% endif %}</div>
+</section>
+{% endblock %}
