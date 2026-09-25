@@ -318,10 +318,14 @@ def employee(request):
     token = request.COOKIES.get("employee_verification", "")
     if token:
         try:
-            item, _ = sspr.session_for(token)
-            with closing(ActiveDirectory()) as ad:
-                target = ad.check_account(item.object_guid)
-                account = {"username": target["username"], "name": item.display_name}
+            item, verified_config = sspr.session_for(token)
+            with closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
+                user, target = sspr.match_employee(source, ad, verified_config, source_id=item.source_id)
+                if user["source_id"] != item.source_id:
+                    raise RuleError("钉钉身份发生变化，请重新验证")
+                if target["guid"] != str(item.object_guid):
+                    raise RuleError("AD 匹配对象发生变化，请重新验证")
+                account = {"username": target["username"], "name": user["name"]}
         except RuleError as exc:
             error = str(exc)
     return render(request, "sspr.html", {"enabled": config.sspr_enabled, "account": account, "error": error, "corp_id": settings.DINGTALK_CORP_ID, "app_key": settings.DINGTALK_APP_KEY, "minimum": config.minimum_password_length})
