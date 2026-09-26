@@ -13,7 +13,7 @@ def test_dingtalk_incomplete_pagination_never_becomes_snapshot():
         {"list": [{"userid": "u"}], "has_more": True, "next_cursor": 0},
     ]
     source.call = Mock(side_effect=replies)
-    source.user = Mock(return_value={"source_id": "u"})
+    source.user = Mock(return_value={"source_id": "u", "departments": ["1"]})
     with pytest.raises(RuleError, match="分页"):
         source.collect("1")
 
@@ -33,7 +33,7 @@ def test_dingtalk_inconsistent_department_parent_fails_closed():
         {"list": [{"userid": "u"}], "has_more": False},
         {"dept_id": 2, "name": "Child", "parent_id": 999},
     ])
-    source.user = Mock(return_value={"source_id": "u"})
+    source.user = Mock(return_value={"source_id": "u", "departments": ["1"]})
     with pytest.raises(RuleError, match="父级与子部门列表不一致"):
         source.collect("1")
 
@@ -48,10 +48,52 @@ def test_dingtalk_consistent_child_and_shared_member_are_collected_once():
         [],
         {"list": [{"userid": "u"}], "has_more": False},
     ])
-    source.user = Mock(return_value={"source_id": "u"})
+    source.user = Mock(return_value={"source_id": "u", "departments": ["1", "2"]})
     users, departments = source.collect("1")
     assert len(users) == 1 and len(departments) == 2
     source.user.assert_called_once_with("u")
+
+
+@pytest.mark.parametrize(("detail", "reason"), [
+    ({"source_id": "other", "departments": ["1"]}, "身份不一致"),
+    ({"source_id": "u", "departments": []}, "成员关系不一致"),
+    ({"source_id": "u", "departments": ["2"]}, "成员关系不一致"),
+    ({"source_id": "u", "departments": "1"}, "成员关系不一致"),
+])
+def test_dingtalk_page_and_live_user_detail_must_agree(detail, reason):
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[
+        {"dept_id": 1, "name": "Root", "parent_id": 0}, [],
+        {"list": [{"userid": "u"}], "has_more": False},
+    ])
+    source.user = Mock(return_value=detail)
+    with pytest.raises(RuleError, match=reason):
+        source.collect("1")
+
+
+def test_dingtalk_shared_member_must_match_each_listed_department():
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[
+        {"dept_id": 1, "name": "Root", "parent_id": 0}, [{"dept_id": 2}],
+        {"list": [{"userid": "u"}], "has_more": False},
+        {"dept_id": 2, "name": "Child", "parent_id": 1}, [],
+        {"list": [{"userid": "u"}], "has_more": False},
+    ])
+    source.user = Mock(return_value={"source_id": "u", "departments": ["1"]})
+    with pytest.raises(RuleError, match="成员关系不一致"):
+        source.collect("1")
+    source.user.assert_called_once_with("u")
+
+
+def test_dingtalk_malformed_detail_departments_cannot_complete_snapshot():
+    source = object.__new__(DingTalk)
+    source.call = Mock(side_effect=[
+        {"dept_id": 1, "name": "Root", "parent_id": 0}, [],
+        {"list": [{"userid": "u"}], "has_more": False},
+        {"userid": "u", "name": "Employee", "dept_id_list": "1"},
+    ])
+    with pytest.raises(RuleError, match="成员关系不一致"):
+        source.collect("1")
 
 
 def test_dingtalk_user_scope_checks_live_department_ancestry():
@@ -111,7 +153,7 @@ def test_dingtalk_error_reports_only_safe_numeric_sub_code(sub_code, expected):
 def test_dingtalk_malformed_pagination_fails_closed(page):
     source = object.__new__(DingTalk)
     source.call = Mock(side_effect=[{"dept_id": 1, "name": "Root", "parent_id": 0}, [], page])
-    source.user = Mock(return_value={"source_id": "u"})
+    source.user = Mock(return_value={"source_id": "u", "departments": ["1"]})
     with pytest.raises(RuleError, match="人员分页"):
         source.collect("1")
 
