@@ -37,6 +37,32 @@ def test_unsynced_employee_can_reset_and_cannot_replay(setup_sspr):
 
 
 @pytest.mark.django_db
+def test_verification_does_not_leave_session_when_audit_fails(setup_sspr, monkeypatch):
+    def unavailable_audit(*args, **kwargs):
+        raise RuntimeError("private database diagnostic")
+
+    monkeypatch.setattr(sspr, "audit", unavailable_audit)
+    with pytest.raises(RuleError, match="身份核验暂不可用") as failure:
+        sspr.verify("valid", "ip")
+    assert "private" not in str(failure.value)
+    assert not EmployeeSession.objects.exists()
+
+
+@pytest.mark.django_db
+def test_verification_fails_safely_on_malformed_directory_identity(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+
+    def malformed_match(field, value):
+        raise ValueError("private LDAP objectGUID")
+
+    monkeypatch.setattr(ad, "match", malformed_match)
+    with pytest.raises(RuleError, match="身份核验暂不可用") as failure:
+        sspr.verify("valid", "ip")
+    assert "private" not in str(failure.value)
+    assert not EmployeeSession.objects.exists()
+
+
+@pytest.mark.django_db
 def test_reset_can_retry_after_sync_holds_same_account_lock(setup_sspr):
     _, ad, _ = setup_sspr
     token, matched = sspr.verify("valid", "ip")
@@ -235,7 +261,7 @@ def test_unknown_reset_result_stops_automatic_reverification(client, setup_sspr,
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("mode", ["ambiguous", "missing", "protected", "disabled"])
+@pytest.mark.parametrize("mode", ["ambiguous", "missing", "protected", "disabled", "missing_username", "missing_guid"])
 def test_unsafe_matching_is_denied(setup_sspr, mode):
     _, ad, _ = setup_sspr
     if mode == "ambiguous":
@@ -244,6 +270,10 @@ def test_unsafe_matching_is_denied(setup_sspr, mode):
         ad.items = []
     elif mode == "protected":
         ad.items[0]["protected"] = True
+    elif mode == "missing_username":
+        ad.items[0]["username"] = ""
+    elif mode == "missing_guid":
+        ad.items[0]["guid"] = ""
     else:
         ad.items[0]["enabled"] = False
     with pytest.raises(RuleError):

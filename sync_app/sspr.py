@@ -46,6 +46,8 @@ def match_employee(source, ad, config, source_id=None, code=None):
     account = matches[0]
     if protected(account) or not account["enabled"]:
         raise RuleError("匹配账号受保护或已禁用，不能自助重置")
+    if not str(account.get("username") or "").strip() or not str(account.get("guid") or "").strip():
+        raise RuleError("匹配账号缺少登录名或对象标识，请联系管理员核对")
     return user, account
 
 
@@ -56,16 +58,21 @@ def verify(code, ip):
         raise RuleError("员工密码重置尚未开启")
     if not settings.DINGTALK_CORP_ID:
         raise RuleError("请管理员先配置钉钉企业 ID，再使用员工身份验证")
-    source = DingTalk()
-    ad = None
+    source = ad = None
     try:
+        source = DingTalk()
         ad = ActiveDirectory()
         user, account = match_employee(source, ad, config, code=code)
         rate_limit("sspr-user:" + user["source_id"], 5)
         token = secrets.token_urlsafe(32)
-        EmployeeSession.objects.create(digest=fingerprint(token), source_id=user["source_id"], display_name=user["name"], object_guid=account["guid"], config_fingerprint=config_signature(config), expires_at=timezone.now() + timedelta(minutes=5))
-        audit(user["source_id"], "sspr_verified", account["guid"])
+        with transaction.atomic():
+            EmployeeSession.objects.create(digest=fingerprint(token), source_id=user["source_id"], display_name=user["name"], object_guid=account["guid"], config_fingerprint=config_signature(config), expires_at=timezone.now() + timedelta(minutes=5))
+            audit(user["source_id"], "sspr_verified", account["guid"])
         return token, account
+    except RuleError:
+        raise
+    except Exception:
+        raise RuleError("员工身份核验暂不可用，请稍后再试或联系管理员") from None
     finally:
         _close_clients(source, ad)
 
