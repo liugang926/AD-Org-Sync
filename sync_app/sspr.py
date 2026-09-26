@@ -11,6 +11,26 @@ from .models import Audit, Configuration, EmployeeSession
 from .security import audit, rate_limit
 
 
+def _close_clients(*clients):
+    # Closing a connection cannot change an already confirmed directory result.
+    for client in clients:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
+def _finish_attempt(attempt, result, success):
+    attempt.result, attempt.success = result, success
+    try:
+        attempt.save(update_fields=["result", "success"])
+        return True
+    except Exception:
+        # The pre-write record remains available when this update fails.
+        return False
+
+
 def config_signature(config):
     return fingerprint([settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN, settings.LDAP_VERIFY_CERT, settings.LDAP_CA_FILE, sorted(settings.SSPR_ALLOWED_DINGTALK_USER_IDS), config.sspr_match, config.sspr_enabled, config.updated_at])
 
@@ -47,9 +67,7 @@ def verify(code, ip):
         audit(user["source_id"], "sspr_verified", account["guid"])
         return token, account
     finally:
-        source.close()
-        if ad:
-            ad.close()
+        _close_clients(source, ad)
 
 
 def session_for(token):
@@ -96,23 +114,19 @@ def reset(token, password, confirmation, ip):
                 raise RuleError("配置发生变化，请重新验证")
             write_started = True
             outcome = ad.reset_password(item.object_guid, password, config.unlock_after_reset)
-            attempt.result, attempt.success = outcome.message, outcome.complete
-            attempt.save(update_fields=["result", "success"])
-            return outcome.message
         except RuleError as exc:
-            attempt.result = str(exc)
-            attempt.save(update_fields=["result"])
+            _finish_attempt(attempt, str(exc), False)
             raise
         except Exception:
             message = (
                 "目录响应中断，密码修改结果不明；请先验证或联系管理员"
                 if write_started else "身份复核暂时失败，密码未提交；请重新验证"
             )
-            attempt.result, attempt.success = message, False
-            attempt.save(update_fields=["result", "success"])
+            _finish_attempt(attempt, message, False)
             raise RuleError(message) from None
+        else:
+            if not _finish_attempt(attempt, outcome.message, outcome.complete):
+                raise RuleError("密码修改结果记录暂不可用，请先验证或联系管理员")
+            return outcome.message
         finally:
-            if source:
-                source.close()
-            if ad:
-                ad.close()
+            _close_clients(source, ad)

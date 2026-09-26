@@ -169,6 +169,42 @@ def test_reset_never_writes_without_durable_attempt(setup_sspr, monkeypatch):
 
 
 @pytest.mark.django_db
+def test_reset_keeps_pending_attempt_if_final_audit_update_fails(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    original_save = Audit.save
+
+    def fail_final_update(self, *args, **kwargs):
+        if self.action == "sspr_reset" and kwargs.get("update_fields"):
+            raise RuntimeError("database unavailable after directory write")
+        return original_save(self, *args, **kwargs)
+
+    monkeypatch.setattr(Audit, "save", fail_final_update)
+    with pytest.raises(RuleError, match="结果记录暂不可用"):
+        sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+
+    attempt = Audit.objects.get(action="sspr_reset")
+    assert attempt.success is False
+    assert "待确认" in attempt.result
+    assert ad.resets == 1
+    assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+
+
+@pytest.mark.django_db
+def test_client_close_failure_cannot_mask_completed_reset(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+
+    def close_failed():
+        raise RuntimeError("connection already closed")
+
+    monkeypatch.setattr(ad, "close", close_failed)
+    assert sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip") == "密码已成功重置"
+    assert Audit.objects.get(action="sspr_reset").success is True
+    assert ad.resets == 1
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("mode", ["ambiguous", "missing", "protected", "disabled"])
 def test_unsafe_matching_is_denied(setup_sspr, mode):
     _, ad, _ = setup_sspr
