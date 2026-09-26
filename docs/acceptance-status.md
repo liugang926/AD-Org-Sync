@@ -27,6 +27,21 @@
 
 此项只验证纯身份匹配决策和 PRD 的显式简化；没有运行两套系统的完整预览、OU/属性/离职计划或 Apply，也没有使用真实同批钉钉数据。它不能替代第 10 节要求的完整新旧预览对比，更不能视为阶段四验收完成。
 
+## 新旧运行时预览的同批合成样本对比
+
+2026-09-26，又分别在上述两个隔离检出运行旧版 `run_sync_job(execution_mode="dry_run")` 与 Django `synchronization.plan`。输入使用相同的虚构人员 ID、工号、部门关系、AD 账号和既有绑定；旧版经企微测试适配器注入等价的规范化人员字段，Django 经钉钉来源替身注入。两边均使用临时 SQLite 和内存 AD，不连接真实服务或执行计划。可重跑脚本与确切数据见 [`acceptance-fixtures/README.md`](acceptance-fixtures/README.md)。旧版计划 17 项、冲突记录 0 项、已执行 0 项；Django 计划 6 项人员操作和 2 项部门 OU 操作，因一个禁用账号超过配置比例阈值标记为高风险。
+
+| 同批样本 | 旧版运行时预览 | Django 预览 | 判定 |
+| --- | --- | --- | --- |
+| `alice` 唯一工号已有账号 | 关联建议 `propose_identity_binding`，并提出 `update_user` | `bind`，现有属性无需修改 | 都选择原账号；新版明确区分首次绑定 |
+| `bob` 无 AD 账号 | `create_user` | `create` | 都提出新建；旧版默认用户名 `bob1002`，新版默认工号 `1002` |
+| `charlie` 已绑定、显示名变化 | `update_user` | `update`，列出 `Charlie` → `Charlie Updated` | 都提出更新 |
+| `dave` 已绑定、主部门变更 | `move_user`，目标为工程 OU | `move`，列出原 OU → 工程 OU | 都提出移动而非重建 |
+| `gone` 已绑定、完整来源中缺失 | `disable_user` | `disable`，列出启用 → 禁用并标高风险 | 都提出禁用；新版需高风险确认 |
+| `eric` 两个 AD 账号使用同一工号 | 此替身下仅选中候选账号 `1006` 并提出 `update_user`，冲突记录为 0 | `conflict`，不选择任一目标 | 新版完整 AD 唯一性检查更严格；旧版结果只代表本样本的候选查询路径 |
+
+旧版还提出部门群组、成员关系和嵌套群组操作，Django 精简版按 PRD 不包含这些功能。此轮补足了**合成数据的完整运行时预览**对照，但没有用真实同批钉钉人员与 AD 数据运行两套平台，也没有对照 Apply 的实际写入。尤其 `eric` 的差异不能仅凭替身证明旧生产环境会误关联；真实目录的多候选阻断仍需单独验收。阶段四尚未完成。
+
 ## 真实开发测试环境的联调证据
 
 - 测试 AD 域控重启后，生产容器在 `LDAP_VERIFY_CERT=false` 下完成 TLS 1.3 握手，成功绑定并读取测试 OU 及其 427 个账号；自签证书未导入信任库。[连接验证任务](https://github.com/liugang926/AD-Org-Sync/actions/runs/35823677780)
