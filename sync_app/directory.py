@@ -80,7 +80,8 @@ class DingTalk:
         data = self.call("/topapi/v2/user/get", {"userid": user_id})
         if str(data.get("userid", "")) != str(user_id):
             raise RuleError("钉钉员工身份不一致")
-        departments = [str(i) for i in data.get("dept_id_list", [])]
+        raw_departments = data.get("dept_id_list", [])
+        departments = [str(i) for i in raw_departments] if isinstance(raw_departments, list) else []
         return {
             "source_id": str(user_id), "name": str(data.get("name") or ""),
             "employee_id": str(data.get("job_number") or "").strip(),
@@ -157,6 +158,12 @@ class DingTalk:
                         raise RuleError("人员缺少稳定 userId")
                     if uid not in users:
                         users[uid] = self.user(uid)
+                    user = users[uid]
+                    if not isinstance(user, dict) or user.get("source_id") != uid:
+                        raise RuleError("人员详情与部门分页身份不一致，禁止同步")
+                    memberships = user.get("departments")
+                    if not isinstance(memberships, list) or dept_id not in memberships:
+                        raise RuleError("人员详情与部门分页成员关系不一致，禁止同步")
                 if not page.get("has_more"):
                     break
                 if not page.get("list") or page.get("next_cursor") is None:
