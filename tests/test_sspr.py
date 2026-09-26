@@ -130,6 +130,45 @@ def test_reset_audits_dingtalk_client_initialization_failure(setup_sspr, monkeyp
 
 
 @pytest.mark.django_db
+def test_reset_attempt_exists_before_directory_write_and_remains_uncertain_on_error(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, matched = sspr.verify("valid", "ip")
+
+    def interrupted_reset(guid, password, unlock=False):
+        attempt = Audit.objects.get(action="sspr_reset")
+        assert attempt.target == matched["guid"]
+        assert attempt.success is False
+        assert "待确认" in attempt.result
+        raise RuntimeError("private directory diagnostic")
+
+    monkeypatch.setattr(ad, "reset_password", interrupted_reset)
+    with pytest.raises(RuleError, match="结果不明"):
+        sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+
+    attempt = Audit.objects.get(action="sspr_reset")
+    assert attempt.success is False
+    assert "结果不明" in attempt.result
+    assert "private" not in attempt.result
+    assert "Example-password" not in attempt.result
+    assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+
+
+@pytest.mark.django_db
+def test_reset_never_writes_without_durable_attempt(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+
+    def unavailable_audit(**kwargs):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(sspr.Audit.objects, "create", unavailable_audit)
+    with pytest.raises(RuleError, match="审计暂时不可用"):
+        sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+    assert not EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+    assert ad.resets == 0
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("mode", ["ambiguous", "missing", "protected", "disabled"])
 def test_unsafe_matching_is_denied(setup_sspr, mode):
     _, ad, _ = setup_sspr

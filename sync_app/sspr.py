@@ -7,7 +7,7 @@ from django.utils import timezone
 from .directory import DingTalk, ActiveDirectory
 from .domain import RuleError, fingerprint, protected
 from .locking import lock
-from .models import Configuration, EmployeeSession
+from .models import Audit, Configuration, EmployeeSession
 from .security import audit, rate_limit
 
 
@@ -67,12 +67,23 @@ def reset(token, password, confirmation, ip):
         raise RuleError("密码长度不符合要求或两次输入不一致")
     rate_limit("sspr-reset-user:" + item.source_id, 5)
     with lock("account:" + str(item.object_guid)):
-        # Atomic claim BEFORE the external write: timeout/replay cannot repeat it.
-        with transaction.atomic():
-            claimed = EmployeeSession.objects.filter(pk=item.pk, used=False, expires_at__gt=timezone.now()).update(used=True)
-            if not claimed:
-                raise RuleError("验证已被使用，请重新验证")
+        # Claim the session and persist an uncertain attempt before any external write.
+        # A process exit after LDAPS changes the password must leave evidence to review.
+        try:
+            with transaction.atomic():
+                claimed = EmployeeSession.objects.filter(pk=item.pk, used=False, expires_at__gt=timezone.now()).update(used=True)
+                if not claimed:
+                    raise RuleError("验证已被使用，请重新验证")
+                attempt = Audit.objects.create(
+                    actor=item.source_id, action="sspr_reset", target=str(item.object_guid),
+                    result="密码重置请求处理中，结果待确认", success=False,
+                )
+        except RuleError:
+            raise
+        except Exception:
+            raise RuleError("审计暂时不可用，密码未提交；请稍后再试") from None
         source = ad = None
+        write_started = False
         try:
             source = DingTalk()
             ad = ActiveDirectory()
@@ -83,12 +94,23 @@ def reset(token, password, confirmation, ip):
                 raise RuleError("AD 匹配对象发生变化，请重新验证")
             if item.config_fingerprint != config_signature(Configuration.current()):
                 raise RuleError("配置发生变化，请重新验证")
+            write_started = True
             outcome = ad.reset_password(item.object_guid, password, config.unlock_after_reset)
-            audit(item.source_id, "sspr_reset", str(item.object_guid), outcome.message, success=outcome.complete)
+            attempt.result, attempt.success = outcome.message, outcome.complete
+            attempt.save(update_fields=["result", "success"])
             return outcome.message
         except RuleError as exc:
-            audit(item.source_id, "sspr_reset", str(item.object_guid), str(exc), success=False)
+            attempt.result = str(exc)
+            attempt.save(update_fields=["result"])
             raise
+        except Exception:
+            message = (
+                "目录响应中断，密码修改结果不明；请先验证或联系管理员"
+                if write_started else "身份复核暂时失败，密码未提交；请重新验证"
+            )
+            attempt.result, attempt.success = message, False
+            attempt.save(update_fields=["result", "success"])
+            raise RuleError(message) from None
         finally:
             if source:
                 source.close()
