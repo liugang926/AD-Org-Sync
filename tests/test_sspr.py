@@ -191,6 +191,42 @@ def test_input_identity_is_not_trusted(client, setup_sspr):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("replacement", [False, True])
+def test_employee_page_hides_account_when_live_identity_no_longer_matches(client, setup_sspr, monkeypatch, replacement):
+    source, ad, _ = setup_sspr
+    monkeypatch.setattr("sync_app.views.DingTalk", lambda: source)
+    monkeypatch.setattr("sync_app.views.ActiveDirectory", lambda: ad)
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+
+    assert b"testuser" in client.get("/sspr").content
+    ad.items[0]["employee_id"] = "someone-else"
+    if replacement:
+        ad.items.append(account(employee="1001", name="replacement"))
+
+    response = client.get("/sspr")
+    assert response.status_code == 200
+    assert b"testuser" not in response.content
+    assert b"replacement" not in response.content
+    assert b'id="verify"' in response.content
+
+
+@pytest.mark.django_db
+def test_employee_page_hides_account_when_source_returns_different_user(client, setup_sspr, monkeypatch):
+    source, ad, _ = setup_sspr
+    monkeypatch.setattr("sync_app.views.DingTalk", lambda: source)
+    monkeypatch.setattr("sync_app.views.ActiveDirectory", lambda: ad)
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+    monkeypatch.setattr(source, "user", lambda _: user("different-user", "1001"))
+
+    response = client.get("/sspr")
+    assert response.status_code == 200
+    assert b"testuser" not in response.content
+    assert b'id="verify"' in response.content
+
+
+@pytest.mark.django_db
 def test_csrf_is_required(setup_sspr):
     from django.test import Client
     assert Client(enforce_csrf_checks=True).post("/sspr/auth/dingtalk", {"code": "valid"}).status_code == 403
