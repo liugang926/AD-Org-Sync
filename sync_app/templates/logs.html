@@ -4,15 +4,15 @@
 <div class="page-heading"><div><p class="eyebrow">工作台 / 操作审计</p><h1>操作日志</h1><p class="page-subtitle">查看同步、账号绑定与员工密码重置记录。审计仅保存操作结果，不展示密码或授权码。</p></div></div>
 
 <section class="card listing-card">
-  <div class="card-head"><div><h2>审计记录</h2><p>按日期和结果定位异常操作。</p></div><span class="section-note">当前筛选共 {{ page.paginator.count }} 条</span></div>
+  <div class="card-head"><div><h2>审计记录</h2><p>按日期和结果定位异常操作。密码重置待确认或处理未完成时，应先核查 AD 或请员工确认登录结果。</p></div><span class="section-note">当前筛选共 {{ page.paginator.count }} 条</span></div>
   <form method="get" class="audit-filters">
     <div><label for="audit-start">开始日期</label><input id="audit-start" type="date" name="start" value="{{ filters.start }}"></div>
     <div><label for="audit-end">结束日期</label><input id="audit-end" type="date" name="end" value="{{ filters.end }}"></div>
-    <div><label for="audit-result">结果</label><select id="audit-result" name="result"><option value="">全部</option><option value="success" {% if filters.result == "success" %}selected{% endif %}>成功</option><option value="failed" {% if filters.result == "failed" %}selected{% endif %}>失败或未完成</option></select></div>
+    <div><label for="audit-result">结果</label><select id="audit-result" name="result"><option value="">全部</option><option value="success" {% if filters.result == "success" %}selected{% endif %}>成功</option><option value="failed" {% if filters.result == "failed" %}selected{% endif %}>失败</option><option value="partial" {% if filters.result == "partial" %}selected{% endif %}>部分完成</option><option value="attention" {% if filters.result == "attention" %}selected{% endif %}>待确认或未完成</option></select></div>
     <button type="submit" class="secondary">筛选记录</button>
   </form>
   <div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>操作</th><th>对象</th><th>结果</th><th>状态</th></tr></thead><tbody>
-    {% for row in audit_rows %}<tr><td class="time-cell">{{ row.item.created_at|date:"Y-m-d H:i:s" }}</td><td>{{ row.item.actor }}</td><td><strong>{{ row.label }}</strong>{% if row.label != row.item.action %}<small>{{ row.item.action }}</small>{% endif %}</td><td class="result-cell">{{ row.item.target|default:"—" }}</td><td class="result-cell">{{ row.item.result }}</td><td>{% if row.item.success %}<span class="status-pill tone-success">成功</span>{% else %}<span class="status-pill tone-warning">失败</span>{% endif %}</td></tr>
+    {% for row in audit_rows %}<tr><td class="time-cell">{{ row.item.created_at|date:"Y-m-d H:i:s" }}</td><td>{{ row.item.actor }}</td><td><strong>{{ row.label }}</strong>{% if row.label != row.item.action %}<small>{{ row.item.action }}</small>{% endif %}</td><td class="result-cell">{{ row.item.target|default:"—" }}</td><td class="result-cell">{{ row.item.result }}</td><td><span class="status-pill tone-{{ row.tone }}">{{ row.status }}</span></td></tr>
     {% empty %}<tr><td colspan="6" class="empty-cell">没有符合筛选条件的审计记录。</td></tr>{% endfor %}
   </tbody></table></div>
   <div class="pagination">{% if page.has_previous %}<a href="?{{ filter_query }}&amp;page={{ page.previous_page_number }}">上一页</a>{% endif %}<span>第 {{ page.number }} / {{ page.paginator.num_pages }} 页</span>{% if page.has_next %}<a href="?{{ filter_query }}&amp;page={{ page.next_page_number }}">下一页</a>{% endif %}</div>

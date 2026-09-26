@@ -1,13 +1,13 @@
 from functools import wraps
 from datetime import timedelta
 import time
-from contextlib import closing
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.views import LoginView
 from django.core.paginator import Paginator
 from django.db import connection
+from django.db.models import Q
 from django.http import JsonResponse, HttpResponseForbidden
 from django.shortcuts import redirect, render, get_object_or_404
 from django.views.decorators.cache import never_cache
@@ -18,8 +18,7 @@ from django.utils.dateparse import parse_date
 from django.utils import timezone
 
 from . import sspr, synchronization
-from .directory import ActiveDirectory, DingTalk
-from .domain import RuleError, candidate
+from .domain import ResetOutcomeUnknown, RuleError, candidate
 from .models import Configuration, Person, Binding, DepartmentBinding, Job, Audit, Snapshot, RuntimeState
 from .security import rate_limit, audit, client_address
 
@@ -293,12 +292,27 @@ def logs(request):
         elif date:
             items = items.filter(**{lookup: date})
     result = request.GET.get("result", "")
-    if result in {"success", "failed"}:
-        items = items.filter(success=result == "success")
+    if result == "success":
+        items = items.filter(Q(state="success") | Q(state="", success=True))
+    elif result == "failed":
+        items = items.filter(Q(state="failed") | Q(state="", success=False))
+    elif result == "partial":
+        items = items.filter(state="partial")
+    elif result == "attention":
+        items = items.filter(state__in=["pending", "unknown"])
     query = request.GET.copy()
     query.pop("page", None)
     page = Paginator(items, 50).get_page(request.GET.get("page"))
-    audit_rows = [{"item": item, "label": AUDIT_LABELS.get(item.action, item.action)} for item in page]
+    states = {
+        "success": ("成功", "success"), "failed": ("失败", "warning"),
+        "partial": ("部分完成", "warning"), "pending": ("处理未完成", "warning"),
+        "unknown": ("待确认", "warning"),
+    }
+    audit_rows = []
+    for item in page:
+        state = item.state or ("success" if item.success else "failed")
+        label, tone = states[state]
+        audit_rows.append({"item": item, "label": AUDIT_LABELS.get(item.action, item.action), "status": label, "tone": tone})
     return render(request, "logs.html", {"page": page, "audit_rows": audit_rows, "filters": request.GET, "filter_query": query.urlencode()})
 
 
@@ -318,16 +332,11 @@ def employee(request):
     token = request.COOKIES.get("employee_verification", "")
     if token:
         try:
-            item, verified_config = sspr.session_for(token)
-            with closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
-                user, target = sspr.match_employee(source, ad, verified_config, source_id=item.source_id)
-                if user["source_id"] != item.source_id:
-                    raise RuleError("钉钉身份发生变化，请重新验证")
-                if target["guid"] != str(item.object_guid):
-                    raise RuleError("AD 匹配对象发生变化，请重新验证")
-                account = {"username": target["username"], "name": user["name"]}
+            account = sspr.current_account(token)
         except RuleError as exc:
             error = str(exc)
+        except Exception:
+            error = "当前账号暂时无法核验，请稍后重新通过钉钉验证"
     return render(request, "sspr.html", {"enabled": config.sspr_enabled, "account": account, "error": error, "corp_id": settings.DINGTALK_CORP_ID, "app_key": settings.DINGTALK_APP_KEY, "minimum": config.minimum_password_length})
 
 
@@ -356,6 +365,10 @@ def employee_reset(request):
     try:
         result = sspr.reset(request.COOKIES.get("employee_verification", ""), request.POST.get("password", ""), request.POST.get("confirmation", ""), client_address(request))
         response = render(request, "sspr.html", {"result": result, "enabled": True})
+        response.delete_cookie("employee_verification", path="/sspr", samesite="Strict")
+        return response
+    except ResetOutcomeUnknown as exc:
+        response = render(request, "sspr.html", {"uncertain": str(exc), "enabled": True})
         response.delete_cookie("employee_verification", path="/sspr", samesite="Strict")
         return response
     except RuleError as exc:

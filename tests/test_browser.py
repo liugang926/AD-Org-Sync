@@ -46,8 +46,6 @@ def test_admin_and_mobile_employee_journeys(live_server, django_user_model, monk
         source, directory = Source(), Directory()
         monkeypatch.setattr(sspr, "DingTalk", lambda: source)
         monkeypatch.setattr(sspr, "ActiveDirectory", lambda: directory)
-        monkeypatch.setattr("sync_app.views.DingTalk", lambda: source)
-        monkeypatch.setattr("sync_app.views.ActiveDirectory", lambda: directory)
         mobile.route("https://g.alicdn.com/**", lambda route: route.abort())
         mobile.reload()
         assert mobile.get_by_text("请从钉钉工作台打开此应用。", exact=True).is_visible()

@@ -17,7 +17,7 @@ def client_address(request):
 
 
 def audit(actor, action, target="", result="成功", *, success=True):
-    Audit.objects.create(actor=actor, action=action, target=target, result=result, success=success)
+    Audit.objects.create(actor=actor, action=action, target=target, result=result, success=success, state="success" if success else "failed")
 
 
 def rate_limit(key, limit=10):
