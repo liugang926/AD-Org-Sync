@@ -78,6 +78,25 @@ def session_for(token):
     return item, config
 
 
+def current_account(token):
+    """Show a verified account only after a fresh source and AD identity check."""
+    item, config = session_for(token)
+    source = ad = None
+    try:
+        source = DingTalk()
+        ad = ActiveDirectory()
+        user, target = match_employee(source, ad, config, source_id=item.source_id)
+        if user["source_id"] != item.source_id:
+            raise RuleError("钉钉身份发生变化，请重新验证")
+        if target["guid"] != str(item.object_guid):
+            raise RuleError("AD 匹配对象发生变化，请重新验证")
+        if item.config_fingerprint != config_signature(Configuration.current()):
+            raise RuleError("配置发生变化，请重新验证")
+        return {"username": target["username"], "name": user["name"]}
+    finally:
+        _close_clients(source, ad)
+
+
 def reset(token, password, confirmation, ip):
     rate_limit("sspr-reset-ip:" + ip, 20)
     item, config = session_for(token)

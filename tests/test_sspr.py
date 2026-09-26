@@ -290,10 +290,8 @@ def test_input_identity_is_not_trusted(client, setup_sspr):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("replacement", [False, True])
-def test_employee_page_hides_account_when_live_identity_no_longer_matches(client, setup_sspr, monkeypatch, replacement):
-    source, ad, _ = setup_sspr
-    monkeypatch.setattr("sync_app.views.DingTalk", lambda: source)
-    monkeypatch.setattr("sync_app.views.ActiveDirectory", lambda: ad)
+def test_employee_page_hides_account_when_live_identity_no_longer_matches(client, setup_sspr, replacement):
+    _, ad, _ = setup_sspr
     token, _ = sspr.verify("valid", "ip")
     client.cookies["employee_verification"] = token
 
@@ -311,9 +309,7 @@ def test_employee_page_hides_account_when_live_identity_no_longer_matches(client
 
 @pytest.mark.django_db
 def test_employee_page_hides_account_when_source_returns_different_user(client, setup_sspr, monkeypatch):
-    source, ad, _ = setup_sspr
-    monkeypatch.setattr("sync_app.views.DingTalk", lambda: source)
-    monkeypatch.setattr("sync_app.views.ActiveDirectory", lambda: ad)
+    source, _, _ = setup_sspr
     token, _ = sspr.verify("valid", "ip")
     client.cookies["employee_verification"] = token
     monkeypatch.setattr(source, "user", lambda _: user("different-user", "1001"))
@@ -321,6 +317,59 @@ def test_employee_page_hides_account_when_source_returns_different_user(client, 
     response = client.get("/sspr")
     assert response.status_code == 200
     assert b"testuser" not in response.content
+    assert b'id="verify"' in response.content
+
+
+@pytest.mark.django_db
+def test_employee_page_keeps_verified_account_when_client_close_fails(client, setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+
+    def close_failed():
+        raise RuntimeError("connection already closed")
+
+    monkeypatch.setattr(ad, "close", close_failed)
+    response = client.get("/sspr")
+    assert response.status_code == 200
+    assert b"testuser" in response.content
+
+
+@pytest.mark.django_db
+def test_employee_page_hides_account_when_live_lookup_fails(client, setup_sspr, monkeypatch):
+    source, _, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+
+    def lookup_failed(_):
+        raise RuntimeError("private directory diagnostic")
+
+    monkeypatch.setattr(source, "user", lookup_failed)
+    response = client.get("/sspr")
+    assert response.status_code == 200
+    assert b"testuser" not in response.content
+    assert "当前账号暂时无法核验" in response.content.decode()
+    assert b"private directory diagnostic" not in response.content
+    assert b'id="verify"' in response.content
+
+
+@pytest.mark.django_db
+def test_employee_page_hides_account_if_config_changes_during_live_lookup(client, setup_sspr, monkeypatch):
+    source, _, config = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+    original_user = source.user
+
+    def change_config(uid):
+        config.unlock_after_reset = True
+        config.save()
+        return original_user(uid)
+
+    monkeypatch.setattr(source, "user", change_config)
+    response = client.get("/sspr")
+    assert response.status_code == 200
+    assert b"testuser" not in response.content
+    assert "配置发生变化" in response.content.decode()
     assert b'id="verify"' in response.content
 
 

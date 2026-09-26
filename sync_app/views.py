@@ -1,7 +1,6 @@
 from functools import wraps
 from datetime import timedelta
 import time
-from contextlib import closing
 
 from django.conf import settings
 from django.contrib import messages
@@ -18,7 +17,6 @@ from django.utils.dateparse import parse_date
 from django.utils import timezone
 
 from . import sspr, synchronization
-from .directory import ActiveDirectory, DingTalk
 from .domain import ResetOutcomeUnknown, RuleError, candidate
 from .models import Configuration, Person, Binding, DepartmentBinding, Job, Audit, Snapshot, RuntimeState
 from .security import rate_limit, audit, client_address
@@ -318,16 +316,11 @@ def employee(request):
     token = request.COOKIES.get("employee_verification", "")
     if token:
         try:
-            item, verified_config = sspr.session_for(token)
-            with closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
-                user, target = sspr.match_employee(source, ad, verified_config, source_id=item.source_id)
-                if user["source_id"] != item.source_id:
-                    raise RuleError("钉钉身份发生变化，请重新验证")
-                if target["guid"] != str(item.object_guid):
-                    raise RuleError("AD 匹配对象发生变化，请重新验证")
-                account = {"username": target["username"], "name": user["name"]}
+            account = sspr.current_account(token)
         except RuleError as exc:
             error = str(exc)
+        except Exception:
+            error = "当前账号暂时无法核验，请稍后重新通过钉钉验证"
     return render(request, "sspr.html", {"enabled": config.sspr_enabled, "account": account, "error": error, "corp_id": settings.DINGTALK_CORP_ID, "app_key": settings.DINGTALK_APP_KEY, "minimum": config.minimum_password_length})
 
 
