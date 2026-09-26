@@ -7,6 +7,7 @@ from django.contrib import messages
 from django.contrib.auth.views import LoginView
 from django.core.paginator import Paginator
 from django.db import connection
+from django.db.models import Q
 from django.http import JsonResponse, HttpResponseForbidden
 from django.shortcuts import redirect, render, get_object_or_404
 from django.views.decorators.cache import never_cache
@@ -291,12 +292,27 @@ def logs(request):
         elif date:
             items = items.filter(**{lookup: date})
     result = request.GET.get("result", "")
-    if result in {"success", "failed"}:
-        items = items.filter(success=result == "success")
+    if result == "success":
+        items = items.filter(Q(state="success") | Q(state="", success=True))
+    elif result == "failed":
+        items = items.filter(Q(state="failed") | Q(state="", success=False))
+    elif result == "partial":
+        items = items.filter(state="partial")
+    elif result == "attention":
+        items = items.filter(state__in=["pending", "unknown"])
     query = request.GET.copy()
     query.pop("page", None)
     page = Paginator(items, 50).get_page(request.GET.get("page"))
-    audit_rows = [{"item": item, "label": AUDIT_LABELS.get(item.action, item.action)} for item in page]
+    states = {
+        "success": ("成功", "success"), "failed": ("失败", "warning"),
+        "partial": ("部分完成", "warning"), "pending": ("处理未完成", "warning"),
+        "unknown": ("待确认", "warning"),
+    }
+    audit_rows = []
+    for item in page:
+        state = item.state or ("success" if item.success else "failed")
+        label, tone = states[state]
+        audit_rows.append({"item": item, "label": AUDIT_LABELS.get(item.action, item.action), "status": label, "tone": tone})
     return render(request, "logs.html", {"page": page, "audit_rows": audit_rows, "filters": request.GET, "filter_query": query.urlencode()})
 
 

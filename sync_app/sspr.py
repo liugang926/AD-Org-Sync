@@ -21,10 +21,10 @@ def _close_clients(*clients):
                 pass
 
 
-def _finish_attempt(attempt, result, success):
-    attempt.result, attempt.success = result, success
+def _finish_attempt(attempt, result, success, state):
+    attempt.result, attempt.success, attempt.state = result, success, state
     try:
-        attempt.save(update_fields=["result", "success"])
+        attempt.save(update_fields=["result", "success", "state"])
         return True
     except Exception:
         # The pre-write record remains available when this update fails.
@@ -113,7 +113,7 @@ def reset(token, password, confirmation, ip):
                     raise RuleError("验证已被使用，请重新验证")
                 attempt = Audit.objects.create(
                     actor=item.source_id, action="sspr_reset", target=str(item.object_guid),
-                    result="密码重置请求处理中，结果待确认", success=False,
+                    result="密码重置请求处理中，结果待确认", success=False, state="pending",
                 )
         except RuleError:
             raise
@@ -133,20 +133,23 @@ def reset(token, password, confirmation, ip):
                 raise RuleError("配置发生变化，请重新验证")
             write_started = True
             outcome = ad.reset_password(item.object_guid, password, config.unlock_after_reset)
+        except ResetOutcomeUnknown as exc:
+            _finish_attempt(attempt, str(exc), False, "unknown")
+            raise
         except RuleError as exc:
-            _finish_attempt(attempt, str(exc), False)
+            _finish_attempt(attempt, str(exc), False, "failed")
             raise
         except Exception:
             message = (
                 "目录响应中断，密码修改结果不明；请先验证或联系管理员"
                 if write_started else "身份复核暂时失败，密码未提交；请重新验证"
             )
-            _finish_attempt(attempt, message, False)
+            _finish_attempt(attempt, message, False, "unknown" if write_started else "failed")
             if write_started:
                 raise ResetOutcomeUnknown(message) from None
             raise RuleError(message) from None
         else:
-            if not _finish_attempt(attempt, outcome.message, outcome.complete):
+            if not _finish_attempt(attempt, outcome.message, outcome.complete, "success" if outcome.complete else "partial"):
                 raise ResetOutcomeUnknown("密码修改结果记录暂不可用，请先验证或联系管理员")
             return outcome.message
         finally:

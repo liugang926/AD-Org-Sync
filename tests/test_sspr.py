@@ -29,6 +29,7 @@ def test_unsynced_employee_can_reset_and_cannot_replay(setup_sspr):
     assert matched["guid"] == ad.items[0]["guid"]
     assert sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
     assert ad.resets == 1
+    assert Audit.objects.get(action="sspr_reset").state == "success"
     with pytest.raises(RuleError):
         sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
     assert ad.resets == 1
@@ -105,6 +106,7 @@ def test_unlock_failure_is_audited_as_partial_and_session_is_consumed(setup_sspr
     result = sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
     assert "密码已重置，但解锁失败" in result
     assert Audit.objects.get(action="sspr_reset").success is False
+    assert Audit.objects.get(action="sspr_reset").state == "partial"
     with pytest.raises(RuleError):
         sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
     assert ad.resets == 1
@@ -124,6 +126,7 @@ def test_reset_audits_dingtalk_client_initialization_failure(setup_sspr, monkeyp
 
     attempt = Audit.objects.get(action="sspr_reset")
     assert attempt.target == matched["guid"] and not attempt.success
+    assert attempt.state == "failed"
     assert "Example-password-42!" not in attempt.result
     assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
     assert ad.resets == 0
@@ -138,6 +141,7 @@ def test_reset_attempt_exists_before_directory_write_and_remains_uncertain_on_er
         attempt = Audit.objects.get(action="sspr_reset")
         assert attempt.target == matched["guid"]
         assert attempt.success is False
+        assert attempt.state == "pending"
         assert "待确认" in attempt.result
         raise RuntimeError("private directory diagnostic")
 
@@ -147,6 +151,7 @@ def test_reset_attempt_exists_before_directory_write_and_remains_uncertain_on_er
 
     attempt = Audit.objects.get(action="sspr_reset")
     assert attempt.success is False
+    assert attempt.state == "unknown"
     assert "结果不明" in attempt.result
     assert "private" not in attempt.result
     assert "Example-password" not in attempt.result
@@ -185,6 +190,7 @@ def test_reset_keeps_pending_attempt_if_final_audit_update_fails(setup_sspr, mon
 
     attempt = Audit.objects.get(action="sspr_reset")
     assert attempt.success is False
+    assert attempt.state == "pending"
     assert "待确认" in attempt.result
     assert ad.resets == 1
     assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
@@ -225,6 +231,7 @@ def test_unknown_reset_result_stops_automatic_reverification(client, setup_sspr,
     assert 'action="/sspr/reset"' not in content
     assert response.cookies["employee_verification"]["max-age"] == 0
     assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+    assert Audit.objects.get(action="sspr_reset").state == "unknown"
 
 
 @pytest.mark.django_db
