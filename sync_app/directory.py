@@ -12,7 +12,7 @@ from ldap3 import BASE, SUBTREE, Connection, MODIFY_REPLACE, Server, Tls
 from ldap3.utils.conv import escape_filter_chars
 from ldap3.utils.dn import escape_rdn, parse_dn
 
-from .domain import RuleError, protected
+from .domain import ResetOutcomeUnknown, RuleError, protected
 from .models import Configuration
 
 
@@ -357,7 +357,7 @@ class ActiveDirectory:
         try:
             changed = self.conn.extend.microsoft.modify_password(account["dn"], password)
         except Exception:
-            raise RuleError("目录响应中断，密码修改结果不明；请先验证或联系管理员") from None
+            raise ResetOutcomeUnknown("目录响应中断，密码修改结果不明；请先验证或联系管理员") from None
         if not changed:
             raise RuleError("AD 拒绝密码，请检查复杂度和密码历史要求")
         if unlock:

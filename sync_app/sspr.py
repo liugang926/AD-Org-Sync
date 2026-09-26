@@ -5,7 +5,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from .directory import DingTalk, ActiveDirectory
-from .domain import RuleError, fingerprint, protected
+from .domain import ResetOutcomeUnknown, RuleError, fingerprint, protected
 from .locking import lock
 from .models import Audit, Configuration, EmployeeSession
 from .security import audit, rate_limit
@@ -123,10 +123,12 @@ def reset(token, password, confirmation, ip):
                 if write_started else "身份复核暂时失败，密码未提交；请重新验证"
             )
             _finish_attempt(attempt, message, False)
+            if write_started:
+                raise ResetOutcomeUnknown(message) from None
             raise RuleError(message) from None
         else:
             if not _finish_attempt(attempt, outcome.message, outcome.complete):
-                raise RuleError("密码修改结果记录暂不可用，请先验证或联系管理员")
+                raise ResetOutcomeUnknown("密码修改结果记录暂不可用，请先验证或联系管理员")
             return outcome.message
         finally:
             _close_clients(source, ad)

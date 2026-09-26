@@ -19,7 +19,7 @@ from django.utils import timezone
 
 from . import sspr, synchronization
 from .directory import ActiveDirectory, DingTalk
-from .domain import RuleError, candidate
+from .domain import ResetOutcomeUnknown, RuleError, candidate
 from .models import Configuration, Person, Binding, DepartmentBinding, Job, Audit, Snapshot, RuntimeState
 from .security import rate_limit, audit, client_address
 
@@ -356,6 +356,10 @@ def employee_reset(request):
     try:
         result = sspr.reset(request.COOKIES.get("employee_verification", ""), request.POST.get("password", ""), request.POST.get("confirmation", ""), client_address(request))
         response = render(request, "sspr.html", {"result": result, "enabled": True})
+        response.delete_cookie("employee_verification", path="/sspr", samesite="Strict")
+        return response
+    except ResetOutcomeUnknown as exc:
+        response = render(request, "sspr.html", {"uncertain": str(exc), "enabled": True})
         response.delete_cookie("employee_verification", path="/sspr", samesite="Strict")
         return response
     except RuleError as exc:

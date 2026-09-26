@@ -4,7 +4,7 @@ from datetime import timedelta
 from threading import Event, Thread
 from sync_app import sspr
 from sync_app.directory import PasswordResetOutcome
-from sync_app.domain import RuleError
+from sync_app.domain import ResetOutcomeUnknown, RuleError
 from sync_app.locking import lock
 from sync_app.models import Configuration, Binding, Job, EmployeeSession, Audit
 from .fakes import Source, Directory, account, user
@@ -142,7 +142,7 @@ def test_reset_attempt_exists_before_directory_write_and_remains_uncertain_on_er
         raise RuntimeError("private directory diagnostic")
 
     monkeypatch.setattr(ad, "reset_password", interrupted_reset)
-    with pytest.raises(RuleError, match="结果不明"):
+    with pytest.raises(ResetOutcomeUnknown, match="结果不明"):
         sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
 
     attempt = Audit.objects.get(action="sspr_reset")
@@ -180,7 +180,7 @@ def test_reset_keeps_pending_attempt_if_final_audit_update_fails(setup_sspr, mon
         return original_save(self, *args, **kwargs)
 
     monkeypatch.setattr(Audit, "save", fail_final_update)
-    with pytest.raises(RuleError, match="结果记录暂不可用"):
+    with pytest.raises(ResetOutcomeUnknown, match="结果记录暂不可用"):
         sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
 
     attempt = Audit.objects.get(action="sspr_reset")
@@ -202,6 +202,29 @@ def test_client_close_failure_cannot_mask_completed_reset(setup_sspr, monkeypatc
     assert sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip") == "密码已成功重置"
     assert Audit.objects.get(action="sspr_reset").success is True
     assert ad.resets == 1
+
+
+@pytest.mark.django_db
+def test_unknown_reset_result_stops_automatic_reverification(client, setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+
+    def interrupted_reset(guid, password, unlock=False):
+        raise ResetOutcomeUnknown("目录响应中断，密码修改结果不明；请先验证或联系管理员")
+
+    monkeypatch.setattr(ad, "reset_password", interrupted_reset)
+    response = client.post("/sspr/reset", {
+        "password": "Example-password-42!", "confirmation": "Example-password-42!",
+    })
+
+    assert response.status_code == 200
+    content = response.content.decode()
+    assert "结果不明" in content and "不要立即重复提交" in content
+    assert 'id="verify"' not in content
+    assert 'action="/sspr/reset"' not in content
+    assert response.cookies["employee_verification"]["max-age"] == 0
+    assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
 
 
 @pytest.mark.django_db
