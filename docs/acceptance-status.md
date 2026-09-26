@@ -10,6 +10,23 @@
 
 本文件记录证据边界，不作为自动宣布验收通过的依据。2026-09-23：旧平台已退役；PR [#61](https://github.com/liugang926/AD-Org-Sync/pull/61) 合并后，Django 版本 `a480636d3dc40e4a9e98ef859831320b50ed7140` 已由原 production runner 部署，六项 CI 和部署任务全部通过。独立核验确认运行 Web 镜像及 `last_successful_image_tag` 均为该 SHA，Web/Nginx 健康，`db_check` 通过；对外 HTTPS 的 `/healthz`、`/readyz`、`/login`、`/sspr` 均返回 200，`/readyz` 的数据库、表结构、worker 检查全为 true。runner 已恢复在线空闲。此前部署已核验生产受限文件权限为 0600、宿主 cron 只有一条应用调度任务、管理员经公开 HTTPS 登录并产生成功审计；本次未重复这些检查。生产 `schedule_enabled=false`、`sspr_enabled=false`，真实企业验收仍未完成。[PR #61 CI 与部署](https://github.com/liugang926/AD-Org-Sync/actions/runs/35860755304)、[独立镜像与健康核验](https://github.com/liugang926/AD-Org-Sync/actions/runs/35861204945)
 
+## 新旧身份匹配规则的同批样本对比
+
+2026-09-26，在互不修改的隔离工作树中，用同一组虚构钉钉人员与 AD 账号分别运行旧版提交 `65b9cf7a95a164fcdcec6ea70caa7b5c3e7b2e0c` 的 `assess_identity_matches`，以及当前 Django `main` 提交 `4dbd0d98446a5893041257400a47219bca5bffe6` 的 `resolve`。旧版匹配测试 27 项通过；8 类样本的旧版决策和新版计划均由代码实际输出，不涉及真实员工或目录写入。
+
+| 同批样本 | 旧版决策 | Django 决策 | 对照结论 |
+| --- | --- | --- | --- |
+| 唯一工号命中一个 AD 账号 | `automatic_link` | `bind` | 提出关联原账号 |
+| 两名来源人员工号重复 | 两人均 `blocked` | 两人均 `conflict` | 不任取一人 |
+| 两个 AD 账号同工号 | `blocked` | `conflict` | 不任取目标 |
+| 新人无 AD 命中 | `manual_confirmation`，建议新建 | `create` 预览计划 | 省去旧身份决策中心，仍须审阅预览后执行 |
+| 在职来源命中已禁用 AD 账号 | `manual_confirmation` | `conflict` | 新版保守阻断，需管理员处理 |
+| 命中受保护 AD 账号 | `blocked` | `conflict` | 均不自动关联 |
+| AD 账号已关联其他来源身份 | `blocked` | `conflict` | 均禁止重复占用 |
+| 已有关联后来源工号改变 | `automatic_link`，复用原关联 | `update`，沿用原目标 | 稳定来源身份不被工号变化替代 |
+
+此项只验证纯身份匹配决策和 PRD 的显式简化；没有运行两套系统的完整预览、OU/属性/离职计划或 Apply，也没有使用真实同批钉钉数据。它不能替代第 10 节要求的完整新旧预览对比，更不能视为阶段四验收完成。
+
 ## 真实开发测试环境的联调证据
 
 - 测试 AD 域控重启后，生产容器在 `LDAP_VERIFY_CERT=false` 下完成 TLS 1.3 握手，成功绑定并读取测试 OU 及其 427 个账号；自签证书未导入信任库。[连接验证任务](https://github.com/liugang926/AD-Org-Sync/actions/runs/35823677780)
