@@ -457,17 +457,29 @@ def run_sync_job(job):
         if job.kind != "apply":
             job.plan = plan(job, source, ad)
             job.save(update_fields=["plan"])
+            person_conflicts = sum(op["action"] == "conflict" for op in job.plan["operations"])
+            department_conflicts = sum(op["action"] == "conflict" for op in job.plan["departments"])
             if has_conflicts(job.plan):
                 job.status = "blocked"
+                job.message = f"预览发现 {person_conflicts} 项人员冲突、{department_conflicts} 项部门冲突；未执行 AD 写入"
             elif job.plan["high_risk"]:
                 job.status = "needs_confirmation"
                 job.kind = "preview"
+                disables = sum(op["action"] == "disable" for op in job.plan["operations"])
+                job.message = f"预览包含 {disables} 项离职禁用，超过保护阈值；请确认受影响清单"
             elif job.kind == "scheduled":
                 job.status = apply(job, source, ad)
             else:
                 job.status = "preview_ready"
+                job.message = f"预览完成：{len(job.plan['operations'])} 项人员计划、{len(job.plan['departments'])} 项部门计划；未执行 AD 写入"
         else:
             job.status = apply(job, source, ad)
+        if job.status in {"success", "partial_failed"}:
+            outcomes = Counter(Operation.objects.filter(job=job).values_list("status", flat=True))
+            if job.status == "success":
+                job.message = f"同步执行完成：{outcomes['success']} 项成功、{outcomes['skipped']} 项跳过"
+            else:
+                job.message = f"同步执行部分失败：{outcomes['success']} 项成功、{outcomes['failed']} 项失败；请核验逐项结果"
 
 
 
