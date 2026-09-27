@@ -1,5 +1,7 @@
 # Django 重构验收状态
 
+2026-09-26 发布核验：PR [#71](https://github.com/liugang926/AD-Org-Sync/pull/71) 与 [#72](https://github.com/liugang926/AD-Org-Sync/pull/72) 已按顺序合并。#71 是验收记录更新，合并提交 `13537d8da26b3ba2ae6054651cb1028855e79231`；#72 在员工页面展示账号前重新读取钉钉人员和实时 AD 匹配，仅同一 userId、同一 objectGUID 的有效会话能展示当前账号，合并提交 `4dbd0d98446a5893041257400a47219bca5bffe6`。两次提交各自的六项 CI 与 `Deploy / Production` 均成功：[发布 #71](https://github.com/liugang926/AD-Org-Sync/actions/runs/36207620271)、[发布 #72](https://github.com/liugang926/AD-Org-Sync/actions/runs/36208076750)。#72 发布后独立核验生产 Web/worker 镜像与 `last_successful_image_tag` 均为其合并 SHA，Web/worker/Nginx 健康，数据库与迁移检查正常，`/readyz` 的数据库、表结构和 worker 检查均为 true，六个公开 HTTPS 入口返回 200，runner 在线空闲。未验证员工页面不展示账号。浏览器及单元测试覆盖匹配目标变化时不展示旧账号；仍缺员工本人从钉钉工作台打开页面、看到当前账号及用新密码登录的现场确认。此次发布不补足真实钉钉来源的新建、实际部门变更和离职验收。
+
 2026-09-25 补充核验：PR [#69](https://github.com/liugang926/AD-Org-Sync/pull/69) 已合并并由原 CI/CD 部署，生产 Web/worker 镜像与 `last_successful_image_tag` 为 `a8dddba5b710cc785af00b8454eba77242b823c3`；部署、健康检查和数据库检查均通过。[#69 部署](https://github.com/liugang926/AD-Org-Sync/actions/runs/36145080804)。只读核验发现，#70 部署于 2026-09-24 06:24 UTC 完成后，生产审计在 07:08 UTC 记录 `sspr_verified`，07:09:06 UTC 记录 `sspr_reset` 成功；审计中的钉钉 userId 与最新目录快照中工号 `T0001919` 的唯一 userId 一致。该员工当前无本地 `Binding`，审计目标 GUID 在实时 AD 中仍可定位，AD `pwdLastSet` 为 07:09:02 UTC。此证据支持生产环境真实身份匹配、无绑定改密与目录写入成功；审计不能证明员工本人从钉钉工作台操作、页面自动展示了账号或新密码可登录，这些仍需本人确认，不读取或索取密码。
 
 2026-09-24 更新：PR [#66](https://github.com/liugang926/AD-Org-Sync/pull/66)、[#67](https://github.com/liugang926/AD-Org-Sync/pull/67)、[#68](https://github.com/liugang926/AD-Org-Sync/pull/68) 和 [#70](https://github.com/liugang926/AD-Org-Sync/pull/70) 已依次合并并由原 CI/CD 部署。当时运行的 Web 与 worker 镜像、`last_successful_image_tag` 均为 #70 的合并提交 `d0095b1557fcc6976e54d9b06fe4ce6ea6bfcf96`；六项 CI 和生产部署成功，Web/Nginx 健康，独立 `db_check` 通过，公开 HTTPS 的 `/healthz`、`/readyz`、`/login`、`/sspr`、`/sspr/callback/dingtalk`、`/sspr/oauth/start` 均返回 200，runner 在线空闲。未验证访客的员工页面不展示账号，已部署的静态脚本包含自动验证入口。[#70 合并部署](https://github.com/liugang926/AD-Org-Sync/actions/runs/35963852423)。部署当时尚无员工在钉钉内的真实授权和本人改密验收证据。
@@ -7,6 +9,38 @@
 同日开启 `T0001919` 的单人密码重置试点：重新完整读取钉钉目录后，工号在 487 人中唯一；实时 LDAPS 唯一匹配已启用、未受保护的 AD 账号，且没有本地绑定。生产环境仅把该员工的钉钉 userId 加入白名单，重建 Web 并验证名单只有一人，然后开启 `sspr_enabled`；`schedule_enabled` 继续关闭。公开 `/sspr`、`/sspr/callback/dingtalk` 和 `/sspr/oauth/start` 均返回 200，显示钉钉验证入口，不向未验证访客展示账号，CSRF Cookie 为 Secure。开启时尚未发生真实员工授权或密码重置，AC-14～17、AC-21 仍待本人操作和审计核验。
 
 本文件记录证据边界，不作为自动宣布验收通过的依据。2026-09-23：旧平台已退役；PR [#61](https://github.com/liugang926/AD-Org-Sync/pull/61) 合并后，Django 版本 `a480636d3dc40e4a9e98ef859831320b50ed7140` 已由原 production runner 部署，六项 CI 和部署任务全部通过。独立核验确认运行 Web 镜像及 `last_successful_image_tag` 均为该 SHA，Web/Nginx 健康，`db_check` 通过；对外 HTTPS 的 `/healthz`、`/readyz`、`/login`、`/sspr` 均返回 200，`/readyz` 的数据库、表结构、worker 检查全为 true。runner 已恢复在线空闲。此前部署已核验生产受限文件权限为 0600、宿主 cron 只有一条应用调度任务、管理员经公开 HTTPS 登录并产生成功审计；本次未重复这些检查。生产 `schedule_enabled=false`、`sspr_enabled=false`，真实企业验收仍未完成。[PR #61 CI 与部署](https://github.com/liugang926/AD-Org-Sync/actions/runs/35860755304)、[独立镜像与健康核验](https://github.com/liugang926/AD-Org-Sync/actions/runs/35861204945)
+
+## 新旧身份匹配规则的同批样本对比
+
+2026-09-26，在互不修改的隔离工作树中，用同一组虚构钉钉人员与 AD 账号分别运行旧版提交 `65b9cf7a95a164fcdcec6ea70caa7b5c3e7b2e0c` 的 `assess_identity_matches`，以及当前 Django `main` 提交 `4dbd0d98446a5893041257400a47219bca5bffe6` 的 `resolve`。旧版匹配测试 27 项通过；8 类样本的旧版决策和新版计划均由代码实际输出，不涉及真实员工或目录写入。
+
+| 同批样本 | 旧版决策 | Django 决策 | 对照结论 |
+| --- | --- | --- | --- |
+| 唯一工号命中一个 AD 账号 | `automatic_link` | `bind` | 提出关联原账号 |
+| 两名来源人员工号重复 | 两人均 `blocked` | 两人均 `conflict` | 不任取一人 |
+| 两个 AD 账号同工号 | `blocked` | `conflict` | 不任取目标 |
+| 新人无 AD 命中 | `manual_confirmation`，建议新建 | `create` 预览计划 | 省去旧身份决策中心，仍须审阅预览后执行 |
+| 在职来源命中已禁用 AD 账号 | `manual_confirmation` | `conflict` | 新版保守阻断，需管理员处理 |
+| 命中受保护 AD 账号 | `blocked` | `conflict` | 均不自动关联 |
+| AD 账号已关联其他来源身份 | `blocked` | `conflict` | 均禁止重复占用 |
+| 已有关联后来源工号改变 | `automatic_link`，复用原关联 | `update`，沿用原目标 | 稳定来源身份不被工号变化替代 |
+
+此项只验证纯身份匹配决策和 PRD 的显式简化；没有运行两套系统的完整预览、OU/属性/离职计划或 Apply，也没有使用真实同批钉钉数据。它不能替代第 10 节要求的完整新旧预览对比，更不能视为阶段四验收完成。
+
+## 新旧运行时预览的同批合成样本对比
+
+2026-09-26，又分别在上述两个隔离检出运行旧版 `run_sync_job(execution_mode="dry_run")` 与 Django `synchronization.plan`。输入使用相同的虚构人员 ID、工号、部门关系、AD 账号和既有绑定；旧版经企微测试适配器注入等价的规范化人员字段，Django 经钉钉来源替身注入。两边均使用临时 SQLite 和内存 AD，不连接真实服务或执行计划。可重跑脚本与确切数据见 [`acceptance-fixtures/README.md`](acceptance-fixtures/README.md)。旧版计划 17 项、冲突记录 0 项、已执行 0 项；Django 计划 6 项人员操作和 2 项部门 OU 操作，因一个禁用账号超过配置比例阈值标记为高风险。
+
+| 同批样本 | 旧版运行时预览 | Django 预览 | 判定 |
+| --- | --- | --- | --- |
+| `alice` 唯一工号已有账号 | 关联建议 `propose_identity_binding`，并提出 `update_user` | `bind`，现有属性无需修改 | 都选择原账号；新版明确区分首次绑定 |
+| `bob` 无 AD 账号 | `create_user` | `create` | 都提出新建；旧版默认用户名 `bob1002`，新版默认工号 `1002` |
+| `charlie` 已绑定、显示名变化 | `update_user` | `update`，列出 `Charlie` → `Charlie Updated` | 都提出更新 |
+| `dave` 已绑定、主部门变更 | `move_user`，目标为工程 OU | `move`，列出原 OU → 工程 OU | 都提出移动而非重建 |
+| `gone` 已绑定、完整来源中缺失 | `disable_user` | `disable`，列出启用 → 禁用并标高风险 | 都提出禁用；新版需高风险确认 |
+| `eric` 两个 AD 账号使用同一工号 | 此替身下仅选中候选账号 `1006` 并提出 `update_user`，冲突记录为 0 | `conflict`，不选择任一目标 | 新版完整 AD 唯一性检查更严格；旧版结果只代表本样本的候选查询路径 |
+
+旧版还提出部门群组、成员关系和嵌套群组操作，Django 精简版按 PRD 不包含这些功能。此轮补足了**合成数据的完整运行时预览**对照，但没有用真实同批钉钉人员与 AD 数据运行两套平台，也没有对照 Apply 的实际写入。尤其 `eric` 的差异不能仅凭替身证明旧生产环境会误关联；真实目录的多候选阻断仍需单独验收。阶段四尚未完成。
 
 ## 真实开发测试环境的联调证据
 
@@ -30,9 +64,9 @@
 - 随后使用同一生产镜像、真实测试 AD、隔离 SQLite 和合成通讯录来源运行完整业务预览与执行：两名合成人员首次建号成功，重复执行未重复建号；一人换部门后 objectGUID 不变；完整全量缺失时只禁用该人，另一人保持启用。同步期间线上数据库没有这些测试人员或绑定；演练结束时删除两个账号、两个专用 OU 和隔离数据库，生产就绪接口仍为 200。这验证了 AC-07、AC-08 和离职禁用的业务执行路径与真实 AD 写入，但来源由测试适配器提供，不等于真实钉钉通讯录的端到端验收。[隔离业务同步演练](https://github.com/liugang926/AD-Org-Sync/actions/runs/35851591216)
 - 复用同一隔离业务同步路径，在首个合成 AD 账号创建后保持执行锁 15 秒，同时从公网请求员工 `/sspr` 与 `/readyz`：两者均返回 200，单次响应分别约 0.020 秒和 0.023 秒。该轮创建、重复执行、移动及禁用均成功，专用账号、OU、隔离数据库已清理，线上数据库无测试人员或绑定，诊断任务已重新停用。这补充了 AC-19 在真实 AD 写入期间的页面可访问性证据；未执行同时密码重置，也不能据单次探针承诺稳定吞吐量。[写入期间公网探针](https://github.com/liugang926/AD-Org-Sync/actions/runs/35857498242)
 - 后续一次性演练沿用生产镜像和真实测试 AD，在专用 OU 中先禁用创建合成账号，保持禁用完成属性初始化，再启用同一 objectGUID；最终删除合成账号与专用 OU，核对线上业务数据库没有该身份的人员或绑定，`/readyz` 为 200。它验证了 PR #65 所用 AD 适配器操作顺序，但没有运行 PR #65 的 `synchronization.apply`，也没有部署该草稿 PR。[分阶段建号与清理](https://github.com/liugang926/AD-Org-Sync/actions/runs/35874202073)
-- 使用 PR #66 的候选提交 `80f06b170d122443d24b6a88b015a81051263825` 构建临时容器，在独立 SQLite 和专用测试 AD OU 中运行完整的 `synchronization` 预览与执行。合成来源人员首次建号后保持禁用，显示名与职位在禁用期间写入，本地绑定保持暂停；重复同步跳过该人且没有重复建号。演练删除测试账号并核对先前失败的两次诊断均未留下测试身份，线上业务数据库无合成人员或绑定，`/readyz` 为 200。该证据覆盖候选代码的分阶段建号执行路径，不等于真实钉钉来源写入，也不表示草稿 PR 已部署。[PR #66 候选同步演练](https://github.com/liugang926/AD-Org-Sync/actions/runs/35882277949)
+- 使用 PR #66 的候选提交 `80f06b170d122443d24b6a88b015a81051263825` 构建临时容器，在独立 SQLite 和专用测试 AD OU 中运行完整的 `synchronization` 预览与执行。合成来源人员首次建号后保持禁用，显示名与职位在禁用期间写入，本地绑定保持暂停；重复同步跳过该人且没有重复建号。演练删除测试账号并核对先前失败的两次诊断均未留下测试身份，线上业务数据库无合成人员或绑定，`/readyz` 为 200。该证据覆盖演练时的候选代码分阶段建号执行路径，不等于真实钉钉来源写入；该次演练本身也不能作为后来正式部署的证据。[PR #66 候选同步演练](https://github.com/liugang926/AD-Org-Sync/actions/runs/35882277949)
 - PR #66 候选提交 `60d9dffd6c6b6a4c0e09a31e5c0345f6340ab422` 又在隔离 SQLite 与真实测试 AD 中模拟“账号已禁用创建、属性尚未写入”时的一次失败。执行记录保存 objectGUID、创建时状态指纹与配置指纹；重新预览只在状态和配置未变时提出续做，随后用同一 objectGUID 完成属性与暂停绑定，重复同步没有重建账号。测试对象已删除，线上业务数据库无测试身份，`/readyz` 为 200。该证据覆盖这一明确的中断点，不代表所有网络超时或 AD 写入后数据库故障都可自动续做。[分阶段建号故障恢复演练](https://github.com/liugang926/AD-Org-Sync/actions/runs/35885650579)
-- PR #66 候选提交 `0cde22f5490c2e17d1bd04bb5fccaaf696727078` 在生产 runner 上以独立 SQLite 完成真实钉钉来源的指定人员演练：实时核对 `T0001919` 的身份和部门范围，人工将其关联到专用测试 OU 内的一次性 AD 账号；两次完整读取钉钉通讯录后，预览只提出该账号的显示名更新，执行保持原 objectGUID 并写入真实测试 AD。演练结束删除一次性账号，复核该员工原 AD 账号指纹不变、线上业务数据库无测试绑定，公开 `/readyz` 为 200。诊断任务已重新停用。此证据覆盖真实来源驱动的绑定、单人预览与属性写入，不覆盖真实来源的新建、移动、禁用或员工本人密码重置；候选 PR 仍为草稿，未部署。[真实钉钉来源隔离写入演练](https://github.com/liugang926/AD-Org-Sync/actions/runs/35887742522)
+- PR #66 候选提交 `0cde22f5490c2e17d1bd04bb5fccaaf696727078` 在生产 runner 上以独立 SQLite 完成真实钉钉来源的指定人员演练：实时核对 `T0001919` 的身份和部门范围，人工将其关联到专用测试 OU 内的一次性 AD 账号；两次完整读取钉钉通讯录后，预览只提出该账号的显示名更新，执行保持原 objectGUID 并写入真实测试 AD。演练结束删除一次性账号，复核该员工原 AD 账号指纹不变、线上业务数据库无测试绑定，公开 `/readyz` 为 200。诊断任务已重新停用。此证据覆盖真实来源驱动的绑定、单人预览与属性写入，不覆盖真实来源的新建、移动、禁用或员工本人密码重置；演练时该 PR 尚未部署，正式发布须另看合并后的 CI/CD 记录。[真实钉钉来源隔离写入演练](https://github.com/liugang926/AD-Org-Sync/actions/runs/35887742522)
 - 在相同候选代码及隔离方式下，下一轮演练先完成真实来源驱动的显示名更新，再将该员工的人工部门映射改到专用测试 OU 下的新子 OU。新预览明确提出 `move` 且在执行前未移动账号；执行后该一次性 AD 账号进入新 OU，objectGUID、用户名与工号不变。正式员工原 AD 账号指纹仍不变；一次性账号和子 OU 均清除，线上业务数据库无测试绑定，`/readyz` 为 200。诊断任务已重新停用。此项证明人工 OU 映射变化后的移动链路，不等于钉钉实际变更员工部门。[真实来源与人工 OU 映射移动演练](https://github.com/liugang926/AD-Org-Sync/actions/runs/35889830463)
 - PR #66 候选提交 `ea05ecc995dc55a56eb5cfa2b2f0ee76fa0faa5f` 增加“属性初始化后、账号启用前”的恢复证据。在隔离 SQLite 与真实测试 AD 中，合成来源人员禁用建号并完成显示名、职位写入后，诊断仅让第一次启用失败；重新预览核对原 objectGUID、初始化后 AD 状态指纹及配置指纹，随后启用同一账号并建立有效绑定，重复同步不重建。一次性账号已清除，线上业务数据库无测试身份，`/readyz` 为 200，诊断任务重新停用。该演练只覆盖这一明确中断点；AD 状态或配置变化时自动续做会阻断，网络超时结果不明仍需人工核验。[启用失败后的同 GUID 续做演练](https://github.com/liugang926/AD-Org-Sync/actions/runs/35892680590)
 - PR #66 后续候选代码将 AD `uSNChanged` 纳入预览和建号恢复的对象指纹：外部修改密码等对象变更或无法读取有效修订号时，自动续做改为冲突待人工核验。隔离测试覆盖禁用建号、已启用但未绑定、预览后变更和修订号缺失。生产容器对专用测试账号的真实 LDAPS 只读探针确认修订号可读取且为有效正整数，生产镜像与就绪状态未变化；探针已停用。该探针仅验证可读性，改密与恢复行为见后续演练。[AD 修订号只读核验](https://github.com/liugang926/AD-Org-Sync/actions/runs/35894980118)
@@ -87,7 +121,7 @@
 | AC-19 同步时员工入口 | 真实测试 AD 写入期间公网 `/sspr` 与 `/readyz` 均为 200；完整单人同步任务持锁时合成身份改密被拒但会话仍可用，执行后重试成功且后续同步未覆盖密码 | 尚未并发运行真实员工钉钉授权重置；公网页面探针与并发改密演练分别进行 |
 | AC-20 备份恢复 | 线上一致性备份的隔离副本恢复及实时 GUID 核验 | 未进行线上数据库切换；恢复本地数据不回滚 AD |
 | AC-21 未同步无绑定重置 | 合成身份与真实 LDAPS 改密；生产 `T0001919` 对应钉钉 userId 有身份验证及成功重置审计，AD 改密时间吻合，当前无本地绑定 | 员工本人操作仍需确认；审计无法单独证明使用了工作台入口 |
-| AC-22 自动展示本人账号 | #70 浏览器回归覆盖自动授权成功、失败重试、完整账号展示和未验证不泄露；生产 HTTPS 页面与静态脚本已部署，已有身份验证成功审计 | 审计不能证明真实钉钉工作台页面自动展示账号，仍需员工界面验收 |
+| AC-22 自动展示本人账号 | #70 浏览器回归覆盖自动授权成功、失败重试和完整账号展示；#72 重新核验实时钉钉 userId 与 AD objectGUID 后才展示账号，单元与浏览器测试覆盖目标变化及未验证不泄露；生产 HTTPS 页面已部署且未验证访客看不到账号 | 审计与未验证页面探针不能证明真实钉钉工作台内自动展示了当前账号，仍需员工界面验收 |
 
 ## 完成前仍需核验
 

@@ -138,6 +138,10 @@ class Audit(models.Model):
     target = models.CharField(max_length=150, blank=True)
     result = models.CharField(max_length=300)
     success = models.BooleanField(default=True)
+    state = models.CharField(max_length=16, blank=True, default="", choices=[
+        ("success", "成功"), ("failed", "失败"), ("partial", "部分完成"),
+        ("pending", "处理未完成"), ("unknown", "待确认"),
+    ])
 
 
 class EmployeeSession(models.Model):

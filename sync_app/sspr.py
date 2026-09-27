@@ -5,10 +5,30 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from .directory import DingTalk, ActiveDirectory
-from .domain import RuleError, fingerprint, protected
+from .domain import ResetOutcomeUnknown, RuleError, fingerprint, protected
 from .locking import lock
-from .models import Configuration, EmployeeSession
+from .models import Audit, Configuration, EmployeeSession
 from .security import audit, rate_limit
+
+
+def _close_clients(*clients):
+    # Closing a connection cannot change an already confirmed directory result.
+    for client in clients:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
+def _finish_attempt(attempt, result, success, state):
+    attempt.result, attempt.success, attempt.state = result, success, state
+    try:
+        attempt.save(update_fields=["result", "success", "state"])
+        return True
+    except Exception:
+        # The pre-write record remains available when this update fails.
+        return False
 
 
 def config_signature(config):
@@ -26,6 +46,8 @@ def match_employee(source, ad, config, source_id=None, code=None):
     account = matches[0]
     if protected(account) or not account["enabled"]:
         raise RuleError("匹配账号受保护或已禁用，不能自助重置")
+    if not str(account.get("username") or "").strip() or not str(account.get("guid") or "").strip():
+        raise RuleError("匹配账号缺少登录名或对象标识，请联系管理员核对")
     return user, account
 
 
@@ -36,20 +58,23 @@ def verify(code, ip):
         raise RuleError("员工密码重置尚未开启")
     if not settings.DINGTALK_CORP_ID:
         raise RuleError("请管理员先配置钉钉企业 ID，再使用员工身份验证")
-    source = DingTalk()
-    ad = None
+    source = ad = None
     try:
+        source = DingTalk()
         ad = ActiveDirectory()
         user, account = match_employee(source, ad, config, code=code)
         rate_limit("sspr-user:" + user["source_id"], 5)
         token = secrets.token_urlsafe(32)
-        EmployeeSession.objects.create(digest=fingerprint(token), source_id=user["source_id"], display_name=user["name"], object_guid=account["guid"], config_fingerprint=config_signature(config), expires_at=timezone.now() + timedelta(minutes=5))
-        audit(user["source_id"], "sspr_verified", account["guid"])
+        with transaction.atomic():
+            EmployeeSession.objects.create(digest=fingerprint(token), source_id=user["source_id"], display_name=user["name"], object_guid=account["guid"], config_fingerprint=config_signature(config), expires_at=timezone.now() + timedelta(minutes=5))
+            audit(user["source_id"], "sspr_verified", account["guid"])
         return token, account
+    except RuleError:
+        raise
+    except Exception:
+        raise RuleError("员工身份核验暂不可用，请稍后再试或联系管理员") from None
     finally:
-        source.close()
-        if ad:
-            ad.close()
+        _close_clients(source, ad)
 
 
 def session_for(token):
@@ -60,6 +85,25 @@ def session_for(token):
     return item, config
 
 
+def current_account(token):
+    """Show a verified account only after a fresh source and AD identity check."""
+    item, config = session_for(token)
+    source = ad = None
+    try:
+        source = DingTalk()
+        ad = ActiveDirectory()
+        user, target = match_employee(source, ad, config, source_id=item.source_id)
+        if user["source_id"] != item.source_id:
+            raise RuleError("钉钉身份发生变化，请重新验证")
+        if target["guid"] != str(item.object_guid):
+            raise RuleError("AD 匹配对象发生变化，请重新验证")
+        if item.config_fingerprint != config_signature(Configuration.current()):
+            raise RuleError("配置发生变化，请重新验证")
+        return {"username": target["username"], "name": user["name"]}
+    finally:
+        _close_clients(source, ad)
+
+
 def reset(token, password, confirmation, ip):
     rate_limit("sspr-reset-ip:" + ip, 20)
     item, config = session_for(token)
@@ -67,12 +111,23 @@ def reset(token, password, confirmation, ip):
         raise RuleError("密码长度不符合要求或两次输入不一致")
     rate_limit("sspr-reset-user:" + item.source_id, 5)
     with lock("account:" + str(item.object_guid)):
-        # Atomic claim BEFORE the external write: timeout/replay cannot repeat it.
-        with transaction.atomic():
-            claimed = EmployeeSession.objects.filter(pk=item.pk, used=False, expires_at__gt=timezone.now()).update(used=True)
-            if not claimed:
-                raise RuleError("验证已被使用，请重新验证")
+        # Claim the session and persist an uncertain attempt before any external write.
+        # A process exit after LDAPS changes the password must leave evidence to review.
+        try:
+            with transaction.atomic():
+                claimed = EmployeeSession.objects.filter(pk=item.pk, used=False, expires_at__gt=timezone.now()).update(used=True)
+                if not claimed:
+                    raise RuleError("验证已被使用，请重新验证")
+                attempt = Audit.objects.create(
+                    actor=item.source_id, action="sspr_reset", target=str(item.object_guid),
+                    result="密码重置请求处理中，结果待确认", success=False, state="pending",
+                )
+        except RuleError:
+            raise
+        except Exception:
+            raise RuleError("审计暂时不可用，密码未提交；请稍后再试") from None
         source = ad = None
+        write_started = False
         try:
             source = DingTalk()
             ad = ActiveDirectory()
@@ -83,14 +138,26 @@ def reset(token, password, confirmation, ip):
                 raise RuleError("AD 匹配对象发生变化，请重新验证")
             if item.config_fingerprint != config_signature(Configuration.current()):
                 raise RuleError("配置发生变化，请重新验证")
+            write_started = True
             outcome = ad.reset_password(item.object_guid, password, config.unlock_after_reset)
-            audit(item.source_id, "sspr_reset", str(item.object_guid), outcome.message, success=outcome.complete)
-            return outcome.message
-        except RuleError as exc:
-            audit(item.source_id, "sspr_reset", str(item.object_guid), str(exc), success=False)
+        except ResetOutcomeUnknown as exc:
+            _finish_attempt(attempt, str(exc), False, "unknown")
             raise
+        except RuleError as exc:
+            _finish_attempt(attempt, str(exc), False, "failed")
+            raise
+        except Exception:
+            message = (
+                "目录响应中断，密码修改结果不明；请先验证或联系管理员"
+                if write_started else "身份复核暂时失败，密码未提交；请重新验证"
+            )
+            _finish_attempt(attempt, message, False, "unknown" if write_started else "failed")
+            if write_started:
+                raise ResetOutcomeUnknown(message) from None
+            raise RuleError(message) from None
+        else:
+            if not _finish_attempt(attempt, outcome.message, outcome.complete, "success" if outcome.complete else "partial"):
+                raise ResetOutcomeUnknown("密码修改结果记录暂不可用，请先验证或联系管理员")
+            return outcome.message
         finally:
-            if source:
-                source.close()
-            if ad:
-                ad.close()
+            _close_clients(source, ad)

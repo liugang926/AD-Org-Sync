@@ -13,7 +13,10 @@
     <p class="eyebrow">员工自助服务</p>
     <h1>重置我的 AD 密码</h1>
     {% if error %}<p class="notice" role="alert">{{ error }}</p>{% endif %}
-    {% if result %}
+    {% if uncertain %}
+      <p class="notice" role="alert">{{ uncertain }}</p>
+      <p>本次验证已结束。请先尝试使用新密码登录；仍无法确认时联系管理员，不要立即重复提交。</p>
+    {% elif result %}
       <p class="notice" role="status">{{ result }}</p>
       <p>本次验证已结束。</p>
     {% elif not enabled %}

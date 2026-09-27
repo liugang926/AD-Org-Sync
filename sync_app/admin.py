@@ -73,8 +73,8 @@ class ReadOnlyAdmin(admin.ModelAdmin):
 
 @admin.register(Audit)
 class AuditAdmin(ReadOnlyAdmin):
-    list_display = ("created_at", "actor", "action", "target", "result")
-    list_filter = ("action",)
+    list_display = ("created_at", "actor", "action", "target", "state", "result")
+    list_filter = ("action", "state")
     search_fields = ("actor", "target")
 
 

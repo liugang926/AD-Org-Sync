@@ -207,8 +207,19 @@ def test_audit_filters_and_invalid_date(admin_client):
     from sync_app.models import Audit
     Audit.objects.create(actor="admin", action="sample_ok", success=True)
     Audit.objects.create(actor="admin", action="sample_failed", success=False)
+    Audit.objects.create(actor="employee", action="sample_partial", success=False, state="partial")
+    Audit.objects.create(actor="employee", action="sample_pending", success=False, state="pending")
+    Audit.objects.create(actor="employee", action="sample_unknown", success=False, state="unknown")
     response = admin_client.get("/logs?result=failed")
     assert [entry.action for entry in response.context["page"]] == ["sample_failed"]
+    assert response.context["audit_rows"][0]["status"] == "失败"
+    response = admin_client.get("/logs?result=partial")
+    assert [entry.action for entry in response.context["page"]] == ["sample_partial"]
+    assert response.context["audit_rows"][0]["status"] == "部分完成"
+    response = admin_client.get("/logs?result=attention")
+    assert [entry.action for entry in response.context["page"]] == ["sample_unknown", "sample_pending"]
+    assert [row["status"] for row in response.context["audit_rows"]] == ["待确认", "处理未完成"]
+    assert "待确认或未完成" in response.content.decode()
     response = admin_client.get("/logs?start=2026-99-99")
     assert response.status_code == 200
     assert list(response.context["page"]) == []
