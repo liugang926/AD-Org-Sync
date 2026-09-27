@@ -9,6 +9,10 @@ class RuleError(Exception):
     """Only safe, actionable text may be attached to this exception."""
 
 
+class ResetOutcomeUnknown(RuleError):
+    """The password may have changed; do not guide the employee to retry."""
+
+
 def fingerprint(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
 

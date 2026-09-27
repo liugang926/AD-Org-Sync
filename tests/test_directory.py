@@ -3,7 +3,7 @@ import uuid
 from unittest.mock import Mock
 import pytest
 from sync_app.directory import DingTalk, ActiveDirectory
-from sync_app.domain import RuleError
+from sync_app.domain import ResetOutcomeUnknown, RuleError
 
 
 def test_dingtalk_incomplete_pagination_never_becomes_snapshot():
@@ -193,7 +193,7 @@ def test_interrupted_password_change_remains_unknown():
     directory.check_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
     directory.conn = Mock()
     directory.conn.extend.microsoft.modify_password.side_effect = RuntimeError("connection interrupted")
-    with pytest.raises(RuleError, match="结果不明"):
+    with pytest.raises(ResetOutcomeUnknown, match="结果不明"):
         directory.reset_password("test-guid", "test-password", unlock=True)
     directory.conn.modify.assert_not_called()
 

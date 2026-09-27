@@ -4,7 +4,7 @@ from datetime import timedelta
 from threading import Event, Thread
 from sync_app import sspr
 from sync_app.directory import PasswordResetOutcome
-from sync_app.domain import RuleError
+from sync_app.domain import ResetOutcomeUnknown, RuleError
 from sync_app.locking import lock
 from sync_app.models import Configuration, Binding, Job, EmployeeSession, Audit
 from .fakes import Source, Directory, account, user
@@ -29,10 +29,37 @@ def test_unsynced_employee_can_reset_and_cannot_replay(setup_sspr):
     assert matched["guid"] == ad.items[0]["guid"]
     assert sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
     assert ad.resets == 1
+    assert Audit.objects.get(action="sspr_reset").state == "success"
     with pytest.raises(RuleError):
         sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
     assert ad.resets == 1
     assert "Example-password" not in str(list(Audit.objects.values()))
+
+
+@pytest.mark.django_db
+def test_verification_does_not_leave_session_when_audit_fails(setup_sspr, monkeypatch):
+    def unavailable_audit(*args, **kwargs):
+        raise RuntimeError("private database diagnostic")
+
+    monkeypatch.setattr(sspr, "audit", unavailable_audit)
+    with pytest.raises(RuleError, match="身份核验暂不可用") as failure:
+        sspr.verify("valid", "ip")
+    assert "private" not in str(failure.value)
+    assert not EmployeeSession.objects.exists()
+
+
+@pytest.mark.django_db
+def test_verification_fails_safely_on_malformed_directory_identity(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+
+    def malformed_match(field, value):
+        raise ValueError("private LDAP objectGUID")
+
+    monkeypatch.setattr(ad, "match", malformed_match)
+    with pytest.raises(RuleError, match="身份核验暂不可用") as failure:
+        sspr.verify("valid", "ip")
+    assert "private" not in str(failure.value)
+    assert not EmployeeSession.objects.exists()
 
 
 @pytest.mark.django_db
@@ -105,6 +132,7 @@ def test_unlock_failure_is_audited_as_partial_and_session_is_consumed(setup_sspr
     result = sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
     assert "密码已重置，但解锁失败" in result
     assert Audit.objects.get(action="sspr_reset").success is False
+    assert Audit.objects.get(action="sspr_reset").state == "partial"
     with pytest.raises(RuleError):
         sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
     assert ad.resets == 1
@@ -124,13 +152,116 @@ def test_reset_audits_dingtalk_client_initialization_failure(setup_sspr, monkeyp
 
     attempt = Audit.objects.get(action="sspr_reset")
     assert attempt.target == matched["guid"] and not attempt.success
+    assert attempt.state == "failed"
     assert "Example-password-42!" not in attempt.result
     assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
     assert ad.resets == 0
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("mode", ["ambiguous", "missing", "protected", "disabled"])
+def test_reset_attempt_exists_before_directory_write_and_remains_uncertain_on_error(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, matched = sspr.verify("valid", "ip")
+
+    def interrupted_reset(guid, password, unlock=False):
+        attempt = Audit.objects.get(action="sspr_reset")
+        assert attempt.target == matched["guid"]
+        assert attempt.success is False
+        assert attempt.state == "pending"
+        assert "待确认" in attempt.result
+        raise RuntimeError("private directory diagnostic")
+
+    monkeypatch.setattr(ad, "reset_password", interrupted_reset)
+    with pytest.raises(ResetOutcomeUnknown, match="结果不明"):
+        sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+
+    attempt = Audit.objects.get(action="sspr_reset")
+    assert attempt.success is False
+    assert attempt.state == "unknown"
+    assert "结果不明" in attempt.result
+    assert "private" not in attempt.result
+    assert "Example-password" not in attempt.result
+    assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+
+
+@pytest.mark.django_db
+def test_reset_never_writes_without_durable_attempt(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+
+    def unavailable_audit(**kwargs):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(sspr.Audit.objects, "create", unavailable_audit)
+    with pytest.raises(RuleError, match="审计暂时不可用"):
+        sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+    assert not EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+    assert ad.resets == 0
+
+
+@pytest.mark.django_db
+def test_reset_keeps_pending_attempt_if_final_audit_update_fails(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    original_save = Audit.save
+
+    def fail_final_update(self, *args, **kwargs):
+        if self.action == "sspr_reset" and kwargs.get("update_fields"):
+            raise RuntimeError("database unavailable after directory write")
+        return original_save(self, *args, **kwargs)
+
+    monkeypatch.setattr(Audit, "save", fail_final_update)
+    with pytest.raises(ResetOutcomeUnknown, match="结果记录暂不可用"):
+        sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip")
+
+    attempt = Audit.objects.get(action="sspr_reset")
+    assert attempt.success is False
+    assert attempt.state == "pending"
+    assert "待确认" in attempt.result
+    assert ad.resets == 1
+    assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+
+
+@pytest.mark.django_db
+def test_client_close_failure_cannot_mask_completed_reset(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+
+    def close_failed():
+        raise RuntimeError("connection already closed")
+
+    monkeypatch.setattr(ad, "close", close_failed)
+    assert sspr.reset(token, "Example-password-42!", "Example-password-42!", "ip") == "密码已成功重置"
+    assert Audit.objects.get(action="sspr_reset").success is True
+    assert ad.resets == 1
+
+
+@pytest.mark.django_db
+def test_unknown_reset_result_stops_automatic_reverification(client, setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+
+    def interrupted_reset(guid, password, unlock=False):
+        raise ResetOutcomeUnknown("目录响应中断，密码修改结果不明；请先验证或联系管理员")
+
+    monkeypatch.setattr(ad, "reset_password", interrupted_reset)
+    response = client.post("/sspr/reset", {
+        "password": "Example-password-42!", "confirmation": "Example-password-42!",
+    })
+
+    assert response.status_code == 200
+    content = response.content.decode()
+    assert "结果不明" in content and "不要立即重复提交" in content
+    assert 'id="verify"' not in content
+    assert 'action="/sspr/reset"' not in content
+    assert response.cookies["employee_verification"]["max-age"] == 0
+    assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+    assert Audit.objects.get(action="sspr_reset").state == "unknown"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("mode", ["ambiguous", "missing", "protected", "disabled", "missing_username", "missing_guid"])
 def test_unsafe_matching_is_denied(setup_sspr, mode):
     _, ad, _ = setup_sspr
     if mode == "ambiguous":
@@ -139,6 +270,10 @@ def test_unsafe_matching_is_denied(setup_sspr, mode):
         ad.items = []
     elif mode == "protected":
         ad.items[0]["protected"] = True
+    elif mode == "missing_username":
+        ad.items[0]["username"] = ""
+    elif mode == "missing_guid":
+        ad.items[0]["guid"] = ""
     else:
         ad.items[0]["enabled"] = False
     with pytest.raises(RuleError):
@@ -192,10 +327,8 @@ def test_input_identity_is_not_trusted(client, setup_sspr):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("replacement", [False, True])
-def test_employee_page_hides_account_when_live_identity_no_longer_matches(client, setup_sspr, monkeypatch, replacement):
-    source, ad, _ = setup_sspr
-    monkeypatch.setattr("sync_app.views.DingTalk", lambda: source)
-    monkeypatch.setattr("sync_app.views.ActiveDirectory", lambda: ad)
+def test_employee_page_hides_account_when_live_identity_no_longer_matches(client, setup_sspr, replacement):
+    _, ad, _ = setup_sspr
     token, _ = sspr.verify("valid", "ip")
     client.cookies["employee_verification"] = token
 
@@ -213,9 +346,7 @@ def test_employee_page_hides_account_when_live_identity_no_longer_matches(client
 
 @pytest.mark.django_db
 def test_employee_page_hides_account_when_source_returns_different_user(client, setup_sspr, monkeypatch):
-    source, ad, _ = setup_sspr
-    monkeypatch.setattr("sync_app.views.DingTalk", lambda: source)
-    monkeypatch.setattr("sync_app.views.ActiveDirectory", lambda: ad)
+    source, _, _ = setup_sspr
     token, _ = sspr.verify("valid", "ip")
     client.cookies["employee_verification"] = token
     monkeypatch.setattr(source, "user", lambda _: user("different-user", "1001"))
@@ -223,6 +354,59 @@ def test_employee_page_hides_account_when_source_returns_different_user(client, 
     response = client.get("/sspr")
     assert response.status_code == 200
     assert b"testuser" not in response.content
+    assert b'id="verify"' in response.content
+
+
+@pytest.mark.django_db
+def test_employee_page_keeps_verified_account_when_client_close_fails(client, setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+
+    def close_failed():
+        raise RuntimeError("connection already closed")
+
+    monkeypatch.setattr(ad, "close", close_failed)
+    response = client.get("/sspr")
+    assert response.status_code == 200
+    assert b"testuser" in response.content
+
+
+@pytest.mark.django_db
+def test_employee_page_hides_account_when_live_lookup_fails(client, setup_sspr, monkeypatch):
+    source, _, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+
+    def lookup_failed(_):
+        raise RuntimeError("private directory diagnostic")
+
+    monkeypatch.setattr(source, "user", lookup_failed)
+    response = client.get("/sspr")
+    assert response.status_code == 200
+    assert b"testuser" not in response.content
+    assert "当前账号暂时无法核验" in response.content.decode()
+    assert b"private directory diagnostic" not in response.content
+    assert b'id="verify"' in response.content
+
+
+@pytest.mark.django_db
+def test_employee_page_hides_account_if_config_changes_during_live_lookup(client, setup_sspr, monkeypatch):
+    source, _, config = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+    original_user = source.user
+
+    def change_config(uid):
+        config.unlock_after_reset = True
+        config.save()
+        return original_user(uid)
+
+    monkeypatch.setattr(source, "user", change_config)
+    response = client.get("/sspr")
+    assert response.status_code == 200
+    assert b"testuser" not in response.content
+    assert "配置发生变化" in response.content.decode()
     assert b'id="verify"' in response.content
 
 
