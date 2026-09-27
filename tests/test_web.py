@@ -186,6 +186,40 @@ def test_job_conflicts_can_be_filtered_and_opened_in_people(admin_client):
 
 
 @pytest.mark.django_db
+def test_dashboard_reports_finished_preview_instead_of_waiting(admin_client, monkeypatch):
+    from sync_app import synchronization as sync
+    from sync_app.models import Binding, Configuration, Operation
+
+    from .fakes import Directory, Source, user
+
+    config = Configuration.current()
+    config.root_ou = "OU=People,DC=example,DC=com"
+    config.save()
+    current = {"source": Source()}
+    monkeypatch.setattr(sync, "DingTalk", lambda: current["source"])
+    monkeypatch.setattr(sync, "ActiveDirectory", Directory)
+
+    ready = sync.enqueue(kind="preview", actor="admin")
+    assert sync.run_next()
+    ready.refresh_from_db()
+    assert ready.status == "preview_ready"
+    assert "预览完成" in ready.message
+    assert ready.message in admin_client.get("/dashboard").content.decode()
+
+    current["source"] = Source([user("u2", "")])
+    blocked = sync.enqueue(kind="preview", actor="admin")
+    assert sync.run_next()
+    blocked.refresh_from_db()
+    assert blocked.status == "blocked"
+    assert "1 项人员冲突" in blocked.message
+    dashboard = admin_client.get("/dashboard").content.decode()
+    assert blocked.message in dashboard
+    assert "等待任务结果" not in dashboard
+    assert not Binding.objects.exists()
+    assert not Operation.objects.filter(job__in=[ready, blocked]).exists()
+
+
+@pytest.mark.django_db
 def test_held_disabled_account_can_be_reviewed_for_reactivation(admin_client, monkeypatch):
     from sync_app import synchronization as sync
     from sync_app.models import Person, Binding

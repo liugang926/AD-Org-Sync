@@ -140,6 +140,29 @@ def test_worker_marks_interrupted_job_and_never_replays_it(configured, monkeypat
 
 
 @pytest.mark.django_db
+def test_scheduled_job_reports_completed_and_partial_results(configured, monkeypatch):
+    from sync_app import synchronization as sync
+
+    source, ad = Source(), Directory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+
+    completed = enqueue(kind="scheduled")
+    assert sync.run_next()
+    completed.refresh_from_db()
+    assert completed.status == "success"
+    assert "同步执行完成" in completed.message
+    assert Binding.objects.exists()
+
+    ad.fail_update.add(ad.items[0]["guid"])
+    partial = enqueue(kind="scheduled")
+    assert sync.run_next()
+    partial.refresh_from_db()
+    assert partial.status == "partial_failed"
+    assert "1 项失败" in partial.message
+
+
+@pytest.mark.django_db
 def test_empty_department_is_planned_and_created(configured):
     from sync_app.models import DepartmentBinding
     class WithEmptyDepartment(Source):
