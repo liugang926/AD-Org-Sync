@@ -1,5 +1,6 @@
 import os
 import secrets
+from hashlib import sha256
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -30,6 +31,7 @@ TIME_ZONE = "Asia/Shanghai"
 USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = DATA_DIR / "static"
+SSPR_SCRIPT_VERSION = sha256((BASE_DIR / "static" / "sspr.js").read_bytes()).hexdigest()[:12]
 LOGIN_URL = "/login"
 LOGIN_REDIRECT_URL = "/dashboard"
 LOGOUT_REDIRECT_URL = "/login"

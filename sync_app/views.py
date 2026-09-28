@@ -337,7 +337,7 @@ def employee(request):
             error = str(exc)
         except Exception:
             error = "当前账号暂时无法核验，请稍后重新通过钉钉验证"
-    return render(request, "sspr.html", {"enabled": config.sspr_enabled, "account": account, "error": error, "corp_id": settings.DINGTALK_CORP_ID, "app_key": settings.DINGTALK_APP_KEY, "minimum": config.minimum_password_length})
+    return render(request, "sspr.html", {"enabled": config.sspr_enabled, "account": account, "error": error, "corp_id": settings.DINGTALK_CORP_ID, "app_key": settings.DINGTALK_APP_KEY, "minimum": config.minimum_password_length, "script_version": settings.SSPR_SCRIPT_VERSION})
 
 
 @never_cache

@@ -41,8 +41,7 @@
         {% csrf_token %}
         <button type="submit" hidden>重新验证</button>
       </form>
-      <script src="https://g.alicdn.com/dingding/dingtalk-jsapi/3.2.9/dingtalk.open.js"></script>
-      <script src="{% static 'sspr.js' %}"></script>
+      <script src="{% static 'sspr.js' %}?v={{ script_version }}"></script>
     {% endif %}
   </section>
 </main>
