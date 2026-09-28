@@ -808,15 +808,29 @@ def test_creation_response_lost_after_ad_write_cannot_create_again(configured, m
 
 @pytest.mark.django_db
 def test_cleanup_preserves_unresolved_creation_evidence(configured):
+    import uuid
     from datetime import timedelta
     from django.core.management import call_command
     from django.utils import timezone
     from sync_app.models import Operation
+    from sync_app.synchronization import unbind_person
     previous = Job.objects.create(status="failed")
     Job.objects.filter(pk=previous.pk).update(created_at=timezone.now() - timedelta(days=100))
     Operation.objects.create(job=previous, source_id="u1", action="create", status="failed")
+    completed = Job.objects.create(status="success")
+    Job.objects.filter(pk=completed.pk).update(created_at=timezone.now() - timedelta(days=100))
+    Operation.objects.create(job=completed, source_id="unbound-after-success", action="create", status="success")
+    person = Person.objects.create(source_id="unbound-after-success", name="已解绑员工")
+    Binding.objects.create(person=person, object_guid=uuid.uuid4(), username="formerly-bound")
+    unbind_person(person.pk, "admin")
+    unexpected = Job.objects.create(status="success")
+    Job.objects.filter(pk=unexpected.pk).update(created_at=timezone.now() - timedelta(days=100))
+    Operation.objects.create(job=unexpected, source_id="missing-binding", action="create", status="success")
+    Person.objects.create(source_id="missing-binding", name="异常失联员工")
     call_command("cleanup")
     assert Job.objects.filter(pk=previous.pk).exists()
+    assert not Job.objects.filter(pk=completed.pk).exists()
+    assert Job.objects.filter(pk=unexpected.pk).exists()
     assert plan(Job.objects.create(), Source(), Directory([]))["operations"][0]["action"] == "conflict"
 
 
