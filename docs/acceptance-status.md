@@ -1,5 +1,7 @@
 # Django 重构验收状态
 
+2026-09-28 发布核验：PR [#76](https://github.com/liugang926/AD-Org-Sync/pull/76) 已合并，`main` 合并提交为 `1374d6b2da365d37dc7db15553b7c0946c36ab19`。原 CI 的六项验证及 [生产部署任务](https://github.com/liugang926/AD-Org-Sync/actions/runs/36359915837)均成功。部署完成后，独立核验生产 Web/worker 镜像和 `last_successful_image_tag` 均为该 SHA，容器健康、数据库及迁移检查通过，外部 HTTPS 六个入口返回 200，`/readyz` 的数据库、表结构及 worker 检查均为 true。稍后的再次探测中，本机经 `ninja-tun` 的连接异常，访问 GitHub 也同时出现 TLS 握手失败；因此那次超时不能单独证明生产入口故障，当前外部可用性仍需从健康客户端复核。#76 让任务列表显示预览冲突数、计划数量及执行结果，不改变全量预览的 19 项冲突，也不补足员工本人和真实目录写入验收。
+
 2026-09-27 发布与真实目录只读核验：PR [#73](https://github.com/liugang926/AD-Org-Sync/pull/73)、[#74](https://github.com/liugang926/AD-Org-Sync/pull/74)、[#75](https://github.com/liugang926/AD-Org-Sync/pull/75) 已依次合并，三次 main 发布的六项 CI 与生产部署均成功：[发布 #73](https://github.com/liugang926/AD-Org-Sync/actions/runs/36285063644)、[发布 #74](https://github.com/liugang926/AD-Org-Sync/actions/runs/36285447078)、[发布 #75](https://github.com/liugang926/AD-Org-Sync/actions/runs/36328041081)。#75 合并提交为 `3b7e729a0727b38fbdbc9d45c0e3d2de2ee4eb51`；独立核验生产 Web/worker 镜像及 `last_successful_image_tag` 均为该 SHA，Web/worker/Nginx 健康，runner 在线，公开 HTTPS 六个入口返回 200，`/readyz` 的数据库、表结构与 worker 检查全为 true。
 
 在 #75 生产镜像中执行一次不写入业务数据库或 AD 的钉钉目录采集，当前管理范围读取到 486 名人员、52 个部门，新增的分页与人员部门归属一致性校验均通过。随后由应用正常队列运行一次**完整预览**（任务 `6e802dd6-c1a5-4119-9b09-0d7c17dc9e95`，约 82 秒）：提出 355 项已有账号关联、111 项新建、19 项冲突、1 项跳过及 52 项部门 OU 计划。任务因冲突停在 `blocked`；该任务没有逐项执行记录，生产有效绑定总数仍为 0。预览写入了新的来源快照和人员当前数据，但未执行 AD 写入。人数与 9 月 23 日保存的 488 人快照不同，不能仅据此推断离职；也不能将此预览视为真实来源新建、实际部门变更、禁用或员工本人改密验收。定时同步仍关闭，SSPR 仍只面向试点身份开放。
