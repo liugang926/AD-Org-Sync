@@ -8,22 +8,22 @@
 
 <section class="card task-overview">
   <div class="task-overview-head"><div><h2>当前任务</h2><small>任务 ID：{{ job.id }}</small></div><span class="status-pill tone-{{ job_status_tone }}">{{ job_status_label }}</span></div>
-  <dl class="task-facts"><div><dt>任务类型</dt><dd>{{ job_kind_label }}</dd></div><div><dt>创建时间</dt><dd>{{ job.created_at|date:"Y-m-d H:i:s" }}</dd></div><div><dt>同步范围</dt><dd>{{ job_scope_label }}</dd></div><div><dt>发起人</dt><dd>{{ job.actor }}</dd></div><div><dt>人员冲突</dt><dd>{{ conflict_count }} 项</dd></div></dl>
+  <dl class="task-facts"><div><dt>任务类型</dt><dd>{{ job_kind_label }}</dd></div><div><dt>创建时间</dt><dd>{{ job.created_at|date:"Y-m-d H:i:s" }}</dd></div><div><dt>同步范围</dt><dd>{{ job_scope_label }}</dd></div><div><dt>发起人</dt><dd>{{ job.actor }}</dd></div><div><dt>人员冲突</dt><dd>{{ conflict_count }} 项</dd></div><div><dt>部门冲突</dt><dd>{{ department_conflict_count }} 项</dd></div><div><dt>计划禁用账号</dt><dd>{{ disable_count }} 项</dd></div></dl>
   {% if job.message %}<p class="hint-block">{{ job.message }}</p>{% endif %}
-  {% if job.plan.high_risk %}<p class="notice" role="alert">该计划超过禁用保护阈值。请逐项核对受影响账号，再确认执行。</p>{% endif %}
+  {% if job.plan.high_risk %}<p class="notice" role="alert">该计划超过禁用保护阈值。请<a href="?only=disables#person-plan">查看全部 {{ disable_count }} 个待禁用账号</a>，逐页核对后再确认执行。</p>{% endif %}
 </section>
 
-<section class="card listing-card">
-  <div class="card-head"><div><h2>部门 OU 计划</h2><p>部门名称优先展示，完整目标 DN 可按需展开。</p></div><span class="section-note">{{ job.plan.departments|length }} 项</span></div>
+<section class="card listing-card" id="department-plan">
+  <div class="card-head"><div><h2>部门 OU 计划</h2><p>部门名称优先展示，完整目标 DN 可按需展开。</p></div><span class="section-note">{{ job.plan.departments|length }} 项，冲突 {{ department_conflict_count }} 项</span></div>
   <div class="table-wrap"><table><thead><tr><th>部门</th><th>目标组织单位</th><th>状态</th></tr></thead><tbody>
-    {% for item in job.plan.departments %}<tr><td><strong>{{ item.name }}</strong></td><td>{% if item.dn %}<span class="ou-label">{{ item.dn|truncatechars:72 }}</span><details><summary>查看完整 DN</summary><code class="dn-value">{{ item.dn }}</code></details>{% else %}<span class="muted">待确认</span>{% endif %}</td><td>{% if item.action == "conflict" %}<span class="status-pill tone-warning">冲突</span><small>{{ item.reason }}</small>{% elif item.guid %}<span class="status-pill tone-success">已存在</span>{% else %}<span class="status-pill tone-active">待创建</span>{% endif %}</td></tr>
+    {% for item in job.plan.departments %}<tr><td><strong>{{ item.name }}</strong><small>部门 ID：{{ item.source_id }}</small></td><td>{% if item.dn %}<span class="ou-label">{{ item.dn|truncatechars:72 }}</span><details><summary>查看完整 DN</summary><code class="dn-value">{{ item.dn }}</code></details>{% else %}<span class="muted">待确认</span>{% endif %}</td><td>{% if item.action == "conflict" %}<span class="status-pill tone-warning">冲突</span><small>{{ item.reason }}</small><small><a href="{% url 'departments' %}?q={{ item.source_id|urlencode }}">查看部门并处理</a></small>{% elif item.guid %}<span class="status-pill tone-success">已存在</span>{% else %}<span class="status-pill tone-active">待创建</span>{% endif %}</td></tr>
     {% empty %}<tr><td colspan="3" class="empty-cell">此范围没有部门变更。</td></tr>{% endfor %}
   </tbody></table></div>
 </section>
 
-<section class="card listing-card">
-  <div class="card-head"><div><h2>人员计划变更</h2><p>命名候选、已保存绑定与将要执行的操作分别列出。</p></div><span class="section-note">人员冲突 {{ conflict_count }} 项</span></div>
-  {% if conflict_count %}<nav class="filter-tabs" aria-label="计划筛选"><a href="{% url 'job' job.id %}" {% if not show_conflicts_only %}aria-current="page"{% endif %}>全部变更</a><a href="{% url 'job' job.id %}?only=conflicts" {% if show_conflicts_only %}aria-current="page"{% endif %}>仅看冲突</a></nav>{% endif %}
+<section class="card listing-card" id="person-plan">
+  <div class="card-head"><div><h2>人员计划变更</h2><p>命名候选、已保存绑定与将要执行的操作分别列出。每页最多显示 50 项。</p></div><span class="section-note">人员冲突 {{ conflict_count }} 项</span></div>
+  {% if job.plan.operations %}<nav class="filter-tabs" aria-label="计划筛选"><a href="{% url 'job' job.id %}#person-plan" {% if not plan_filter %}aria-current="page"{% endif %}>全部变更</a><a href="{% url 'job' job.id %}?only=conflicts#person-plan" {% if plan_filter == 'conflicts' %}aria-current="page"{% endif %}>仅看冲突（{{ conflict_count }}）</a><a href="{% url 'job' job.id %}?only=disables#person-plan" {% if plan_filter == 'disables' %}aria-current="page"{% endif %}>待禁用账号（{{ disable_count }}）</a></nav>{% endif %}
   <div class="table-wrap"><table><thead><tr><th>人员</th><th>计划操作</th><th>AD 账号</th><th>原因</th><th>目标与属性变化</th></tr></thead><tbody>
     {% for row in planned_rows %}{% with item=row.item %}<tr>
       <td><strong>{{ item.user.name|default:item.source_id }}</strong><small>userId：{{ item.source_id }}</small>{% if item.action == "conflict" %}<small><a href="{% url 'people' %}?q={{ item.source_id|urlencode }}">查看人员并处理</a></small>{% endif %}</td>
@@ -31,13 +31,15 @@
       <td>{{ item.username|default:"—" }}<small>命名原值：{{ item.raw_naming_value|default:"—" }} → {{ item.candidate|default:"—" }}</small><small>已保存绑定：{{ item.binding.username|default:"未绑定" }}</small></td>
       <td class="result-cell">{{ item.reason|default:"—" }}</td>
       <td>{% if item.ou %}<span class="ou-label">{{ item.ou|truncatechars:50 }}</span>{% endif %}{% for change in item.changes %}<small>{{ change.field }}：{{ change.before|default_if_none:"空" }} → {{ change.after|default_if_none:"空" }}</small>{% empty %}{% if not item.ou %}<span class="muted">无属性变更</span>{% endif %}{% endfor %}</td>
-    </tr>{% endwith %}{% empty %}<tr><td colspan="5" class="empty-cell">{% if show_conflicts_only %}没有人员冲突。{% else %}尚未生成计划，请稍后刷新。{% endif %}</td></tr>{% endfor %}
+    </tr>{% endwith %}{% empty %}<tr><td colspan="5" class="empty-cell">{% if plan_filter == 'conflicts' %}没有人员冲突。{% elif plan_filter == 'disables' %}没有待禁用账号。{% else %}尚未生成计划，请稍后刷新。{% endif %}</td></tr>{% endfor %}
   </tbody></table></div>
+  {% if planned_page.paginator.num_pages > 1 %}<nav class="pagination" aria-label="人员计划分页">{% if planned_page.has_previous %}<a href="?only={{ plan_filter }}&amp;page={{ planned_page.previous_page_number }}#person-plan">上一页</a>{% endif %}<span>第 {{ planned_page.number }} / {{ planned_page.paginator.num_pages }} 页，共 {{ planned_page.paginator.count }} 项</span>{% if planned_page.has_next %}<a href="?only={{ plan_filter }}&amp;page={{ planned_page.next_page_number }}#person-plan">下一页</a>{% endif %}</nav>{% endif %}
   {% if plan_has_conflicts %}<div class="execution-confirm"><p>当前计划包含冲突，请先处理后重新生成预览。</p></div>{% elif job.status == "preview_ready" or job.status == "needs_confirmation" %}<div class="execution-confirm"><p>执行会写入 AD；范围、来源或绑定改变后，需要重新生成预览。</p><form method="post">{% csrf_token %}{% if job.plan.high_risk %}<label class="inline-check"><input type="checkbox" name="confirmed" required>我已核对上述禁用账号清单，确认执行</label>{% endif %}<button type="submit">执行此计划</button></form></div>{% endif %}
 </section>
 
-<section class="card listing-card">
+<section class="card listing-card" id="execution-results">
   <div class="card-head"><div><h2>实际执行结果</h2><p>逐项记录已经完成的操作；部分失败不等于整体成功。</p></div></div>
   <div class="table-wrap"><table><thead><tr><th>来源 userId</th><th>操作</th><th>状态</th><th>结果</th></tr></thead><tbody>{% for row in operation_rows %}<tr><td>{{ row.operation.source_id }}</td><td>{{ row.label }}</td><td><span class="status-pill tone-{{ row.tone }}">{{ row.status }}</span></td><td class="result-cell">{{ row.operation.message|default:"—" }}</td></tr>{% empty %}<tr><td colspan="4" class="empty-cell">尚未执行。预览不代表 AD 已完成变更。</td></tr>{% endfor %}</tbody></table></div>
+  {% if operation_page.paginator.num_pages > 1 %}<nav class="pagination" aria-label="执行结果分页">{% if operation_page.has_previous %}<a href="?only={{ plan_filter }}&amp;page={{ planned_page.number }}&amp;result_page={{ operation_page.previous_page_number }}#execution-results">上一页</a>{% endif %}<span>第 {{ operation_page.number }} / {{ operation_page.paginator.num_pages }} 页，共 {{ operation_page.paginator.count }} 项</span>{% if operation_page.has_next %}<a href="?only={{ plan_filter }}&amp;page={{ planned_page.number }}&amp;result_page={{ operation_page.next_page_number }}#execution-results">下一页</a>{% endif %}</nav>{% endif %}
 </section>
 {% endblock %}

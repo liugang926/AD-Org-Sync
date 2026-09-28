@@ -206,6 +206,60 @@ def test_job_conflicts_can_be_filtered_and_opened_in_people(admin_client):
 
 
 @pytest.mark.django_db
+def test_job_plan_pages_large_lists_and_exposes_department_and_disable_actions(admin_client):
+    from sync_app.models import Job, Operation
+
+    operations = [
+        {"source_id": f"u-{index:03}", "user": {"name": f"员工 {index:03}"}, "action": "bind", "reason": "唯一工号匹配"}
+        for index in range(105)
+    ]
+    operations.append({"source_id": "u-left", "user": {"name": "离职员工"}, "action": "disable", "reason": "全量缺失"})
+    job = Job.objects.create(status="blocked", plan={
+        "operations": operations,
+        "departments": [{"source_id": "42", "name": "研发部", "action": "conflict", "reason": "OU 已变化"}],
+        "high_risk": True,
+    })
+
+    first = admin_client.get(f"/jobs/{job.pk}")
+    assert first.status_code == 200
+    assert first.context["planned_page"].paginator.count == 106
+    assert len(first.context["planned_rows"]) == 50
+    assert "员工 000" in first.content.decode()
+    assert "员工 050" not in first.content.decode()
+    assert "部门冲突" in first.content.decode()
+    assert "/departments?q=42" in first.content.decode()
+    assert "?only=disables#person-plan" in first.content.decode()
+    assert "执行此计划" not in first.content.decode()
+
+    last = admin_client.get(f"/jobs/{job.pk}?page=3")
+    assert last.context["planned_page"].number == 3
+    assert "离职员工" in last.content.decode()
+    assert "?only=&amp;page=2#person-plan" in last.content.decode()
+
+    disables = admin_client.get(f"/jobs/{job.pk}?only=disables")
+    assert disables.context["planned_page"].paginator.count == 1
+    assert "离职员工" in disables.content.decode()
+    assert "员工 000" not in disables.content.decode()
+
+    no_conflicts = admin_client.get(f"/jobs/{job.pk}?only=conflicts")
+    assert "没有人员冲突" in no_conflicts.content.decode()
+    assert f'href="/jobs/{job.pk}#person-plan"' in no_conflicts.content.decode()
+
+    Operation.objects.bulk_create([
+        Operation(job=job, source_id=f"result-{index:03}", action="bind", status="success")
+        for index in range(101)
+    ])
+    results_first = admin_client.get(f"/jobs/{job.pk}?only=disables")
+    assert len(results_first.context["operation_rows"]) == 50
+    assert "result-050" not in results_first.content.decode()
+    assert "result_page=2#execution-results" in results_first.content.decode()
+    results_last = admin_client.get(f"/jobs/{job.pk}?only=disables&result_page=3")
+    assert len(results_last.context["operation_rows"]) == 1
+    assert "result-100" in results_last.content.decode()
+    assert "only=disables&amp;page=1&amp;result_page=2#execution-results" in results_last.content.decode()
+
+
+@pytest.mark.django_db
 def test_dashboard_reports_finished_preview_instead_of_waiting(admin_client, monkeypatch):
     from sync_app import synchronization as sync
     from sync_app.models import Binding, Configuration, Operation
