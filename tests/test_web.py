@@ -240,6 +240,37 @@ def test_dashboard_reports_finished_preview_instead_of_waiting(admin_client, mon
 
 
 @pytest.mark.django_db
+def test_dashboard_keeps_latest_full_plan_conflicts_visible_after_other_tasks(admin_client):
+    from sync_app.models import Job
+
+    blocked = Job.objects.create(
+        kind="preview", status="blocked", scope="full",
+        plan={
+            "operations": [{"action": "conflict"}],
+            "departments": [{"action": "conflict"}],
+        },
+    )
+    Job.objects.create(kind="refresh", status="success", scope="full")
+    Job.objects.create(
+        kind="preview", status="preview_ready", scope="users",
+        plan={"operations": [{"action": "bind"}], "departments": []},
+    )
+
+    response = admin_client.get("/dashboard")
+    assert response.context["latest_full_plan"] == blocked
+    assert response.context["conflict_count"] == 2
+    assert f'href="/jobs/{blocked.pk}"' in response.content.decode()
+
+    current = Job.objects.create(
+        kind="preview", status="preview_ready", scope="full",
+        plan={"operations": [{"action": "bind"}], "departments": []},
+    )
+    response = admin_client.get("/dashboard")
+    assert response.context["latest_full_plan"] == current
+    assert response.context["conflict_count"] == 0
+
+
+@pytest.mark.django_db
 def test_held_disabled_account_can_be_reviewed_for_reactivation(admin_client, monkeypatch):
     from sync_app import synchronization as sync
     from sync_app.models import Person, Binding

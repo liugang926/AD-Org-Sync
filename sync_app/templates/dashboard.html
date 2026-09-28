@@ -10,7 +10,7 @@
   <section class="metric"><span class="metric-label">最近采集人员</span><strong>{% if snapshot %}{{ snapshot.users|length }}{% else %}0{% endif %}</strong><span>钉钉通讯录</span></section>
   <section class="metric"><span class="metric-label">已关联 AD 账号</span><strong>{{ binding_count }}</strong><span>本地同步关联</span></section>
   <section class="metric"><span class="metric-label">部门映射</span><strong>{{ department_binding_count }}</strong><a href="{% url 'departments' %}">查看映射 →</a></section>
-  <section class="metric"><span class="metric-label">最近任务冲突</span><strong>{{ conflict_count }}</strong><span>{% if job_rows %}以最近任务为准{% else %}尚无任务{% endif %}</span></section>
+  <section class="metric"><span class="metric-label">最近全量计划冲突</span><strong>{% if latest_full_plan %}{{ conflict_count }}{% else %}—{% endif %}</strong>{% if latest_full_plan %}<a href="{% url 'job' latest_full_plan.id %}">查看 {{ latest_full_plan.created_at|date:"m-d H:i" }} 的计划 →</a>{% else %}<span>尚无全量计划</span>{% endif %}</section>
 </div>
 
 <div class="section-heading"><div><p class="eyebrow">建议操作顺序</p><h2>三步完成一次安全同步</h2></div><span class="section-note">执行前必须人工审阅预览</span></div>
