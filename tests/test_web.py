@@ -33,7 +33,7 @@ def test_dingtalk_workbench_homepage_alias_renders_employee_verification(client,
         assert 'id="verify"' in html
         assert 'data-corp="ding-test-corp"' in html
         assert 'data-client="test-client-id"' in html
-        assert '/static/sspr.js' in html
+        assert f'/static/sspr.js?v={settings.SSPR_SCRIPT_VERSION}' in html
 
 
 @pytest.mark.django_db
