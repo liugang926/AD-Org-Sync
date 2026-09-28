@@ -139,13 +139,20 @@ def dashboard(request):
         for job in jobs
     ]
     snapshot = Snapshot.objects.order_by("-pk").first()
-    latest_job = jobs[0] if jobs else None
-    conflict_count = sum(item.get("action") == "conflict" for item in latest_job.plan.get("operations", [])) if latest_job and isinstance(latest_job.plan, dict) else 0
+    latest_full_plan = Job.objects.filter(
+        scope="full", kind__in=["preview", "apply", "scheduled"]
+    ).exclude(plan={}).order_by("-created_at").first()
+    plan_data = latest_full_plan.plan if latest_full_plan and isinstance(latest_full_plan.plan, dict) else {}
+    conflict_count = sum(
+        item.get("action") == "conflict"
+        for item in plan_data.get("operations", []) + plan_data.get("departments", [])
+    )
     return render(request, "dashboard.html", {
         "jobs": jobs, "job_rows": job_rows, "config": config, "snapshot": snapshot,
         "runtime": RuntimeState.current(), "next_run": next_run if config.schedule_enabled else None,
         "person_count": Person.objects.count(), "binding_count": Binding.objects.count(),
-        "department_binding_count": DepartmentBinding.objects.count(), "conflict_count": conflict_count,
+        "department_binding_count": DepartmentBinding.objects.count(),
+        "latest_full_plan": latest_full_plan, "conflict_count": conflict_count,
     })
 
 
