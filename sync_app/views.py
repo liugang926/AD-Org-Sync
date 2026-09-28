@@ -228,15 +228,19 @@ def job_detail(request, job_id):
 
 @administrator
 def people(request):
-    query = request.GET.get("q", "")
+    query = request.GET.get("q", "").strip()[:100]
+    snapshot = Snapshot.objects.order_by("-pk").first()
+    source = {u["source_id"]: u for u in snapshot.users} if snapshot else {}
     items = Person.objects.order_by("name")
     if query:
         from django.db.models import Q
-        items = items.filter(Q(name__icontains=query) | Q(source_id__icontains=query))
+        employee_ids = [
+            source_id for source_id, user in source.items()
+            if query.casefold() in str(user.get("employee_id") or "").casefold()
+        ]
+        items = items.filter(Q(name__icontains=query) | Q(source_id__icontains=query) | Q(source_id__in=employee_ids))
     page = Paginator(items, 30).get_page(request.GET.get("page"))
     bindings = {b.person_id: b for b in Binding.objects.filter(person__in=page.object_list)}
-    snapshot = Snapshot.objects.order_by("-pk").first()
-    source = {u["source_id"]: u for u in snapshot.users} if snapshot else {}
     department_names = {str(d["id"]): d["name"] for d in snapshot.departments} if snapshot else {}
     naming = Configuration.current().naming
     rows = []

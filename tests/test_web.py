@@ -71,6 +71,26 @@ def test_department_console_prioritizes_names_and_filters_mapping_state(admin_cl
 
 
 @pytest.mark.django_db
+def test_people_can_find_employee_by_dingtalk_employee_id(admin_client):
+    from sync_app.models import Person, Snapshot
+
+    Snapshot.objects.create(
+        fingerprint="complete-source", root_department="1", departments=[],
+        users=[
+            {"source_id": "ding-a", "name": "甲", "employee_id": "T0001919", "departments": []},
+            {"source_id": "ding-b", "name": "乙", "employee_id": "T0001920", "departments": []},
+        ],
+    )
+    Person.objects.create(source_id="ding-a", name="甲")
+    Person.objects.create(source_id="ding-b", name="乙")
+
+    response = admin_client.get("/people?q=t0001919")
+    assert response.status_code == 200
+    assert [person.source_id for person in response.context["page"].object_list] == ["ding-a"]
+    assert "按姓名、工号或钉钉 userId 搜索" in response.content.decode()
+
+
+@pytest.mark.django_db
 def test_configuration_editor_uses_guided_chinese_fields(admin_client):
     Configuration.current()
     html = admin_client.get("/admin/sync_app/configuration/1/change/").content.decode()

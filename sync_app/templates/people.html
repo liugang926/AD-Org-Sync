@@ -8,8 +8,8 @@
 <section class="card listing-card">
   <div class="card-head"><div><h2>来源人员</h2><p>共 {{ page.paginator.count }} 人。人工绑定须先核验目标账号，再确认变更。</p></div><span class="section-note">数据更新时间：{{ snapshot.created_at|default:"尚未采集" }}</span></div>
   <form class="filter-bar" method="get">
-    <label for="person-search">按姓名或钉钉 userId 搜索</label>
-    <div class="filter-controls"><input id="person-search" name="q" value="{{ query }}" placeholder="输入姓名或 userId"><button type="submit" class="secondary">搜索</button>{% if query %}<a href="{% url 'people' %}">清除</a>{% endif %}</div>
+    <label for="person-search">按姓名、工号或钉钉 userId 搜索</label>
+    <div class="filter-controls"><input id="person-search" name="q" value="{{ query }}" placeholder="输入姓名、工号或 userId"><button type="submit" class="secondary">搜索</button>{% if query %}<a href="{% url 'people' %}">清除</a>{% endif %}</div>
   </form>
 </section>
 
