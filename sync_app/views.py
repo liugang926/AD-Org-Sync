@@ -203,33 +203,42 @@ def job_detail(request, job_id):
         return redirect("job", job_id=job.pk)
     planned_operations = job.plan.get("operations", [])
     conflict_count = sum(item.get("action") == "conflict" for item in planned_operations)
-    show_conflicts_only = request.GET.get("only") == "conflicts"
-    if show_conflicts_only:
-        planned_operations = [item for item in planned_operations if item.get("action") == "conflict"]
+    department_conflict_count = sum(item.get("action") == "conflict" for item in job.plan.get("departments", []))
+    disable_count = sum(item.get("action") == "disable" for item in planned_operations)
+    plan_filter = request.GET.get("only", "")
+    if plan_filter not in {"conflicts", "disables"}:
+        plan_filter = ""
+    if plan_filter:
+        action = "conflict" if plan_filter == "conflicts" else "disable"
+        planned_operations = [item for item in planned_operations if item.get("action") == action]
+    planned_page = Paginator(planned_operations, 50).get_page(request.GET.get("page"))
     planned_rows = [
         {"item": item, "label": ACTION_LABELS.get(item.get("action"), item.get("action", "—")),
          "tone": status_tone(item.get("action"))}
-        for item in planned_operations
+        for item in planned_page
     ]
+    operation_page = Paginator(job.operation_set.order_by("pk"), 50).get_page(request.GET.get("result_page"))
     operation_rows = [
         {"operation": operation, "label": ACTION_LABELS.get(operation.action, operation.action),
          "status": OPERATION_STATUS_LABELS.get(operation.status, operation.status),
          "tone": status_tone(operation.status)}
-        for operation in job.operation_set.all()
+        for operation in operation_page
     ]
     return render(request, "job.html", {
         "job": job,
-        "operations": job.operation_set.all(),
-        "planned_operations": planned_operations,
+        "planned_page": planned_page,
         "planned_rows": planned_rows,
+        "operation_page": operation_page,
         "operation_rows": operation_rows,
         "job_status_label": JOB_STATUS_LABELS.get(job.status, job.status),
         "job_status_tone": status_tone(job.status),
         "job_kind_label": JOB_KIND_LABELS.get(job.kind, job.kind),
         "job_scope_label": {"full": "完整管理范围", "department": "指定部门及子部门", "users": "指定人员"}.get(job.scope, job.scope),
         "conflict_count": conflict_count,
+        "department_conflict_count": department_conflict_count,
+        "disable_count": disable_count,
         "plan_has_conflicts": synchronization.has_conflicts(job.plan),
-        "show_conflicts_only": show_conflicts_only,
+        "plan_filter": plan_filter,
     })
 
 
