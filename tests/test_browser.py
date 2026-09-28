@@ -69,7 +69,7 @@ def test_admin_and_mobile_employee_journeys(live_server, django_user_model, monk
         silent.close()
         request_stalled = browser.new_page(viewport={"width": 390, "height": 844})
         request_stalled.clock.install()
-        request_stalled.add_init_script("window.dd = {requestAuthCode: opts => opts.success({code: 'valid'})};")
+        request_stalled.add_init_script("window.AbortController = undefined; window.dd = {requestAuthCode: opts => opts.success({code: 'valid'})};")
         request_stalled.route("**/sspr/auth/dingtalk", lambda route: None)
         request_stalled.goto(live_server.url + "/sspr", wait_until="domcontentloaded")
         request_stalled.clock.fast_forward(21000)

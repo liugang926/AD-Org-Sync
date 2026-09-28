@@ -29,16 +29,16 @@ if (form) {
     const code = result && (result.code || result.authCode);
     if (!code) return fail("钉钉未返回授权码，请重新验证。", current);
     status.textContent = "正在确认身份和 AD 账号…";
-    controller = new AbortController();
+    controller = typeof AbortController === "function" ? new AbortController() : undefined;
     timer = setTimeout(() => fail("身份核验超时，请检查网络后重试。", current), 20000);
     try {
       const body = new URLSearchParams({
         code,
         csrfmiddlewaretoken: form.querySelector("[name=csrfmiddlewaretoken]").value
       });
-      const response = await fetch("/sspr/auth/dingtalk", {
-        method: "POST", credentials: "same-origin", body, signal: controller.signal
-      });
+      const options = {method: "POST", credentials: "same-origin", body};
+      if (controller) options.signal = controller.signal;
+      const response = await fetch("/sspr/auth/dingtalk", options);
       const data = await response.json();
       if (current !== attempt) return;
       clearTimeout(timer);
