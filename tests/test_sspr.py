@@ -37,6 +37,27 @@ def test_unsynced_employee_can_reset_and_cannot_replay(setup_sspr):
 
 
 @pytest.mark.django_db
+def test_password_length_defaults_to_eight_and_follows_admin_setting(setup_sspr):
+    _, ad, config = setup_sspr
+    assert config.minimum_password_length == 8
+
+    token, _ = sspr.verify("valid", "ip")
+    with pytest.raises(RuleError, match="8–128 位"):
+        sspr.reset(token, "Ab1!xyz", "Ab1!xyz", "ip")
+    assert not EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+    assert sspr.reset(token, "Ab1!xyza", "Ab1!xyza", "ip")
+    assert ad.resets == 1
+
+    config.minimum_password_length = 10
+    config.save()
+    token, _ = sspr.verify("valid", "ip")
+    with pytest.raises(RuleError, match="10–128 位"):
+        sspr.reset(token, "Ab1!xyza", "Ab1!xyza", "ip")
+    assert sspr.reset(token, "Ab1!xyzabc", "Ab1!xyzabc", "ip")
+    assert ad.resets == 2
+
+
+@pytest.mark.django_db
 def test_verification_does_not_leave_session_when_audit_fails(setup_sspr, monkeypatch):
     def unavailable_audit(*args, **kwargs):
         raise RuntimeError("private database diagnostic")
