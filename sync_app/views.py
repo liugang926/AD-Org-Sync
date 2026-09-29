@@ -392,4 +392,17 @@ def employee_reset(request):
         response.delete_cookie("employee_verification", path="/sspr", samesite="Strict")
         return response
     except RuleError as exc:
-        return render(request, "sspr.html", {"error": str(exc), "enabled": True, "corp_id": settings.DINGTALK_CORP_ID, "app_key": settings.DINGTALK_APP_KEY}, status=400)
+        config = Configuration.current()
+        account = None
+        token = request.COOKIES.get("employee_verification", "")
+        if token:
+            try:
+                account = sspr.current_account(token)
+            except Exception:
+                # Only a still-valid, freshly matched session may reveal the account.
+                pass
+        return render(request, "sspr.html", {
+            "error": str(exc), "enabled": config.sspr_enabled, "account": account,
+            "minimum": config.minimum_password_length, "corp_id": settings.DINGTALK_CORP_ID,
+            "app_key": settings.DINGTALK_APP_KEY, "script_version": settings.SSPR_SCRIPT_VERSION,
+        }, status=400)

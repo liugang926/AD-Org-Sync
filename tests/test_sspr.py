@@ -58,6 +58,45 @@ def test_password_length_defaults_to_eight_and_follows_admin_setting(setup_sspr)
 
 
 @pytest.mark.django_db
+def test_password_length_error_keeps_valid_employee_form_for_retry(client, setup_sspr):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+
+    response = client.post("/sspr/reset", {"password": "Ab1!xyz", "confirmation": "Ab1!xyz"})
+    content = response.content.decode()
+    assert response.status_code == 400
+    assert "新密码长度须为 8–128 位" in content
+    assert "testuser" in content and 'minlength="8"' in content
+    assert 'action="/sspr/reset"' in content
+    assert not EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+    assert ad.resets == 0
+
+    response = client.post("/sspr/reset", {"password": "Ab1!xyza", "confirmation": "Ab1!xyza"})
+    assert response.status_code == 200
+    assert ad.resets == 1
+
+
+@pytest.mark.django_db
+def test_directory_rejection_consumes_session_and_hides_account(client, setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+
+    def reject_password(guid, password, unlock=False):
+        raise RuleError("AD 策略拒绝新密码")
+
+    monkeypatch.setattr(ad, "reset_password", reject_password)
+    response = client.post("/sspr/reset", {"password": "Ab1!xyza", "confirmation": "Ab1!xyza"})
+    content = response.content.decode()
+    assert response.status_code == 400
+    assert "AD 策略拒绝新密码" in content
+    assert "testuser" not in content
+    assert 'id="verify"' in content
+    assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+
+
+@pytest.mark.django_db
 def test_verification_does_not_leave_session_when_audit_fails(setup_sspr, monkeypatch):
     def unavailable_audit(*args, **kwargs):
         raise RuntimeError("private database diagnostic")
