@@ -27,7 +27,7 @@ class Configuration(models.Model):
     sspr_enabled = models.BooleanField("开启员工密码重置", default=False)
     sspr_match = models.CharField("密码重置匹配方式", max_length=30, choices=[("employee_id", "钉钉工号 → AD employeeID"), ("email", "钉钉邮箱 → AD mail"), ("source_id", "钉钉 userId → AD sAMAccountName")], default="employee_id")
     unlock_after_reset = models.BooleanField("重置后解锁", default=False)
-    minimum_password_length = models.PositiveIntegerField("最短密码长度", default=12, validators=[MinValueValidator(12), MaxValueValidator(128)])
+    minimum_password_length = models.PositiveIntegerField("最短密码长度", default=8, validators=[MinValueValidator(8), MaxValueValidator(128)], help_text="可设置为 8–128 位；企业 AD 密码策略仍会进行最终校验。")
     schedule_enabled = models.BooleanField("开启定时同步", default=False)
     interval_minutes = models.PositiveIntegerField("同步间隔（分钟）", default=60, validators=[MinValueValidator(5)])
     updated_at = models.DateTimeField(auto_now=True)

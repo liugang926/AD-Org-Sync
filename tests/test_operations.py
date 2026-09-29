@@ -6,7 +6,6 @@ import subprocess
 import sys
 from pathlib import Path
 from django.core.management import call_command
-from django.db import connection
 import pytest
 import yaml
 
@@ -17,6 +16,35 @@ def test_clean_migrations_and_database_check():
     output = io.StringIO()
     call_command("db_check", stdout=output)
     assert '"database": "ok"' in output.getvalue()
+
+
+def test_password_length_migration_updates_old_default_and_preserves_custom_value(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env.update(AD_ORG_SYNC_DATA_DIR=str(tmp_path), DJANGO_SETTINGS_MODULE="sync_app.settings", LDAP_BASE_DN="DC=example,DC=com")
+    code = '''
+import django
+django.setup()
+from datetime import timedelta
+from django.core.management import call_command
+from django.utils import timezone
+from sync_app.models import Configuration
+call_command("migrate", "sync_app", "0007_audit_state", interactive=False, verbosity=0)
+config = Configuration.current()
+Configuration.objects.filter(pk=config.pk).update(minimum_password_length=12, updated_at=timezone.now() - timedelta(days=1))
+before = Configuration.current().updated_at
+call_command("migrate", "sync_app", "0008_sspr_minimum_eight", interactive=False, verbosity=0)
+config.refresh_from_db()
+assert config.minimum_password_length == 8
+assert config.updated_at > before
+call_command("migrate", "sync_app", "0007_audit_state", interactive=False, verbosity=0)
+Configuration.objects.filter(pk=config.pk).update(minimum_password_length=16)
+call_command("migrate", "sync_app", "0008_sspr_minimum_eight", interactive=False, verbosity=0)
+config.refresh_from_db()
+assert config.minimum_password_length == 16
+'''
+    result = subprocess.run([sys.executable, "-c", code], cwd=root, env=env, capture_output=True, text=True, timeout=40)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.django_db

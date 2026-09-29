@@ -109,13 +109,17 @@ def test_configuration_editor_saves_attribute_choices_and_protected_accounts():
         "attributes": ["displayName", "mail"], "clear_attributes": ["mail"],
         "protected_usernames": "svc-sync\nshared-admin\nsvc-sync",
         "disable_limit": 5, "disable_percent": 10, "sspr_match": "employee_id",
-        "minimum_password_length": 12, "interval_minutes": 60,
+        "minimum_password_length": 8, "interval_minutes": 60,
     }, instance=Configuration.current())
     assert form.is_valid(), form.errors
     saved = form.save()
     assert saved.attributes == ["displayName", "mail"]
     assert saved.clear_attributes == ["mail"]
     assert saved.protected_usernames == ["svc-sync", "shared-admin"]
+    assert saved.minimum_password_length == 8
+    too_short = ConfigurationForm(data={**form.data, "minimum_password_length": 7}, instance=saved)
+    assert not too_short.is_valid()
+    assert "minimum_password_length" in too_short.errors
 
 
 @pytest.mark.django_db

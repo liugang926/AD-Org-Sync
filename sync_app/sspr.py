@@ -107,8 +107,10 @@ def current_account(token):
 def reset(token, password, confirmation, ip):
     rate_limit("sspr-reset-ip:" + ip, 20)
     item, config = session_for(token)
-    if password != confirmation or not config.minimum_password_length <= len(password) <= 128:
-        raise RuleError("密码长度不符合要求或两次输入不一致")
+    if password != confirmation:
+        raise RuleError("两次输入的新密码不一致")
+    if not config.minimum_password_length <= len(password) <= 128:
+        raise RuleError(f"新密码长度须为 {config.minimum_password_length}–128 位")
     rate_limit("sspr-reset-user:" + item.source_id, 5)
     with lock("account:" + str(item.object_guid)):
         # Claim the session and persist an uncertain attempt before any external write.
