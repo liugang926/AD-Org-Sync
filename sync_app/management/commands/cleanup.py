@@ -1,7 +1,8 @@
 from datetime import timedelta
 from django.core.management.base import BaseCommand
+from django.db.models import Q
 from django.utils import timezone
-from sync_app.models import EmployeeSession, RateWindow, Snapshot, Job, Audit, Operation, Binding, RuntimeState
+from sync_app.models import EmployeeSession, RateWindow, Snapshot, Job, Audit, Operation, Binding, Person, RuntimeState
 from sync_app.locking import lock
 
 
@@ -24,7 +25,15 @@ class Command(BaseCommand):
             if latest:
                 old = old.exclude(pk=latest.pk)
             old.delete()
-            unresolved = Operation.objects.filter(action="create").exclude(source_id__in=Binding.objects.values("person__source_id")).values("job_id")
+            # Keep creation evidence when the binding is unexpectedly absent.
+            # An explicit unbind marks the person excluded, so its successful
+            # creation can age out without weakening recovery after a failure.
+            unresolved = (
+                Operation.objects.filter(action="create")
+                .exclude(source_id__in=Binding.objects.values("person__source_id"))
+                .exclude(Q(status="success") & Q(source_id__in=Person.objects.filter(excluded=True).values("source_id")))
+                .values("job_id")
+            )
             Job.objects.filter(created_at__lt=now - timedelta(days=90)).exclude(status__in=["queued", "running"]).exclude(pk__in=unresolved).delete()
             Audit.objects.filter(created_at__lt=now - timedelta(days=180)).delete()
             state.last_cleanup_at = now
