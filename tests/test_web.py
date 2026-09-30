@@ -123,6 +123,28 @@ def test_configuration_editor_saves_attribute_choices_and_protected_accounts():
 
 
 @pytest.mark.django_db
+def test_settings_form_loaded_before_collection_preserves_new_identity_anchor(rf):
+    from types import SimpleNamespace
+    from django.contrib.admin import site
+    from sync_app.admin import ConfigurationAdmin
+    from sync_app.synchronization import collect, directory_identity_anchor
+    from .fakes import Source
+
+    old_settings = Configuration.current()
+    assert not old_settings.identity_anchor
+    collect(Source(), Configuration.current())
+    old_settings.minimum_password_length = 10
+    request = rf.post("/")
+    request.user = SimpleNamespace(username="admin")
+    ConfigurationAdmin(Configuration, site).save_model(request, old_settings, None, True)
+
+    current = Configuration.current()
+    assert current.minimum_password_length == 10
+    assert current.identity_anchor == directory_identity_anchor()
+    assert collect(Source(), current).users[0]["source_id"] == "u1"
+
+
+@pytest.mark.django_db
 def test_non_admin_cannot_mutate(client, django_user_model):
     person = django_user_model.objects.create_user("reader", password="randomlongpassword")
     client.force_login(person)
@@ -160,9 +182,11 @@ def test_binding_requires_review_before_mutation(admin_client, monkeypatch):
 
 @pytest.mark.django_db
 def test_primary_department_is_chosen_from_current_employee_departments(admin_client):
-    from sync_app.models import Person, Snapshot
+    from sync_app.models import Configuration, Person, Snapshot
+    from sync_app.synchronization import directory_identity_anchor
     from .fakes import user
 
+    Configuration.objects.update_or_create(pk=1, defaults={"identity_anchor": directory_identity_anchor()})
     employee = user()
     employee["departments"] = ["1", "2", "999"]
     employee["primary_department"] = ""
@@ -187,6 +211,72 @@ def test_primary_department_is_chosen_from_current_employee_departments(admin_cl
     assert valid.status_code == 302
     person.refresh_from_db()
     assert person.primary_department == "2"
+
+
+@pytest.mark.django_db
+def test_department_mapping_rejects_changed_or_missing_directory_anchor(settings, monkeypatch):
+    from sync_app import admin as admin_module
+    from sync_app.models import Configuration, Snapshot, DepartmentBinding
+    from sync_app.synchronization import directory_identity_anchor
+    from .fakes import Directory
+
+    config = Configuration.current()
+    config.root_ou = "OU=People,DC=example,DC=com"
+    config.identity_anchor = directory_identity_anchor()
+    config.save()
+    Snapshot.objects.create(fingerprint="source", root_department="1", users=[], departments=[{"id": "1", "name": "公司"}])
+    calls = []
+
+    def directory_factory():
+        calls.append("AD connection")
+        return Directory()
+
+    monkeypatch.setattr(admin_module, "ActiveDirectory", directory_factory)
+    data = {"source_id": "1", "dn": config.root_ou}
+    valid = admin_module.DepartmentForm(data=data)
+    assert valid.is_valid(), valid.errors
+    assert calls == ["AD connection"]
+    calls.clear()
+
+    settings.DINGTALK_CORP_ID = "replacement-enterprise"
+    changed = admin_module.DepartmentForm(data=data)
+    assert not changed.is_valid() and "企业或 AD 目录已更换" in str(changed.errors)
+    config.identity_anchor = ""
+    config.save()
+    missing = admin_module.DepartmentForm(data=data)
+    assert not missing.is_valid() and "缺少目录身份锚点" in str(missing.errors)
+    assert not DepartmentBinding.objects.exists() and not calls
+
+
+@pytest.mark.django_db
+def test_department_mapping_rechecks_identity_at_save(rf, settings, monkeypatch):
+    from django.contrib.admin import site
+    from sync_app import admin as admin_module
+    from sync_app.domain import RuleError
+    from sync_app.models import Configuration, Snapshot, DepartmentBinding, Audit
+    from sync_app.synchronization import directory_identity_anchor
+    from .fakes import Directory
+
+    config = Configuration.current()
+    config.root_ou = "OU=People,DC=example,DC=com"
+    config.identity_anchor = directory_identity_anchor()
+    config.save()
+    Snapshot.objects.create(fingerprint="source", root_department="1", users=[], departments=[{"id": "1", "name": "公司"}])
+    calls = []
+
+    def directory_factory():
+        calls.append("AD connection")
+        return Directory()
+
+    monkeypatch.setattr(admin_module, "ActiveDirectory", directory_factory)
+    form = admin_module.DepartmentForm(data={"source_id": "1", "dn": config.root_ou})
+    assert form.is_valid(), form.errors
+    obj = form.save(commit=False)
+    calls.clear()
+    settings.LDAP_HOST = "replacement-ad"
+    with pytest.raises(RuleError, match="企业或 AD 目录已更换"):
+        admin_module.DepartmentAdmin(DepartmentBinding, site).save_model(rf.post("/"), obj, form, False)
+    assert not DepartmentBinding.objects.exists() and not Audit.objects.exists() and not calls
 
 
 @pytest.mark.django_db
@@ -338,6 +428,7 @@ def test_held_disabled_account_can_be_reviewed_for_reactivation(admin_client, mo
     target["enabled"] = False
     ad = Directory([target])
     monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    Configuration.objects.update_or_create(pk=1, defaults={"identity_anchor": sync.directory_identity_anchor()})
     person = Person.objects.create(source_id="u1", name="测试员工")
     Binding.objects.create(person=person, object_guid=target["guid"], username=target["username"], enabled=False)
     response = admin_client.post(f"/people/{person.pk}", {"action": "verify"})

@@ -109,10 +109,12 @@ import django
 django.setup()
 from django.core.management import call_command
 from sync_app.models import Configuration, Person, Binding
+from sync_app.synchronization import directory_identity_anchor
 call_command('migrate', verbosity=0, interactive=False)
 config=Configuration.current()
 config.root_ou='OU=People,DC=example,DC=com'
 config.attributes=['displayName']
+config.identity_anchor=directory_identity_anchor()
 config.save()
 person=Person.objects.create(source_id='u1',name='Original employee')
 Binding.objects.create(person=person,object_guid='12345678-1234-1234-1234-123456789abc',username='testuser',manual=True)

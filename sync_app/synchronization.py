@@ -29,20 +29,42 @@ def valid_ad_revision(account):
     return revision.isdecimal() and int(revision) > 0
 
 
-def collect(source, config):
-    started_at = timezone.now()
-    anchor = fingerprint([settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN])
+def directory_identity_anchor():
+    return fingerprint([settings.DINGTALK_CORP_ID, settings.DINGTALK_APP_KEY, settings.LDAP_HOST, settings.LDAP_BASE_DN])
+
+
+def validate_directory_identity(config):
+    """Do not let a new directory claim previously collected identities."""
+    anchor = directory_identity_anchor()
     if config.identity_anchor and config.identity_anchor != anchor:
         raise RuleError("企业或 AD 目录已更换，禁止复用旧组织绑定；请使用新的数据库")
+    if not config.identity_anchor and (
+        Snapshot.objects.exists() or Binding.objects.exists() or DepartmentBinding.objects.exists()
+        or Operation.objects.filter(action="create").exists()
+    ):
+        raise RuleError("现有来源或绑定缺少目录身份锚点，禁止复用；请使用新的数据库")
+    return anchor
+
+
+def establish_directory_identity(config):
+    """Call in a successful first-write transaction while owning the sync lock."""
+    anchor = validate_directory_identity(config)
+    if not config.identity_anchor:
+        config.identity_anchor = anchor
+        config.save(update_fields=["identity_anchor"])
+    return anchor
+
+
+def collect(source, config):
+    started_at = timezone.now()
+    validate_directory_identity(config)
     users, departments = source.collect(config.root_department)
     if not users or len({u["source_id"] for u in users}) != len(users):
         raise RuleError("通讯录为空或来源身份重复，禁止同步")
     signature = fingerprint([users, departments, config.root_department])
     # Persist only complete successful snapshots.
     with transaction.atomic():
-        if not config.identity_anchor:
-            config.identity_anchor = anchor
-            config.save(update_fields=["identity_anchor"])
+        establish_directory_identity(config)
         snap = Snapshot.objects.create(started_at=started_at, fingerprint=signature, root_department=config.root_department, users=users, departments=departments)
         for user in users:
             Person.objects.update_or_create(source_id=user["source_id"], defaults={"name": user["name"]})
@@ -263,6 +285,7 @@ def has_conflicts(plan_data):
 
 def apply(job, source, ad):
     config = Configuration.current()
+    validate_directory_identity(config)
     saved = job.plan
     if not saved or saved.get("scope") != job.scope or saved.get("selected") != job.selected:
         raise RuleError("缺少有效预览")
@@ -484,9 +507,10 @@ def run_sync_job(job):
 
 
 def binding_review(person_id, username):
+    config = Configuration.current()
+    anchor = validate_directory_identity(config)
     with closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
         person = Person.objects.get(pk=person_id)
-        config = Configuration.current()
         user = source.user(person.source_id)
         if not source.user_in_scope(user, config.root_department):
             raise RuleError("来源人员已不在当前同步范围，不能建立绑定")
@@ -499,10 +523,13 @@ def binding_review(person_id, username):
         if Binding.objects.filter(object_guid=target["guid"]).exclude(person=person).exists():
             raise RuleError("目标已绑定其他人员")
         old = Binding.objects.filter(person=person).first()
+        if validate_directory_identity(Configuration.current()) != anchor:
+            raise RuleError("企业或 AD 目录已变化，请重新审核绑定")
         payload = {
             "person": person.pk, "username": target["username"], "guid": target["guid"],
             "employee_id": target["employee_id"], "dn": target["dn"], "enabled": target["enabled"],
             "revision": str(old.revision) if old else "",
+            "identity_anchor": anchor,
         }
         return {"person": person, "old": old, "target": target, "confirmation": signing.dumps(payload, salt="binding-review")}
 
@@ -519,6 +546,9 @@ def bind_person(person_id, confirmation, actor, reason):
     with lock("sync"), closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
         person = Person.objects.get(pk=person_id)
         config = Configuration.current()
+        anchor = validate_directory_identity(config)
+        if reviewed.get("identity_anchor") != anchor:
+            raise RuleError("企业或 AD 目录身份确认已失效，请重新审核绑定")
         user = source.user(person.source_id)
         if not source.user_in_scope(user, config.root_department):
             raise RuleError("来源人员已不在当前同步范围，不能建立绑定")
@@ -539,11 +569,15 @@ def bind_person(person_id, confirmation, actor, reason):
             if protected(current) or not under(current["dn"], config.root_ou):
                 raise RuleError("目标受保护或不在同步管理范围内")
             with transaction.atomic():
+                current_config = Configuration.current()
+                if validate_directory_identity(current_config) != reviewed["identity_anchor"]:
+                    raise RuleError("企业或 AD 目录已变化，请重新审核绑定")
                 old = Binding.objects.filter(person=person).first()
                 if (str(old.revision) if old else "") != reviewed["revision"]:
                     raise RuleError("当前绑定已变化，请重新确认")
                 if Binding.objects.filter(object_guid=current["guid"]).exclude(person=person).exists():
                     raise RuleError("目标已绑定其他人员")
+                establish_directory_identity(current_config)
                 Binding.objects.update_or_create(person=person, defaults={"object_guid": current["guid"], "username": current["username"], "manual": True, "enabled": current["enabled"], "revision": uuid.uuid4()})
                 audit(actor, "manual_bind", person.source_id, f"{str(old.object_guid) if old else '未绑定'} → {current['guid']}；{reason[:150]}")
 
@@ -556,10 +590,12 @@ def reactivate_person(person_id, actor, reason, confirmed):
         if not binding or binding.person.excluded:
             raise RuleError("请先确认绑定且人员未排除同步")
         config = Configuration.current()
+        validate_directory_identity(config)
         user = source.user(binding.person.source_id)
         if not source.user_in_scope(user, config.root_department):
             raise RuleError("来源人员已不在当前同步范围，不能恢复 AD 账号")
         with lock("account:" + str(binding.object_guid)):
+            validate_directory_identity(Configuration.current())
             target = ad.by_guid(binding.object_guid)
             if target["enabled"]:
                 if binding.enabled:
@@ -576,6 +612,7 @@ def reactivate_person(person_id, actor, reason, confirmed):
 
 
 def verify_binding(person_id):
+    validate_directory_identity(Configuration.current())
     binding = Binding.objects.select_related("person").filter(person_id=person_id).first()
     if not binding:
         raise RuleError("该人员尚未绑定")
@@ -586,6 +623,7 @@ def verify_binding(person_id):
 
 def change_person(person_id, actor, excluded, primary_department):
     with lock("sync"), transaction.atomic():
+        validate_directory_identity(Configuration.current())
         person = Person.objects.get(pk=person_id)
         if primary_department and primary_department != person.primary_department:
             snapshot = Snapshot.objects.order_by("-pk").first()
@@ -602,6 +640,7 @@ def change_person(person_id, actor, excluded, primary_department):
 
 def unbind_person(person_id, actor):
     with lock("sync"), transaction.atomic():
+        validate_directory_identity(Configuration.current())
         person = Person.objects.get(pk=person_id)
         Binding.objects.filter(person=person).delete()
         person.excluded = True
