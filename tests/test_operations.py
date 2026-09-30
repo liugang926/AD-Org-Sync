@@ -1,4 +1,5 @@
 import io
+from importlib.metadata import distribution, version
 import sqlite3
 import os
 import shutil
@@ -8,6 +9,45 @@ from pathlib import Path
 from django.core.management import call_command
 import pytest
 import yaml
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+
+def test_installed_dependency_graph_matches_lock():
+    # Inspect the resolved graph, including dependencies activated by nested extras.
+    # This fails when an install path bypasses the lock or adds an unlocked dependency.
+    root = Path(__file__).resolve().parents[1]
+    pins = {}
+    for line in (root / "constraints.txt").read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        requirement = Requirement(line)
+        if requirement.marker and not requirement.marker.evaluate():
+            continue
+        name = canonicalize_name(requirement.name)
+        assert name not in pins, f"Multiple active locks for {name}"
+        specifiers = list(requirement.specifier)
+        assert len(specifiers) == 1 and specifiers[0].operator == "=="
+        assert "*" not in specifiers[0].version
+        pins[name] = specifiers[0].version
+
+    pending = [("ad-org-sync", frozenset({"test"})), ("pip", frozenset())]
+    visited = set()
+    while pending:
+        name, extras = pending.pop()
+        key = (name, extras)
+        if key in visited:
+            continue
+        visited.add(key)
+        if name != "ad-org-sync":
+            assert name in pins, f"Installed dependency is not locked: {name}"
+            assert version(name) == pins[name], f"Installed version differs from lock: {name}"
+        for raw in distribution(name).requires or []:
+            requirement = Requirement(raw)
+            if requirement.marker and not any(requirement.marker.evaluate({"extra": extra}) for extra in {"", *extras}):
+                continue
+            assert version(requirement.name) in requirement.specifier
+            pending.append((canonicalize_name(requirement.name), frozenset(requirement.extras)))
 
 
 @pytest.mark.django_db(transaction=True)

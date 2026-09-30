@@ -10,7 +10,11 @@ Python 3.10+，Django 5.2 LTS。生产镜像使用 Python 3.12。
 
 ```powershell
 python -m venv .venv
+$env:PIP_CONSTRAINT = (Resolve-Path ./constraints.txt).Path
+$env:PIP_BUILD_CONSTRAINT = $env:PIP_CONSTRAINT
+.venv/Scripts/python -m pip install --upgrade pip
 .venv/Scripts/python -m pip install -e ".[test]"
+.venv/Scripts/python -m pip check
 .venv/Scripts/python manage.py migrate
 .venv/Scripts/python manage.py createsuperuser
 .venv/Scripts/python manage.py shell -c "from sync_app.models import Configuration; Configuration.current()"
@@ -27,6 +31,39 @@ python -m venv .venv
 同步匹配默认使用唯一工号，邮箱及 userId 匹配仅作人工确认候选；账号命名可选工号、userId、邮箱前缀。密码重置匹配单独配置，可选工号→employeeID、邮箱→mail、userId→sAMAccountName。AD 查询范围由 LDAP_BASE_DN 限定，同步写入进一步限制到配置的根 OU。LDAPS 始终加密，默认 `LDAP_VERIFY_CERT=false`，允许未受信任的自签证书；无需 CA 文件。如需验证可信链和主机名，设置 `LDAP_VERIFY_CERT=true`，可选提供 `LDAP_CA_HOST_FILE`（未提供时使用系统信任库）。
 
 受控验收可在受限环境文件中配置 `SSPR_ALLOWED_DINGTALK_USER_IDS`，用逗号列出允许的钉钉 userId（不是工号）。配置非空时，只有名单内员工通过钉钉验证后可继续实时 LDAPS 匹配与重置；名单变化使现有验证会话失效。不配置时维持原有的全员匹配行为；无论名单如何，后台的 `sspr_enabled` 开关仍须明确开启。
+
+## 依赖版本与安装
+
+`pyproject.toml` 固定直接依赖版本，仓库的 `constraints.txt` 固定运行、测试及构建依赖的完整版本集合，并使用环境标记适配 Python 3.10+ 与 Windows/Linux。安装时将 `PIP_CONSTRAINT` 和 `PIP_BUILD_CONSTRAINT` 都指向该文件的绝对路径，再升级到文件指定的 pip 版本。第二项约束同时控制隔离构建环境中的 setuptools、wheel 等依赖；CI 和生产 Docker 构建采用相同规则。
+
+从源码安装运行环境，在仓库根目录执行：
+
+```bash
+python3 -m venv .venv
+export PIP_CONSTRAINT="$(pwd)/constraints.txt"
+export PIP_BUILD_CONSTRAINT="$PIP_CONSTRAINT"
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install .
+.venv/bin/python -m pip check
+```
+
+通过发布包安装时，将同一次发布的 wheel 与 `constraints.txt` 下载到同一目录，在该目录创建虚拟环境并设置上述两个绝对路径变量，然后执行：
+
+```bash
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install ./ad_org_sync-3.0.0-py3-none-any.whl
+.venv/bin/python -m pip check
+```
+
+约束文件选择依赖版本，实际安装集合由源码或 wheel 的依赖声明决定；生产安装仅包含运行所需包，开发和测试使用 `.[test]`。Wheel、SBOM 的 CI 产物及正式 wheel 发布均附带同一约束文件。Docker 仅在 builder 阶段读取该文件，最终运行镜像中的应用按锁定版本安装。
+
+更新依赖时，先修改 `pyproject.toml` 中相应直接依赖或构建组的版本，再重新生成 `constraints.txt`。可选维护工具 uv 仅用于生成该文件：
+
+```bash
+uv pip compile pyproject.toml --extra test --group build --universal --python-version 3.10 --no-header --no-annotate --output-file constraints.txt
+```
+
+需要更新传递依赖时，在上述命令增加 `--upgrade`，并审查生成的版本及环境标记。两份文件一并提交，经 Python 3.10/3.12、Windows、容器、Wheel/迁移/SBOM 和浏览器六项 CI 验证后，按现有 PR 批准及 CI/CD 流程发布。
 
 ## CI/CD
 

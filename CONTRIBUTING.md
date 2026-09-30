@@ -11,8 +11,16 @@
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\activate
-pip install -e ".[test]"
+$env:PIP_CONSTRAINT = (Resolve-Path ./constraints.txt).Path
+$env:PIP_BUILD_CONSTRAINT = $env:PIP_CONSTRAINT
+python -m pip install --upgrade pip
+python -m pip install -e ".[test]"
+python -m pip check
 ```
+
+Run the commands below in that environment so the same constraints also apply to
+isolated wheel builds. In a new terminal, set both absolute constraint paths
+again. See [dependency updates](README.md#依赖版本与安装) before changing versions.
 
 ## Useful Commands
 

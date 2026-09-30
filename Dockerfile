@@ -1,16 +1,16 @@
 FROM python:3.12-slim AS builder
-ENV PIP_NO_CACHE_DIR=1 PYTHONDONTWRITEBYTECODE=1
+ENV PIP_NO_CACHE_DIR=1 PYTHONDONTWRITEBYTECODE=1 PIP_CONSTRAINT=/build/constraints.txt PIP_BUILD_CONSTRAINT=/build/constraints.txt
 WORKDIR /build
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md constraints.txt ./
 COPY sync_app ./sync_app
-RUN python -m pip install --prefix=/install .
+RUN python -m pip install --upgrade pip && python -m pip install --prefix=/install .
 
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 AD_ORG_SYNC_DATA_DIR=/data
 RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid app --home-dir /app --shell /usr/sbin/nologin app
 WORKDIR /app
 COPY --from=builder /install/ /usr/local/
-RUN mkdir -p /data /app/logs && chown -R app:app /data /app/logs
+RUN python -m pip check && mkdir -p /data /app/logs && chown -R app:app /data /app/logs
 USER app
 EXPOSE 8010
 VOLUME ["/data", "/app/logs"]
