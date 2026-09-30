@@ -5,6 +5,52 @@ from playwright.sync_api import sync_playwright
 
 
 @pytest.mark.django_db(transaction=True)
+def test_password_reset_audit_filters_and_mobile_table(live_server, django_user_model):
+    from datetime import datetime, timezone as datetime_timezone
+    from sync_app.models import Audit
+
+    django_user_model.objects.create_superuser("audit-admin", password="Audit-browser-only-823!")
+    record = Audit.objects.create(
+        actor="ding-user-1919", actor_name="审计测试员工", employee_id="T0001919",
+        action="sspr_reset", target_username="test.ad", target="d0a00000-1111-2222-3333-444444444444",
+        state="partial", success=False, result="密码已重置，AD 账号解锁失败",
+        completed_at=datetime(2026, 9, 30, 1, 2, 5, tzinfo=datetime_timezone.utc),
+        client_ip="198.51.100.17",
+    )
+    Audit.objects.filter(pk=record.pk).update(created_at=datetime(2026, 9, 30, 1, 2, 3, tzinfo=datetime_timezone.utc))
+    Audit.objects.create(actor="admin", action="settings", result="不应出现在密码重置筛选中")
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        page.goto(live_server.url + "/login")
+        page.get_by_label("用户名").fill("audit-admin")
+        page.get_by_label("密码").fill("Audit-browser-only-823!")
+        page.get_by_role("button", name="登录", exact=True).click()
+        page.wait_for_url("**/dashboard")
+        page.goto(live_server.url + "/logs?action=sspr_reset")
+        page.get_by_label("人员或 AD 账号").fill("T0001919")
+        page.get_by_label("结果", exact=True).select_option("partial")
+        page.get_by_role("button", name="筛选记录", exact=True).click()
+        assert page.get_by_role("cell", name="审计测试员工", exact=False).is_visible()
+        assert page.get_by_role("cell", name="test.ad", exact=False).is_visible()
+        assert page.get_by_role("cell", name="部分完成", exact=True).is_visible()
+        assert page.get_by_text("密码已修改，解锁未完成。", exact=True).is_visible()
+        assert page.get_by_text("完成：2026-09-30 09:02:05", exact=True).is_visible()
+        assert page.get_by_text("不应出现在密码重置筛选中", exact=False).count() == 0
+        output = Path("test_artifacts/browser")
+        output.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(output / "password-audit-desktop.png"), full_page=True)
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        region = page.get_by_role("region", name="审计记录列表")
+        assert region.evaluate("el => el.scrollWidth > el.clientWidth")
+        region.evaluate("el => { el.scrollLeft = el.scrollWidth; }")
+        assert page.get_by_role("cell", name="198.51.100.17", exact=True).is_visible()
+        page.screenshot(path=str(output / "password-audit-mobile.png"), full_page=True)
+        browser.close()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_admin_and_mobile_employee_journeys(live_server, django_user_model, monkeypatch):
     from sync_app.models import Configuration
     Configuration.current()

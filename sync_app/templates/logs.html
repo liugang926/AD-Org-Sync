@@ -1,20 +1,34 @@
 {% extends "base.html" %}
+{% load tz %}
 {% block title %}操作审计 · 组织同步控制台{% endblock %}
 {% block content %}
 <div class="page-heading"><div><p class="eyebrow">工作台 / 操作审计</p><h1>操作日志</h1><p class="page-subtitle">查看同步、账号绑定与员工密码重置记录。审计仅保存操作结果，不展示密码或授权码。</p></div></div>
 
-<section class="card listing-card">
-  <div class="card-head"><div><h2>审计记录</h2><p>按日期和结果定位异常操作。密码重置待确认或处理未完成时，应先核查 AD 或请员工确认登录结果。</p></div><span class="section-note">当前筛选共 {{ page.paginator.count }} 条</span></div>
+<section class="card listing-card audit-card">
+  <div class="card-head"><div><h2>审计记录</h2><p>时间均为北京时间（Asia/Shanghai，UTC+08:00）。姓名、工号和 AD 账号按操作时记录；历史缺失字段显示“—”。</p></div><span class="section-note">当前筛选共 {{ page.paginator.count }} 条</span></div>
   <form method="get" class="audit-filters">
+    <div class="audit-search"><label for="audit-query">人员或 AD 账号</label><input id="audit-query" type="search" name="q" value="{{ filters.q }}" placeholder="姓名、工号、userId、AD 账号或 GUID"></div>
+    <div><label for="audit-action">操作类型</label><select id="audit-action" name="action"><option value="">全部操作</option>{% for value, label in action_choices %}<option value="{{ value }}" {% if filters.action == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
     <div><label for="audit-start">开始日期</label><input id="audit-start" type="date" name="start" value="{{ filters.start }}"></div>
     <div><label for="audit-end">结束日期</label><input id="audit-end" type="date" name="end" value="{{ filters.end }}"></div>
-    <div><label for="audit-result">结果</label><select id="audit-result" name="result"><option value="">全部</option><option value="success" {% if filters.result == "success" %}selected{% endif %}>成功</option><option value="failed" {% if filters.result == "failed" %}selected{% endif %}>失败</option><option value="partial" {% if filters.result == "partial" %}selected{% endif %}>部分完成</option><option value="attention" {% if filters.result == "attention" %}selected{% endif %}>待确认或未完成</option></select></div>
-    <button type="submit" class="secondary">筛选记录</button>
+    <div><label for="audit-result">结果</label><select id="audit-result" name="result"><option value="">全部</option><option value="success" {% if filters.result == "success" %}selected{% endif %}>成功</option><option value="failed" {% if filters.result == "failed" %}selected{% endif %}>失败</option><option value="partial" {% if filters.result == "partial" %}selected{% endif %}>部分完成</option><option value="pending" {% if filters.result == "pending" %}selected{% endif %}>处理中 / 未完成</option><option value="unknown" {% if filters.result == "unknown" %}selected{% endif %}>结果不明</option><option value="attention" {% if filters.result == "attention" %}selected{% endif %}>待确认或未完成</option></select></div>
+    <div class="audit-filter-actions"><button type="submit" class="secondary">筛选记录</button><a href="{% url 'logs' %}">清除筛选</a></div>
   </form>
-  <div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>操作</th><th>对象</th><th>结果</th><th>状态</th></tr></thead><tbody>
-    {% for row in audit_rows %}<tr><td class="time-cell">{{ row.item.created_at|date:"Y-m-d H:i:s" }}</td><td>{{ row.item.actor }}</td><td><strong>{{ row.label }}</strong>{% if row.label != row.item.action %}<small>{{ row.item.action }}</small>{% endif %}</td><td class="result-cell">{{ row.item.target|default:"—" }}</td><td class="result-cell">{{ row.item.result }}</td><td><span class="status-pill tone-{{ row.tone }}">{{ row.status }}</span></td></tr>
-    {% empty %}<tr><td colspan="6" class="empty-cell">没有符合筛选条件的审计记录。</td></tr>{% endfor %}
+  <p class="audit-help">密码重置“部分完成”表示密码已修改但解锁失败；“结果不明”或“处理中 / 未完成”需先核查 AD 或请员工确认登录结果。</p>
+  {% timezone "Asia/Shanghai" %}
+  <div class="table-wrap" role="region" aria-label="审计记录列表" tabindex="0"><table class="audit-table"><thead><tr><th>请求 / 记录时间</th><th>操作人员</th><th>操作</th><th>AD 账号 / 对象</th><th>状态</th><th>说明 / 失败原因</th><th>来源 IP</th></tr></thead><tbody>
+    {% for row in audit_rows %}<tr>
+      <td class="time-cell"><strong>{{ row.item.created_at|date:"Y-m-d H:i:s" }}</strong><small>完成：{% if row.item.completed_at %}{{ row.item.completed_at|date:"Y-m-d H:i:s" }}{% else %}—{% endif %}</small></td>
+      <td class="audit-identity"><strong>{{ row.actor_label }}</strong>{% if row.employee_action %}<small>工号：{{ row.item.employee_id|default:"—" }}</small><small>userId：{{ row.actor_identifier|default:"—" }}</small>{% else %}{% if row.item.actor_name %}<small>操作者：{{ row.item.actor }}</small>{% endif %}{% endif %}</td>
+      <td><strong>{{ row.label }}</strong>{% if row.label != row.item.action %}<small>{{ row.item.action }}</small>{% endif %}</td>
+      <td class="audit-target">{% if row.employee_action %}<strong>{{ row.item.target_username|default:"—" }}</strong><small>AD GUID：{{ row.item.target|default:"—" }}</small>{% else %}{{ row.item.target|default:"—" }}{% endif %}</td>
+      <td><span class="status-pill tone-{{ row.tone }}">{{ row.status }}</span></td>
+      <td class="audit-result">{{ row.item.result|default:"—" }}{% if row.state_note %}<small>{{ row.state_note }}</small>{% endif %}</td>
+      <td class="audit-ip">{{ row.item.client_ip|default:"—" }}</td>
+    </tr>
+    {% empty %}<tr><td colspan="7" class="empty-cell">没有符合筛选条件的审计记录。</td></tr>{% endfor %}
   </tbody></table></div>
+  {% endtimezone %}
   <div class="pagination">{% if page.has_previous %}<a href="?{{ filter_query }}&amp;page={{ page.previous_page_number }}">上一页</a>{% endif %}<span>第 {{ page.number }} / {{ page.paginator.num_pages }} 页</span>{% if page.has_next %}<a href="?{{ filter_query }}&amp;page={{ page.next_page_number }}">下一页</a>{% endif %}</div>
 </section>
 {% endblock %}
