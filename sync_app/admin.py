@@ -2,12 +2,14 @@ from django.contrib import admin
 from django import forms
 from django.shortcuts import redirect
 from contextlib import closing
+from django.db import transaction
 from .directory import ActiveDirectory, under
 from .domain import RuleError
 from .models import Snapshot
 from .models import Configuration, Audit, DepartmentBinding, Job, Operation
 from .locking import lock
 from .security import audit
+from .synchronization import establish_directory_identity, validate_directory_identity
 
 
 ATTRIBUTE_CHOICES = [
@@ -55,6 +57,11 @@ class ConfigurationAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         with lock("sync"):
+            # A settings form may have been loaded before the first collection.
+            # Preserve the independently established, non-editable directory identity.
+            current = Configuration.objects.filter(pk=obj.pk).only("identity_anchor").first()
+            if current:
+                obj.identity_anchor = current.identity_anchor
             obj.full_clean()
             obj.save()
             audit(request.user.username, "settings")
@@ -87,6 +94,10 @@ class DepartmentForm(forms.ModelForm):
 
     def clean(self):
         data = super().clean()
+        try:
+            self.directory_identity_anchor = validate_directory_identity(Configuration.current())
+        except RuleError as exc:
+            raise forms.ValidationError(str(exc)) from None
         snap = Snapshot.objects.order_by("-pk").first()
         if not snap or data.get("source_id") not in {d["id"] for d in snap.departments}:
             raise forms.ValidationError("部门不在当前通讯录，请先采集")
@@ -113,8 +124,13 @@ class DepartmentAdmin(admin.ModelAdmin):
         return False
 
     def save_model(self, request, obj, form, change):
-        with lock("sync"), closing(ActiveDirectory()) as ad:
-            obj.object_guid = ad.verify_ou(obj.dn, str(obj.object_guid))
+        with lock("sync"), transaction.atomic():
+            config = Configuration.current()
+            if validate_directory_identity(config) != getattr(form, "directory_identity_anchor", None):
+                raise RuleError("企业或 AD 目录身份确认已失效，请重新审核部门映射")
+            with closing(ActiveDirectory()) as ad:
+                obj.object_guid = ad.verify_ou(obj.dn, str(obj.object_guid))
+            establish_directory_identity(config)
             obj.manual = True
             obj.save()
             audit(request.user.username, "department_binding", obj.source_id)

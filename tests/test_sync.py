@@ -1,6 +1,6 @@
 import pytest
 from sync_app.models import Configuration, Binding, Person, Job
-from sync_app.synchronization import plan, apply, enqueue, queue_apply
+from sync_app.synchronization import plan, apply, enqueue, queue_apply, directory_identity_anchor
 from sync_app.domain import RuleError
 from .fakes import Source, Directory, user, account
 
@@ -9,6 +9,9 @@ from .fakes import Source, Directory, user, account
 def configured():
     config = Configuration.current()
     config.root_ou = "OU=People,DC=example,DC=com"
+    # Most rule tests start with a directory already established by collection.
+    # First-use and unanchored-data tests reset this field explicitly.
+    config.identity_anchor = directory_identity_anchor()
     config.save()
     return config
 
@@ -106,6 +109,8 @@ def test_conflicting_preview_cannot_be_queued_for_apply(configured):
 
 @pytest.mark.django_db
 def test_empty_source_and_changed_binding_block_writes(configured):
+    configured.identity_anchor = ""
+    configured.save()
     ad = Directory()
     with pytest.raises(RuleError):
         plan(Job.objects.create(), Source([]), ad)
@@ -114,6 +119,8 @@ def test_empty_source_and_changed_binding_block_writes(configured):
     source = Source()
     job = Job.objects.create()
     job.plan = plan(job, source, ad)
+    configured.refresh_from_db()
+    assert configured.identity_anchor == directory_identity_anchor()
     Person.objects.update(excluded=True)
     with pytest.raises(RuleError):
         apply(job, source, ad)
@@ -128,6 +135,150 @@ def test_changed_enterprise_cannot_reuse_bindings(configured, settings):
     settings.DINGTALK_CORP_ID = "different-enterprise"
     with pytest.raises(RuleError, match="企业"):
         plan(Job.objects.create(), Source(), Directory())
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("setting_name", ["DINGTALK_CORP_ID", "DINGTALK_APP_KEY", "LDAP_HOST", "LDAP_BASE_DN"])
+@pytest.mark.parametrize("action", ["review", "bind", "reactivate", "verify", "policy", "unbind"])
+def test_manual_identity_paths_reject_changed_directory(configured, settings, monkeypatch, setting_name, action):
+    from sync_app import synchronization as sync
+    from sync_app.models import Audit
+
+    source, ad = Source(), Directory()
+    sync.collect(source, configured)
+    person = Person.objects.get(source_id="u1")
+    ad.items[0]["enabled"] = False
+    binding = Binding.objects.create(person=person, object_guid=ad.items[0]["guid"], username="testuser", enabled=False)
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    review = sync.binding_review(person.pk, "testuser")
+    setattr(settings, setting_name, str(getattr(settings, setting_name)) + "-replacement")
+
+    actions = {
+        "review": lambda: sync.binding_review(person.pk, "testuser"),
+        "bind": lambda: sync.bind_person(person.pk, review["confirmation"], "admin", "核验"),
+        "reactivate": lambda: sync.reactivate_person(person.pk, "admin", "核验", True),
+        "verify": lambda: sync.verify_binding(person.pk),
+        "policy": lambda: sync.change_person(person.pk, "admin", True, ""),
+        "unbind": lambda: sync.unbind_person(person.pk, "admin"),
+    }
+    with pytest.raises(RuleError, match="企业或 AD 目录已更换"):
+        actions[action]()
+    binding.refresh_from_db()
+    person.refresh_from_db()
+    assert not ad.items[0]["enabled"] and not binding.enabled
+    assert not person.excluded and not binding.manual and not Audit.objects.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("evidence", ["snapshot", "binding", "department", "creation"])
+def test_missing_anchor_cannot_claim_old_directory_data(configured, monkeypatch, evidence):
+    import uuid
+    from sync_app import synchronization as sync
+    from sync_app.models import Snapshot, DepartmentBinding, Operation
+
+    configured.identity_anchor = ""
+    configured.save()
+    source, ad = Source(), Directory()
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    if evidence == "snapshot":
+        Snapshot.objects.create(fingerprint="old", root_department="1", users=[user()], departments=[])
+    elif evidence == "binding":
+        Binding.objects.create(person=person, object_guid=ad.items[0]["guid"], username="testuser")
+    elif evidence == "department":
+        DepartmentBinding.objects.create(source_id="1", object_guid=uuid.uuid4(), dn=configured.root_ou)
+    else:
+        Operation.objects.create(job=Job.objects.create(), source_id="u1", action="create", target_guid=ad.items[0]["guid"])
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+
+    with pytest.raises(RuleError, match="缺少目录身份锚点"):
+        sync.collect(source, configured)
+    with pytest.raises(RuleError, match="缺少目录身份锚点"):
+        sync.binding_review(person.pk, "testuser")
+    configured.refresh_from_db()
+    assert not configured.identity_anchor and ad.created == 0
+
+
+@pytest.mark.django_db
+def test_first_manual_binding_fixes_identity_only_when_committed(configured, monkeypatch):
+    from sync_app import synchronization as sync
+
+    configured.identity_anchor = ""
+    configured.save()
+    source, ad = Source(), Directory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    review = sync.binding_review(person.pk, "testuser")
+    configured.refresh_from_db()
+    assert not configured.identity_anchor
+    sync.bind_person(person.pk, review["confirmation"], "admin", "确认身份")
+    configured.refresh_from_db()
+    assert configured.identity_anchor == sync.directory_identity_anchor()
+    assert Binding.objects.get(person=person).manual
+
+
+@pytest.mark.django_db
+def test_first_binding_failure_does_not_leave_identity_anchor(configured, monkeypatch):
+    from sync_app import synchronization as sync
+
+    configured.identity_anchor = ""
+    configured.save()
+    source, ad = Source(), Directory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    review = sync.binding_review(person.pk, "testuser")
+
+    def unavailable_audit(*args, **kwargs):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr(sync, "audit", unavailable_audit)
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        sync.bind_person(person.pk, review["confirmation"], "admin", "确认身份")
+    configured.refresh_from_db()
+    assert not configured.identity_anchor and not Binding.objects.exists()
+
+
+@pytest.mark.django_db
+def test_first_binding_review_is_bound_to_reviewed_directory(configured, settings, monkeypatch):
+    from sync_app import synchronization as sync
+
+    configured.identity_anchor = ""
+    configured.save()
+    source, ad = Source(), Directory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    review = sync.binding_review(person.pk, "testuser")
+    settings.DINGTALK_CORP_ID = "replacement-enterprise"
+    with pytest.raises(RuleError, match="身份确认已失效"):
+        sync.bind_person(person.pk, review["confirmation"], "admin", "确认身份")
+    configured.refresh_from_db()
+    assert not configured.identity_anchor and not Binding.objects.exists()
+
+
+@pytest.mark.django_db
+def test_manual_binding_rechecks_identity_under_account_lock(configured, settings, monkeypatch):
+    from sync_app import synchronization as sync
+
+    source, ad = Source(), Directory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    person = Person.objects.create(source_id="u1", name="测试员工")
+    review = sync.binding_review(person.pk, "testuser")
+    original_by_guid = ad.by_guid
+
+    def directory_replaced_after_lookup(guid):
+        target = original_by_guid(guid)
+        settings.DINGTALK_CORP_ID = "replacement-enterprise"
+        return target
+
+    monkeypatch.setattr(ad, "by_guid", directory_replaced_after_lookup)
+    with pytest.raises(RuleError, match="企业或 AD 目录已更换"):
+        sync.bind_person(person.pk, review["confirmation"], "admin", "确认身份")
+    assert not Binding.objects.exists()
 
 
 @pytest.mark.django_db
@@ -268,7 +419,7 @@ def test_old_binding_confirmation_without_ad_state_requires_new_review(configure
         "guid": ad.items[0]["guid"], "revision": "",
     }, salt="binding-review")
 
-    with pytest.raises(RuleError, match="目标状态已变化"):
+    with pytest.raises(RuleError, match="身份确认已失效"):
         sync.bind_person(person.pk, legacy_confirmation, "admin", "确认身份")
     assert not Binding.objects.exists()
 
