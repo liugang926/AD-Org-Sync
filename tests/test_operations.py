@@ -87,6 +87,47 @@ assert config.minimum_password_length == 16
     assert result.returncode == 0, result.stderr
 
 
+def test_audit_details_migration_preserves_history_without_inventing_identity_or_completion(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env.update(AD_ORG_SYNC_DATA_DIR=str(tmp_path), DJANGO_SETTINGS_MODULE="sync_app.settings", LDAP_BASE_DN="DC=example,DC=com")
+    code = '''
+import django
+django.setup()
+from django.core.management import call_command
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
+from django.utils import timezone
+call_command("migrate", "sync_app", "0008_sspr_minimum_eight", interactive=False, verbosity=0)
+old_apps = MigrationExecutor(connection).loader.project_state([("sync_app", "0008_sspr_minimum_eight")]).apps
+OldAudit = old_apps.get_model("sync_app", "Audit")
+OldSession = old_apps.get_model("sync_app", "EmployeeSession")
+old = OldAudit.objects.create(actor="legacy-user", action="sspr_reset", target="12345678-1234-1234-1234-123456789abc", result="密码已成功重置", success=True, state="success")
+OldSession.objects.create(digest="legacy-token-digest", source_id="legacy-user", display_name="已验证员工", object_guid="12345678-1234-1234-1234-123456789abc", config_fingerprint="legacy-config", expires_at=timezone.now())
+call_command("migrate", "sync_app", "0009_sspr_audit_details", interactive=False, verbosity=0)
+from sync_app.models import Audit, EmployeeSession
+current = Audit.objects.get(pk=old.pk)
+assert current.actor == old.actor and current.target == old.target
+assert current.created_at == old.created_at and current.result == old.result
+assert current.state == "success" and current.success
+assert current.actor_name == current.employee_id == current.target_username == ""
+assert current.client_ip is None and current.completed_at is None
+session = EmployeeSession.objects.get(pk="legacy-token-digest")
+assert session.display_name == "已验证员工"
+assert session.employee_id == session.target_username == ""
+# The production image rollback keeps this upgraded database. Previous code
+# must still insert audit/session records without knowing the new columns.
+rollback_audit = OldAudit.objects.create(actor="rollback-user", action="sspr_reset", target=old.target, result="rollback-result", success=False, state="failed")
+OldSession.objects.create(digest="rollback-token-digest", source_id="rollback-user", display_name="", object_guid=old.target, config_fingerprint="rollback-config", expires_at=timezone.now())
+assert Audit.objects.get(pk=rollback_audit.pk).actor_name == ""
+assert EmployeeSession.objects.get(pk="rollback-token-digest").target_username == ""
+call_command("migrate", interactive=False, verbosity=0)
+call_command("db_check", verbosity=0)
+'''
+    result = subprocess.run([sys.executable, "-c", code], cwd=root, env=env, capture_output=True, text=True, timeout=40)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.django_db
 def test_sqlite_backup_restores_records(tmp_path, settings):
     source_path = tmp_path / "source.sqlite3"

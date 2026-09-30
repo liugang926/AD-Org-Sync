@@ -300,6 +300,19 @@ def person_action(request, person_id):
 @administrator
 def logs(request):
     items = Audit.objects.order_by("-pk")
+    search = request.GET.get("q", "").strip()[:150]
+    if search:
+        items = items.filter(
+            Q(actor_name__icontains=search) | Q(employee_id__icontains=search)
+            | Q(actor__icontains=search) | Q(target_username__icontains=search)
+            | Q(target__icontains=search)
+        )
+    action = request.GET.get("action", "")
+    action_choices = list(AUDIT_LABELS.items())
+    if action in AUDIT_LABELS:
+        items = items.filter(action=action)
+    else:
+        action = ""
     for parameter, lookup in [("start", "created_at__date__gte"), ("end", "created_at__date__lte")]:
         value = request.GET.get(parameter, "")
         try:
@@ -320,20 +333,45 @@ def logs(request):
         items = items.filter(state="partial")
     elif result == "attention":
         items = items.filter(state__in=["pending", "unknown"])
+    elif result in {"pending", "unknown"}:
+        items = items.filter(state=result)
+    else:
+        result = ""
     query = request.GET.copy()
     query.pop("page", None)
     page = Paginator(items, 50).get_page(request.GET.get("page"))
     states = {
         "success": ("成功", "success"), "failed": ("失败", "warning"),
-        "partial": ("部分完成", "warning"), "pending": ("处理未完成", "warning"),
-        "unknown": ("待确认", "warning"),
+        "partial": ("部分完成", "warning"), "pending": ("处理中 / 未完成", "active"),
+        "unknown": ("结果不明", "warning"),
     }
     audit_rows = []
     for item in page:
         state = item.state or ("success" if item.success else "failed")
-        label, tone = states[state]
-        audit_rows.append({"item": item, "label": AUDIT_LABELS.get(item.action, item.action), "status": label, "tone": tone})
-    return render(request, "logs.html", {"page": page, "audit_rows": audit_rows, "filters": request.GET, "filter_query": query.urlencode()})
+        label, tone = states.get(state, ("未知状态", "warning"))
+        employee_action = item.action.startswith("sspr_")
+        actor_label = item.actor_name or ("—" if employee_action else item.actor)
+        unverified_actor = employee_action and item.actor in {"anonymous", "employee", "未验证访客"} and not item.actor_name and not item.target
+        if unverified_actor:
+            actor_label = "未验证访客"
+        state_note = ""
+        if item.action == "sspr_reset":
+            state_note = {
+                "partial": "密码已修改，解锁未完成。",
+                "unknown": "无法确认密码是否已写入，请核查 AD 或由本人确认登录结果。",
+                "pending": "尚无完成结果，请先核查后再重试。",
+            }.get(state, "")
+        audit_rows.append({
+            "item": item, "label": AUDIT_LABELS.get(item.action, item.action),
+            "status": label, "tone": tone, "state_note": state_note,
+            "employee_action": employee_action, "actor_label": actor_label,
+            "actor_identifier": "" if unverified_actor else item.actor,
+        })
+    filters = {"q": search, "action": action, "result": result, "start": request.GET.get("start", ""), "end": request.GET.get("end", "")}
+    return render(request, "logs.html", {
+        "page": page, "audit_rows": audit_rows, "filters": filters,
+        "filter_query": query.urlencode(), "action_choices": action_choices,
+    })
 
 
 @administrator
@@ -366,15 +404,11 @@ def employee(request):
 def employee_auth(request):
     try:
         code = request.POST.get("code", "")
-        if not code or len(code) > 4096:
-            raise RuleError("缺少有效钉钉授权码")
         token, _ = sspr.verify(code, client_address(request))
         response = JsonResponse({"next": "/sspr"})
         response.set_cookie("employee_verification", token, max_age=300, secure=True, httponly=True, samesite="Strict", path="/sspr")
         return response
     except RuleError as exc:
-        from .security import audit
-        audit("employee", "sspr_auth_failed", result=str(exc), success=False)
         return JsonResponse({"error": str(exc)}, status=400)
 
 
