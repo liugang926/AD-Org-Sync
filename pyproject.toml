@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools==84.0.0", "wheel==0.48.0"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "ad-org-sync"
@@ -8,9 +8,11 @@ description = "Single-organization DingTalk synchronization and LDAPS self-servi
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-dependencies = ["Django==5.2.17", "ldap3==2.9.1", "requests>=2.32.4,<3", "waitress>=3.0.2,<4", "whitenoise>=6.9,<7", "filelock>=3.18,<4"]
+dependencies = ["Django==5.2.17", "ldap3==2.9.1", "requests==2.34.2", "waitress==3.0.2", "whitenoise==6.12.0", "filelock==3.32.7"]
 [project.optional-dependencies]
-test = ["pytest>=8,<10", "pytest-django>=4.11,<5", "ruff>=0.15,<1", "mypy>=1.19,<3", "playwright>=1.52,<2", "PyYAML>=6,<7", "build>=1.2,<2", "cyclonedx-bom>=7,<8"]
+test = ["pytest==9.1.1", "pytest-django==4.14.0", "ruff==0.16.9", "mypy==2.3.1", "playwright==1.63.0", "PyYAML==6.0.3", "build==1.6.1", "cyclonedx-bom==7.4.0"]
+[dependency-groups]
+build = ["pip==26.2.1", "setuptools==84.0.0", "wheel==0.48.0"]
 [project.scripts]
 ad-org-sync = "sync_app.cli:main"
 [tool.setuptools.packages.find]
