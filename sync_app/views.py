@@ -14,6 +14,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
+from django.views.csrf import csrf_failure as default_csrf_failure
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 
@@ -410,6 +411,34 @@ def employee_auth(request):
         return response
     except RuleError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
+
+
+def csrf_failure(request, reason=""):
+    match = getattr(request, "resolver_match", None)
+    if request.method == "POST" and match and match.func is employee_reset:
+        return employee_reset_csrf_rejected(request)
+    return default_csrf_failure(request, reason=reason)
+
+
+@never_cache
+@sensitive_post_parameters()
+def employee_reset_csrf_rejected(request):
+    # CSRF rejection does not authenticate the cookie owner or any posted identity.
+    message = "安全校验未通过，密码未提交；请重新打开密码服务并通过钉钉验证"
+    try:
+        audit(
+            "未验证访客", "sspr_reset", result=message, success=False,
+            client_ip=client_address(request),
+        )
+    except Exception:
+        message = "安全校验未通过，密码未提交；审计暂时不可用，请稍后重新打开密码服务并通过钉钉验证"
+    return HttpResponseForbidden(
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<title>安全校验未通过</title></head><body>'
+        f'<p>{message}</p><p><a href="/sspr">重新打开密码服务并通过钉钉验证</a></p>'
+        '</body></html>',
+    )
 
 
 @never_cache

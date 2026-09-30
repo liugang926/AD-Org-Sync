@@ -20,6 +20,7 @@ SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY") or key_file.read_text().strip()
 PUBLIC_URL = os.environ.get("AD_ORG_SYNC_PUBLIC_BASE_URL", "http://127.0.0.1:8010").rstrip("/")
 ALLOWED_HOSTS = [urlsplit(PUBLIC_URL).hostname or "localhost", "localhost", "127.0.0.1", "testserver"]
 CSRF_TRUSTED_ORIGINS = [PUBLIC_URL]
+CSRF_FAILURE_VIEW = "sync_app.views.csrf_failure"
 INSTALLED_APPS = ["django.contrib.admin", "django.contrib.auth", "django.contrib.contenttypes", "django.contrib.sessions", "django.contrib.messages", "django.contrib.staticfiles", "sync_app.apps.SyncAppConfig"]
 MIDDLEWARE = ["django.middleware.security.SecurityMiddleware", "whitenoise.middleware.WhiteNoiseMiddleware", "django.contrib.sessions.middleware.SessionMiddleware", "django.middleware.common.CommonMiddleware", "django.middleware.csrf.CsrfViewMiddleware", "django.contrib.auth.middleware.AuthenticationMiddleware", "django.contrib.messages.middleware.MessageMiddleware", "django.middleware.clickjacking.XFrameOptionsMiddleware"]
 ROOT_URLCONF = "sync_app.urls"
