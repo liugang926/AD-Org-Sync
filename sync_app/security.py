@@ -16,8 +16,21 @@ def client_address(request):
     return "unknown"
 
 
-def audit(actor, action, target="", result="成功", *, success=True):
-    Audit.objects.create(actor=actor, action=action, target=target, result=result, success=success, state="success" if success else "failed")
+def normalized_ip(value):
+    try:
+        return str(ip_address(value))
+    except (ValueError, TypeError):
+        return None
+
+
+def audit(actor, action, target="", result="成功", *, success=True, actor_name="", employee_id="", target_username="", client_ip=None):
+    now = timezone.now()
+    return Audit.objects.create(
+        actor=actor, action=action, target=target, result=result, success=success,
+        state="success" if success else "failed", created_at=now, completed_at=now,
+        actor_name=actor_name, employee_id=employee_id,
+        target_username=target_username, client_ip=normalized_ip(client_ip),
+    )
 
 
 def rate_limit(key, limit=10):

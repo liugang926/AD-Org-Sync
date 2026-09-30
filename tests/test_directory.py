@@ -240,6 +240,39 @@ def test_interrupted_password_change_remains_unknown():
     directory.conn.modify.assert_not_called()
 
 
+@pytest.mark.parametrize("code, reason", [
+    (19, "不满足 AD 约束"), (50, "操作权限不足"), (32, "对象不存在"),
+    (51, "目录服务繁忙"), (52, "目录服务暂不可用"), (53, "AD 不允许此操作"),
+    (None, "未提供可识别的拒绝原因"), ("private-diagnostic", "未提供可识别的拒绝原因"),
+])
+def test_password_rejection_reports_safe_directory_reason(code, reason):
+    directory = object.__new__(ActiveDirectory)
+    directory.check_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
+    directory.conn = Mock()
+    directory.conn.extend.microsoft.modify_password.return_value = False
+    directory.conn.result = {"result": code, "message": "private password diagnostic", "dn": "private DN"}
+
+    with pytest.raises(RuleError, match=reason) as error:
+        directory.reset_password("test-guid", "Never-audit-this-password!")
+    assert "private" not in str(error.value)
+    assert "Never-audit-this-password!" not in str(error.value)
+    directory.conn.modify.assert_not_called()
+
+
+def test_unlock_rejection_keeps_confirmed_password_result_and_safe_reason():
+    directory = object.__new__(ActiveDirectory)
+    directory.check_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
+    directory.conn = Mock()
+    directory.conn.extend.microsoft.modify_password.return_value = True
+    directory.conn.modify.return_value = False
+    directory.conn.result = {"result": 50, "message": "private LDAP diagnostic"}
+
+    outcome = directory.reset_password("test-guid", "Never-audit-this-password!", unlock=True)
+    assert not outcome.complete
+    assert "密码已重置，但解锁失败" in outcome.message and "操作权限不足" in outcome.message
+    assert "private" not in outcome.message and "Never-audit-this-password!" not in outcome.message
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize("verify", [True, False])
 def test_ldaps_certificate_policy_preserves_encryption(monkeypatch, settings, verify):

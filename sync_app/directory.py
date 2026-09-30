@@ -22,6 +22,25 @@ class PasswordResetOutcome:
     complete: bool
 
 
+def _ldap_rejection_reason(result):
+    """Use protocol result categories, never server diagnostics that may contain secrets."""
+    code = result.get("result") if isinstance(result, dict) else None
+    if type(code) is not int:
+        code = None
+    reasons = {
+        8: "目录要求更强的身份验证，请管理员检查 LDAPS 连接",
+        13: "目录要求加密连接，请管理员检查 LDAPS 配置",
+        19: "密码或请求不满足 AD 约束，请管理员核查密码策略及请求格式",
+        32: "目标 AD 对象不存在，请重新验证",
+        49: "目录服务账号认证失败，请管理员检查连接凭据",
+        50: "目录服务账号操作权限不足，请联系管理员检查授权",
+        51: "目录服务繁忙，请稍后重试",
+        52: "目录服务暂不可用，请稍后重试或联系管理员",
+        53: "AD 不允许此操作，请管理员核查域策略与目录限制",
+    }
+    return reasons.get(code, "目录未提供可识别的拒绝原因，请管理员核查策略与权限")
+
+
 def under(dn, root):
     try:
         parts = [(a.casefold(), b.casefold()) for a, b, _ in parse_dn(dn)]
@@ -366,12 +385,14 @@ class ActiveDirectory:
         except Exception:
             raise ResetOutcomeUnknown("目录响应中断，密码修改结果不明；请先验证或联系管理员") from None
         if not changed:
-            raise RuleError("AD 拒绝密码，请检查复杂度和密码历史要求")
+            raise RuleError("AD 拒绝密码重置：" + _ldap_rejection_reason(self.conn.result))
         if unlock:
             try:
                 unlocked = self.conn.modify(account["dn"], {"lockoutTime": [(MODIFY_REPLACE, [0])]})
+                reason = _ldap_rejection_reason(self.conn.result) if not unlocked else ""
             except Exception:
                 unlocked = False
+                reason = "目录响应中断，请联系管理员核查锁定状态"
             if not unlocked:
-                return PasswordResetOutcome("密码已重置，但解锁失败，请联系管理员", False)
+                return PasswordResetOutcome("密码已重置，但解锁失败：" + reason, False)
         return PasswordResetOutcome("密码已成功重置", True)

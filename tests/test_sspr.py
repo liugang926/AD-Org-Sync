@@ -102,7 +102,7 @@ def test_verification_does_not_leave_session_when_audit_fails(setup_sspr, monkey
         raise RuntimeError("private database diagnostic")
 
     monkeypatch.setattr(sspr, "audit", unavailable_audit)
-    with pytest.raises(RuleError, match="身份核验暂不可用") as failure:
+    with pytest.raises(RuleError, match="审计暂时不可用") as failure:
         sspr.verify("valid", "ip")
     assert "private" not in str(failure.value)
     assert not EmployeeSession.objects.exists()
@@ -229,6 +229,7 @@ def test_reset_attempt_exists_before_directory_write_and_remains_uncertain_on_er
         assert attempt.success is False
         assert attempt.state == "pending"
         assert "待确认" in attempt.result
+        assert attempt.completed_at is None
         raise RuntimeError("private directory diagnostic")
 
     monkeypatch.setattr(ad, "reset_password", interrupted_reset)
@@ -239,6 +240,7 @@ def test_reset_attempt_exists_before_directory_write_and_remains_uncertain_on_er
     assert attempt.success is False
     assert attempt.state == "unknown"
     assert "结果不明" in attempt.result
+    assert attempt.completed_at is not None
     assert "private" not in attempt.result
     assert "Example-password" not in attempt.result
     assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
@@ -266,7 +268,7 @@ def test_reset_keeps_pending_attempt_if_final_audit_update_fails(setup_sspr, mon
     original_save = Audit.save
 
     def fail_final_update(self, *args, **kwargs):
-        if self.action == "sspr_reset" and kwargs.get("update_fields"):
+        if self.action == "sspr_reset" and "completed_at" in (kwargs.get("update_fields") or []):
             raise RuntimeError("database unavailable after directory write")
         return original_save(self, *args, **kwargs)
 
@@ -278,6 +280,7 @@ def test_reset_keeps_pending_attempt_if_final_audit_update_fails(setup_sspr, mon
     assert attempt.success is False
     assert attempt.state == "pending"
     assert "待确认" in attempt.result
+    assert attempt.completed_at is None
     assert ad.resets == 1
     assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
 
@@ -482,3 +485,201 @@ def test_missing_enterprise_id_blocks_employee_auth(setup_sspr, settings):
     with pytest.raises(RuleError, match="企业 ID"):
         sspr.verify("valid", "ip")
     assert not EmployeeSession.objects.exists()
+
+
+@pytest.mark.django_db
+def test_password_audit_captures_server_identity_ip_and_completion(setup_sspr):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "2001:0db8:0:0:0:0:0:1")
+    session = EmployeeSession.objects.get(digest=sspr.fingerprint(token))
+    verified = Audit.objects.get(action="sspr_verified")
+    assert session.employee_id == "1001" and session.target_username == "testuser"
+    assert verified.actor == "u1" and verified.actor_name == "测试员工"
+    assert verified.employee_id == "1001" and verified.target_username == "testuser"
+    assert verified.target == ad.items[0]["guid"]
+    assert verified.client_ip == "2001:db8::1" and verified.completed_at is not None
+    assert verified.completed_at == verified.created_at
+
+    sspr.reset(token, "Ab1!xyza", "Ab1!xyza", "192.0.2.10")
+    attempt = Audit.objects.get(action="sspr_reset")
+    assert attempt.actor == "u1" and attempt.actor_name == "测试员工"
+    assert attempt.employee_id == "1001" and attempt.target_username == "testuser"
+    assert attempt.client_ip == "192.0.2.10"
+    assert attempt.completed_at >= attempt.created_at
+    assert attempt.state == "success" and attempt.success
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("reason", ["expired", "used", "changed_config", "mismatch", "length", "ip_rate", "user_rate"])
+def test_rejected_submissions_are_one_failed_attempt_with_trusted_session(setup_sspr, monkeypatch, reason):
+    _, ad, config = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    session = EmployeeSession.objects.get(digest=sspr.fingerprint(token))
+    password = confirmation = "Ab1!xyza"
+    if reason == "expired":
+        EmployeeSession.objects.filter(pk=session.pk).update(expires_at=timezone.now() - timedelta(seconds=1))
+    elif reason == "used":
+        EmployeeSession.objects.filter(pk=session.pk).update(used=True)
+    elif reason == "changed_config":
+        config.minimum_password_length = 10
+        config.save()
+    elif reason == "mismatch":
+        confirmation = "DIFFERENT-SECRET"
+    elif reason == "length":
+        password = confirmation = "SHORT"
+    else:
+        original_limit = sspr.rate_limit
+
+        def deny_limit(key, limit=10):
+            if key.startswith("sspr-reset-ip:" if reason == "ip_rate" else "sspr-reset-user:"):
+                raise RuleError("操作过于频繁，请稍后再试")
+            return original_limit(key, limit)
+
+        monkeypatch.setattr(sspr, "rate_limit", deny_limit)
+
+    with pytest.raises(RuleError):
+        sspr.reset(token, password, confirmation, "ip")
+    attempt = Audit.objects.get(action="sspr_reset")
+    assert attempt.actor == "u1" and attempt.actor_name == "测试员工"
+    assert attempt.employee_id == "1001" and attempt.target_username == "testuser"
+    assert attempt.target == str(session.object_guid)
+    assert attempt.state == "failed" and not attempt.success
+    assert attempt.completed_at is not None and attempt.client_ip is None
+    assert ad.resets == 0
+    assert "Ab1!xyza" not in str(list(Audit.objects.values()))
+    assert "DIFFERENT-SECRET" not in str(list(Audit.objects.values()))
+    if reason != "used":
+        session.refresh_from_db()
+        assert not session.used
+
+
+@pytest.mark.django_db
+def test_unknown_session_rejection_does_not_trust_posted_actor_or_account(client, setup_sspr):
+    _, ad, _ = setup_sspr
+    client.cookies["employee_verification"] = "FORGED-TOKEN"
+    response = client.post("/sspr/reset", {
+        "password": "Ab1!xyza", "confirmation": "Ab1!xyza",
+        "userId": "forged-user", "username": "administrator", "employee_id": "forged-id",
+    })
+    assert response.status_code == 400
+    attempt = Audit.objects.get(action="sspr_reset")
+    assert attempt.actor == "未验证访客"
+    assert attempt.actor_name == attempt.employee_id == attempt.target_username == attempt.target == ""
+    assert attempt.state == "failed" and attempt.completed_at is not None
+    data = str(list(Audit.objects.values()))
+    assert all(secret not in data for secret in ["FORGED-TOKEN", "forged-user", "administrator", "forged-id", "Ab1!xyza"])
+    assert ad.resets == 0
+
+
+@pytest.mark.django_db
+def test_replay_has_separate_failure_without_overwriting_success(setup_sspr):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    sspr.reset(token, "Ab1!xyza", "Ab1!xyza", "ip")
+    first = Audit.objects.get(action="sspr_reset")
+    with pytest.raises(RuleError, match="验证已失效"):
+        sspr.reset(token, "Ab1!xyza", "Ab1!xyza", "ip")
+    first.refresh_from_db()
+    second = Audit.objects.exclude(pk=first.pk).get(action="sspr_reset")
+    assert first.state == "success" and first.success
+    assert second.state == "failed" and not second.success
+    assert second.actor == "u1" and second.target_username == "testuser"
+    assert first.completed_at is not None and second.completed_at is not None
+    assert ad.resets == 1
+
+
+@pytest.mark.django_db
+def test_account_busy_denial_is_audited_without_consuming_session(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+
+    def account_busy(_):
+        raise RuleError("操作正在执行，请稍后重试")
+
+    monkeypatch.setattr(sspr, "lock", account_busy)
+    with pytest.raises(RuleError, match="操作正在执行"):
+        sspr.reset(token, "Ab1!xyza", "Ab1!xyza", "ip")
+    attempt = Audit.objects.get(action="sspr_reset")
+    assert attempt.state == "failed" and attempt.completed_at is not None
+    assert attempt.actor == "u1" and attempt.target_username == "testuser"
+    assert not EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+    assert ad.resets == 0
+
+
+@pytest.mark.django_db
+def test_failed_verification_has_live_identity_but_no_session(setup_sspr):
+    _, ad, _ = setup_sspr
+    ad.items[0]["enabled"] = False
+    with pytest.raises(RuleError, match="已禁用"):
+        sspr.verify("valid", "192.0.2.10")
+    failed = Audit.objects.get(action="sspr_auth_failed")
+    assert failed.actor == "u1" and failed.actor_name == "测试员工"
+    assert failed.employee_id == "1001" and failed.target_username == "testuser"
+    assert failed.client_ip == "192.0.2.10" and failed.completed_at is not None
+    assert not failed.success and failed.state == "failed"
+    assert not EmployeeSession.objects.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("code", ["", "X" * 4097, "SECRET-AUTHORIZATION-CODE"])
+def test_invalid_verification_is_anonymous_and_code_is_never_audited(setup_sspr, code):
+    with pytest.raises(RuleError):
+        sspr.verify(code, "ip")
+    failed = Audit.objects.get(action="sspr_auth_failed")
+    assert failed.actor == "未验证访客" and failed.client_ip is None
+    assert failed.actor_name == failed.employee_id == failed.target_username == failed.target == ""
+    assert failed.completed_at is not None and not failed.success
+    if code:
+        assert code not in str(list(Audit.objects.values()))
+    assert not EmployeeSession.objects.exists()
+
+
+@pytest.mark.django_db
+def test_reset_refreshes_audit_profile_and_renamed_account_before_write(setup_sspr, monkeypatch):
+    source, ad, _ = setup_sspr
+    token, initial = sspr.verify("valid", "ip")
+    session = EmployeeSession.objects.get(digest=sspr.fingerprint(token))
+    source.users[0].update(name="更新员工姓名", employee_id="1002")
+    ad.items[0].update(username="renamed-account", employee_id="1002")
+    original_reset = ad.reset_password
+
+    def checked_reset(guid, password, unlock=False):
+        attempt = Audit.objects.get(action="sspr_reset")
+        assert attempt.actor == "u1" and attempt.target == initial["guid"]
+        assert attempt.actor_name == "更新员工姓名" and attempt.employee_id == "1002"
+        assert attempt.target_username == "renamed-account"
+        assert attempt.state == "pending" and attempt.completed_at is None
+        return original_reset(guid, password, unlock)
+
+    monkeypatch.setattr(ad, "reset_password", checked_reset)
+    sspr.reset(token, "Ab1!xyza", "Ab1!xyza", "ip")
+    attempt = Audit.objects.get(action="sspr_reset")
+    assert attempt.state == "success" and attempt.target_username == "renamed-account"
+    assert attempt.actor_name == "更新员工姓名" and attempt.employee_id == "1002"
+    assert attempt.actor == "u1" and attempt.target == str(session.object_guid)
+    assert attempt.completed_at >= attempt.created_at and ad.resets == 1
+    # Historical verification evidence retains what was known at verification time.
+    verified = Audit.objects.get(action="sspr_verified")
+    assert verified.actor_name == "测试员工" and verified.target_username == "testuser"
+
+
+@pytest.mark.django_db
+def test_identity_audit_update_failure_prevents_directory_password_write(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    original_save = Audit.save
+
+    def fail_identity_update(self, *args, **kwargs):
+        if "target_username" in (kwargs.get("update_fields") or []):
+            raise RuntimeError("private database identity update diagnostic")
+        return original_save(self, *args, **kwargs)
+
+    monkeypatch.setattr(Audit, "save", fail_identity_update)
+    with pytest.raises(RuleError, match="审计暂时不可用，密码未提交") as failure:
+        sspr.reset(token, "Ab1!xyza", "Ab1!xyza", "ip")
+    attempt = Audit.objects.get(action="sspr_reset")
+    assert attempt.state == "failed" and not attempt.success
+    assert attempt.completed_at is not None
+    assert "private" not in attempt.result and "private" not in str(failure.value)
+    assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+    assert ad.resets == 0

@@ -132,13 +132,18 @@ class Audit(models.Model):
         verbose_name = "审计日志"
         verbose_name_plural = "审计日志"
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    actor = models.CharField(max_length=150)
-    action = models.CharField(max_length=40)
-    target = models.CharField(max_length=150, blank=True)
-    result = models.CharField(max_length=300)
-    success = models.BooleanField(default=True)
-    state = models.CharField(max_length=16, blank=True, default="", choices=[
+    created_at = models.DateTimeField("请求/记录时间", default=timezone.now)
+    actor = models.CharField("操作者标识", max_length=150)
+    actor_name = models.CharField("员工姓名", max_length=200, blank=True, db_default="")
+    employee_id = models.CharField("工号", max_length=100, blank=True, db_default="")
+    action = models.CharField("操作类型", max_length=40)
+    target = models.CharField("对象标识", max_length=150, blank=True)
+    target_username = models.CharField("AD 账号", max_length=100, blank=True, db_default="")
+    client_ip = models.GenericIPAddressField("来源 IP", null=True, blank=True)
+    completed_at = models.DateTimeField("结果记录时间", null=True, blank=True)
+    result = models.CharField("结果说明/失败原因", max_length=300)
+    success = models.BooleanField("是否全部完成", default=True)
+    state = models.CharField("结果状态", max_length=16, blank=True, default="", choices=[
         ("success", "成功"), ("failed", "失败"), ("partial", "部分完成"),
         ("pending", "处理未完成"), ("unknown", "待确认"),
     ])
@@ -148,6 +153,8 @@ class EmployeeSession(models.Model):
     digest = models.CharField(max_length=64, primary_key=True)
     source_id = models.CharField(max_length=100)
     display_name = models.CharField(max_length=200, blank=True)
+    employee_id = models.CharField("工号", max_length=100, blank=True, db_default="")
+    target_username = models.CharField("AD 账号", max_length=100, blank=True, db_default="")
     object_guid = models.UUIDField()
     config_fingerprint = models.CharField(max_length=64)
     expires_at = models.DateTimeField()

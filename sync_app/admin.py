@@ -2,7 +2,9 @@ from django.contrib import admin
 from django import forms
 from django.shortcuts import redirect
 from contextlib import closing
+from zoneinfo import ZoneInfo
 from django.db import transaction
+from django.utils import timezone
 from .directory import ActiveDirectory, under
 from .domain import RuleError
 from .models import Snapshot
@@ -80,9 +82,30 @@ class ReadOnlyAdmin(admin.ModelAdmin):
 
 @admin.register(Audit)
 class AuditAdmin(ReadOnlyAdmin):
-    list_display = ("created_at", "actor", "action", "target", "state", "result")
-    list_filter = ("action", "state")
-    search_fields = ("actor", "target")
+    list_display = ("requested_time", "completed_time", "actor_name", "employee_id", "actor", "action", "target_username", "status_label", "result", "client_ip")
+    list_filter = ("action", "state", "created_at")
+    search_fields = ("actor_name", "employee_id", "actor", "target_username", "target")
+    date_hierarchy = "created_at"
+    fields = ("requested_time", "completed_time", "actor_name", "employee_id", "actor", "action", "target_username", "target", "status_label", "result", "client_ip")
+    readonly_fields = fields
+
+    @admin.display(description="请求 / 记录时间（北京时间）", ordering="created_at")
+    def requested_time(self, obj):
+        return timezone.localtime(obj.created_at, ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+
+    @admin.display(description="完成时间（北京时间）", ordering="completed_at")
+    def completed_time(self, obj):
+        if not obj.completed_at:
+            return "—"
+        return timezone.localtime(obj.completed_at, ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+
+    @admin.display(description="结果状态", ordering="state")
+    def status_label(self, obj):
+        state = obj.state or ("success" if obj.success else "failed")
+        return {
+            "success": "成功", "failed": "失败", "partial": "部分完成",
+            "pending": "处理中 / 未完成", "unknown": "结果不明",
+        }.get(state, "未知状态")
 
 
 class DepartmentForm(forms.ModelForm):

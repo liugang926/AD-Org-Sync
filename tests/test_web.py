@@ -452,8 +452,130 @@ def test_audit_filters_and_invalid_date(admin_client):
     assert response.context["audit_rows"][0]["status"] == "部分完成"
     response = admin_client.get("/logs?result=attention")
     assert [entry.action for entry in response.context["page"]] == ["sample_unknown", "sample_pending"]
-    assert [row["status"] for row in response.context["audit_rows"]] == ["待确认", "处理未完成"]
+    assert [row["status"] for row in response.context["audit_rows"]] == ["结果不明", "处理中 / 未完成"]
     assert "待确认或未完成" in response.content.decode()
+    response = admin_client.get("/logs?result=pending")
+    assert [entry.action for entry in response.context["page"]] == ["sample_pending"]
+    assert response.context["audit_rows"][0]["tone"] == "active"
+    response = admin_client.get("/logs?result=unknown")
+    assert [entry.action for entry in response.context["page"]] == ["sample_unknown"]
     response = admin_client.get("/logs?start=2026-99-99")
     assert response.status_code == 200
     assert list(response.context["page"]) == []
+
+
+@pytest.mark.django_db
+def test_audit_password_reset_snapshots_are_searchable_and_escaped(admin_client):
+    from datetime import datetime, timezone as datetime_timezone
+    from sync_app.models import Audit, Person
+
+    request_time = datetime(2026, 9, 30, 1, 2, 3, tzinfo=datetime_timezone.utc)
+    record = Audit.objects.create(
+        actor="ding-user-1919", actor_name="测试员工<script>alert(1)</script>",
+        employee_id="T0001919", action="sspr_reset", target_username="test.ad",
+        target="d0a00000-1111-2222-3333-444444444444", state="failed", success=False,
+        result="密码不符合 AD 密码策略：<script>alert(2)</script>",
+        completed_at=request_time.replace(second=5), client_ip="198.51.100.17",
+    )
+    Audit.objects.filter(pk=record.pk).update(created_at=request_time)
+    # Current directory data must not replace the operation's historical snapshot.
+    Person.objects.create(source_id=record.actor, name="后来修改的姓名")
+    Audit.objects.create(actor="admin", action="settings", result="配置已更新")
+    for query in ("测试员工", "T0001919", "ding-user-1919", "TEST.AD", "d0a00000-1111"):
+        response = admin_client.get("/logs", {"action": "sspr_reset", "q": query})
+        assert [item.pk for item in response.context["page"]] == [record.pk]
+    html = response.content.decode()
+    assert "2026-09-30 09:02:03" in html and "完成：2026-09-30 09:02:05" in html
+    assert "北京时间（Asia/Shanghai，UTC+08:00）" in html
+    for value in ("工号：T0001919", "userId：ding-user-1919", "test.ad", "198.51.100.17", "密码不符合 AD 密码策略"):
+        assert value in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "<script>alert(" not in html and "后来修改的姓名" not in html
+    assert list(admin_client.get("/logs?q=后来修改的姓名").context["page"]) == []
+
+
+@pytest.mark.django_db
+def test_audit_password_reset_incomplete_results_are_distinct(admin_client):
+    from sync_app.models import Audit
+
+    for state in ("pending", "unknown", "partial"):
+        Audit.objects.create(actor="ding-user", action="sspr_reset", success=False, state=state)
+    response = admin_client.get("/logs?action=sspr_reset&result=failed")
+    assert list(response.context["page"]) == []
+    html = admin_client.get("/logs?action=sspr_reset").content.decode()
+    for value in ("处理中 / 未完成", "结果不明", "部分完成", "密码已修改，解锁未完成。", "完成：—", "工号：—", "AD GUID：—"):
+        assert value in html
+    Audit.objects.create(actor="anonymous", action="sspr_auth_failed", success=False, state="failed", result="授权码无效")
+    assert "未验证访客" in admin_client.get("/logs?action=sspr_auth_failed").content.decode()
+
+
+@pytest.mark.django_db
+def test_employee_http_denials_are_audited_once_without_client_supplied_identity(client, admin_client):
+    from sync_app.models import Audit
+
+    forged = {"actor": "forged-user", "employee_id": "forged-employee", "target_username": "forged-account"}
+    response = client.post("/sspr/auth/dingtalk", forged)
+    assert response.status_code == 400
+    denied = Audit.objects.get(action="sspr_auth_failed")
+    assert denied.actor == "未验证访客" and denied.state == "failed"
+    assert denied.result == "缺少有效钉钉授权码"
+    assert not denied.employee_id and not denied.target_username
+    assert denied.completed_at is not None
+
+    response = client.post("/sspr/reset", {**forged, "password": "Never-audit-this-password!", "confirmation": "Never-audit-this-password!"})
+    assert response.status_code == 400
+    assert Audit.objects.filter(action="sspr_reset").count() == 1
+    denied = Audit.objects.get(action="sspr_reset")
+    assert denied.actor == "未验证访客" and denied.state == "failed"
+    html = admin_client.get("/logs?action=sspr_reset").content.decode()
+    assert "<strong>未验证访客</strong>" in html and "验证已失效" in html
+    assert "userId：—" in html and "userId：未验证访客" not in html
+    assert "forged-" not in html and "Never-audit-this-password!" not in html
+
+
+@pytest.mark.django_db
+def test_audit_pagination_retains_search_operation_date_and_result(admin_client):
+    from datetime import datetime, timezone as datetime_timezone
+    from urllib.parse import parse_qs
+    from sync_app.models import Audit
+
+    Audit.objects.bulk_create([
+        Audit(actor="u1", actor_name="A&B", action="sspr_reset", state="success", result="密码已修改")
+        for _ in range(51)
+    ])
+    Audit.objects.update(created_at=datetime(2026, 9, 30, 3, tzinfo=datetime_timezone.utc))
+    filters = {"q": "A&B", "action": "sspr_reset", "result": "success", "start": "2026-09-30", "end": "2026-09-30"}
+    response = admin_client.get("/logs", filters)
+    assert response.context["page"].paginator.count == 51
+    assert len(response.context["page"]) == 50
+    assert parse_qs(response.context["filter_query"]) == {key: [value] for key, value in filters.items()}
+    assert "q=A%26B" in response.content.decode() and "page=2" in response.content.decode()
+    response = admin_client.get("/logs", {**filters, "page": 2})
+    assert len(response.context["page"]) == 1 and response.context["page"].number == 2
+
+
+@pytest.mark.django_db
+def test_django_audit_admin_search_and_details_remain_read_only(admin_client):
+    from django.contrib import admin
+    from sync_app.models import Audit
+
+    record = Audit.objects.create(
+        actor="ding-user-1919", actor_name="测试员工", employee_id="T0001919", action="sspr_reset",
+        target_username="test.ad", state="unknown", success=False, result="连接中断，无法确认写入结果",
+        client_ip="198.51.100.17",
+    )
+    response = admin_client.get("/admin/sync_app/audit/", {"q": "T0001919"})
+    assert response.status_code == 200
+    assert [item.pk for item in response.context["cl"].result_list] == [record.pk]
+    assert "结果不明" in response.content.decode()
+    response = admin_client.get(f"/admin/sync_app/audit/{record.pk}/change/")
+    assert response.status_code == 200
+    html = response.content.decode()
+    assert "完成时间（北京时间）" in html and "test.ad" in html and "198.51.100.17" in html
+    model_admin = admin.site._registry[Audit]
+    assert not model_admin.has_add_permission(response.wsgi_request)
+    assert not model_admin.has_change_permission(response.wsgi_request, record)
+    assert not model_admin.has_delete_permission(response.wsgi_request, record)
+    assert admin_client.post(f"/admin/sync_app/audit/{record.pk}/change/", {"result": "覆盖审计"}).status_code == 403
+    record.refresh_from_db()
+    assert record.result == "连接中断，无法确认写入结果"
