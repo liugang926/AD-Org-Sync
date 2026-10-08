@@ -133,7 +133,7 @@ def test_failed_fresh_account_check_hides_platforms(client, employee_content, em
     directory.items[0]["enabled"] = False
     html = client.get("/sspr").content.decode()
     assert "核验成功才可见的平台" not in html and "testuser" not in html
-    assert "受保护或已禁用" in html
+    assert "AD账号已禁用，不能自助重置" in html
 
 
 def test_csrf_rejection_uses_custom_copy_without_security_or_identity_bypass(employee_content):

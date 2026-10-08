@@ -107,7 +107,7 @@ def test_default_employee_id_mode_does_not_fall_back_to_matching_username(userna
         return original_match(field, value)
 
     monkeypatch.setattr(ad, "match", record_match)
-    with pytest.raises(RuleError, match="未唯一匹配"):
+    with pytest.raises(RuleError, match="未匹配到AD账号"):
         sspr.verify("valid", "192.0.2.10")
     assert calls == [("employee_id", "T0002341")]
     assert ad.items[0]["username"] == "T0002341" and ad.items[0]["employee_id"] == ""
@@ -123,7 +123,7 @@ def test_username_mode_keeps_unique_match_and_account_safety_checks(username_ssp
         ad.items[0]["protected"] = True
     else:
         ad.items[0]["enabled"] = False
-    with pytest.raises(RuleError, match="未唯一匹配|受保护或已禁用"):
+    with pytest.raises(RuleError, match="匹配到多个AD账号|AD账号受保护|AD账号已禁用"):
         sspr.verify("valid", "192.0.2.10")
     assert not EmployeeSession.objects.exists() and ad.resets == 0
     assert not Audit.objects.get(action="sspr_auth_failed").success
