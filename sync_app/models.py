@@ -71,7 +71,17 @@ class Configuration(models.Model):
     identity_anchor = models.CharField(max_length=64, blank=True, editable=False)
     root_ou = models.CharField("同步 AD 根 OU DN", max_length=500, blank=True)
     naming = models.CharField("新账号命名", max_length=30, choices=[("employee_id", "工号"), ("source_id", "钉钉 userId"), ("email", "邮箱前缀")], default="employee_id")
-    match_field = models.CharField("同步匹配字段", max_length=30, choices=[("employee_id", "工号（唯一精确匹配可自动绑定）"), ("email", "邮箱（仅建议，需人工确认）"), ("source_id", "userId 与 AD 账号名（仅建议）")], default="employee_id")
+    match_field = models.CharField(
+        "同步匹配字段", max_length=30,
+        choices=[
+            ("employee_id", "钉钉工号 → AD employeeID（唯一精确匹配可自动绑定）"),
+            ("employee_username", "钉钉工号 → AD sAMAccountName（唯一精确匹配可自动绑定）"),
+            ("email", "邮箱（仅建议，需人工确认）"),
+            ("source_id", "userId 与 AD 账号名（仅建议）"),
+        ],
+        default="employee_id",
+        help_text="更改匹配方式后须重新生成预览；AD 根 OU 外的现有账号不会自动纳入同步。",
+    )
     attributes = models.JSONField("同步属性", default=list, blank=True, help_text="displayName、mail、title、department、telephoneNumber")
     clear_attributes = models.JSONField("允许来源空值清除的属性", default=list, blank=True, help_text="必须属于已启用的同步属性；默认空值不覆盖 AD")
     enable_new_accounts = models.BooleanField("新建账号初始化成功后启用", default=True)

@@ -41,13 +41,14 @@ def resolve(user: dict, binding: dict | None, accounts: list[dict], occupied: se
         if protected(target) or not target["enabled"]:
             return "conflict", target, "目标受保护或已禁用，需人工处理"
         return "update", target, "使用已有绑定"
-    identifier = user.get(match_field, "").strip().casefold()
+    source_field = "employee_id" if match_field == "employee_username" else match_field
+    identifier = user.get(source_field, "").strip().casefold()
     if not identifier or employee_counts[identifier] != 1:
         return "conflict", None, "匹配字段缺失或重复"
     employee = user.get("employee_id", "").strip().casefold()
     if not employee:
         return "conflict", None, "工号缺失或重复"
-    target_field = "username" if match_field == "source_id" else match_field
+    target_field = "username" if match_field in {"source_id", "employee_username"} else match_field
     matches = [a for a in accounts if a.get(target_field, "").strip().casefold() == identifier]
     if len(matches) > 1:
         return "conflict", None, "多个 AD 账号命中同一标识"
@@ -55,8 +56,10 @@ def resolve(user: dict, binding: dict | None, accounts: list[dict], occupied: se
         target = matches[0]
         if target["guid"] in occupied or protected(target) or not target["enabled"]:
             return "conflict", target, "AD 账号已占用、受保护或已禁用"
-        if match_field != "employee_id":
+        if match_field not in {"employee_id", "employee_username"}:
             return "conflict", target, "建议关联此账号，请在人员页面人工确认"
+        if match_field == "employee_username":
+            return "bind", target, "唯一工号与 AD 账号名匹配"
         return "bind", target, "唯一工号匹配"
     if any(a.get("employee_id", "").strip().casefold() == employee for a in accounts):
         return "conflict", None, "工号已存在于其他 AD 账号，请人工核验"
