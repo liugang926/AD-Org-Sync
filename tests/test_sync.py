@@ -17,6 +17,136 @@ def configured():
 
 
 @pytest.mark.django_db
+def test_job_to_sam_preview_then_apply_binds_existing_object(configured):
+    configured.match_field = "employee_username"
+    configured.naming = "source_id"
+    configured.save()
+    source = Source([user(employee=" T0001919 ")])
+    target = account(employee="", name="t0001919")
+    ad = Directory([target])
+    job = Job.objects.create()
+    job.plan = plan(job, source, ad)
+    operation = job.plan["operations"][0]
+    assert operation["action"] == "bind" and operation["target"]["guid"] == target["guid"]
+    assert operation["candidate"] == "u1" and operation["username"] == "t0001919"
+    assert not Binding.objects.exists() and ad.created == 0
+    assert apply(job, source, ad) == "success"
+    binding = Binding.objects.get()
+    assert str(binding.object_guid) == target["guid"] and binding.username == "t0001919"
+    assert ad.created == 0 and ad.items[0]["employee_id"] == ""
+
+
+@pytest.mark.django_db
+def test_job_to_sam_partial_scope_checks_duplicates_in_full_source(configured):
+    configured.match_field = "employee_username"
+    configured.save()
+    source = Source([user("u1", "T0001919"), user("u2", "t0001919")])
+    ad = Directory([account(employee="", name="T0001919")])
+    job = Job.objects.create(scope="users", selected=["u1"])
+    job.plan = plan(job, source, ad)
+    assert len(job.plan["operations"]) == 1
+    assert job.plan["operations"][0]["action"] == "conflict"
+    with pytest.raises(RuleError, match="冲突"):
+        apply(job, source, ad)
+    assert not Binding.objects.exists() and ad.created == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("state", ["outside_root", "protected", "disabled", "occupied"])
+def test_job_to_sam_does_not_claim_ineligible_target(configured, state):
+    configured.match_field = "employee_username"
+    configured.save()
+    target = account(employee="", name="T0001919")
+    if state == "outside_root":
+        target["dn"] = "CN=T0001919,OU=Existing,DC=example,DC=com"
+    elif state == "protected":
+        target.update(protected=True, domain_admin=True)
+    elif state == "disabled":
+        target["enabled"] = False
+    else:
+        owner = Person.objects.create(source_id="other", name="其他人员")
+        Binding.objects.create(person=owner, object_guid=target["guid"], username=target["username"])
+    ad = Directory([target])
+    source = Source([user(employee="T0001919")])
+    job = Job.objects.create()
+    job.plan = plan(job, source, ad)
+    operation = job.plan["operations"][0]
+    assert operation["action"] == "conflict" and operation["target"]["guid"] == target["guid"]
+    if state == "outside_root":
+        assert "不在受管 OU" in operation["reason"]
+    with pytest.raises(RuleError, match="冲突"):
+        apply(job, source, ad)
+    assert not Binding.objects.filter(person__source_id="u1").exists() and ad.created == 0
+    assert ad.items[0] == target
+
+
+@pytest.mark.django_db
+def test_job_to_sam_mode_change_invalidates_saved_preview(configured):
+    configured.match_field = "employee_username"
+    configured.save()
+    source = Source([user(employee="T0001919")])
+    ad = Directory([account(employee="", name="T0001919")])
+    job = Job.objects.create()
+    job.plan = plan(job, source, ad)
+    assert job.plan["operations"][0]["action"] == "bind"
+    configured.match_field = "employee_id"
+    configured.save()
+    with pytest.raises(RuleError, match="配置或绑定已变化"):
+        apply(job, source, ad)
+    assert not Binding.objects.exists() and ad.created == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("change", ["username", "guid", "protected", "enabled", "dn"])
+def test_job_to_sam_target_changed_after_preview_blocks_binding(configured, change):
+    configured.match_field = "employee_username"
+    configured.save()
+    source = Source([user(employee="T0001919")])
+    ad = Directory([account(employee="", name="T0001919")])
+    job = Job.objects.create()
+    job.plan = plan(job, source, ad)
+    ad.items[0][change] = {
+        "username": "replacement", "guid": account()["guid"], "protected": True,
+        "enabled": False, "dn": "CN=T0001919,OU=Other,DC=example,DC=com",
+    }[change]
+    with pytest.raises(RuleError, match="AD 状态已变化|对象不存在"):
+        apply(job, source, ad)
+    assert not Binding.objects.exists() and ad.created == 0
+
+
+@pytest.mark.django_db
+def test_job_to_sam_no_match_keeps_independent_creation_naming(configured):
+    configured.match_field = "employee_username"
+    configured.naming = "source_id"
+    configured.save()
+    source = Source([user(employee="T0001919")])
+    ad = Directory([])
+    job = Job.objects.create()
+    job.plan = plan(job, source, ad)
+    operation = job.plan["operations"][0]
+    assert operation["action"] == "create" and operation["username"] == "u1"
+    assert apply(job, source, ad) == "success"
+    assert ad.created == 1 and Binding.objects.get().username == "u1"
+
+
+@pytest.mark.django_db
+def test_job_to_sam_existing_guid_binding_survives_job_change(configured):
+    configured.match_field = "employee_username"
+    configured.save()
+    source = Source([user(employee="T0001919")])
+    original = account(employee="", name="T0001919")
+    ad = Directory([original])
+    first = Job.objects.create()
+    first.plan = plan(first, source, ad)
+    assert apply(first, source, ad) == "success"
+    source.users[0]["employee_id"] = "T0002341"
+    ad.items.append(account(employee="", name="T0002341"))
+    second = plan(Job.objects.create(), source, ad)["operations"][0]
+    assert second["action"] == "update" and second["target"]["guid"] == original["guid"]
+    assert str(Binding.objects.get().object_guid) == original["guid"]
+
+
+@pytest.mark.django_db
 def test_preview_read_only_and_idempotent_execution(configured):
     source, ad = Source(), Directory([])
     job = Job.objects.create()

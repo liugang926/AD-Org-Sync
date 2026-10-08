@@ -177,7 +177,8 @@ def plan(job, source, ad):
     departments = {d["id"]: d for d in snap.departments}
     overrides = {d.source_id: d for d in DepartmentBinding.objects.all()}
     occupied = {str(b.object_guid) for b in bindings.values()}
-    employee_counts = Counter(u.get(config.match_field, "").strip().casefold() for u in snap.users)
+    source_match_field = "employee_id" if config.match_field == "employee_username" else config.match_field
+    employee_counts = Counter(u.get(source_match_field, "").strip().casefold() for u in snap.users)
     actual_employee_counts = Counter(u.get("employee_id", "").strip().casefold() for u in snap.users)
     name_counts = Counter(candidate(u, config.naming).casefold() for u in snap.users)
     operations = []
