@@ -1,5 +1,6 @@
 import ssl
 import uuid
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 import pytest
 from sync_app.directory import DingTalk, ActiveDirectory
@@ -229,6 +230,114 @@ def test_ad_account_fingerprint_includes_directory_change_revision():
     entry["attributes"]["uSNChanged"] = 43
     from sync_app.domain import fingerprint
     assert fingerprint(ActiveDirectory.account(entry)) != fingerprint(account)
+
+
+def native_state_entry():
+    return {"dn": "CN=person,OU=People,DC=example,DC=com", "attributes": {
+        "objectGUID": str(uuid.uuid4()), "sAMAccountName": "person", "employeeID": "1001",
+        "objectSid": "S-1-5-21-100-200-300-1100", "userAccountControl": 512,
+        "adminCount": [], "isCriticalSystemObject": [], "lockoutTime": [], "uSNChanged": 42,
+    }}
+
+
+@pytest.mark.parametrize("raw,locked", [(b"0", False), (b"1", True), (b"133700000000000000", True)])
+def test_ad_lockout_schema_datetime_uses_original_filetime_without_rounding(raw, locked):
+    from ldap3.protocol.formatters.formatters import format_ad_timestamp
+
+    entry = native_state_entry()
+    entry["attributes"]["lockoutTime"] = format_ad_timestamp(raw)
+    assert isinstance(entry["attributes"]["lockoutTime"], datetime)
+    entry["raw_attributes"] = {"lockoutTime": [raw]}
+    result = ActiveDirectory.account(entry)
+    assert result["locked"] is locked
+    assert result["enabled"] and not result["protected"]
+    assert result["ad_revision"] == "42" and result["username"] == "person"
+    assert result["guid"] == entry["attributes"]["objectGUID"]
+
+
+@pytest.mark.parametrize("stamp,locked", [
+    (datetime(1601, 1, 1), False),
+    (datetime(1601, 1, 1, tzinfo=timezone.utc), False),
+    (datetime(1601, 1, 1, 8, tzinfo=timezone(timedelta(hours=8))), False),
+    (datetime(2026, 1, 1), True),
+    (datetime(2026, 1, 1, tzinfo=timezone.utc), True),
+])
+def test_ad_lockout_datetime_fallback_accepts_utc_and_naive_ad_timestamps(stamp, locked):
+    entry = native_state_entry()
+    entry["attributes"]["lockoutTime"] = [stamp]
+    assert ActiveDirectory.account(entry)["locked"] is locked
+
+
+@pytest.mark.parametrize("value,locked", [(0, False), ("0", False), (b"0", False), (1, True), ("1", True), (b"1", True)])
+def test_ad_numeric_lockout_formats_remain_compatible(value, locked):
+    entry = native_state_entry()
+    entry["attributes"]["lockoutTime"] = value
+    assert ActiveDirectory.account(entry)["locked"] is locked
+
+
+@pytest.mark.parametrize("field,bad_value", [
+    ("userAccountControl", None), ("userAccountControl", []),
+    ("userAccountControl", [512, 514]), ("userAccountControl", -1),
+    ("userAccountControl", True), ("userAccountControl", 512.5),
+    ("userAccountControl", "+512"), ("userAccountControl", "5_12"),
+    ("userAccountControl", "٥١٢"), ("userAccountControl", b" 512"),
+    ("adminCount", None), ("adminCount", [0, 1]), ("adminCount", -1),
+    ("adminCount", False), ("adminCount", "private-invalid-value"),
+    ("isCriticalSystemObject", None), ("isCriticalSystemObject", [False, True]),
+    ("isCriticalSystemObject", 0), ("isCriticalSystemObject", "private-invalid-value"),
+    ("lockoutTime", None), ("lockoutTime", [0, 1]), ("lockoutTime", -1),
+    ("lockoutTime", False), ("lockoutTime", 0.5),
+    ("lockoutTime", "private-invalid-value"), ("lockoutTime", datetime(1600, 1, 1)),
+])
+def test_ad_invalid_security_states_fail_closed_without_echoing_values(field, bad_value):
+    entry = native_state_entry()
+    entry["attributes"][field] = bad_value
+    with pytest.raises(RuleError, match="安全属性无法核验") as error:
+        ActiveDirectory.account(entry)
+    assert "private-invalid-value" not in str(error.value)
+
+
+def test_ad_missing_required_uac_is_denied_but_optional_empty_flags_keep_ad_defaults():
+    entry = native_state_entry()
+    result = ActiveDirectory.account(entry)
+    assert result["enabled"] and not result["protected"] and not result["locked"]
+    del entry["attributes"]["userAccountControl"]
+    with pytest.raises(RuleError, match="安全属性无法核验"):
+        ActiveDirectory.account(entry)
+
+
+@pytest.mark.parametrize("raw", [None, [b"0", b"1"], [b"-1"], [b"private-invalid-value"], [datetime(1601, 1, 1)]])
+def test_ad_invalid_raw_lockout_does_not_fall_back_to_a_safe_formatted_value(raw):
+    entry = native_state_entry()
+    entry["attributes"]["lockoutTime"] = datetime(1601, 1, 1, tzinfo=timezone.utc)
+    entry["raw_attributes"] = {"lockoutTime": raw}
+    with pytest.raises(RuleError, match="安全属性无法核验") as error:
+        ActiveDirectory.account(entry)
+    assert "private-invalid-value" not in str(error.value)
+
+
+@pytest.mark.parametrize("attribute,value", [
+    ("adminCount", 1), ("isCriticalSystemObject", True),
+    ("isCriticalSystemObject", "TRUE"), ("isCriticalSystemObject", b"TRUE"),
+    ("userAccountControl", 512 | 2048), ("userAccountControl", 512 | 4096),
+    ("userAccountControl", 512 | 8192),
+])
+def test_ad_native_lockout_fix_preserves_all_protection_flags(attribute, value):
+    entry = native_state_entry()
+    entry["attributes"]["lockoutTime"] = datetime(1601, 1, 1, tzinfo=timezone.utc)
+    entry["attributes"][attribute] = value
+    assert ActiveDirectory.account(entry)["protected"]
+
+
+def test_ad_native_lockout_fix_keeps_disabled_extra_and_builtin_account_protection():
+    entry = native_state_entry()
+    entry["attributes"]["lockoutTime"] = datetime(1601, 1, 1)
+    entry["attributes"]["userAccountControl"] = 514
+    assert not ActiveDirectory.account(entry)["enabled"]
+    assert ActiveDirectory.account(entry, {"person"})["protected"]
+    for rid in (500, 501, 502):
+        entry["attributes"]["objectSid"] = "S-1-5-21-100-200-300-" + str(rid)
+        assert ActiveDirectory.account(entry)["protected"]
 
 
 def test_ldap_failures_never_return_partial_results():
