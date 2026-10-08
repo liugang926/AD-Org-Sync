@@ -50,6 +50,73 @@ def test_pages_and_readiness(admin_client):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("scope,selected,expected", [
+    ("full", "", []),
+    ("department", "2 3", ["2", "3"]),
+    ("users", "u1 u2", ["u1", "u2"]),
+])
+def test_dashboard_preview_requires_csrf_and_only_queues_selected_scope(admin_user, monkeypatch, scope, selected, expected):
+    from django.test import Client
+    from unittest.mock import Mock
+    from sync_app import synchronization as sync
+    from sync_app.models import Binding, Job, Operation, Snapshot
+    from .fakes import Directory, Source
+
+    source_factory = Mock(return_value=Source())
+    ad_factory = Mock(return_value=Directory())
+    monkeypatch.setattr(sync, "DingTalk", source_factory)
+    monkeypatch.setattr(sync, "ActiveDirectory", ad_factory)
+    client = Client(enforce_csrf_checks=True)
+    client.force_login(admin_user)
+    assert client.get("/dashboard").status_code == 200
+    data = {"scope": scope, "selected": selected}
+    assert client.post("/dashboard", data).status_code == 403
+    assert not Job.objects.exists()
+    data["csrfmiddlewaretoken"] = client.cookies["csrftoken"].value
+    response = client.post("/dashboard", data)
+    assert response.status_code == 302 and response["Location"] == "/dashboard"
+    job = Job.objects.get()
+    assert (job.kind, job.status, job.scope, job.selected, job.actor) == (
+        "preview", "queued", scope, expected, admin_user.username,
+    )
+    assert client.post("/dashboard", data).status_code == 302
+    assert Job.objects.count() == 1
+    source_factory.assert_not_called()
+    ad_factory.assert_not_called()
+    assert not Binding.objects.exists() and not Operation.objects.exists() and not Snapshot.objects.exists()
+
+
+@pytest.mark.django_db
+def test_dashboard_preview_with_missing_root_ou_reports_guard_without_directory_writes(admin_user, monkeypatch):
+    from django.test import Client
+    from unittest.mock import Mock
+    from sync_app import synchronization as sync
+    from sync_app.models import Binding, Job, Operation, Snapshot
+    from .fakes import Directory, Source
+
+    config = Configuration.current()
+    assert not config.root_ou
+    source, ad = Source(), Directory()
+    source.collect = Mock(wraps=source.collect)
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: ad)
+    client = Client(enforce_csrf_checks=True)
+    client.force_login(admin_user)
+    page = client.get("/dashboard")
+    assert "尚未配置" in page.content.decode()
+    assert client.post("/dashboard", {
+        "csrfmiddlewaretoken": client.cookies["csrftoken"].value, "scope": "full",
+    }).status_code == 302
+    assert sync.run_next()
+    job = Job.objects.get()
+    assert job.status == "failed" and job.message == "请设置 LDAP 目录范围内的同步根 OU"
+    assert job.message in client.get("/dashboard").content.decode()
+    source.collect.assert_not_called()
+    assert ad.created == ad.resets == 0 and ad.disabled == []
+    assert not Binding.objects.exists() and not Operation.objects.exists() and not Snapshot.objects.exists()
+
+
+@pytest.mark.django_db
 def test_department_console_prioritizes_names_and_filters_mapping_state(admin_client):
     import uuid
     from sync_app.models import DepartmentBinding, Snapshot
