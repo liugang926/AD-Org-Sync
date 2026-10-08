@@ -4,6 +4,18 @@ import pytest
 from playwright.sync_api import sync_playwright
 
 
+def _assert_employee_identity_withheld(page, platform_names=()):
+    assert page.get_by_text("正在通过钉钉确认身份", exact=False).count() == 0
+    assert page.get_by_text("正在确认身份", exact=False).count() == 0
+    assert page.get_by_text("testuser", exact=True).count() == 0
+    assert page.get_by_text("当前 AD 账号", exact=True).count() == 0
+    assert page.get_by_role("heading", name="企业 AD 认证平台", exact=True).count() == 0
+    assert page.locator('form[action="/sspr/reset"]').count() == 0
+    assert page.get_by_label("新密码", exact=True).count() == 0
+    for name in platform_names:
+        assert page.get_by_text(name, exact=True).count() == 0
+
+
 @pytest.mark.django_db(transaction=True)
 def test_dashboard_preview_browser_submits_its_own_csrf_token_and_queues_once(live_server, django_user_model, monkeypatch):
     from unittest.mock import Mock
@@ -138,7 +150,7 @@ def test_admin_and_mobile_employee_journeys(live_server, django_user_model, monk
         mobile.reload()
         assert mobile.get_by_text("钉钉组件加载失败，请从钉钉工作台打开并检查网络后重试。", exact=True).is_visible()
         assert mobile.get_by_role("button", name="重新验证").is_enabled()
-        assert mobile.get_by_text("testuser", exact=True).count() == 0
+        _assert_employee_identity_withheld(mobile)
         stalled = browser.new_page(viewport={"width": 390, "height": 844})
         stalled.clock.install()
         stalled.route("https://g.alicdn.com/**", lambda route: None)
@@ -146,6 +158,7 @@ def test_admin_and_mobile_employee_journeys(live_server, django_user_model, monk
         stalled.clock.fast_forward(9000)
         assert stalled.get_by_text("连接钉钉超时，请从钉钉工作台打开并检查网络后重试。", exact=True).is_visible()
         assert stalled.get_by_role("button", name="重新验证").is_enabled()
+        _assert_employee_identity_withheld(stalled)
         stalled.close()
         silent = browser.new_page(viewport={"width": 390, "height": 844})
         silent.clock.install()
@@ -154,6 +167,7 @@ def test_admin_and_mobile_employee_journeys(live_server, django_user_model, monk
         silent.clock.fast_forward(13000)
         assert silent.get_by_text("钉钉授权超时，请重新验证。", exact=True).is_visible()
         assert silent.get_by_role("button", name="重新验证").is_enabled()
+        _assert_employee_identity_withheld(silent)
         silent.close()
         request_stalled = browser.new_page(viewport={"width": 390, "height": 844})
         request_stalled.clock.install()
@@ -163,6 +177,7 @@ def test_admin_and_mobile_employee_journeys(live_server, django_user_model, monk
         request_stalled.clock.fast_forward(21000)
         assert request_stalled.get_by_text("身份核验超时，请检查网络后重试。", exact=True).is_visible()
         assert request_stalled.get_by_role("button", name="重新验证").is_enabled()
+        _assert_employee_identity_withheld(request_stalled)
         request_stalled.close()
         automatic = browser.new_page(viewport={"width": 390, "height": 844})
         automatic.route("https://g.alicdn.com/**", lambda route: route.abort())
@@ -177,6 +192,7 @@ def test_admin_and_mobile_employee_journeys(live_server, django_user_model, monk
         verify_button = mobile.get_by_role("button", name="重新验证")
         assert mobile.get_by_text("钉钉验证失败，请重新验证。", exact=True).is_visible()
         assert verify_button.is_enabled()
+        _assert_employee_identity_withheld(mobile)
         verify_button.click()
         mobile.get_by_text("当前 AD 账号", exact=True).wait_for(state="visible")
         assert mobile.get_by_text("当前 AD 账号", exact=True).is_visible()
@@ -196,8 +212,14 @@ def test_admin_and_mobile_employee_journeys(live_server, django_user_model, monk
 @pytest.mark.django_db(transaction=True)
 def test_admin_employee_page_text_and_authenticated_platforms_mobile(live_server, django_user_model, monkeypatch):
     from sync_app import sspr
-    from sync_app.models import Audit, AuthPlatform, Configuration, EmployeePageSettings
-    from tests.fakes import Source, Directory
+    from sync_app.models import (
+        Audit,
+        AuthPlatform,
+        Configuration,
+        EmployeePageSettings,
+        EmployeeSession,
+    )
+    from tests.fakes import Directory, Source
 
     config = Configuration.current()
     config.sspr_enabled = True
@@ -268,11 +290,126 @@ def test_admin_employee_page_text_and_authenticated_platforms_mobile(live_server
         assert unverified.get_by_text(description, exact=True).is_visible()
         assert unverified.get_by_label("服务公告").get_by_text(announcement, exact=True).is_visible()
         assert unverified.get_by_text(support_text, exact=True).is_visible()
-        for name in platform_names:
-            assert unverified.get_by_text(name, exact=True).count() == 0
-        assert unverified.get_by_role("heading", name="企业 AD 认证平台", exact=True).count() == 0
+        unverified.get_by_text("钉钉组件加载失败，请从钉钉工作台打开并检查网络后重试。", exact=True).wait_for(state="visible")
+        _assert_employee_identity_withheld(unverified, platform_names)
+        assert unverified.get_by_text("钉钉核验后会显示本人当前AD账号；本服务无需先同步或绑定", exact=True).is_visible()
         assert unverified.evaluate("window.employeeNoticeExecuted === undefined")
         assert unverified.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+        denial_cases = (
+            (True, True, False, "AD账号受保护，不能自助重置；无需先同步或绑定，请联系AD管理员核查权限与保护状态"),
+            (False, False, False, "AD账号已禁用，不能自助重置；无需先同步或绑定，请联系AD管理员核查账号启用状态"),
+            (True, False, False, "AD账号已禁用，不能自助重置；无需先同步或绑定，请联系AD管理员核查账号启用状态"),
+            (True, False, True, "AD账号已禁用，不能自助重置；无需先同步或绑定，请联系AD管理员核查账号启用状态"),
+        )
+        expected_denials = []
+        for protected, enabled, domain_admin, message in denial_cases:
+            directory.items[0].update(protected=protected, enabled=enabled, domain_admin=domain_admin)
+            blocked = browser.new_page(viewport={"width": 390, "height": 844})
+            blocked.on("pageerror", lambda error: errors.append(str(error)))
+            blocked.clock.install()
+            blocked.route("https://g.alicdn.com/**", lambda route: route.abort())
+            blocked.add_init_script("window.dd = {requestAuthCode: opts => opts.success({code: 'valid'})};")
+            with blocked.expect_response(lambda response: response.request.method == "POST" and response.url == live_server.url + "/sspr/auth/dingtalk") as verification:
+                blocked.goto(live_server.url + "/sspr")
+            status = blocked.locator("#status")
+            status.get_by_text(message, exact=True).wait_for(state="visible")
+            assert verification.value.status == 400
+            assert verification.value.json() == {"error": message}
+            assert "employee_verification=" not in (verification.value.header_value("set-cookie") or "")
+            retry = blocked.get_by_role("button", name="重新验证", exact=True)
+            assert retry.is_enabled()
+            with blocked.expect_response(lambda response: response.request.method == "POST" and response.url == live_server.url + "/sspr/auth/dingtalk") as retried:
+                retry.click()
+            assert retried.value.status == 400
+            assert retried.value.json() == {"error": message}
+            status.get_by_text(message, exact=True).wait_for(state="visible")
+            blocked.clock.fast_forward(21000)
+            assert status.text_content() == message
+            assert retry.is_enabled()
+            _assert_employee_identity_withheld(blocked, platform_names)
+            assert not any(cookie["name"] == "employee_verification" for cookie in blocked.context.cookies())
+            assert blocked.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+            expected_denials.extend([message, message])
+            blocked.close()
+
+        def rejected_authorization_records():
+            return EmployeeSession.objects.exists(), list(Audit.objects.filter(action="sspr_auth_failed").order_by("pk").values_list("result", "success"))
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            session_exists, denials = executor.submit(rejected_authorization_records).result()
+        assert not session_exists
+        assert denials == [(message, False) for message in expected_denials]
+        assert directory.resets == 0
+
+        # Domain Admins remains protected for synchronization, but an enabled
+        # member may reset only the account confirmed by its own DingTalk identity.
+        directory.items[0].update(protected=True, enabled=True, domain_admin=True)
+        expected_guid = directory.items[0]["guid"]
+        domain_admin = browser.new_page(viewport={"width": 390, "height": 844})
+        domain_admin.on("pageerror", lambda error: errors.append(str(error)))
+        domain_admin.route("https://g.alicdn.com/**", lambda route: route.abort())
+        domain_admin.add_init_script("window.dd = {requestAuthCode: opts => opts.success({code: 'valid'})};")
+        with domain_admin.expect_response(lambda response: response.request.method == "POST" and response.url == live_server.url + "/sspr/auth/dingtalk") as verification:
+            domain_admin.goto(live_server.url + "/sspr")
+        assert verification.value.status == 200
+        domain_admin.get_by_text("当前 AD 账号", exact=True).wait_for(state="visible")
+        assert domain_admin.get_by_text("testuser", exact=True).is_visible()
+        assert domain_admin.get_by_role("heading", name="企业 AD 认证平台", exact=True).is_visible()
+        assert domain_admin.get_by_role("button", name="重新验证").count() == 0
+        domain_admin.get_by_label("新密码", exact=True).fill("Browser-domain-admin-43!")
+        domain_admin.get_by_label("确认新密码").fill("Browser-domain-admin-43!")
+        with domain_admin.expect_response(lambda response: response.request.method == "POST" and response.url == live_server.url + "/sspr/reset") as reset:
+            domain_admin.get_by_role("button", name="确认重置本人密码").click()
+        assert reset.value.status == 200
+        assert domain_admin.get_by_text("密码已成功重置", exact=True).is_visible()
+        assert domain_admin.get_by_label("新密码", exact=True).count() == 0
+        assert directory.resets == 1
+        domain_admin.close()
+
+        def domain_admin_reset_audit():
+            record = Audit.objects.get(action="sspr_reset")
+            return record.actor, record.employee_id, record.target_username, record.target, record.state, record.success, record.result
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            recorded_reset = executor.submit(domain_admin_reset_audit).result()
+        assert recorded_reset == ("u1", "1001", "testuser", expected_guid, "success", True, "密码已成功重置")
+
+        # A verified page must re-read eligibility and the target GUID before it
+        # renders private identity, platforms, or another password reset form.
+        stale = browser.new_page(viewport={"width": 390, "height": 844})
+        stale.on("pageerror", lambda error: errors.append(str(error)))
+        stale.route("https://g.alicdn.com/**", lambda route: route.abort())
+        stale.add_init_script("window.dd = {requestAuthCode: opts => opts.success({code: 'valid'})};")
+        stale.goto(live_server.url + "/sspr")
+        stale.get_by_text("当前 AD 账号", exact=True).wait_for(state="visible")
+        directory.items[0]["domain_admin"] = False
+        stale.reload()
+        stale.get_by_text(denial_cases[0][3], exact=True).first.wait_for(state="visible")
+        _assert_employee_identity_withheld(stale, platform_names)
+        assert stale.get_by_role("button", name="重新验证").is_enabled()
+        assert directory.resets == 1
+        stale.close()
+
+        directory.items[0]["domain_admin"] = True
+        changed = browser.new_page(viewport={"width": 390, "height": 844})
+        changed.on("pageerror", lambda error: errors.append(str(error)))
+        changed.route("https://g.alicdn.com/**", lambda route: route.abort())
+        changed.add_init_script("window.dd = {requestAuthCode: opts => opts.success({code: 'valid'})};")
+        changed.goto(live_server.url + "/sspr")
+        changed.get_by_text("当前 AD 账号", exact=True).wait_for(state="visible")
+        from uuid import uuid4
+        directory.items[0]["guid"] = str(uuid4())
+        # Prevent fresh authorization so the existing cookie alone is assessed.
+        changed.route("**/sspr/auth/dingtalk", lambda route: route.abort())
+        changed.reload()
+        assert changed.get_by_text("AD 匹配对象发生变化，请重新验证", exact=True).is_visible()
+        changed.get_by_text("身份核验请求失败，请检查网络后重试。", exact=True).wait_for(state="visible")
+        _assert_employee_identity_withheld(changed, platform_names)
+        assert changed.get_by_role("button", name="重新验证").is_enabled()
+        assert directory.resets == 1
+        changed.close()
+        directory.items[0].update(protected=False, enabled=True, domain_admin=False, guid=expected_guid)
 
         employee = browser.new_page(viewport={"width": 390, "height": 844})
         employee.on("pageerror", lambda error: errors.append(str(error)))

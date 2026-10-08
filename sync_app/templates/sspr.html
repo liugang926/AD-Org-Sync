@@ -54,7 +54,7 @@
         <button>确认重置本人密码</button>
       </form>
     {% else %}
-      <p>正在通过钉钉确认身份，完成后将显示您的 AD 账号。</p>
+      <p>钉钉核验后会显示本人当前AD账号；本服务无需先同步或绑定</p>
       <p id="status" role="status" aria-live="polite">正在连接钉钉…</p>
       <form id="verify" data-corp="{{ corp_id }}" data-client="{{ app_key }}">
         {% csrf_token %}

@@ -94,15 +94,20 @@ def match_employee(source, ad, config, source_id=None, code=None, *, _identity=N
     if config.sspr_match == "employee_username" and not str(value or "").strip():
         raise RuleError("钉钉工号为空，不能匹配 AD 账号")
     matches = ad.match(ad_field, value)
-    if len(matches) != 1:
-        raise RuleError("未唯一匹配 AD 账号，请联系管理员核对身份字段")
+    match_count = len(matches)
+    if match_count == 0:
+        raise RuleError("未匹配到AD账号，请联系管理员核对钉钉身份字段和AD账号资料")
+    if match_count > 1:
+        raise RuleError("匹配到多个AD账号，请联系管理员核对重复身份字段和AD账号资料")
     account = matches[0]
     if _identity is not None:
         _identity["account"] = account
-    if protected(account) or not account["enabled"]:
-        raise RuleError("匹配账号受保护或已禁用，不能自助重置")
+    if not account["enabled"]:
+        raise RuleError("AD账号已禁用，不能自助重置；无需先同步或绑定，请联系AD管理员核查账号启用状态")
     if not str(account.get("username") or "").strip() or not str(account.get("guid") or "").strip():
         raise RuleError("匹配账号缺少登录名或对象标识，请联系管理员核对")
+    if protected(account) and ad.password_reset_allowed(account) is not True:
+        raise RuleError("AD账号受保护，不能自助重置；无需先同步或绑定，请联系AD管理员核查权限与保护状态")
     return user, account
 
 

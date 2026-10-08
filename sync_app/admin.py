@@ -62,7 +62,7 @@ class EmployeePageSettingsAdmin(admin.ModelAdmin):
 class ConfigurationForm(forms.ModelForm):
     attributes = forms.MultipleChoiceField(label="同步到 AD 的属性", choices=ATTRIBUTE_CHOICES, widget=forms.CheckboxSelectMultiple, required=False, help_text="仅更新勾选的属性；来源空值默认不覆盖 AD。")
     clear_attributes = forms.MultipleChoiceField(label="允许清空的属性", choices=ATTRIBUTE_CHOICES, widget=forms.CheckboxSelectMultiple, required=False, help_text="仅对已启用同步的属性生效。")
-    protected_usernames = forms.CharField(label="额外保护账号", required=False, widget=forms.Textarea(attrs={"rows": 3, "placeholder": "每行一个 AD 账号名"}), help_text="每行一个 sAMAccountName；同步与密码重置都禁止操作。")
+    protected_usernames = forms.CharField(label="额外保护账号", required=False, widget=forms.Textarea(attrs={"rows": 3, "placeholder": "每行一个 AD 账号名"}), help_text="每行一个 sAMAccountName；同步禁止操作。自助重置保护对实时核验为域管理员的本人账号不生效，其他受保护账号仍拒绝。")
 
     class Meta:
         model = Configuration
@@ -87,7 +87,7 @@ class ConfigurationAdmin(admin.ModelAdmin):
         ("02 · 匹配与新建账号", {"fields": ("match_field", "naming", "enable_new_accounts", "require_password_change")}),
         ("03 · 属性与保护", {"fields": ("attributes", "clear_attributes", "protected_usernames")}),
         ("04 · 离职安全阈值", {"fields": ("disable_missing", "disable_limit", "disable_percent"), "description": "超过人数或比例阈值时，预览需人工确认。"}),
-        ("05 · 员工自助重置", {"fields": ("current_ldap_directory", "sspr_open_scope", "sspr_enabled", "sspr_match", "unlock_after_reset", "minimum_password_length"), "description": "密码重置独立使用实时 LDAPS 唯一匹配，不依赖同步任务或本地绑定。"}),
+        ("05 · 员工自助重置", {"fields": ("current_ldap_directory", "sspr_open_scope", "sspr_enabled", "sspr_match", "unlock_after_reset", "minimum_password_length"), "description": "密码重置独立使用实时 LDAPS 唯一匹配，不依赖同步任务或本地绑定。已启用的域管理员也可重置本人密码；其他受保护账号仍拒绝。"}),
         ("06 · 定时任务", {"fields": ("schedule_enabled", "interval_minutes")}),
     )
 
@@ -99,8 +99,8 @@ class ConfigurationAdmin(admin.ModelAdmin):
     def sspr_open_scope(self, obj):
         count = len(settings.SSPR_ALLOWED_DINGTALK_USER_IDS)
         if count:
-            return f"仅向 {count} 个已配置的钉钉账号开放；仍须通过 AD 唯一匹配与账号保护检查。"
-        return "未限制钉钉 userId；仍须通过 AD 唯一匹配与账号保护检查。"
+            return f"仅向 {count} 个已配置的钉钉账号开放；仍须通过 AD 唯一匹配与账号保护检查；已启用的域管理员同样可重置本人密码。"
+        return "未限制钉钉 userId；仍须通过 AD 唯一匹配与账号保护检查；已启用的域管理员同样可重置本人密码。"
 
     def has_add_permission(self, request):
         return not Configuration.objects.exists()
