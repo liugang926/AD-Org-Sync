@@ -169,6 +169,54 @@ def test_ldap_match_escapes_untrusted_identity_values():
         directory.match("arbitraryLDAPAttribute", "x")
 
 
+def test_ad_search_uses_critical_domain_scope_on_every_page(settings):
+    settings.LDAP_BASE_DN = "DC=example,DC=com"
+    directory = object.__new__(ActiveDirectory)
+    directory.conn = Mock()
+    responses = [
+        ({"result": 0, "controls": {"1.2.840.113556.1.4.319": {"value": {"cookie": b"next"}}}}, [{"type": "searchResEntry", "dn": "CN=first,DC=example,DC=com"}]),
+        ({"result": 0}, [{"type": "searchResEntry", "dn": "CN=second,DC=example,DC=com"}]),
+    ]
+
+    def search(*args, **kwargs):
+        directory.conn.result, directory.conn.response = responses.pop(0)
+        return True
+
+    directory.conn.search.side_effect = search
+    rows = directory.search("(objectClass=user)")
+    assert len(rows) == 2
+    calls = directory.conn.search.call_args_list
+    assert len(calls) == 2
+    assert all(call.args[0] == settings.LDAP_BASE_DN for call in calls)
+    assert all(call.kwargs["controls"] == [("1.2.840.113556.1.4.1339", True, None)] for call in calls)
+    assert calls[0].kwargs["paged_cookie"] is None
+    assert calls[1].kwargs["paged_cookie"] == b"next"
+
+
+@pytest.mark.parametrize("result_code", [10, 12, 50, 81])
+def test_ad_domain_scope_failure_does_not_return_partial_matches(result_code):
+    directory = object.__new__(ActiveDirectory)
+    directory.conn = Mock()
+    directory.conn.result = {"result": result_code}
+    directory.conn.response = [{"type": "searchResEntry", "dn": "CN=partial,DC=example,DC=com"}]
+    with pytest.raises(RuleError, match="未完整成功"):
+        directory.search("(objectClass=user)")
+    directory.conn.search.assert_called_once()
+
+
+def test_ad_search_still_rejects_unhandled_refs_and_stalled_pages():
+    directory = object.__new__(ActiveDirectory)
+    directory.conn = Mock()
+    directory.conn.result = {"result": 0}
+    directory.conn.response = [{"type": "searchResRef", "uri": ["ldaps://other.example.com"]}]
+    with pytest.raises(RuleError, match="未处理的引用"):
+        directory.search("(objectClass=user)")
+    directory.conn.response = [{"type": "searchResEntry", "dn": "CN=partial,DC=example,DC=com"}]
+    directory.conn.result = {"result": 0, "controls": {"1.2.840.113556.1.4.319": {"value": {"cookie": b"stalled"}}}}
+    with pytest.raises(RuleError, match="分页未前进"):
+        directory.search("(objectClass=user)")
+
+
 def test_ad_account_fingerprint_includes_directory_change_revision():
     assert "uSNChanged" in ActiveDirectory.ATTRS
     guid = str(uuid.uuid4())

@@ -197,6 +197,7 @@ class DingTalk:
 
 
 class ActiveDirectory:
+    DOMAIN_SCOPE_OID = "1.2.840.113556.1.4.1339"
     ATTRS = ["objectGUID", "sAMAccountName", "employeeID", "mail", "displayName", "title", "department", "telephoneNumber", "userAccountControl", "adminCount", "objectSid", "lockoutTime", "isCriticalSystemObject", "uSNChanged"]
     MATCH = {"employee_id": "employeeID", "email": "mail", "source_id": "sAMAccountName"}
 
@@ -218,7 +219,8 @@ class ActiveDirectory:
         results, cookie, seen = [], None, set()
         try:
             while True:
-                self.conn.search(base or settings.LDAP_BASE_DN, query, scope, attributes=attrs or self.ATTRS, paged_size=500, paged_cookie=cookie)
+                # Keep searches in this AD naming context instead of following DNS/forest referrals.
+                self.conn.search(base or settings.LDAP_BASE_DN, query, scope, attributes=attrs or self.ATTRS, paged_size=500, paged_cookie=cookie, controls=[(self.DOMAIN_SCOPE_OID, True, None)])
                 if self.conn.result.get("result") != 0:
                     raise RuleError("AD 查询未完整成功")
                 if any(r["type"] == "searchResRef" for r in self.conn.response):

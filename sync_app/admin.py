@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.conf import settings
 from django import forms
 from django.shortcuts import redirect
 from contextlib import closing
@@ -80,14 +81,26 @@ class ConfigurationForm(forms.ModelForm):
 @admin.register(Configuration)
 class ConfigurationAdmin(admin.ModelAdmin):
     form = ConfigurationForm
+    readonly_fields = ("current_ldap_directory", "sspr_open_scope")
     fieldsets = (
         ("01 · 同步边界", {"fields": ("root_department", "root_ou"), "description": "只处理指定钉钉部门和 AD 根 OU 范围内的对象。"}),
         ("02 · 匹配与新建账号", {"fields": ("match_field", "naming", "enable_new_accounts", "require_password_change")}),
         ("03 · 属性与保护", {"fields": ("attributes", "clear_attributes", "protected_usernames")}),
         ("04 · 离职安全阈值", {"fields": ("disable_missing", "disable_limit", "disable_percent"), "description": "超过人数或比例阈值时，预览需人工确认。"}),
-        ("05 · 员工自助重置", {"fields": ("sspr_enabled", "sspr_match", "unlock_after_reset", "minimum_password_length"), "description": "密码重置独立使用实时 LDAPS 唯一匹配，不依赖同步任务或本地绑定。"}),
+        ("05 · 员工自助重置", {"fields": ("current_ldap_directory", "sspr_open_scope", "sspr_enabled", "sspr_match", "unlock_after_reset", "minimum_password_length"), "description": "密码重置独立使用实时 LDAPS 唯一匹配，不依赖同步任务或本地绑定。"}),
         ("06 · 定时任务", {"fields": ("schedule_enabled", "interval_minutes")}),
     )
+
+    @admin.display(description="当前 LDAPS 目录")
+    def current_ldap_directory(self, obj):
+        return f"域控：{settings.LDAP_HOST or '未配置'}；目录：{settings.LDAP_BASE_DN or '未配置'}"
+
+    @admin.display(description="当前开放范围")
+    def sspr_open_scope(self, obj):
+        count = len(settings.SSPR_ALLOWED_DINGTALK_USER_IDS)
+        if count:
+            return f"仅向 {count} 个已配置的钉钉账号开放；仍须通过 AD 唯一匹配与账号保护检查。"
+        return "未限制钉钉 userId；仍须通过 AD 唯一匹配与账号保护检查。"
 
     def has_add_permission(self, request):
         return not Configuration.objects.exists()
