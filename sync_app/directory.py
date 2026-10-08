@@ -5,6 +5,7 @@ import string
 import uuid
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import requests
 from django.conf import settings
@@ -243,17 +244,71 @@ class ActiveDirectory:
         def value(name, default=""):
             item = attrs.get(name, default)
             return item[0] if isinstance(item, list) and item else (default if isinstance(item, list) else item)
-        uac = int(value("userAccountControl", 0))
+        def state_value(collection, name, default=None):
+            item = collection.get(name, default)
+            if isinstance(item, list):
+                if len(item) > 1:
+                    raise RuleError("AD 账号安全属性无法核验，请联系管理员")
+                item = item[0] if item else default
+            if item is None:
+                raise RuleError("AD 账号安全属性无法核验，请联系管理员")
+            return item
+        def integer(item):
+            if isinstance(item, bool) or not isinstance(item, (int, str, bytes)):
+                raise RuleError("AD 账号安全属性无法核验，请联系管理员")
+            if isinstance(item, (str, bytes)):
+                if not item.isascii() or not item.isdigit():
+                    raise RuleError("AD 账号安全属性无法核验，请联系管理员")
+            try:
+                result = int(item)
+            except (ValueError, TypeError):
+                raise RuleError("AD 账号安全属性无法核验，请联系管理员") from None
+            if result < 0:
+                raise RuleError("AD 账号安全属性无法核验，请联系管理员")
+            return result
+        uac = integer(state_value(attrs, "userAccountControl"))
+        admin_count = integer(state_value(attrs, "adminCount", 0))
         sid = str(value("objectSid"))
-        critical = str(value("isCriticalSystemObject")).lower() == "true"
+        critical_value = state_value(attrs, "isCriticalSystemObject", False)
+        if isinstance(critical_value, bytes):
+            try:
+                critical_value = critical_value.decode("ascii")
+            except UnicodeDecodeError:
+                raise RuleError("AD 账号安全属性无法核验，请联系管理员") from None
+        if isinstance(critical_value, str):
+            if critical_value.lower() not in {"true", "false"}:
+                raise RuleError("AD 账号安全属性无法核验，请联系管理员")
+            critical_value = critical_value.lower() == "true"
+        if not isinstance(critical_value, bool):
+            raise RuleError("AD 账号安全属性无法核验，请联系管理员")
+        critical = critical_value
+        raw_attrs = entry.get("raw_attributes", {})
+        # Schema-aware ldap3 returns lockoutTime as datetime. Its original
+        # FILETIME retains sub-microsecond precision and must take precedence.
+        raw_lockout = "lockoutTime" in raw_attrs and raw_attrs["lockoutTime"] != []
+        if raw_lockout:
+            lockout = state_value(raw_attrs, "lockoutTime")
+        else:
+            lockout = state_value(attrs, "lockoutTime", 0)
+        if isinstance(lockout, datetime) and not raw_lockout:
+            try:
+                stamp = lockout.astimezone(timezone.utc) if lockout.utcoffset() is not None else lockout.replace(tzinfo=timezone.utc)
+                epoch = datetime(1601, 1, 1, tzinfo=timezone.utc)
+                if stamp < epoch:
+                    raise RuleError("AD 账号安全属性无法核验，请联系管理员")
+                locked = stamp > epoch
+            except (ValueError, TypeError, OverflowError):
+                raise RuleError("AD 账号安全属性无法核验，请联系管理员") from None
+        else:
+            locked = bool(integer(lockout))
         explicit_protection = str(value("sAMAccountName")).casefold() in protected_names
         ad_revision = str(value("uSNChanged") or "").strip()
         return {"guid": str(uuid.UUID(str(value("objectGUID")).strip("{}"))), "dn": entry["dn"],
                 "ad_revision": ad_revision,
                 "username": str(value("sAMAccountName")).strip(), "employee_id": str(value("employeeID")).strip(),
                 "email": str(value("mail")).strip(), "enabled": not bool(uac & 2), "uac": uac,
-                "protected": critical or explicit_protection or int(value("adminCount", 0)) == 1 or sid.endswith(("-500", "-501", "-502")) or bool(uac & (2048 | 4096 | 8192)),
-                "locked": bool(int(value("lockoutTime", 0))),
+                "protected": critical or explicit_protection or admin_count == 1 or sid.endswith(("-500", "-501", "-502")) or bool(uac & (2048 | 4096 | 8192)),
+                "locked": locked,
                 "attrs": {k: str(value(k)) for k in ["displayName", "mail", "title", "department", "telephoneNumber"]}}
 
     def accounts(self):
