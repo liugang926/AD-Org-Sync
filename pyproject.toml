@@ -18,7 +18,7 @@ ad-org-sync = "sync_app.cli:main"
 [tool.setuptools.packages.find]
 include = ["sync_app*"]
 [tool.setuptools.package-data]
-sync_app = ["templates/*.html", "templates/registration/*.html", "static/*"]
+sync_app = ["templates/*.html", "templates/registration/*.html", "templates/admin/*.html", "static/*"]
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "sync_app.settings"
 testpaths = ["tests"]

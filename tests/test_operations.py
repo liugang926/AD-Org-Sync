@@ -150,7 +150,7 @@ def test_sqlite_backup_restores_records(tmp_path, settings):
 
 def test_ci_preserves_production_gates():
     root = Path(__file__).resolve().parents[1]
-    workflow = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
+    workflow = yaml.safe_load((root / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
     assert jobs["quality"]["strategy"]["matrix"]["python-version"] == ["3.10", "3.12"]
     deploy = jobs["deploy-production"]

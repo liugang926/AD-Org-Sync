@@ -97,7 +97,27 @@ jobs:
           "$PYTHON" -m sync_app.cli check
           "$PYTHON" -m sync_app.cli migrate --noinput
           "$PYTHON" -m sync_app.cli db_check
-          "$PYTHON" -c "from importlib.resources import files; p=files('sync_app'); assert p.joinpath('templates/sspr.html').is_file(); assert p.joinpath('static/app.css').is_file()"
+          "$PYTHON" - <<'PY'
+          import os
+          import sys
+          from importlib.resources import files
+          from pathlib import Path
+
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sync_app.settings")
+          import django
+          django.setup()
+          from django.template.loader import get_template
+          import sync_app
+
+          package = files("sync_app")
+          for resource in ("templates/sspr.html", "static/app.css", "templates/admin/base_site.html", "static/admin_theme.css"):
+              assert package.joinpath(resource).is_file(), resource
+          assert Path(sync_app.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+          template = get_template("admin/base_site.html")
+          assert Path(template.origin.name).resolve() == Path(str(package.joinpath("templates/admin/base_site.html"))).resolve()
+          rendered = template.render({"title": "管理页面", "is_popup": False})
+          assert "admin_theme.css" in rendered and "返回工作台" in rendered
+          PY
       - name: Backup and migration recovery tests
         run: python -m pytest -q tests/test_operations.py
       - name: Validated CycloneDX SBOM
