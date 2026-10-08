@@ -167,6 +167,68 @@ def test_ci_preserves_production_gates():
     assert "ROLLBACK FAILED" in script and "--no-build" in script
 
 
+def test_separate_data_directories_do_not_reuse_test_bindings_or_sessions(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    compose = yaml.safe_load((root / "docker-compose.yml").read_text())
+    for service in ("web", "worker"):
+        assert compose["services"][service]["environment"]["AD_ORG_SYNC_DATA_DIR"] == "${AD_ORG_SYNC_DATA_DIR:-/data}"
+    code = '''
+import os, uuid, django
+django.setup()
+from django.core.management import call_command
+from django.utils import timezone
+from sync_app.models import Configuration, Person, Binding, Snapshot, EmployeeSession
+call_command("migrate", interactive=False, verbosity=0)
+config = Configuration.current()
+if os.environ["CHECK_ROLE"] == "test":
+ config.minimum_password_length = 16
+ config.identity_anchor = "test-directory-anchor"
+ config.save()
+ person = Person.objects.create(source_id="isolated-test", name="Test employee")
+ Binding.objects.create(person=person, object_guid=uuid.uuid4(), username="test-account")
+ Snapshot.objects.create(fingerprint="test-source", root_department="1", users=[], departments=[])
+ EmployeeSession.objects.create(digest="test-token-digest", source_id=person.source_id, object_guid=uuid.uuid4(), config_fingerprint="test-policy", expires_at=timezone.now())
+elif os.environ["CHECK_ROLE"] == "production":
+ assert config.minimum_password_length == 8 and config.identity_anchor == ""
+ assert not any(model.objects.exists() for model in (Person, Binding, Snapshot, EmployeeSession))
+else:
+ assert config.minimum_password_length == 16 and config.identity_anchor == "test-directory-anchor"
+ assert Binding.objects.get().username == "test-account"
+ assert Snapshot.objects.count() == EmployeeSession.objects.count() == 1
+call_command("db_check", verbosity=0)
+'''
+    for directory, role in (("testing", "test"), ("production", "production"), ("testing", "recheck")):
+        env = os.environ.copy()
+        env.update(AD_ORG_SYNC_DATA_DIR=str(tmp_path / directory), DJANGO_SETTINGS_MODULE="sync_app.settings", CHECK_ROLE=role)
+        result = subprocess.run([sys.executable, "-c", code], cwd=root, env=env, capture_output=True, text=True, timeout=40)
+        assert result.returncode == 0, result.stderr
+
+
+def test_worker_healthcheck_uses_current_directory_without_borrowing_old_heartbeat(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    compose = yaml.safe_load((root / "docker-compose.yml").read_text())
+    expression = compose["services"]["worker"]["healthcheck"]["test"][3]
+    current = tmp_path / "production"
+    old = tmp_path / "testing"
+    current.mkdir()
+    old.mkdir()
+    heartbeat = current / "worker-heartbeat"
+    env = os.environ.copy()
+    env["AD_ORG_SYNC_DATA_DIR"] = str(current)
+
+    def check():
+        return subprocess.run([sys.executable, "-c", expression], env=env, capture_output=True, timeout=10).returncode
+
+    heartbeat.touch()
+    assert check() == 0
+    heartbeat.unlink()
+    (old / "worker-heartbeat").touch()
+    assert check() != 0
+    heartbeat.touch()
+    os.utime(heartbeat, (0, 0))
+    assert check() != 0
+
+
 def test_no_legacy_or_cache_runtime():
     root = Path(__file__).resolve().parents[1]
     compose = yaml.safe_load((root / "docker-compose.yml").read_text())

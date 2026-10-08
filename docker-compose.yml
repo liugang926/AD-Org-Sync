@@ -3,7 +3,7 @@ x-app: &app
   image: ad-org-sync-web:${AD_ORG_SYNC_IMAGE_TAG:-local}
   build: .
   environment: &environment
-    AD_ORG_SYNC_DATA_DIR: /data
+    AD_ORG_SYNC_DATA_DIR: ${AD_ORG_SYNC_DATA_DIR:-/data}
     AD_ORG_SYNC_IMAGE_TAG: ${AD_ORG_SYNC_IMAGE_TAG:-local}
     AD_ORG_SYNC_PUBLIC_BASE_URL: ${AD_ORG_SYNC_PUBLIC_BASE_URL:?Set external HTTPS URL}
     AD_ORG_SYNC_ADMIN_USERNAME: ${AD_ORG_SYNC_ADMIN_USERNAME:-admin}
@@ -59,7 +59,7 @@ services:
         condition: service_healthy
     command: ["python", "-m", "sync_app.cli", "worker"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import os,time; assert time.time()-os.stat('/data/worker-heartbeat').st_mtime < 90"]
+      test: ["CMD", "python", "-c", "import os,time; assert time.time()-os.stat(os.path.join(os.environ.get('AD_ORG_SYNC_DATA_DIR','/data'),'worker-heartbeat')).st_mtime < 90"]
       interval: 15s
       timeout: 5s
       retries: 3

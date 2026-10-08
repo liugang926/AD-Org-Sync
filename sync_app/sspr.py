@@ -80,7 +80,20 @@ def match_employee(source, ad, config, source_id=None, code=None, *, _identity=N
     allowed = settings.SSPR_ALLOWED_DINGTALK_USER_IDS
     if allowed and user["source_id"] not in allowed:
         raise RuleError("员工密码重置尚未对当前账号开放")
-    matches = ad.match(config.sspr_match, user.get(config.sspr_match, ""))
+    match_fields = {
+        "employee_id": ("employee_id", "employee_id"),
+        "email": ("email", "email"),
+        "source_id": ("source_id", "source_id"),
+        "employee_username": ("employee_id", "source_id"),
+    }
+    fields = match_fields.get(config.sspr_match)
+    if fields is None:
+        raise RuleError("密码重置匹配方式无效，请联系管理员核对配置")
+    source_field, ad_field = fields
+    value = user.get(source_field, "")
+    if config.sspr_match == "employee_username" and not str(value or "").strip():
+        raise RuleError("钉钉工号为空，不能匹配 AD 账号")
+    matches = ad.match(ad_field, value)
     if len(matches) != 1:
         raise RuleError("未唯一匹配 AD 账号，请联系管理员核对身份字段")
     account = matches[0]

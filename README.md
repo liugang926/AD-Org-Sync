@@ -30,7 +30,9 @@ $env:PIP_BUILD_CONSTRAINT = $env:PIP_CONSTRAINT
 
 钉钉应用须具备部门和人员详情读取权限，配置可信域名和企业内部微应用首页。新配置可使用规范入口 `https://it-service.tianjizn.com:9443/sspr`；当前移动端和 PC 端首页均在相同 HTTPS 域名和端口的 `/sspr/callback/dingtalk`，该路径与 `/sspr` 映射到同一员工页面，可直接用作工作台入口。打开后页面自动通过[钉钉微应用免登 JSAPI](https://open.dingtalk.com/tools/explorer/jsapi?id=11723)取得授权码，服务端实时唯一匹配 LDAPS 后展示本人当前完整 AD 账号；验证失败时才显示重试入口，未验证访客看不到账号。免登使用 Client ID（原 AppKey）和服务器配置的 CorpId；AgentId 不是 Client ID。首页的 `corpid=$CORPID$` 占位符是可选的传值方式，本应用不依赖它，也不信任查询字符串中的企业或人员。员工验证 Cookie 始终 Secure；生产开关及允许范围由受限配置控制，真实员工验收仍须本人在工作台完成。
 
-同步匹配默认使用唯一工号，邮箱及 userId 匹配仅作人工确认候选；账号命名可选工号、userId、邮箱前缀。密码重置匹配单独配置，可选工号→employeeID、邮箱→mail、userId→sAMAccountName。AD 查询范围由 LDAP_BASE_DN 限定，同步写入进一步限制到配置的根 OU。LDAPS 始终加密，默认 `LDAP_VERIFY_CERT=false`，允许未受信任的自签证书；无需 CA 文件。如需验证可信链和主机名，设置 `LDAP_VERIFY_CERT=true`，可选提供 `LDAP_CA_HOST_FILE`（未提供时使用系统信任库）。
+同步匹配默认使用唯一工号，邮箱及 userId 匹配仅作人工确认候选；账号命名可选工号、userId、邮箱前缀。密码重置匹配单独配置，可选工号→employeeID、邮箱→mail、userId→sAMAccountName，或工号→sAMAccountName。最后一种用于 AD 登录名是工号但 employeeID 未填写的情况，需要管理员明确选择；不会自动尝试其他身份字段。后台显示当前 LDAPS 目录及员工开放范围，不回显连接凭据。AD 查询范围由 LDAP_BASE_DN 限定，同步写入进一步限制到配置的根 OU。LDAPS 始终加密，默认 `LDAP_VERIFY_CERT=false`，允许未受信任的自签证书；无需 CA 文件。如需验证可信链和主机名，设置 `LDAP_VERIFY_CERT=true`，可选提供 `LDAP_CA_HOST_FILE`（未提供时使用系统信任库）。
+
+生产与测试应使用各自确认的 AD 连接和数据目录。Compose 默认仍使用 `/data`；可以在受限环境文件中设置 `AD_ORG_SYNC_DATA_DIR=/data/production`，在同一持久卷中初始化独立数据库，原测试数据仍保留。新目录不会自动复制账号绑定、身份锚点或员工会话；首次启用生产目录前应完成备份、设置及独立验证。不得为了切换目录直接清空或复用旧 AD 绑定。AD 查询使用 [Microsoft Domain Scope 控制](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/ldap/ldap-server-domain-scope-oid)，限定单一命名上下文并避免域根引用；仍拒绝不完整查询和未处理引用。
 
 受控验收可在受限环境文件中配置 `SSPR_ALLOWED_DINGTALK_USER_IDS`，用逗号列出允许的钉钉 userId（不是工号）。配置非空时，只有名单内员工通过钉钉验证后可继续实时 LDAPS 匹配与重置；名单变化使现有验证会话失效。不配置时维持原有的全员匹配行为；无论名单如何，后台的 `sspr_enabled` 开关仍须明确开启。
 
