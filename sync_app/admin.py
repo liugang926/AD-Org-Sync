@@ -9,7 +9,7 @@ from django.utils import timezone
 from .directory import ActiveDirectory, under
 from .domain import RuleError
 from .models import Snapshot
-from .models import Configuration, Audit, DepartmentBinding, Job, Operation, EmployeePageSettings, AuthPlatform
+from .models import Configuration, Audit, DepartmentBinding, Job, Operation, EmployeePageSettings, AuthPlatform, PasswordResetNotification
 from .locking import lock
 from .security import audit, client_address
 from .synchronization import establish_directory_identity, validate_directory_identity
@@ -157,6 +157,43 @@ class AuditAdmin(ReadOnlyAdmin):
             "success": "成功", "failed": "失败", "partial": "部分完成",
             "pending": "处理中 / 未完成", "unknown": "结果不明",
         }.get(state, "未知状态")
+
+
+@admin.register(PasswordResetNotification)
+class PasswordResetNotificationAdmin(ReadOnlyAdmin):
+    list_display = ("queued_time", "employee_name", "employee_number", "ad_account", "state", "completed_time", "message")
+    list_filter = ("state", "created_at")
+    search_fields = ("audit__actor_name", "audit__employee_id", "audit__target_username", "audit__actor")
+    date_hierarchy = "created_at"
+    fields = ("audit", "employee_name", "employee_number", "ad_account", "queued_time", "started_time", "completed_time", "state", "message")
+    readonly_fields = fields
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("audit")
+
+    @admin.display(description="员工")
+    def employee_name(self, obj):
+        return obj.audit.actor_name or "—"
+
+    @admin.display(description="工号")
+    def employee_number(self, obj):
+        return obj.audit.employee_id or "—"
+
+    @admin.display(description="AD 账号")
+    def ad_account(self, obj):
+        return obj.audit.target_username or "—"
+
+    @admin.display(description="排队时间（北京时间）", ordering="created_at")
+    def queued_time(self, obj):
+        return timezone.localtime(obj.created_at, ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+
+    @admin.display(description="开始发送（北京时间）", ordering="started_at")
+    def started_time(self, obj):
+        return timezone.localtime(obj.started_at, ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S") if obj.started_at else "—"
+
+    @admin.display(description="投递结果时间（北京时间）", ordering="completed_at")
+    def completed_time(self, obj):
+        return timezone.localtime(obj.completed_at, ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S") if obj.completed_at else "—"
 
 
 class DepartmentForm(forms.ModelForm):

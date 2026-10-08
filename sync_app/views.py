@@ -301,7 +301,7 @@ def person_action(request, person_id):
 
 @administrator
 def logs(request):
-    items = Audit.objects.order_by("-pk")
+    items = Audit.objects.select_related("password_notification").order_by("-pk")
     search = request.GET.get("q", "").strip()[:150]
     if search:
         items = items.filter(
@@ -363,11 +363,13 @@ def logs(request):
                 "unknown": "无法确认密码是否已写入，请核查 AD 或由本人确认登录结果。",
                 "pending": "尚无完成结果，请先核查后再重试。",
             }.get(state, "")
+        notification = getattr(item, "password_notification", None) if item.action == "sspr_reset" else None
         audit_rows.append({
             "item": item, "label": AUDIT_LABELS.get(item.action, item.action),
             "status": label, "tone": tone, "state_note": state_note,
             "employee_action": employee_action, "actor_label": actor_label,
             "actor_identifier": "" if unverified_actor else item.actor,
+            "password_notification": notification,
         })
     filters = {"q": search, "action": action, "result": result, "start": request.GET.get("start", ""), "end": request.GET.get("end", "")}
     return render(request, "logs.html", {

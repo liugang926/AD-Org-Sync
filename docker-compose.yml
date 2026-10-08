@@ -11,6 +11,8 @@ x-app: &app
     DINGTALK_CORP_ID: ${DINGTALK_CORP_ID:-}
     DINGTALK_APP_KEY: ${DINGTALK_APP_KEY:-}
     DINGTALK_APP_SECRET: ${DINGTALK_APP_SECRET:-}
+    DINGTALK_PASSWORD_ROBOT_WEBHOOK_FILE: ${DINGTALK_PASSWORD_ROBOT_WEBHOOK_HOST_FILE:+/run/secrets/password_robot_webhook}
+    DINGTALK_PASSWORD_ROBOT_SIGN_SECRET_FILE: ${DINGTALK_PASSWORD_ROBOT_SIGN_SECRET_HOST_FILE:+/run/secrets/password_robot_sign_secret}
     SSPR_ALLOWED_DINGTALK_USER_IDS: ${SSPR_ALLOWED_DINGTALK_USER_IDS:-}
     LDAP_HOST: ${LDAP_HOST:-}
     LDAP_BASE_DN: ${LDAP_BASE_DN:-}
@@ -44,7 +46,46 @@ services:
         source: ${LDAP_CA_HOST_FILE:-/dev/null}
         target: /source/ad-ca.pem
         read_only: true
-    command: ["sh", "-ec", "chown -R 10001:10001 /data /app/logs /run/secrets; install -m 0400 -o 10001 -g 10001 /source/admin_password /run/secrets/admin_password; if [ -s /source/ad-ca.pem ]; then install -m 0444 -o 10001 -g 10001 /source/ad-ca.pem /run/secrets/ad-ca.pem; else rm -f /run/secrets/ad-ca.pem; fi"]
+      - type: bind
+        source: ${DINGTALK_PASSWORD_ROBOT_WEBHOOK_HOST_FILE:-/dev/null}
+        target: /source/password_robot_webhook
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DINGTALK_PASSWORD_ROBOT_SIGN_SECRET_HOST_FILE:-/dev/null}
+        target: /source/password_robot_sign_secret
+        read_only: true
+        bind:
+          create_host_path: false
+    command:
+      - sh
+      - -ec
+      - |
+        for name in password_robot_webhook password_robot_sign_secret; do
+          [ ! -d "/source/$$name" ] || { echo "Password robot secret source must be a regular file." >&2; exit 1; }
+          if [ -s "/source/$$name" ]; then
+            [ -f "/source/$$name" ] || { echo "Password robot secret source must be a regular file." >&2; exit 1; }
+            case "$$(stat -c '%a' "/source/$$name")" in
+              400|600) ;;
+              *) echo "Password robot secret source must be mode 0400 or 0600." >&2; exit 1 ;;
+            esac
+          fi
+        done
+        chown -R 10001:10001 /data /app/logs /run/secrets
+        install -m 0400 -o 10001 -g 10001 /source/admin_password /run/secrets/admin_password
+        if [ -s /source/ad-ca.pem ]; then
+          install -m 0444 -o 10001 -g 10001 /source/ad-ca.pem /run/secrets/ad-ca.pem
+        else
+          rm -f /run/secrets/ad-ca.pem
+        fi
+        for name in password_robot_webhook password_robot_sign_secret; do
+          if [ -s "/source/$$name" ]; then
+            install -m 0400 -o 10001 -g 10001 "/source/$$name" "/run/secrets/$$name"
+          else
+            rm -f "/run/secrets/$$name"
+          fi
+        done
   web:
     <<: *app
     depends_on:

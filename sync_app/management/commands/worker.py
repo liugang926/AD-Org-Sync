@@ -5,6 +5,7 @@ from django.core.management.base import BaseCommand
 from django.db import close_old_connections
 from sync_app.domain import RuleError
 from sync_app.synchronization import run_next
+from sync_app.password_notifications import process_one_password_notification
 
 
 class Command(BaseCommand):
@@ -22,6 +23,11 @@ class Command(BaseCommand):
         while True:
             close_old_connections()
             (settings.DATA_DIR / "worker-heartbeat").touch()
+            try:
+                process_one_password_notification()
+            except Exception:
+                # Keep notification failures separate from sync and SSPR outcomes.
+                pass
             try:
                 run_next()
             except RuleError:

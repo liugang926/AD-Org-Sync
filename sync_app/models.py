@@ -215,6 +215,27 @@ class Audit(models.Model):
     ])
 
 
+class PasswordResetNotification(models.Model):
+    class State(models.TextChoices):
+        PENDING = "pending", "待发送"
+        SENDING = "sending", "发送中"
+        SENT = "sent", "机器人已接受"
+        FAILED = "failed", "明确失败"
+        UNKNOWN = "unknown", "结果不明，不自动重发"
+
+    audit = models.OneToOneField(Audit, on_delete=models.CASCADE, related_name="password_notification", verbose_name="改密审计")
+    state = models.CharField("通知状态", max_length=16, choices=State.choices, default=State.PENDING)
+    created_at = models.DateTimeField("排队时间", auto_now_add=True)
+    started_at = models.DateTimeField("发送开始时间", null=True, blank=True)
+    completed_at = models.DateTimeField("通知结果时间", null=True, blank=True)
+    message = models.CharField("通知结果说明", max_length=500, blank=True)
+
+    class Meta:
+        verbose_name = "密码重置机器人通知"
+        verbose_name_plural = "密码重置机器人通知"
+        ordering = ["created_at", "pk"]
+
+
 class EmployeeSession(models.Model):
     digest = models.CharField(max_length=64, primary_key=True)
     source_id = models.CharField(max_length=100)

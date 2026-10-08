@@ -77,6 +77,8 @@ uv pip compile pyproject.toml --extra test --group build --universal --python-ve
 
 生产环境文件、管理员密码文件权限 0600。LDAP CA 可选提供，提供时由初始化服务复制进只读 secrets 卷。对外必须经 HTTPS 网关，Nginx 默认仅监听宿主 127.0.0.1。若网关位于另一台主机，明确配置私有绑定地址和访问限制。切勿将应用 8010 端口直接公开。
 
+密码重置钉钉机器人可选启用：将完整 Webhook 保存到权限 0400 或 0600 的宿主文件，在受限环境文件设置 `DINGTALK_PASSWORD_ROBOT_WEBHOOK_HOST_FILE`；开启机器人加签时另设 `DINGTALK_PASSWORD_ROBOT_SIGN_SECRET_HOST_FILE`。未配置 Webhook 文件才关闭通知；明确配置后文件缺失、为空或不可读则记录通知配置失败，不影响已成功改密。未配置签名文件表示不加签；明确配置后文件失效则记录配置失败，不会自动取消加签。初始化服务复制为 UID/GID 10001、权限 0400，web 和 worker 通过现有只读 secrets 卷访问；未提供时移除对应机器人文件，其他秘密文件保留。直接运行开发服务时使用 `DINGTALK_PASSWORD_ROBOT_WEBHOOK_FILE` 和可选的 `DINGTALK_PASSWORD_ROBOT_SIGN_SECRET_FILE` 指定文件路径，默认关闭。URL、访问令牌和签名秘密不得写入源码、普通环境变量或管理页面。
+
 首次重构使用新的 django.sqlite3，不接管旧平台 app.db。部署前应停用旧应用；若旧服务仍在运行，旧 CLI 的备份命令与新版本不同，部署脚本将停止，要求先按旧流程完成备份与退役，不会跳过检查。
 
 已退役的旧平台不得自动恢复。仅当上一成功 SHA 同时记录在 `last_successful_django_image_tag` 中时，失败部署才允许回退到该 Django 版本；首次 Django 部署失败会停止新服务并保留数据，等待排查。该标记只能由完成就绪和数据库检查的部署写入。

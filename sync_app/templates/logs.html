@@ -23,7 +23,7 @@
       <td><strong>{{ row.label }}</strong>{% if row.label != row.item.action %}<small>{{ row.item.action }}</small>{% endif %}</td>
       <td class="audit-target">{% if row.employee_action %}<strong>{{ row.item.target_username|default:"—" }}</strong><small>AD GUID：{{ row.item.target|default:"—" }}</small>{% else %}{{ row.item.target|default:"—" }}{% endif %}</td>
       <td><span class="status-pill tone-{{ row.tone }}">{{ row.status }}</span></td>
-      <td class="audit-result">{{ row.item.result|default:"—" }}{% if row.state_note %}<small>{{ row.state_note }}</small>{% endif %}</td>
+      <td class="audit-result">{{ row.item.result|default:"—" }}{% if row.state_note %}<small>{{ row.state_note }}</small>{% endif %}{% if row.password_notification %}<small>钉钉通知：{{ row.password_notification.get_state_display }}{% if row.password_notification.message %} · {{ row.password_notification.message }}{% endif %}</small>{% endif %}</td>
       <td class="audit-ip">{{ row.item.client_ip|default:"—" }}</td>
     </tr>
     {% empty %}<tr><td colspan="7" class="empty-cell">没有符合筛选条件的审计记录。</td></tr>{% endfor %}
