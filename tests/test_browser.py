@@ -5,6 +5,48 @@ from playwright.sync_api import sync_playwright
 
 
 @pytest.mark.django_db(transaction=True)
+def test_dashboard_preview_browser_submits_its_own_csrf_token_and_queues_once(live_server, django_user_model, monkeypatch):
+    from unittest.mock import Mock
+    from sync_app import synchronization as sync
+    from sync_app.models import Binding, Configuration, Job, Operation, Snapshot
+    from .fakes import Directory, Source
+
+    Configuration.current()
+    django_user_model.objects.create_superuser("preview-browser-admin", password="Preview-browser-only-823!")
+    source_factory = Mock(return_value=Source())
+    ad_factory = Mock(return_value=Directory())
+    monkeypatch.setattr(sync, "DingTalk", source_factory)
+    monkeypatch.setattr(sync, "ActiveDirectory", ad_factory)
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.goto(live_server.url + "/login")
+        page.get_by_label("用户名").fill("preview-browser-admin")
+        page.get_by_label("密码").fill("Preview-browser-only-823!")
+        page.get_by_role("button", name="登录", exact=True).click()
+        page.wait_for_url("**/dashboard")
+        button = page.get_by_role("button", name="生成预览", exact=True)
+        form = page.locator("form").filter(has=button)
+        assert form.count() == 1
+        token = form.locator('input[name="csrfmiddlewaretoken"]')
+        assert token.count() == 1 and token.input_value()
+        form.get_by_label("同步范围").select_option("users")
+        form.get_by_label("部门 ID 或人员 userId").fill("u1 u2")
+        with page.expect_response(lambda response: response.request.method == "POST" and response.url == live_server.url + "/dashboard") as submitted:
+            button.click()
+        assert submitted.value.status == 302
+        assert page.get_by_text("任务已排队，执行进程将生成预览", exact=True).is_visible()
+        browser.close()
+    job = Job.objects.get()
+    assert (job.kind, job.status, job.scope, job.selected, job.actor) == (
+        "preview", "queued", "users", ["u1", "u2"], "preview-browser-admin",
+    )
+    source_factory.assert_not_called()
+    ad_factory.assert_not_called()
+    assert not Binding.objects.exists() and not Operation.objects.exists() and not Snapshot.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_password_reset_audit_filters_and_mobile_table(live_server, django_user_model):
     from datetime import datetime, timezone as datetime_timezone
     from sync_app.models import Audit
