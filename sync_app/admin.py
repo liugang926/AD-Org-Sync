@@ -8,9 +8,9 @@ from django.utils import timezone
 from .directory import ActiveDirectory, under
 from .domain import RuleError
 from .models import Snapshot
-from .models import Configuration, Audit, DepartmentBinding, Job, Operation
+from .models import Configuration, Audit, DepartmentBinding, Job, Operation, EmployeePageSettings, AuthPlatform
 from .locking import lock
-from .security import audit
+from .security import audit, client_address
 from .synchronization import establish_directory_identity, validate_directory_identity
 
 
@@ -18,6 +18,44 @@ ATTRIBUTE_CHOICES = [
     ("displayName", "姓名"), ("mail", "邮箱"), ("title", "职位"),
     ("department", "部门"), ("telephoneNumber", "电话"),
 ]
+
+
+class AuthPlatformInline(admin.StackedInline):
+    model = AuthPlatform
+    extra = 0
+    fields = ("name", "authentication_note", "login_url", "password_note", "enabled", "position")
+
+
+@admin.register(EmployeePageSettings)
+class EmployeePageSettingsAdmin(admin.ModelAdmin):
+    inlines = [AuthPlatformInline]
+    fieldsets = (
+        ("员工页面文案", {"fields": ("title", "description", "announcement", "help_text", "support_text"), "description": "以下内容以纯文本展示；请勿填写密码、密钥等敏感信息。"}),
+    )
+
+    def has_add_permission(self, request):
+        return super().has_add_permission(request) and not EmployeePageSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def save_model(self, request, obj, form, change):
+        obj.full_clean()
+        super().save_model(request, obj, form, change)
+
+    def save_related(self, request, form, formsets, change):
+        # Django's changeform_view wraps the model, inlines, and audit in one
+        # transaction. An audit failure must roll back every presentation edit.
+        super().save_related(request, form, formsets, change)
+        changed_fields = ", ".join(form.changed_data) or "无"
+        added = sum(len(formset.new_objects) for formset in formsets)
+        changed = sum(len(formset.changed_objects) for formset in formsets)
+        deleted = sum(len(formset.deleted_objects) for formset in formsets)
+        audit(
+            request.user.get_username(), "employee_page_settings", str(form.instance.pk),
+            f"页面字段：{changed_fields}；平台共 {form.instance.platforms.count()} 项（新增 {added}、修改 {changed}、删除 {deleted}）",
+            client_ip=client_address(request),
+        )
 
 
 class ConfigurationForm(forms.ModelForm):

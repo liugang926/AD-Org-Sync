@@ -1,8 +1,64 @@
 import uuid
+from urllib.parse import urlsplit
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.validators import MinValueValidator, MaxValueValidator, MaxLengthValidator, URLValidator
 from django.db import models
 from django.utils import timezone
+
+
+def validate_platform_login_url(value):
+    if not value:
+        return
+    URLValidator(schemes=["http", "https"])(value)
+    parsed = urlsplit(value)
+    if parsed.username is not None or parsed.password is not None:
+        raise ValidationError("登录地址不能包含用户名或密码。")
+
+
+class EmployeePageSettings(models.Model):
+    """Presentation settings are independent of AD identity and reset policy."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    title = models.CharField("页面标题", max_length=100, default="重置我的 AD 密码")
+    description = models.TextField("页面说明", max_length=1000, validators=[MaxLengthValidator(1000)], default="通过钉钉验证身份，查询并重置本人 AD 账号密码。")
+    announcement = models.TextField("公告", max_length=2000, validators=[MaxLengthValidator(2000)], blank=True)
+    help_text = models.TextField("操作帮助", max_length=1000, validators=[MaxLengthValidator(1000)], blank=True)
+    support_text = models.TextField("联系支持", max_length=500, validators=[MaxLengthValidator(500)], blank=True)
+    updated_at = models.DateTimeField("更新时间", auto_now=True)
+
+    class Meta:
+        verbose_name = "员工页面设置"
+        verbose_name_plural = "员工页面设置"
+        constraints = [models.CheckConstraint(condition=models.Q(pk=1), name="employee_page_settings_singleton")]
+
+    def clean(self):
+        if self.pk != 1:
+            raise ValidationError("只允许一份员工页面设置。")
+
+    @classmethod
+    def current(cls):
+        return cls.objects.filter(pk=1).first() or cls()
+
+    def __str__(self):
+        return "员工密码服务页面"
+
+
+class AuthPlatform(models.Model):
+    page_settings = models.ForeignKey(EmployeePageSettings, on_delete=models.CASCADE, related_name="platforms")
+    name = models.CharField("平台名称", max_length=100)
+    authentication_note = models.CharField("认证说明", max_length=500, blank=True)
+    login_url = models.URLField("登录地址", max_length=500, blank=True, validators=[validate_platform_login_url], help_text="仅填写 HTTP 或 HTTPS 地址，不得包含用户名或密码。")
+    password_note = models.CharField("改密生效说明", max_length=500, blank=True)
+    enabled = models.BooleanField("在员工页面显示", default=True)
+    position = models.PositiveIntegerField("显示顺序", default=0, validators=[MaxValueValidator(9999)])
+
+    class Meta:
+        verbose_name = "AD 认证平台"
+        verbose_name_plural = "AD 认证平台"
+        ordering = ["position", "pk"]
+
+    def __str__(self):
+        return self.name
 
 
 class Configuration(models.Model):
