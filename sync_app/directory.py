@@ -4,6 +4,7 @@ import ssl
 import string
 import uuid
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -333,6 +334,143 @@ class ActiveDirectory:
             raise RuleError("账号受保护或已禁用，不能执行此操作")
         return account
 
+    def is_domain_admin(self, account):
+        """Read current same-domain RID-512 membership, never an adminCount hint."""
+        message = "无法实时核验域管理员成员关系，请重新验证或联系AD管理员核查目录状态"
+
+        def require(condition):
+            if not condition:
+                raise RuleError(message)
+
+        def one(attrs, name):
+            require(isinstance(attrs, Mapping))
+            value = attrs.get(name)
+            if isinstance(value, list):
+                require(len(value) == 1)
+                value = value[0]
+            require(value is not None)
+            return value
+
+        def number(value):
+            require(type(value) in (int, str, bytes))
+            if isinstance(value, (str, bytes)):
+                require(value.isascii() and value.isdigit())
+            result = int(value)
+            require(0 <= result <= 0xffffffff)
+            return result
+
+        def sid(value, length):
+            if isinstance(value, bytes) and not value.startswith(b"S-"):
+                require(len(value) >= 8 and value[0] == 1 and int.from_bytes(value[2:8], "big") == 5)
+                require(value[1] == length and len(value) == 8 + 4 * length)
+                parts = tuple(int.from_bytes(value[index:index + 4], "little") for index in range(8, len(value), 4))
+            else:
+                if isinstance(value, bytes):
+                    value = value.decode("ascii")
+                require(isinstance(value, str) and value.startswith("S-1-5-"))
+                parts = tuple(number(item) for item in value[6:].split("-"))
+                require(len(parts) == length)
+            require(parts[0] == 21)
+            return parts
+
+        def binary_sid(parts):
+            data = bytes((1, len(parts))) + (5).to_bytes(6, "big")
+            data += b"".join(part.to_bytes(4, "little") for part in parts)
+            return "".join(f"\\{byte:02x}" for byte in data)
+
+        def guid(value):
+            if isinstance(value, bytes):
+                require(len(value) == 16)
+                return str(uuid.UUID(bytes_le=value))
+            return str(uuid.UUID(str(value).strip("{}")))
+
+        def group(parts, naming_context):
+            rows = self.search(
+                f"(&(objectClass=group)(objectSid={binary_sid(parts)}))",
+                base=naming_context, attrs=["objectGUID", "objectSid"],
+            )
+            require(len(rows) == 1 and under(rows[0]["dn"], naming_context))
+            attrs = rows[0]["attributes"]
+            require(sid(one(attrs, "objectSid"), 5) == parts)
+            return rows[0]["dn"], guid(one(attrs, "objectGUID"))
+
+        def member_chain(member_dn, group_dn, group_guid, group_sid):
+            rows = self.search(
+                f"(&(objectClass=group)(objectSid={binary_sid(group_sid)})(member:1.2.840.113556.1.4.1941:={escape_filter_chars(member_dn)}))",
+                base=group_dn, attrs=["objectGUID", "objectSid"], scope=BASE,
+            )
+            require(len(rows) <= 1)
+            if not rows:
+                return False
+            row = rows[0]
+            require(row["dn"].casefold() == group_dn.casefold())
+            require(guid(one(row["attributes"], "objectGUID")) == group_guid)
+            require(sid(one(row["attributes"], "objectSid"), 5) == group_sid)
+            return True
+
+        try:
+            # search(base="") intentionally defaults to the configured root;
+            # RootDSE requires an explicit BASE request on the empty DN.
+            # Like ldap3's own DSA-info reader, select RootDSE metadata with the
+            # standard selectors; AD-only DSE names are not normal schema types.
+            # Consume only defaultNamingContext, retaining all schema checks.
+            self.conn.search(
+                "", "(objectClass=*)", BASE, attributes=["*", "+"],
+                controls=[(self.DOMAIN_SCOPE_OID, True, None)],
+            )
+            require(self.conn.result.get("result") == 0)
+            require(not any(row["type"] == "searchResRef" for row in self.conn.response))
+            root_rows = [row for row in self.conn.response if row["type"] == "searchResEntry"]
+            require(len(root_rows) == 1 and root_rows[0]["dn"] == "")
+            naming_context = one(root_rows[0]["attributes"], "defaultNamingContext")
+            require(isinstance(naming_context, str) and naming_context and under(settings.LDAP_BASE_DN, naming_context))
+            domain_rows = self.search("(objectClass=domainDNS)", base=naming_context, attrs=["objectSid"], scope=BASE)
+            require(len(domain_rows) == 1 and domain_rows[0]["dn"].casefold() == naming_context.casefold())
+            domain_sid = sid(one(domain_rows[0]["attributes"], "objectSid"), 4)
+            expected_guid = guid(account["guid"])
+            escaped_guid = "".join(f"\\{byte:02x}" for byte in uuid.UUID(expected_guid).bytes_le)
+            users = self.search(
+                f"(&(objectCategory=person)(objectClass=user)(objectGUID={escaped_guid}))",
+                attrs=["objectGUID", "objectSid", "primaryGroupID", "userAccountControl", "uSNChanged"],
+            )
+            require(len(users) == 1)
+            user = users[0]
+            require(under(user["dn"], naming_context) and under(user["dn"], settings.LDAP_BASE_DN))
+            attrs = user["attributes"]
+            require(guid(one(attrs, "objectGUID")) == expected_guid)
+            user_sid = sid(one(attrs, "objectSid"), 5)
+            require(user_sid[:-1] == domain_sid)
+            uac = number(one(attrs, "userAccountControl"))
+            require(uac == account["uac"] and not bool(uac & 2) and account["enabled"] is True)
+            revision = str(one(attrs, "uSNChanged")).strip()
+            require(revision.isascii() and revision.isdigit() and int(revision) > 0 and revision == account["ad_revision"])
+            primary_rid = number(one(attrs, "primaryGroupID"))
+            require(primary_rid > 0)
+            admin_sid = (*domain_sid, 512)
+            admin_dn, admin_guid = group(admin_sid, naming_context)
+            if primary_rid == 512:
+                return True
+            if member_chain(user["dn"], admin_dn, admin_guid, admin_sid):
+                return True
+            primary_dn, _ = group((*domain_sid, primary_rid), naming_context)
+            return member_chain(primary_dn, admin_dn, admin_guid, admin_sid)
+        except RuleError:
+            raise
+        except Exception:
+            raise RuleError(message) from None
+
+    def password_reset_allowed(self, account):
+        # This is an SSPR exception only; protected() and sync guards stay strict.
+        return account["enabled"] is True and (not protected(account) or self.is_domain_admin(account) is True)
+
+    def check_password_reset_account(self, guid):
+        account = self.by_guid(guid)
+        if account["enabled"] is not True:
+            raise RuleError("AD账号已禁用，不能自助重置；无需先同步或绑定，请联系AD管理员核查账号启用状态")
+        if not self.password_reset_allowed(account):
+            raise RuleError("AD账号受保护，不能自助重置；无需先同步或绑定，请联系AD管理员核查权限与保护状态")
+        return account
+
     def ensure_ou(self, dn, root):
         if not under(dn, root):
             raise RuleError("OU 超出管理范围")
@@ -436,7 +574,7 @@ class ActiveDirectory:
         return self.by_guid(guid)
 
     def reset_password(self, guid, password, unlock=False):
-        account = self.check_account(guid)
+        account = self.check_password_reset_account(guid)
         try:
             changed = self.conn.extend.microsoft.modify_password(account["dn"], password)
         except Exception:

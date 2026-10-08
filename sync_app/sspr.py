@@ -102,14 +102,12 @@ def match_employee(source, ad, config, source_id=None, code=None, *, _identity=N
     account = matches[0]
     if _identity is not None:
         _identity["account"] = account
-    if protected(account):
-        if not account.get("enabled", True):
-            raise RuleError("AD账号受保护且已禁用，不能自助重置；无需先同步或绑定，请联系AD管理员核查权限、保护与启用状态")
-        raise RuleError("AD账号受保护，不能自助重置；无需先同步或绑定，请联系AD管理员核查权限与保护状态")
     if not account["enabled"]:
         raise RuleError("AD账号已禁用，不能自助重置；无需先同步或绑定，请联系AD管理员核查账号启用状态")
     if not str(account.get("username") or "").strip() or not str(account.get("guid") or "").strip():
         raise RuleError("匹配账号缺少登录名或对象标识，请联系管理员核对")
+    if protected(account) and ad.password_reset_allowed(account) is not True:
+        raise RuleError("AD账号受保护，不能自助重置；无需先同步或绑定，请联系AD管理员核查权限与保护状态")
     return user, account
 
 

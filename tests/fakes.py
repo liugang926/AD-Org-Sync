@@ -1,6 +1,6 @@
 import copy
 import uuid
-from sync_app.domain import RuleError
+from sync_app.domain import RuleError, protected
 from sync_app.directory import PasswordResetOutcome
 
 
@@ -59,6 +59,17 @@ class Directory:
     def check_account(self, guid):
         return self.by_guid(guid)
 
+    def password_reset_allowed(self, account):
+        return account["enabled"] is True and (not protected(account) or account.get("domain_admin") is True)
+
+    def check_password_reset_account(self, guid):
+        item = self.by_guid(guid)
+        if not item["enabled"]:
+            raise RuleError("AD账号已禁用，不能自助重置；无需先同步或绑定，请联系AD管理员核查账号启用状态")
+        if not self.password_reset_allowed(item):
+            raise RuleError("AD账号受保护，不能自助重置；无需先同步或绑定，请联系AD管理员核查权限与保护状态")
+        return item
+
     def ensure_ou(self, dn, root):
         return self.ous.setdefault(dn.casefold(), str(uuid.uuid4()))
 
@@ -104,6 +115,7 @@ class Directory:
         item["ad_revision"] = str(int(item["ad_revision"]) + 1)
 
     def reset_password(self, guid, password, unlock=False):
+        self.check_password_reset_account(guid)
         self.resets += 1
         item = next(a for a in self.items if a["guid"] == str(guid))
         item["ad_revision"] = str(int(item["ad_revision"]) + 1)

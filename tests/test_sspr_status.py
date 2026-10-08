@@ -13,7 +13,7 @@ pytestmark = pytest.mark.django_db
 STATUS_CASES = (
     (True, True, "AD账号受保护，不能自助重置；无需先同步或绑定，请联系AD管理员核查权限与保护状态"),
     (False, False, "AD账号已禁用，不能自助重置；无需先同步或绑定，请联系AD管理员核查账号启用状态"),
-    (True, False, "AD账号受保护且已禁用，不能自助重置；无需先同步或绑定，请联系AD管理员核查权限、保护与启用状态"),
+    (True, False, "AD账号已禁用，不能自助重置；无需先同步或绑定，请联系AD管理员核查账号启用状态"),
 )
 
 

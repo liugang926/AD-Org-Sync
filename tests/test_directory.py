@@ -374,7 +374,7 @@ def test_ad_create_rejection_reports_safe_cause(result, expected):
 @pytest.mark.parametrize("unlock_result", [False, RuntimeError("connection interrupted")])
 def test_password_reset_reports_unlock_failure_after_password_change(unlock_result):
     directory = object.__new__(ActiveDirectory)
-    directory.check_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
+    directory.check_password_reset_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
     directory.conn = Mock()
     directory.conn.extend.microsoft.modify_password.return_value = True
     if isinstance(unlock_result, Exception):
@@ -389,7 +389,7 @@ def test_password_reset_reports_unlock_failure_after_password_change(unlock_resu
 
 def test_interrupted_password_change_remains_unknown():
     directory = object.__new__(ActiveDirectory)
-    directory.check_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
+    directory.check_password_reset_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
     directory.conn = Mock()
     directory.conn.extend.microsoft.modify_password.side_effect = RuntimeError("connection interrupted")
     with pytest.raises(ResetOutcomeUnknown, match="结果不明"):
@@ -404,7 +404,7 @@ def test_interrupted_password_change_remains_unknown():
 ])
 def test_password_rejection_reports_safe_directory_reason(code, reason):
     directory = object.__new__(ActiveDirectory)
-    directory.check_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
+    directory.check_password_reset_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
     directory.conn = Mock()
     directory.conn.extend.microsoft.modify_password.return_value = False
     directory.conn.result = {"result": code, "message": "private password diagnostic", "dn": "private DN"}
@@ -418,7 +418,7 @@ def test_password_rejection_reports_safe_directory_reason(code, reason):
 
 def test_unlock_rejection_keeps_confirmed_password_result_and_safe_reason():
     directory = object.__new__(ActiveDirectory)
-    directory.check_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
+    directory.check_password_reset_account = Mock(return_value={"dn": "CN=person,OU=People,DC=example,DC=com"})
     directory.conn = Mock()
     directory.conn.extend.microsoft.modify_password.return_value = True
     directory.conn.modify.return_value = False
