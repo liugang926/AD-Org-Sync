@@ -25,6 +25,7 @@
       <div class="sidebar-section-title">系统管理</div>
       <nav class="side-nav" aria-label="系统管理">
         <a href="/admin/sync_app/configuration/1/change/">组织配置</a>
+        {% if perms.sync_app.view_employeepagesettings or perms.sync_app.change_employeepagesettings %}<a href="/admin/sync_app/employeepagesettings/1/change/">员工页面设置</a>{% endif %}
       </nav>
       <div class="sidebar-foot"><span class="sidebar-foot-dot" aria-hidden="true"></span>单组织 · LDAPS 加密连接</div>
     </aside>

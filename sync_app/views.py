@@ -6,7 +6,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.views import LoginView
 from django.core.paginator import Paginator
-from django.db import connection
+from django.db import connection, DatabaseError
 from django.db.models import Q
 from django.http import JsonResponse, HttpResponseForbidden
 from django.shortcuts import redirect, render, get_object_or_404
@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from . import sspr, synchronization
 from .domain import ResetOutcomeUnknown, RuleError, candidate
-from .models import Configuration, Person, Binding, DepartmentBinding, Job, Audit, Snapshot, RuntimeState
+from .models import Configuration, Person, Binding, DepartmentBinding, Job, Audit, Snapshot, RuntimeState, EmployeePageSettings, AuthPlatform
 from .security import rate_limit, audit, client_address
 
 
@@ -40,6 +40,7 @@ ACTION_LABELS = {
 }
 AUDIT_LABELS = {
     "admin_login": "管理员登录", "settings": "配置变更",
+    "employee_page_settings": "员工页面设置",
     "department_binding": "部门映射变更", "sspr_verified": "员工身份验证",
     "sspr_auth_failed": "员工验证失败", "sspr_reset": "员工密码重置",
     "manual_bind": "人工绑定", "reactivate": "恢复账号或绑定",
@@ -383,6 +384,20 @@ def test_connections(request):
     return redirect("dashboard")
 
 
+def employee_page_context(**context):
+    try:
+        context["page_settings"] = EmployeePageSettings.current()
+        # Evaluate here so a presentation-store failure cannot hide a reset result.
+        context["auth_platforms"] = (
+            list(AuthPlatform.objects.filter(page_settings_id=1, enabled=True))
+            if context.get("account") else []
+        )
+    except DatabaseError:
+        context["page_settings"] = EmployeePageSettings()
+        context["auth_platforms"] = []
+    return context
+
+
 @never_cache
 @ensure_csrf_cookie
 def employee(request):
@@ -396,7 +411,7 @@ def employee(request):
             error = str(exc)
         except Exception:
             error = "当前账号暂时无法核验，请稍后重新通过钉钉验证"
-    return render(request, "sspr.html", {"enabled": config.sspr_enabled, "account": account, "error": error, "corp_id": settings.DINGTALK_CORP_ID, "app_key": settings.DINGTALK_APP_KEY, "minimum": config.minimum_password_length, "script_version": settings.SSPR_SCRIPT_VERSION})
+    return render(request, "sspr.html", employee_page_context(enabled=config.sspr_enabled, account=account, error=error, corp_id=settings.DINGTALK_CORP_ID, app_key=settings.DINGTALK_APP_KEY, minimum=config.minimum_password_length, script_version=settings.SSPR_SCRIPT_VERSION))
 
 
 @never_cache
@@ -432,13 +447,9 @@ def employee_reset_csrf_rejected(request):
         )
     except Exception:
         message = "安全校验未通过，密码未提交；审计暂时不可用，请稍后重新打开密码服务并通过钉钉验证"
-    return HttpResponseForbidden(
-        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        '<title>安全校验未通过</title></head><body>'
-        f'<p>{message}</p><p><a href="/sspr">重新打开密码服务并通过钉钉验证</a></p>'
-        '</body></html>',
-    )
+    return render(request, "sspr.html", employee_page_context(
+        error=message, security_rejected=True, enabled=False,
+    ), status=403)
 
 
 @never_cache
@@ -447,11 +458,11 @@ def employee_reset_csrf_rejected(request):
 def employee_reset(request):
     try:
         result = sspr.reset(request.COOKIES.get("employee_verification", ""), request.POST.get("password", ""), request.POST.get("confirmation", ""), client_address(request))
-        response = render(request, "sspr.html", {"result": result, "enabled": True})
+        response = render(request, "sspr.html", employee_page_context(result=result, enabled=True))
         response.delete_cookie("employee_verification", path="/sspr", samesite="Strict")
         return response
     except ResetOutcomeUnknown as exc:
-        response = render(request, "sspr.html", {"uncertain": str(exc), "enabled": True})
+        response = render(request, "sspr.html", employee_page_context(uncertain=str(exc), enabled=True))
         response.delete_cookie("employee_verification", path="/sspr", samesite="Strict")
         return response
     except RuleError as exc:
@@ -464,8 +475,8 @@ def employee_reset(request):
             except Exception:
                 # Only a still-valid, freshly matched session may reveal the account.
                 pass
-        return render(request, "sspr.html", {
+        return render(request, "sspr.html", employee_page_context(**{
             "error": str(exc), "enabled": config.sspr_enabled, "account": account,
             "minimum": config.minimum_password_length, "corp_id": settings.DINGTALK_CORP_ID,
             "app_key": settings.DINGTALK_APP_KEY, "script_version": settings.SSPR_SCRIPT_VERSION,
-        }, status=400)
+        }), status=400)

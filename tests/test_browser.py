@@ -149,3 +149,108 @@ def test_admin_and_mobile_employee_journeys(live_server, django_user_model, monk
         assert not errors
         browser.close()
     assert not Binding.objects.exists() and not Job.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_admin_employee_page_text_and_authenticated_platforms_mobile(live_server, django_user_model, monkeypatch):
+    from sync_app import sspr
+    from sync_app.models import Audit, AuthPlatform, Configuration, EmployeePageSettings
+    from tests.fakes import Source, Directory
+
+    config = Configuration.current()
+    config.sspr_enabled = True
+    config.save()
+    settings = EmployeePageSettings.current()
+    settings.save()
+    settings.platforms.all().delete()
+    platform_names = ("VPN", "Nextcloud", "AI知识库")
+    for position, name in enumerate(platform_names):
+        AuthPlatform.objects.create(page_settings=settings, name=name, position=position)
+    django_user_model.objects.create_superuser("page-browser-admin", password="Page-browser-only-823!")
+    source, directory = Source(), Directory()
+    monkeypatch.setattr(sspr, "DingTalk", lambda: source)
+    monkeypatch.setattr(sspr, "ActiveDirectory", lambda: directory)
+    title = "企业账号密码服务"
+    description = "在钉钉工作台确认本人身份后，可查看当前 AD 账号及企业认证平台。"
+    announcement = "维护公告：请在业务允许的时间修改密码。\n" + "https://docs.example.com/" + "a" * 350 + "\n<script>window.employeeNoticeExecuted=true</script>"
+    help_text = "请先确认页面显示的是本人账号，再设置新密码。\n" + "修改后请保存个人工作，并按各平台的说明重新登录。" * 12
+    support_text = "如有疑问，请联系企业 IT 服务台。"
+    platform_urls = ("https://vpn.example.com/login", "https://nextcloud.example.com/login", "https://knowledge.example.com/login")
+    output = Path("test_artifacts/browser")
+    output.mkdir(parents=True, exist_ok=True)
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        admin_page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        errors = []
+        admin_page.on("pageerror", lambda error: errors.append(str(error)))
+        admin_page.goto(live_server.url + "/login")
+        admin_page.get_by_label("用户名").fill("page-browser-admin")
+        admin_page.get_by_label("密码").fill("Page-browser-only-823!")
+        admin_page.get_by_role("button", name="登录", exact=True).click()
+        admin_page.wait_for_url("**/dashboard")
+        admin_page.goto(live_server.url + "/admin/sync_app/employeepagesettings/1/change/")
+        admin_page.get_by_label("页面标题").fill(title)
+        admin_page.get_by_label("页面说明").fill(description)
+        admin_page.get_by_label("公告").fill(announcement)
+        admin_page.get_by_label("操作帮助").fill(help_text)
+        admin_page.get_by_label("联系支持").fill(support_text)
+        for position, name in enumerate(platform_names):
+            assert admin_page.locator(f"#id_platforms-{position}-name").input_value() == name
+            admin_page.locator(f"#id_platforms-{position}-authentication_note").fill("使用当前企业 AD 账号认证")
+            admin_page.locator(f"#id_platforms-{position}-login_url").fill(platform_urls[position])
+            admin_page.locator(f"#id_platforms-{position}-password_note").fill(f"{name} 下次登录请使用新密码。")
+            admin_page.locator(f"#id_platforms-{position}-enabled").check()
+        admin_page.get_by_role("button", name="保存", exact=True).click()
+        admin_page.wait_for_url("**/admin/sync_app/employeepagesettings/")
+        admin_page.goto(live_server.url + "/admin/sync_app/employeepagesettings/1/change/")
+        assert admin_page.get_by_label("页面标题").input_value() == title
+        assert admin_page.get_by_label("公告").input_value() == announcement
+        assert admin_page.get_by_label("操作帮助").input_value() == help_text
+        admin_page.screenshot(path=str(output / "employee-page-settings.png"), full_page=True)
+
+        def saved_audit():
+            record = Audit.objects.get(action="employee_page_settings")
+            return record.actor, record.target, record.state, record.success, record.result
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            actor, target, state, success, result = executor.submit(saved_audit).result()
+        assert (actor, target, state, success) == ("page-browser-admin", "1", "success", True)
+        assert "announcement" in result and "修改 3" in result
+        assert title not in result and platform_urls[0] not in result
+
+        unverified = browser.new_page(viewport={"width": 390, "height": 844})
+        unverified.route("https://g.alicdn.com/**", lambda route: route.abort())
+        unverified.goto(live_server.url + "/sspr")
+        assert unverified.get_by_role("heading", name=title, exact=True).is_visible()
+        assert unverified.get_by_text(description, exact=True).is_visible()
+        assert unverified.get_by_label("服务公告").get_by_text(announcement, exact=True).is_visible()
+        assert unverified.get_by_text(support_text, exact=True).is_visible()
+        for name in platform_names:
+            assert unverified.get_by_text(name, exact=True).count() == 0
+        assert unverified.get_by_role("heading", name="企业 AD 认证平台", exact=True).count() == 0
+        assert unverified.evaluate("window.employeeNoticeExecuted === undefined")
+        assert unverified.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+        employee = browser.new_page(viewport={"width": 390, "height": 844})
+        employee.on("pageerror", lambda error: errors.append(str(error)))
+        employee.route("https://g.alicdn.com/**", lambda route: route.abort())
+        employee.add_init_script("window.dd = {requestAuthCode: opts => opts.success({code: 'valid'})};")
+        employee.goto(live_server.url + "/sspr")
+        employee.get_by_text("当前 AD 账号", exact=True).wait_for(state="visible")
+        assert employee.get_by_text("testuser", exact=True).is_visible()
+        assert employee.get_by_role("heading", name="企业 AD 认证平台", exact=True).is_visible()
+        for position, name in enumerate(platform_names):
+            assert employee.get_by_text(name, exact=True).is_visible()
+            assert employee.get_by_text(f"{name} 下次登录请使用新密码。", exact=True).is_visible()
+            link = employee.get_by_role("link", name=f"打开{name}", exact=True)
+            assert link.get_attribute("href") == platform_urls[position]
+            assert link.get_attribute("target") == "_blank"
+            assert {"noopener", "noreferrer"}.issubset(set(link.get_attribute("rel").split()))
+        assert employee.get_by_label("新密码", exact=True).is_visible()
+        assert employee.get_by_text(support_text, exact=True).is_visible()
+        assert employee.evaluate("window.employeeNoticeExecuted === undefined")
+        assert employee.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        employee.screenshot(path=str(output / "employee-platforms-mobile.png"), full_page=True)
+        assert not errors
+        browser.close()
