@@ -56,17 +56,24 @@ def test_robot_secrets_keep_shared_readonly_volume_and_optional_host_bindings():
         assert binding["bind"]["create_host_path"] is False
 
 
+@pytest.fixture(scope="session")
+def docker_compose():
+    docker = shutil.which("docker")
+    if not docker:
+        pytest.skip("Docker Compose is required to evaluate its interpolation contract")
+    # A fresh Windows runner may take longer to start the CLI and load plugins.
+    # Keep the probe bounded and let a genuine startup timeout fail the tests.
+    available = subprocess.run([docker, "compose", "version"], capture_output=True, text=True, timeout=60)
+    if available.returncode != 0:
+        pytest.skip("Docker Compose plugin is not installed")
+    return docker
+
+
 @pytest.mark.parametrize("webhook_host_file,sign_host_file", [
     (None, None), ("", ""), ("/tmp/isolated-webhook-file", None),
     (None, "/tmp/isolated-signing-file"), ("/tmp/isolated-webhook-file", "/tmp/isolated-signing-file"),
 ])
-def test_compose_robot_paths_are_empty_unless_host_files_selected(tmp_path, webhook_host_file, sign_host_file):
-    docker = shutil.which("docker")
-    if not docker:
-        pytest.skip("Docker Compose is required to evaluate its interpolation contract")
-    available = subprocess.run([docker, "compose", "version"], capture_output=True, text=True, timeout=15)
-    if available.returncode != 0:
-        pytest.skip("Docker Compose plugin is not installed")
+def test_compose_robot_paths_are_empty_unless_host_files_selected(tmp_path, webhook_host_file, sign_host_file, docker_compose):
     env_file = tmp_path / "isolated-compose.env"
     env_file.write_text(
         "AD_ORG_SYNC_PUBLIC_BASE_URL=https://example.invalid\n"
@@ -79,7 +86,7 @@ def test_compose_robot_paths_are_empty_unless_host_files_selected(tmp_path, webh
     env.pop("DINGTALK_PASSWORD_ROBOT_WEBHOOK_HOST_FILE", None)
     env.pop("DINGTALK_PASSWORD_ROBOT_SIGN_SECRET_HOST_FILE", None)
     result = subprocess.run(
-        [docker, "compose", "--env-file", str(env_file), "config", "--format", "json"],
+        [docker_compose, "compose", "--env-file", str(env_file), "config", "--format", "json"],
         cwd=ROOT, env=env, capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr
