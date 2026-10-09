@@ -2,8 +2,17 @@
 {% block title %}人员与账号关联 · 组织同步控制台{% endblock %}
 {% block content %}
 <div class="page-heading">
-  <div><p class="eyebrow">工作台 / 人员与账号关联</p><h1>人员与账号关联</h1><p class="page-subtitle">核对来源人员、当前 AD 绑定与新账号命名候选。员工密码重置独立通过实时 LDAPS 匹配，不依赖此处的同步状态。</p></div>
+  <div><p class="eyebrow">工作台 / 人员与账号关联</p><h1>人员与账号关联</h1><p class="page-subtitle">按钉钉工号核验已有 AD 登录名，唯一匹配后保存实际账号关联；也可人工核验并修改。员工密码重置独立通过实时 LDAPS 匹配。</p></div>
 </div>
+
+{% if directory_identity_error %}<p class="notice" role="alert">目录身份需核验：{{ directory_identity_error }}。下方账号仅为历史保存关联，不代表当前目录中的账号；操作提交时会独立校验目录身份。</p>{% endif %}
+{% if source_scope_changed %}<p class="notice" role="alert">来源范围已变，当前列表仍为上次成功采集的资料。请先刷新完整通讯录，再核验账号关联。</p>{% elif association_results_stale %}<p class="notice" role="status">来源资料已更新，已忽略旧任务的逐人关联说明，等待重新核验。已保存的账号关联继续保留。</p>{% endif %}
+
+<section class="card association-card">
+  <div class="card-head association-toolbar"><div><h2>账号关联核验</h2><p>{% if config.auto_associate_accounts and config.match_field == "employee_username" %}已开启自动关联：钉钉工号 → AD 登录名。{% else %}按工号自动关联尚未开启，可在组织设置中配置。{% endif %}核验只保存本地账号与 GUID，不修改 AD。</p></div><form method="post" action="{% url 'refresh_associations' %}">{% csrf_token %}<button type="submit" {% if association_active %}disabled{% endif %}>{% if association_active %}正在核验账号关联{% else %}刷新账号关联{% endif %}</button></form></div>
+  <dl class="association-facts"><div><dt>最近任务</dt><dd><span class="status-pill tone-{{ association_status_tone }}">{{ association_status_label }}</span>{% if association_job %} <a href="{% url 'job' association_job.id %}">查看详情 →</a>{% endif %}</dd></div><div><dt>发起时间</dt><dd>{{ association_job.created_at|date:"Y-m-d H:i:s"|default:"尚未核验" }}</dd></div><div><dt>完成时间</dt><dd>{{ association_job.finished_at|date:"Y-m-d H:i:s"|default:"—" }}</dd></div></dl>
+  {% if association_job.message %}<p class="hint-block">{{ association_job.message }}</p>{% endif %}
+</section>
 
 <section class="card listing-card">
   <div class="card-head"><div><h2>来源人员</h2><p>共 {{ page.paginator.count }} 人。人工绑定须先核验目标账号，再确认变更。</p></div><span class="section-note">数据更新时间：{{ snapshot.created_at|default:"尚未采集" }}</span></div>
@@ -14,23 +23,23 @@
 </section>
 
 <div aria-label="人员列表">
-{% for person,binding,source,naming_candidate,department_options in rows %}
+{% for person,binding,source,naming_candidate,department_options,association in rows %}
   <section class="card person-card">
     <div class="person-header">
       <div><h2>{{ person.name }}</h2><small>钉钉 userId：{{ person.source_id }}</small></div>
-      {% if person.excluded %}<span class="status-pill tone-neutral">已排除同步</span>{% elif binding %}{% if binding.enabled %}<span class="status-pill tone-success">已关联</span>{% else %}<span class="status-pill tone-warning">绑定已停用</span>{% endif %}{% else %}<span class="status-pill tone-active">待关联</span>{% endif %}
+      <div class="person-statuses"><span class="status-pill tone-{{ association.tone }}">{{ association.label }}</span>{% if binding %}<span class="status-pill tone-neutral">{% if binding.manual %}人工关联{% else %}自动关联{% endif %}</span>{% if not binding.sync_managed %}<span class="status-pill tone-neutral">仅账号关联</span>{% elif directory_identity_error %}<span class="status-pill tone-neutral">历史同步管理</span>{% elif not person.excluded %}<span class="status-pill tone-active">已纳入同步</span>{% endif %}{% endif %}{% if person.excluded %}<span class="status-pill tone-neutral">已排除同步</span>{% endif %}</div>
     </div>
     {% if not source %}<p class="notice">该人员不在最近成功采集中，已有绑定仍保留；请先核对来源状态。</p>{% endif %}
     <dl class="person-summary">
-      <div><dt>当前 AD 绑定</dt><dd>{% if binding %}<strong>{{ binding.username }}</strong><small>objectGUID：{{ binding.object_guid }}</small>{% else %}<span class="muted">尚未绑定</span>{% endif %}</dd></div>
+      <div><dt>{% if directory_identity_error %}历史 AD 账号关联{% else %}当前 AD 账号关联{% endif %}</dt><dd>{% if binding %}<strong>{{ binding.username }}</strong><small>objectGUID：{{ binding.object_guid }}</small><small>关联更新：{{ binding.updated_at|date:"Y-m-d H:i:s" }}</small>{% else %}<span class="muted">尚未保存账号关联</span>{% endif %}</dd></div>
       <div><dt>来源工号</dt><dd>{{ source.employee_id|default:"未提供" }}</dd></div>
       <div><dt>邮箱</dt><dd>{{ source.email|default:"未提供" }}</dd></div>
-      <div><dt>新账号命名候选</dt><dd>{{ naming_candidate|default:"无有效候选" }}<small>候选不等于当前绑定</small></dd></div>
+      <div><dt>最近核验说明</dt><dd>{{ association.reason|default:"已有账号关联" }}{% if association.sync_note %}<small>{{ association.sync_note }}</small>{% endif %}{% if binding and not binding.sync_managed %}<small>当前仅保存身份关联；实际 AD 同步须先预览并确认。</small>{% endif %}</dd></div>
     </dl>
     <details class="person-actions"><summary>维护绑定与同步设置</summary>
       <div class="grid action-grid">
-        <form class="action-panel" method="post" action="{% url 'person_action' person.pk %}">{% csrf_token %}<input type="hidden" name="action" value="bind"><h3>绑定已有 AD 账号</h3><p>提交后先展示目标账号供复核。</p><label for="bind-{{ person.pk }}">已有 AD 账号</label><input id="bind-{{ person.pk }}" name="username" required value="{{ binding.username }}"><label for="reason-{{ person.pk }}">修改原因</label><input id="reason-{{ person.pk }}" name="reason" required maxlength="150"><button type="submit">核验并查看变更</button></form>
-        <form class="action-panel" method="post" action="{% url 'person_action' person.pk %}">{% csrf_token %}<input type="hidden" name="action" value="policy"><h3>同步设置</h3><p>仅能指定该员工当前所属部门。</p><label for="department-{{ person.pk }}">主部门</label><select id="department-{{ person.pk }}" name="department"><option value="">使用钉钉主部门</option>{% for option in department_options %}<option value="{{ option.id }}" {% if person.primary_department == option.id %}selected{% endif %}>{{ option.name }}（{{ option.id }}）</option>{% endfor %}</select><label class="inline-check"><input type="checkbox" name="excluded" {% if person.excluded %}checked{% endif %}>排除同步</label><button class="secondary" type="submit">保存同步设置</button></form>
+        <form class="action-panel" method="post" action="{% url 'person_action' person.pk %}">{% csrf_token %}<input type="hidden" name="action" value="bind"><h3>{% if binding %}修改 AD 账号关联{% else %}关联已有 AD 账号{% endif %}</h3><p>提交后先展示实际目标账号供复核；人工关联不修改 AD。</p><label for="bind-{{ person.pk }}">已有 AD 账号</label><input id="bind-{{ person.pk }}" name="username" required value="{{ binding.username }}"><label for="reason-{{ person.pk }}">修改原因</label><input id="reason-{{ person.pk }}" name="reason" required maxlength="150"><button type="submit">核验并查看变更</button></form>
+        <form class="action-panel" method="post" action="{% url 'person_action' person.pk %}">{% csrf_token %}<input type="hidden" name="action" value="policy"><h3>同步设置</h3><p>仅能指定该员工当前所属部门。账号关联与同步管理分别记录。</p><small>新账号命名候选：{{ naming_candidate|default:"无有效候选" }}，候选不等于已关联账号。</small><label for="department-{{ person.pk }}">主部门</label><select id="department-{{ person.pk }}" name="department"><option value="">使用钉钉主部门</option>{% for option in department_options %}<option value="{{ option.id }}" {% if person.primary_department == option.id %}selected{% endif %}>{{ option.name }}（{{ option.id }}）</option>{% endfor %}</select><label class="inline-check"><input type="checkbox" name="excluded" {% if person.excluded %}checked{% endif %}>排除同步</label><button class="secondary" type="submit">保存同步设置</button></form>
       </div>
       {% if binding %}<div class="person-secondary-actions"><form method="post" action="{% url 'person_action' person.pk %}">{% csrf_token %}<input type="hidden" name="action" value="verify"><button class="secondary" type="submit">实时核验 AD 绑定</button></form><form method="post" action="{% url 'person_action' person.pk %}">{% csrf_token %}<input type="hidden" name="action" value="unbind"><button class="danger" type="submit">解除绑定并排除自动同步</button></form><small>解绑不会删除 AD 账号，也不影响独立密码重置。</small></div>{% endif %}
     </details>

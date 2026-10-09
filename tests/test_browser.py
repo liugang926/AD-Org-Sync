@@ -4,6 +4,83 @@ import pytest
 from playwright.sync_api import sync_playwright
 
 
+@pytest.mark.django_db(transaction=True)
+def test_real_saved_account_association_and_manual_override_browser(live_server, django_user_model, monkeypatch):
+    from unittest.mock import Mock
+    from sync_app import account_associations as associations, synchronization as sync
+    from sync_app.models import Binding, Configuration, Job
+    from .fakes import Source, account, user
+    from .test_account_associations import ReadOnlyDirectory
+
+    config = Configuration.current()
+    config.match_field = "employee_username"
+    config.root_ou = "OU=People,DC=example,DC=com"
+    config.auto_associate_accounts = True
+    config.save()
+    django_user_model.objects.create_superuser("association-browser-admin", password="Association-browser-only-823!")
+    target, replacement = account(name="T0002320"), account(name="manual.other")
+    target.update(dn="CN=T0002320,OU=Existing,DC=example,DC=com", protected=True)
+    source, directory = Source([user(employee="T0002320")]), ReadOnlyDirectory([target, replacement])
+    source_factory, ad_factory = Mock(return_value=source), Mock(return_value=directory)
+    for module in (associations, sync):
+        monkeypatch.setattr(module, "DingTalk", source_factory)
+        monkeypatch.setattr(module, "ActiveDirectory", ad_factory)
+
+    def saved_identity():
+        binding = Binding.objects.get()
+        return str(binding.object_guid), binding.manual, binding.sync_managed, binding.enabled
+
+    output = Path("test_artifacts/browser")
+    output.mkdir(parents=True, exist_ok=True)
+    with sync_playwright() as playwright, ThreadPoolExecutor(max_workers=1) as executor:
+        browser = playwright.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.goto(live_server.url + "/login")
+        page.get_by_label("用户名").fill("association-browser-admin")
+        page.get_by_label("密码").fill("Association-browser-only-823!")
+        page.get_by_role("button", name="登录", exact=True).click()
+        page.wait_for_url("**/dashboard")
+        page.goto(live_server.url + "/people")
+        with page.expect_response(lambda response: response.request.method == "POST" and response.url.endswith("/people/associate")) as submitted:
+            page.get_by_role("button", name="刷新账号关联", exact=True).click()
+        assert submitted.value.status == 302
+        source_factory.assert_not_called()
+        ad_factory.assert_not_called()
+        assert executor.submit(lambda: Job.objects.get().kind).result() == "associate"
+        assert executor.submit(sync.run_next).result()
+        assert executor.submit(saved_identity).result() == (target["guid"], False, False, False)
+        page.goto(live_server.url + "/people?q=T0002320")
+        card = page.locator(".person-card")
+        assert card.get_by_text("objectGUID：" + target["guid"], exact=True).is_visible()
+        assert card.get_by_text("自动关联", exact=True).is_visible()
+        assert card.get_by_text("仅账号关联", exact=True).is_visible()
+        assert card.get_by_text("关联已停用", exact=True).count() == 0
+        assert card.get_by_label("已有 AD 账号", exact=True).input_value() == "T0002320"
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        page.screenshot(path=str(output / "account-association-desktop.png"), full_page=True)
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        page.screenshot(path=str(output / "account-association-mobile.png"), full_page=True)
+        card.locator("summary").click()
+        card.get_by_label("已有 AD 账号", exact=True).fill("manual.other")
+        card.get_by_label("修改原因", exact=True).fill("管理员核验本人已有账号")
+        card.get_by_role("button", name="核验并查看变更", exact=True).click()
+        assert page.get_by_role("heading", name="确认修改账号关联", exact=True).is_visible()
+        assert page.get_by_text("objectGUID：" + replacement["guid"], exact=True).is_visible()
+        page.get_by_role("button", name="确认绑定此账号", exact=True).click()
+        page.wait_for_url("**/people")
+        assert executor.submit(saved_identity).result() == (replacement["guid"], True, False, False)
+        card = page.locator(".person-card")
+        assert card.get_by_text("objectGUID：" + replacement["guid"], exact=True).is_visible()
+        assert card.get_by_text("人工关联", exact=True).is_visible()
+        assert card.get_by_text("objectGUID：" + target["guid"], exact=True).count() == 0
+        assert card.get_by_text("唯一工号匹配，已默认关联", exact=True).count() == 0
+        assert card.get_by_text("受保护账号，仅维护账号关联", exact=True).count() == 0
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        page.screenshot(path=str(output / "account-association-manual-mobile.png"), full_page=True)
+        browser.close()
+
+
 def _assert_employee_identity_withheld(page, platform_names=()):
     assert page.get_by_text("正在通过钉钉确认身份", exact=False).count() == 0
     assert page.get_by_text("正在确认身份", exact=False).count() == 0

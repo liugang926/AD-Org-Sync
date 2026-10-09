@@ -65,23 +65,69 @@ def test_password_length_migration_updates_old_default_and_preserves_custom_valu
     code = '''
 import django
 django.setup()
+import uuid
 from datetime import timedelta
 from django.core.management import call_command
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
 from django.utils import timezone
-from sync_app.models import Configuration
-call_command("migrate", "sync_app", "0007_audit_state", interactive=False, verbosity=0)
-config = Configuration.current()
+from sync_app.sspr import config_signature
+
+def historical_apps(target):
+    return MigrationExecutor(connection).loader.project_state([("sync_app", target)]).apps
+
+old_target = "0007_audit_state"
+new_target = "0008_sspr_minimum_eight"
+call_command("migrate", "sync_app", old_target, interactive=False, verbosity=0)
+apps = historical_apps(old_target)
+Configuration = apps.get_model("sync_app", "Configuration")
+Person = apps.get_model("sync_app", "Person")
+Binding = apps.get_model("sync_app", "Binding")
+EmployeeSession = apps.get_model("sync_app", "EmployeeSession")
+config, _ = Configuration.objects.get_or_create(pk=1)
+assert config.minimum_password_length == Configuration().minimum_password_length == 12
+assert config.match_field == config.sspr_match == "employee_id"
 Configuration.objects.filter(pk=config.pk).update(minimum_password_length=12, updated_at=timezone.now() - timedelta(days=1))
-before = Configuration.current().updated_at
-call_command("migrate", "sync_app", "0008_sspr_minimum_eight", interactive=False, verbosity=0)
-config.refresh_from_db()
+config = Configuration.objects.get(pk=config.pk)
+before = Configuration.objects.values().get(pk=config.pk)
+before_signature = config_signature(config)
+person = Person.objects.create(source_id="kept-user", name="Kept employee")
+binding = Binding.objects.create(person=person, object_guid=uuid.uuid4(), username="kept-login", manual=True)
+item = EmployeeSession.objects.create(digest="kept-session", source_id=person.source_id, object_guid=binding.object_guid,
+    config_fingerprint=before_signature, expires_at=timezone.now() + timedelta(minutes=5))
+binding_before = Binding.objects.values().get(pk=binding.pk)
+session_before = EmployeeSession.objects.values().get(pk=item.pk)
+call_command("migrate", "sync_app", new_target, interactive=False, verbosity=0)
+Configuration = historical_apps(new_target).get_model("sync_app", "Configuration")
+config = Configuration.objects.get(pk=config.pk)
 assert config.minimum_password_length == 8
-assert config.updated_at > before
-call_command("migrate", "sync_app", "0007_audit_state", interactive=False, verbosity=0)
+assert config.updated_at > before["updated_at"]
+assert config_signature(config) != before_signature
+after = Configuration.objects.values().get(pk=config.pk)
+assert {k: v for k, v in after.items() if k not in {"minimum_password_length", "updated_at"}} == {k: v for k, v in before.items() if k not in {"minimum_password_length", "updated_at"}}
+call_command("migrate", "sync_app", old_target, interactive=False, verbosity=0)
+Configuration = historical_apps(old_target).get_model("sync_app", "Configuration")
+config = Configuration.objects.get(pk=config.pk)
+assert config.minimum_password_length == 12
+assert config.updated_at > after["updated_at"]
+# The intentional policy timestamp changes invalidate the old verification
+# signature in both directions; the stored session itself is never rewritten.
+assert config_signature(config) != before_signature
 Configuration.objects.filter(pk=config.pk).update(minimum_password_length=16)
-call_command("migrate", "sync_app", "0008_sspr_minimum_eight", interactive=False, verbosity=0)
-config.refresh_from_db()
+config = Configuration.objects.get(pk=config.pk)
+custom_before = Configuration.objects.values().get(pk=config.pk)
+custom_signature = config_signature(config)
+call_command("migrate", "sync_app", new_target, interactive=False, verbosity=0)
+apps = historical_apps(new_target)
+Configuration = apps.get_model("sync_app", "Configuration")
+config = Configuration.objects.get(pk=config.pk)
 assert config.minimum_password_length == 16
+assert Configuration.objects.values().get(pk=config.pk) == custom_before
+assert config_signature(config) == custom_signature
+assert apps.get_model("sync_app", "Binding").objects.values().get(pk=binding.pk) == binding_before
+assert apps.get_model("sync_app", "EmployeeSession").objects.values().get(pk=item.pk) == session_before
+call_command("migrate", interactive=False, verbosity=0)
+call_command("db_check", verbosity=0)
 '''
     result = subprocess.run([sys.executable, "-c", code], cwd=root, env=env, capture_output=True, text=True, timeout=40)
     assert result.returncode == 0, result.stderr

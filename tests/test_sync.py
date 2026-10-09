@@ -530,7 +530,7 @@ def test_manual_binding_rechecks_protection_under_account_lock(configured, monke
         return target
 
     monkeypatch.setattr(ad, "by_guid", protected_after_lookup)
-    with pytest.raises(RuleError, match="目标受保护"):
+    with pytest.raises(RuleError, match="AD 目标状态已变化"):
         sync.bind_person(person.pk, review["confirmation"], "admin", "确认身份")
     assert not Binding.objects.exists()
 
@@ -555,7 +555,7 @@ def test_old_binding_confirmation_without_ad_state_requires_new_review(configure
 
 
 @pytest.mark.django_db
-def test_manual_binding_to_disabled_ad_account_waits_for_explicit_reactivation(configured, monkeypatch):
+def test_manual_identity_association_does_not_enable_disabled_ad_account(configured, monkeypatch):
     from sync_app import synchronization as sync
 
     source = Source()
@@ -571,12 +571,13 @@ def test_manual_binding_to_disabled_ad_account_waits_for_explicit_reactivation(c
     binding = Binding.objects.get(person=person)
     assert binding.manual and not binding.enabled
     assert not ad.items[0]["enabled"]
-    assert plan(Job.objects.create(), source, ad)["operations"][0]["action"] == "skip"
+    assert not binding.sync_managed
+    assert plan(Job.objects.create(), source, ad)["operations"][0]["action"] == "conflict"
 
-    sync.reactivate_person(person.pk, "admin", "核验后恢复", True)
+    with pytest.raises(RuleError, match="仅维护身份关联"):
+        sync.reactivate_person(person.pk, "admin", "核验后恢复", True)
     binding.refresh_from_db()
-    assert binding.enabled and ad.items[0]["enabled"]
-    assert plan(Job.objects.create(), source, ad)["operations"][0]["action"] == "update"
+    assert not binding.enabled and not ad.items[0]["enabled"]
 
 
 @pytest.mark.django_db

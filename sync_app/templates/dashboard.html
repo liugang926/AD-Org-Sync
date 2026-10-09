@@ -8,7 +8,7 @@
 
 <div class="metrics" aria-label="同步关键数据">
   <section class="metric"><span class="metric-label">最近采集人员</span><strong>{% if snapshot %}{{ snapshot.users|length }}{% else %}0{% endif %}</strong><span>钉钉通讯录</span></section>
-  <section class="metric"><span class="metric-label">已关联 AD 账号</span><strong>{{ binding_count }}</strong><span>本地同步关联</span></section>
+  <section class="metric"><span class="metric-label">已关联 AD 账号</span><strong>{{ binding_count }}</strong><span>其中纳入同步 {{ managed_binding_count }} 人 · 仅账号关联 {{ identity_binding_count }} 人</span><a href="{% url 'people' %}">查看账号关联 →</a></section>
   <section class="metric"><span class="metric-label">部门映射</span><strong>{{ department_binding_count }}</strong><a href="{% url 'departments' %}">查看映射 →</a></section>
   <section class="metric"><span class="metric-label">最近全量计划冲突</span><strong>{% if latest_full_plan %}{{ conflict_count }}{% else %}—{% endif %}</strong>{% if latest_full_plan %}<a href="{% url 'job' latest_full_plan.id %}">查看 {{ latest_full_plan.created_at|date:"m-d H:i" }} 的计划 →</a>{% else %}<span>尚无全量计划</span>{% endif %}</section>
 </div>
@@ -17,7 +17,7 @@
 <div class="workflow-grid">
   <section class="card workflow-card"><span class="step-number">01</span><h3>检查连接与通讯录</h3><p>确认钉钉来源和 AD 连接可用，再刷新最新人员与部门。刷新不会写入 AD。</p><form method="post">{% csrf_token %}<input type="hidden" name="action" value="refresh"><button class="secondary" type="submit">仅刷新通讯录</button></form><small>上次刷新：{{ snapshot.created_at|default:"尚未采集" }}</small></section>
   <section class="card workflow-card workflow-primary"><span class="step-number">02</span><h3>创建同步预览</h3><p>选择同步范围，系统生成将要执行的变更与冲突清单。</p><form method="post">{% csrf_token %}<label for="scope">同步范围</label><select name="scope" id="scope"><option value="full">完整管理范围</option><option value="department">指定部门及子部门</option><option value="users">指定人员</option></select><label for="selected">部门 ID 或人员 userId</label><input id="selected" name="selected" placeholder="局部同步时填写，多个用空格分隔" aria-describedby="selected-hint"><small id="selected-hint">完整同步无需填写。</small><button type="submit">生成预览</button></form></section>
-  <section class="card workflow-card"><span class="step-number">03</span><h3>审阅并执行</h3><p>逐项查看新增、更新、停用和冲突，确认后执行。部分失败时需核验结果并重新预览。</p>{% if job_rows %}<a class="button-link secondary" href="{% url 'job' job_rows.0.job.id %}">查看最近任务</a>{% else %}<span class="empty-action">生成预览后可在此查看任务</span>{% endif %}<small>员工密码重置独立通过 LDAPS 匹配。</small></section>
+  <section class="card workflow-card"><span class="step-number">03</span><h3>审阅并执行</h3><p>逐项查看新增、更新、停用和冲突，确认后执行。部分失败时需核验结果并重新预览。</p>{% if latest_sync_job %}<a class="button-link secondary" href="{% url 'job' latest_sync_job.id %}">查看最近同步任务</a>{% else %}<span class="empty-action">生成预览后可在此查看任务</span>{% endif %}<small>员工密码重置独立通过 LDAPS 匹配。</small></section>
 </div>
 
 <div class="info-grid">

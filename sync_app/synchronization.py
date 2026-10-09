@@ -186,7 +186,7 @@ def plan(job, source, ad):
     ou_plans = department_plans(snap, job.scope, job.selected, chosen_users, config, overrides, ad)
     for user in chosen_users:
         person, binding = people[user["source_id"]], bindings.get(user["source_id"])
-        b = {"guid": str(binding.object_guid), "enabled": binding.enabled} if binding else None
+        b = {"guid": str(binding.object_guid), "enabled": binding.enabled if binding.sync_managed else True} if binding else None
         recovery = None
         if not binding:
             recovery = Operation.objects.filter(source_id=user["source_id"], action="create").order_by("-pk").first()
@@ -262,7 +262,7 @@ def plan(job, source, ad):
     if job.scope == "full" and config.disable_missing:
         current_ids = {u["source_id"] for u in snap.users}
         for uid, binding in bindings.items():
-            if uid in current_ids or not binding.enabled or binding.person.excluded:
+            if uid in current_ids or not binding.sync_managed or not binding.enabled or binding.person.excluded:
                 continue
             target = next((a for a in accounts if a["guid"] == str(binding.object_guid)), None)
             action = "skip"
@@ -271,7 +271,8 @@ def plan(job, source, ad):
                 action, reason = "disable", "完整全量中缺失的受管人员"
             operations.append({"source_id": uid, "action": action, "target": target, "username": binding.username, "reason": reason, "changes": [{"field": "enabled", "before": True, "after": False}] if action == "disable" else []})
     disables = sum(o["action"] == "disable" for o in operations)
-    threshold = disables > config.disable_limit or disables * 100 > max(len(bindings), 1) * config.disable_percent
+    managed_count = sum(binding.sync_managed for binding in bindings.values())
+    threshold = disables > config.disable_limit or disables * 100 > max(managed_count, 1) * config.disable_percent
     return {"snapshot": snap.pk, "source": snap.fingerprint, "config": configuration_signature(config), "bindings": binding_signature(), "operations": operations, "departments": ou_plans, "high_risk": threshold, "scope": job.scope, "selected": job.selected}
 
 
@@ -382,7 +383,10 @@ def apply(job, source, ad):
                             Binding.objects.create(person=person, object_guid=account["guid"], username=account["username"], enabled=op["action"] not in {"create", "resume_create"} or config.enable_new_accounts)
                         else:
                             existing.username = account["username"]
-                            existing.save(update_fields=["username", "updated_at"])
+                            existing.sync_managed = True
+                            existing.enabled = account["enabled"]
+                            existing.revision = uuid.uuid4()
+                            existing.save(update_fields=["username", "sync_managed", "enabled", "revision", "updated_at"])
                         record.status = "success"
                         record.save()
                 record.status = "success"
@@ -395,14 +399,16 @@ def apply(job, source, ad):
     return "partial_failed" if failed else "success"
 
 
-def enqueue(kind="preview", scope="full", selected=None, actor="scheduler"):
-    if kind not in {"preview", "scheduled", "connections", "refresh"} or scope not in {"full", "users", "department"}:
+def enqueue(kind="preview", scope="full", selected=None, actor="scheduler", plan_seed=None):
+    if kind not in {"preview", "scheduled", "connections", "refresh", "associate"} or scope not in {"full", "users", "department"}:
         raise RuleError("任务类型或范围无效")
+    if kind == "associate" and (scope != "full" or selected):
+        raise RuleError("账号关联核验必须读取完整来源范围")
     with lock("enqueue"), transaction.atomic():
         existing = Job.objects.filter(status__in=["queued", "running"]).first()
         if existing:
             raise RuleError("已有排队或执行中的任务")
-        return Job.objects.create(kind=kind, scope=scope, selected=selected or [], actor=actor)
+        return Job.objects.create(kind=kind, scope=scope, selected=selected or [], actor=actor, plan=plan_seed or {})
 
 
 def queue_apply(job_id, actor, confirmed=False):
@@ -461,6 +467,9 @@ def run_next():
                     snap = collect(source, Configuration.current())
                     job.message = f"完整读取 {len(snap.users)} 名人员、{len(snap.departments)} 个部门"
                     job.status = "success"
+            elif job.kind == "associate":
+                from .account_associations import run_association_job
+                run_association_job(job)
             else:
                 run_sync_job(job)
         except Exception as exc:
@@ -516,11 +525,11 @@ def binding_review(person_id, username):
         if not source.user_in_scope(user, config.root_department):
             raise RuleError("来源人员已不在当前同步范围，不能建立绑定")
         matches = ad.match("source_id", username.strip())
-        if len(matches) != 1 or protected(matches[0]):
-            raise RuleError("目标不存在、不唯一或受保护")
+        if len(matches) != 1:
+            raise RuleError("目标不存在或不唯一")
         target = matches[0]
-        if not under(target["dn"], config.root_ou):
-            raise RuleError("目标不在同步管理范围内")
+        if not under(target["dn"], settings.LDAP_BASE_DN):
+            raise RuleError("目标超出当前 LDAP 目录范围")
         if Binding.objects.filter(object_guid=target["guid"]).exclude(person=person).exists():
             raise RuleError("目标已绑定其他人员")
         old = Binding.objects.filter(person=person).first()
@@ -529,6 +538,7 @@ def binding_review(person_id, username):
         payload = {
             "person": person.pk, "username": target["username"], "guid": target["guid"],
             "employee_id": target["employee_id"], "dn": target["dn"], "enabled": target["enabled"],
+            "protected": protected(target),
             "revision": str(old.revision) if old else "",
             "identity_anchor": anchor,
         }
@@ -554,8 +564,8 @@ def bind_person(person_id, confirmation, actor, reason):
         if not source.user_in_scope(user, config.root_department):
             raise RuleError("来源人员已不在当前同步范围，不能建立绑定")
         matches = ad.match("source_id", reviewed["username"])
-        if len(matches) != 1 or protected(matches[0]):
-            raise RuleError("目标不存在、不唯一或受保护")
+        if len(matches) != 1:
+            raise RuleError("目标不存在或不唯一")
         account = matches[0]
         if account["guid"] != reviewed["guid"]:
             raise RuleError("AD 目标已变化，请重新验证")
@@ -565,10 +575,11 @@ def bind_person(person_id, confirmation, actor, reason):
                     or current["username"] != reviewed["username"]
                     or current["employee_id"] != reviewed.get("employee_id")
                     or current["dn"].casefold() != str(reviewed.get("dn", "")).casefold()
-                    or current["enabled"] is not reviewed.get("enabled")):
+                    or current["enabled"] is not reviewed.get("enabled")
+                    or protected(current) is not reviewed.get("protected")):
                 raise RuleError("AD 目标状态已变化，请重新验证")
-            if protected(current) or not under(current["dn"], config.root_ou):
-                raise RuleError("目标受保护或不在同步管理范围内")
+            if not under(current["dn"], settings.LDAP_BASE_DN):
+                raise RuleError("目标超出当前 LDAP 目录范围")
             with transaction.atomic():
                 current_config = Configuration.current()
                 if validate_directory_identity(current_config) != reviewed["identity_anchor"]:
@@ -579,7 +590,8 @@ def bind_person(person_id, confirmation, actor, reason):
                 if Binding.objects.filter(object_guid=current["guid"]).exclude(person=person).exists():
                     raise RuleError("目标已绑定其他人员")
                 establish_directory_identity(current_config)
-                Binding.objects.update_or_create(person=person, defaults={"object_guid": current["guid"], "username": current["username"], "manual": True, "enabled": current["enabled"], "revision": uuid.uuid4()})
+                managed = bool(old and old.sync_managed and str(old.object_guid) == str(current["guid"]))
+                Binding.objects.update_or_create(person=person, defaults={"object_guid": current["guid"], "username": current["username"], "manual": True, "enabled": current["enabled"] if managed else False, "sync_managed": managed, "revision": uuid.uuid4()})
                 audit(actor, "manual_bind", person.source_id, f"{str(old.object_guid) if old else '未绑定'} → {current['guid']}；{reason[:150]}")
 
 
@@ -590,6 +602,8 @@ def reactivate_person(person_id, actor, reason, confirmed):
         binding = Binding.objects.select_related("person").filter(person_id=person_id).first()
         if not binding or binding.person.excluded:
             raise RuleError("请先确认绑定且人员未排除同步")
+        if not binding.sync_managed:
+            raise RuleError("该账号仅维护身份关联，尚未纳入同步管理，不能从此处启用 AD 账号")
         config = Configuration.current()
         validate_directory_identity(config)
         user = source.user(binding.person.source_id)

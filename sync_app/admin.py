@@ -84,7 +84,7 @@ class ConfigurationAdmin(admin.ModelAdmin):
     readonly_fields = ("current_ldap_directory", "sspr_open_scope")
     fieldsets = (
         ("01 · 同步边界", {"fields": ("root_department", "root_ou"), "description": "只处理指定钉钉部门和 AD 根 OU 范围内的对象。"}),
-        ("02 · 匹配与新建账号", {"fields": ("match_field", "naming", "enable_new_accounts", "require_password_change"), "description": "匹配方式用于关联现有 AD 账号；新账号命名仅用于创建账号。"}),
+        ("02 · 匹配与新建账号", {"fields": ("match_field", "auto_associate_accounts", "naming", "enable_new_accounts", "require_password_change"), "description": "唯一工号匹配默认保存账号关联；关联和允许同步分别判断。新账号命名仅用于创建账号。"}),
         ("03 · 属性与保护", {"fields": ("attributes", "clear_attributes", "protected_usernames")}),
         ("04 · 离职安全阈值", {"fields": ("disable_missing", "disable_limit", "disable_percent"), "description": "超过人数或比例阈值时，预览需人工确认。"}),
         ("05 · 员工自助重置", {"fields": ("current_ldap_directory", "sspr_open_scope", "sspr_enabled", "sspr_match", "unlock_after_reset", "minimum_password_length"), "description": "密码重置独立使用实时 LDAPS 唯一匹配，不依赖同步任务或本地绑定。已启用的域管理员也可重置本人密码；其他受保护账号仍拒绝。"}),
