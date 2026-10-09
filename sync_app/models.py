@@ -82,6 +82,10 @@ class Configuration(models.Model):
         default="employee_id",
         help_text="更改匹配方式后须重新生成预览；AD 根 OU 外的现有账号不会自动纳入同步。",
     )
+    auto_associate_accounts = models.BooleanField(
+        "自动关联工号对应的 AD 账号", default=True, db_default=True,
+        help_text="选择工号 → AD 账号名时，后台默认核验并保存唯一匹配；人工关联优先。关联只保存身份关系，AD 写入仍须按受管范围预览并确认。",
+    )
     attributes = models.JSONField("同步属性", default=list, blank=True, help_text="displayName、mail、title、department、telephoneNumber")
     clear_attributes = models.JSONField("允许来源空值清除的属性", default=list, blank=True, help_text="必须属于已启用的同步属性；默认空值不覆盖 AD")
     enable_new_accounts = models.BooleanField("新建账号初始化成功后启用", default=True)
@@ -109,7 +113,7 @@ class Configuration(models.Model):
         if not isinstance(self.protected_usernames, list) or any(not isinstance(x, str) or not x.strip() for x in self.protected_usernames):
             raise ValidationError("保护账号必须为非空账号名列表")
         previous = Configuration.objects.filter(pk=self.pk).first()
-        if previous and (Binding.objects.exists() or DepartmentBinding.objects.exists()) and (previous.root_department != self.root_department or previous.root_ou != self.root_ou):
+        if previous and (Binding.objects.filter(sync_managed=True).exists() or DepartmentBinding.objects.exists()) and (previous.root_department != self.root_department or previous.root_ou != self.root_ou):
             raise ValidationError("已有同步绑定时不能直接更换管理范围，请先审查并解除原绑定")
 
     @classmethod
@@ -145,6 +149,7 @@ class Binding(models.Model):
     username = models.CharField(max_length=100)
     manual = models.BooleanField(default=False)
     enabled = models.BooleanField(default=True)
+    sync_managed = models.BooleanField("已纳入同步管理", default=True, db_default=True)
     revision = models.UUIDField(default=uuid.uuid4)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -136,6 +136,15 @@ details[open] summary{margin-top:3px}
 .person-header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding:20px 23px 16px}
 .person-header h2{margin:0 0 3px}
 .person-header small{margin:0}
+.person-statuses{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;max-width:52%}
+.association-toolbar{flex-wrap:wrap;align-items:flex-start}
+.association-toolbar>div{min-width:0;flex:1 1 360px}
+.association-toolbar form{margin:0}
+.association-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:0}
+.association-facts dt{color:#7b8ca1;font-size:11px}
+.association-facts dd{margin:4px 0 0;color:#29435f;overflow-wrap:anywhere}
+.association-facts a{font-size:12px;white-space:nowrap}
+@media(max-width:620px){.person-header{flex-wrap:wrap}.person-statuses{justify-content:flex-start;max-width:100%}.association-facts{grid-template-columns:1fr}.association-toolbar>div{flex-basis:100%}.association-toolbar button{white-space:normal}}
 .person-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin:0;padding:16px 23px;border-top:1px solid #edf1f5;border-bottom:1px solid #edf1f5}
 .person-summary div{min-width:0}
 .person-summary dt{margin-bottom:3px;color:#7b8ca1;font-size:11px;font-weight:650}

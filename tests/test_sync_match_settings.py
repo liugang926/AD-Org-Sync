@@ -20,7 +20,7 @@ def configuration_payload(config):
         "interval_minutes": config.interval_minutes,
         **{name: "on" for name in (
             "enable_new_accounts", "require_password_change", "disable_missing",
-            "sspr_enabled", "unlock_after_reset", "schedule_enabled",
+            "sspr_enabled", "unlock_after_reset", "schedule_enabled", "auto_associate_accounts",
         ) if getattr(config, name)},
         "_save": "保存",
     }
@@ -89,17 +89,26 @@ def test_sync_match_choice_migration_preserves_existing_configuration(tmp_path):
     code = '''
 import django
 django.setup()
+import uuid
+from datetime import timedelta
 from django.core.management import call_command
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
-from sync_app.models import Configuration
+from django.utils import timezone
+from sync_app.domain import fingerprint
 from sync_app.sspr import config_signature
-from sync_app.synchronization import configuration_signature
+
+def historical_apps(target):
+    return MigrationExecutor(connection).loader.project_state([("sync_app", target)]).apps
 
 old_target = "0011_sspr_employee_username"
 new_target = "0012_sync_employee_username"
 call_command("migrate", "sync_app", old_target, interactive=False, verbosity=0)
-config = Configuration.current()
+apps = historical_apps(old_target)
+Configuration = apps.get_model("sync_app", "Configuration")
+Person = apps.get_model("sync_app", "Person")
+Binding = apps.get_model("sync_app", "Binding")
+config, _ = Configuration.objects.get_or_create(pk=1)
 config.root_department = "kept-department"
 config.root_ou = "OU=Kept,DC=example,DC=com"
 config.naming = "source_id"
@@ -110,21 +119,30 @@ config.protected_usernames = ["kept-service-account"]
 config.sspr_enabled = True
 config.sspr_match = "email"
 config.minimum_password_length = 16
+person = Person.objects.create(source_id="kept-user", name="Kept employee")
+binding = Binding.objects.create(person=person, object_guid=uuid.uuid4(), username="kept-login", manual=True)
+binding_before = Binding.objects.values().get(pk=binding.pk)
 for mode in ("employee_id", "email", "source_id"):
     config.match_field = mode
     config.save()
     before = Configuration.objects.values().get(pk=config.pk)
-    signatures = (configuration_signature(config), config_signature(config))
+    signatures = (fingerprint(before), config_signature(config))
+    EmployeeSession = historical_apps(old_target).get_model("sync_app", "EmployeeSession")
+    item = EmployeeSession.objects.create(digest="kept-session-" + mode, source_id=person.source_id, object_guid=binding.object_guid,
+        config_fingerprint=signatures[1], expires_at=timezone.now() + timedelta(minutes=5))
+    session_before = EmployeeSession.objects.values().get(pk=item.pk)
     for target in (new_target, old_target, new_target):
         call_command("migrate", "sync_app", target, interactive=False, verbosity=0)
-        config.refresh_from_db()
+        apps = historical_apps(target)
+        Configuration = apps.get_model("sync_app", "Configuration")
+        config = Configuration.objects.get(pk=config.pk)
         assert Configuration.objects.values().get(pk=config.pk) == before
-        assert (configuration_signature(config), config_signature(config)) == signatures
-        state = MigrationExecutor(connection).loader.project_state([("sync_app", target)])
-        historical_model = state.apps.get_model("sync_app", "Configuration")
-        choices = dict(historical_model._meta.get_field("match_field").choices)
+        assert (fingerprint(Configuration.objects.values().get(pk=config.pk)), config_signature(config)) == signatures
+        assert apps.get_model("sync_app", "Binding").objects.values().get(pk=binding.pk) == binding_before
+        assert apps.get_model("sync_app", "EmployeeSession").objects.values().get(pk=item.pk) == session_before
+        choices = dict(Configuration._meta.get_field("match_field").choices)
         assert ("employee_username" in choices) == (target == new_target)
-        assert historical_model().match_field == "employee_id"
+        assert Configuration().match_field == "employee_id"
 call_command("migrate", interactive=False, verbosity=0)
 call_command("db_check", verbosity=0)
 '''

@@ -263,11 +263,23 @@ django.setup()
 import uuid
 from datetime import timedelta
 from django.core.management import call_command
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
 from django.utils import timezone
-from sync_app.models import Configuration, EmployeeSession
 from sync_app.sspr import config_signature
-call_command("migrate", "sync_app", "0010_employee_page_settings", interactive=False, verbosity=0)
-config = Configuration.current()
+
+def historical_apps(target):
+    return MigrationExecutor(connection).loader.project_state([("sync_app", target)]).apps
+
+old_target = "0010_employee_page_settings"
+new_target = "0011_sspr_employee_username"
+call_command("migrate", "sync_app", old_target, interactive=False, verbosity=0)
+apps = historical_apps(old_target)
+Configuration = apps.get_model("sync_app", "Configuration")
+EmployeeSession = apps.get_model("sync_app", "EmployeeSession")
+Person = apps.get_model("sync_app", "Person")
+Binding = apps.get_model("sync_app", "Binding")
+config, _ = Configuration.objects.get_or_create(pk=1)
 config.sspr_enabled = True
 config.sspr_match = "email"
 config.minimum_password_length = 16
@@ -275,20 +287,33 @@ config.protected_usernames = ["kept-protected-account"]
 config.identity_anchor = "kept-directory-anchor"
 config.save()
 before = (config.updated_at, config_signature(config))
+configuration_before = Configuration.objects.values().get(pk=config.pk)
+person = Person.objects.create(source_id="kept-user", name="Kept employee")
+binding = Binding.objects.create(person=person, object_guid=uuid.uuid4(), username="kept-login", manual=True)
+binding_before = Binding.objects.values().get(pk=binding.pk)
 item = EmployeeSession.objects.create(
-    digest="kept-session", source_id="kept-user", object_guid=uuid.uuid4(),
+    digest="kept-session", source_id="kept-user", object_guid=binding.object_guid,
     config_fingerprint=before[1], expires_at=timezone.now() + timedelta(minutes=5),
 )
-for target in ("0011_sspr_employee_username", "0010_employee_page_settings", "0011_sspr_employee_username"):
+session_before = EmployeeSession.objects.values().get(pk=item.pk)
+for target in (new_target, old_target, new_target):
     call_command("migrate", "sync_app", target, interactive=False, verbosity=0)
-    config.refresh_from_db()
-    item.refresh_from_db()
+    apps = historical_apps(target)
+    Configuration = apps.get_model("sync_app", "Configuration")
+    config = Configuration.objects.get(pk=config.pk)
+    item = apps.get_model("sync_app", "EmployeeSession").objects.get(pk=item.pk)
+    assert Configuration.objects.values().get(pk=config.pk) == configuration_before
     assert (config.updated_at, config_signature(config)) == before
     assert config.sspr_match == "email" and config.sspr_enabled
     assert config.minimum_password_length == 16
     assert config.protected_usernames == ["kept-protected-account"]
     assert config.identity_anchor == "kept-directory-anchor"
     assert item.config_fingerprint == before[1] and not item.used
+    assert apps.get_model("sync_app", "Binding").objects.values().get(pk=binding.pk) == binding_before
+    assert apps.get_model("sync_app", "EmployeeSession").objects.values().get(pk=item.pk) == session_before
+    choices = dict(Configuration._meta.get_field("sspr_match").choices)
+    assert ("employee_username" in choices) == (target == new_target)
+    assert Configuration().sspr_match == "employee_id"
 call_command("migrate", interactive=False, verbosity=0)
 call_command("db_check", verbosity=0)
 '''

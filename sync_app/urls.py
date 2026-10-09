@@ -12,6 +12,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("healthz", views.health), path("readyz", views.ready),
     path("people", views.people, name="people"),
+    path("people/associate", views.refresh_associations, name="refresh_associations"),
     path("departments", views.departments, name="departments"),
     path("people/<int:person_id>", views.person_action, name="person_action"),
     path("jobs/<uuid:job_id>", views.job_detail, name="job"),

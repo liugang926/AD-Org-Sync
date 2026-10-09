@@ -1,6 +1,7 @@
 from functools import wraps
 from datetime import timedelta
 import time
+from uuid import UUID
 
 from django.conf import settings
 from django.contrib import messages
@@ -31,12 +32,12 @@ JOB_STATUS_LABELS = {
 }
 JOB_KIND_LABELS = {
     "preview": "同步预览", "refresh": "通讯录刷新", "connections": "连接检测",
-    "apply": "执行同步", "scheduled": "定时同步",
+    "apply": "执行同步", "scheduled": "定时同步", "associate": "账号关联核验",
 }
 ACTION_LABELS = {
     "create": "新建账号", "resume_create": "继续建号", "update": "更新属性",
     "move": "移动 OU", "bind": "关联账号", "disable": "禁用账号",
-    "skip": "跳过", "conflict": "冲突", "ensure_ou": "建立 OU",
+    "skip": "跳过", "conflict": "冲突", "ensure_ou": "建立 OU", "associate": "保存账号关联",
 }
 AUDIT_LABELS = {
     "admin_login": "管理员登录", "settings": "配置变更",
@@ -47,10 +48,17 @@ AUDIT_LABELS = {
     "person_policy": "人员同步设置", "unbind": "解除绑定",
     "preview": "同步预览", "refresh": "通讯录刷新",
     "connections": "连接检测", "apply": "执行同步", "scheduled": "定时同步",
+    "associate": "账号关联核验", "auto_associate": "自动账号关联",
 }
 OPERATION_STATUS_LABELS = {
     "success": "已完成", "created": "已创建", "failed": "失败",
     "skipped": "已跳过", "pending": "待执行",
+}
+ASSOCIATION_REASON_LABELS = {
+    "no_match": "未匹配", "missing_job": "缺少工号", "duplicate_job": "工号重复",
+    "ambiguous_ad": "多个 AD 候选", "occupied": "账号关联冲突", "recovery_required": "待恢复核验",
+    "missing_target": "关联账号待核验", "source_changed": "来源已变化", "ad_changed": "AD 账号已变化",
+    "failed": "核验失败", "excluded": "未执行关联",
 }
 
 
@@ -59,7 +67,7 @@ def status_tone(status):
         return "warning"
     if status in {
         "queued", "running", "preview_ready", "needs_confirmation",
-        "create", "resume_create", "update", "move", "bind", "ensure_ou",
+        "create", "resume_create", "update", "move", "bind", "ensure_ou", "associate",
     }:
         return "active"
     if status in {"success", "completed", "created"}:
@@ -78,7 +86,7 @@ def administrator(view):
             return view(request, *args, **kwargs)
         except RuleError as exc:
             messages.error(request, str(exc))
-            if request.resolver_match and request.resolver_match.url_name == "person_action":
+            if request.resolver_match and request.resolver_match.url_name in {"person_action", "refresh_associations"}:
                 return redirect("people")
             return redirect(request.path if request.method == "GET" else "/dashboard")
     return wrapped
@@ -144,6 +152,7 @@ def dashboard(request):
     latest_full_plan = Job.objects.filter(
         scope="full", kind__in=["preview", "apply", "scheduled"]
     ).exclude(plan={}).order_by("-created_at").first()
+    latest_sync_job = Job.objects.filter(kind__in=["preview", "apply", "scheduled"]).order_by("-created_at").first()
     plan_data = latest_full_plan.plan if latest_full_plan and isinstance(latest_full_plan.plan, dict) else {}
     conflict_count = sum(
         item.get("action") == "conflict"
@@ -153,8 +162,11 @@ def dashboard(request):
         "jobs": jobs, "job_rows": job_rows, "config": config, "snapshot": snapshot,
         "runtime": RuntimeState.current(), "next_run": next_run if config.schedule_enabled else None,
         "person_count": Person.objects.count(), "binding_count": Binding.objects.count(),
+        "managed_binding_count": Binding.objects.filter(sync_managed=True, person__excluded=False).count(),
+        "identity_binding_count": Binding.objects.filter(sync_managed=False).count(),
         "department_binding_count": DepartmentBinding.objects.count(),
         "latest_full_plan": latest_full_plan, "conflict_count": conflict_count,
+        "latest_sync_job": latest_sync_job,
     })
 
 
@@ -200,15 +212,22 @@ def departments(request):
 def job_detail(request, job_id):
     job = get_object_or_404(Job, pk=job_id)
     if request.method == "POST":
+        if job.kind == "associate":
+            messages.error(request, "账号关联任务仅保存本地关联，无需执行同步；请到人员页刷新账号关联")
+            return redirect("job", job_id=job.pk)
         synchronization.queue_apply(job.pk, request.user.username, request.POST.get("confirmed") == "on")
         messages.success(request, "执行任务已排队")
         return redirect("job", job_id=job.pk)
     planned_operations = job.plan.get("operations", [])
+    association_counts = {
+        action: sum(item.get("action") == action for item in planned_operations)
+        for action in ("associate", "skip", "conflict")
+    } if job.kind == "associate" else {}
     conflict_count = sum(item.get("action") == "conflict" for item in planned_operations)
     department_conflict_count = sum(item.get("action") == "conflict" for item in job.plan.get("departments", []))
     disable_count = sum(item.get("action") == "disable" for item in planned_operations)
     plan_filter = request.GET.get("only", "")
-    if plan_filter not in {"conflicts", "disables"}:
+    if plan_filter not in ({"conflicts"} if job.kind == "associate" else {"conflicts", "disables"}):
         plan_filter = ""
     if plan_filter:
         action = "conflict" if plan_filter == "conflicts" else "disable"
@@ -219,6 +238,17 @@ def job_detail(request, job_id):
          "tone": status_tone(item.get("action"))}
         for item in planned_page
     ]
+    if job.kind == "associate":
+        for row in planned_rows:
+            item = row["item"]
+            reason_code = item.get("reason_code", "")
+            row["label"] = {
+                "linked": "已保存关联", "retained": "保留现有关联",
+                **ASSOCIATION_REASON_LABELS,
+            }.get(reason_code, "关联尚未完成")
+            row["tone"] = "success" if reason_code == "linked" else (
+                "neutral" if reason_code in {"retained", "no_match", "excluded"} else "warning"
+            )
     operation_page = Paginator(job.operation_set.order_by("pk"), 50).get_page(request.GET.get("result_page"))
     operation_rows = [
         {"operation": operation, "label": ACTION_LABELS.get(operation.action, operation.action),
@@ -235,12 +265,14 @@ def job_detail(request, job_id):
         "job_status_label": JOB_STATUS_LABELS.get(job.status, job.status),
         "job_status_tone": status_tone(job.status),
         "job_kind_label": JOB_KIND_LABELS.get(job.kind, job.kind),
-        "job_scope_label": {"full": "完整管理范围", "department": "指定部门及子部门", "users": "指定人员"}.get(job.scope, job.scope),
+        "job_scope_label": "当前钉钉通讯录" if job.kind == "associate" else {"full": "完整管理范围", "department": "指定部门及子部门", "users": "指定人员"}.get(job.scope, job.scope),
         "conflict_count": conflict_count,
         "department_conflict_count": department_conflict_count,
         "disable_count": disable_count,
         "plan_has_conflicts": synchronization.has_conflicts(job.plan),
         "plan_filter": plan_filter,
+        "association_job": job.kind == "associate",
+        "association_counts": association_counts,
     })
 
 
@@ -260,7 +292,25 @@ def people(request):
     page = Paginator(items, 30).get_page(request.GET.get("page"))
     bindings = {b.person_id: b for b in Binding.objects.filter(person__in=page.object_list)}
     department_names = {str(d["id"]): d["name"] for d in snapshot.departments} if snapshot else {}
-    naming = Configuration.current().naming
+    config = Configuration.current()
+    naming = config.naming
+    directory_identity_error = ""
+    try:
+        synchronization.validate_directory_identity(config)
+    except RuleError as exc:
+        directory_identity_error = str(exc)
+    source_scope_changed = bool(snapshot and str(snapshot.root_department) != str(config.root_department))
+    association_job = Job.objects.filter(kind="associate").order_by("-created_at").first()
+    association_plan = association_job.plan if association_job and isinstance(association_job.plan, dict) else {}
+    association_results_stale = (
+        "source_fingerprint" in association_plan
+        and (snapshot is None or association_plan["source_fingerprint"] != snapshot.fingerprint)
+    )
+    association_operations = {
+        str(item.get("source_id")): item
+        for item in association_plan.get("operations", []) if isinstance(item, dict)
+    } if not (directory_identity_error or source_scope_changed or association_results_stale) else {}
+    association_active = bool(association_job and association_job.status in {"queued", "running"})
     rows = []
     for person in page:
         user = source.get(person.source_id)
@@ -270,8 +320,78 @@ def people(request):
         options = [{"id": department_id, "name": department_names.get(department_id, department_id)} for department_id in department_ids]
         if person.primary_department and person.primary_department not in department_ids:
             options.insert(0, {"id": person.primary_department, "name": "已保存（当前不在来源部门）"})
-        rows.append((person, bindings.get(person.pk), user, candidate(user, naming) if user else "", options))
-    return render(request, "people.html", {"page": page, "rows": rows, "query": query, "snapshot": snapshot})
+        binding = bindings.get(person.pk)
+        operation = association_operations.get(str(person.source_id))
+        binding_result_superseded = False
+        if binding and operation:
+            target = operation.get("target")
+            target_guid = target.get("guid") if isinstance(target, dict) else None
+            if target_guid:
+                try:
+                    binding_result_superseded = UUID(str(target_guid)) != binding.object_guid
+                except (ValueError, TypeError, AttributeError):
+                    binding_result_superseded = True
+            if association_job.finished_at and binding.updated_at > association_job.finished_at:
+                binding_result_superseded = True
+            if binding_result_superseded:
+                operation = None
+        reason_code = operation.get("reason_code", "") if operation else ""
+        association = {
+            "label": "待核验", "tone": "neutral", "reason": "尚无账号关联核验结果",
+            "sync_note": operation.get("sync_note", "") if operation else "",
+        }
+        if binding:
+            if binding.sync_managed:
+                association.update(label="已关联" if binding.enabled else "关联已停用", tone="success" if binding.enabled else "warning")
+            else:
+                association.update(label="账号已关联", tone="success")
+            association["reason"] = operation.get("reason", "") if operation else ""
+            if operation and (operation.get("action") == "conflict" or reason_code == "failed"):
+                association.update(label="关联需核验", tone="warning")
+            if directory_identity_error:
+                association.update(label="历史关联，目录需核验", tone="warning", reason="此处为历史保存的关联，不代表当前企业或 AD 目录账号。", sync_note="")
+            elif source_scope_changed or association_results_stale:
+                association.update(label="已保存关联", reason="来源资料或范围已变化，等待完整通讯录刷新后重新核验。", sync_note="")
+            elif binding_result_superseded:
+                association["reason"] = "账号关联已更新，旧核验结果不再适用。"
+        elif directory_identity_error:
+            association.update(label="目录需核验", tone="warning", reason="目录身份校验未通过，请先核对企业与 AD 目录配置。")
+        elif source_scope_changed:
+            association.update(label="来源范围待刷新", tone="warning", reason="来源根部门已改变，请先刷新完整通讯录，再核验账号关联。")
+        elif association_results_stale:
+            association.update(label="待重新核验", reason="来源资料已更新，旧关联结果不再适用，等待重新核验。")
+        elif association_active and not operation:
+            association.update(label="正在核验", tone="active", reason="账号关联任务正在排队或执行，完成后刷新页面查看结果")
+        elif operation:
+            association["label"] = ASSOCIATION_REASON_LABELS.get(reason_code, "关联尚未完成")
+            association["tone"] = "neutral" if reason_code in {"no_match", "excluded"} else "warning"
+            association["reason"] = operation.get("reason") or "请查看最近任务核验结果"
+        elif association_job and association_job.status in {"failed", "blocked", "partial", "partial_failed"}:
+            association.update(label="核验未完成", tone="warning", reason=association_job.message or "最近账号关联任务未完成，请查看任务详情后重试")
+        elif user and not str(user.get("employee_id") or "").strip():
+            association.update(label="缺少工号", tone="warning", reason="钉钉来源未提供工号，无法按工号匹配 AD 登录名")
+        elif not config.auto_associate_accounts or config.match_field != "employee_username":
+            association["reason"] = "当前未开启按工号自动关联，可由管理员核验并人工关联已有 AD 账号"
+        if user is None and not directory_identity_error and not source_scope_changed:
+            association.update(label="保留历史关联" if binding else "不在当前通讯录", tone="neutral",
+                               reason="最近完整通讯录中未出现该人员；保留已有记录，不自动建立新的账号关联。", sync_note="")
+        rows.append((person, binding, user, candidate(user, naming) if user else "", options, association))
+    return render(request, "people.html", {
+        "page": page, "rows": rows, "query": query, "snapshot": snapshot, "config": config,
+        "association_job": association_job, "association_active": association_active,
+        "association_status_label": JOB_STATUS_LABELS.get(association_job.status, association_job.status) if association_job else "尚未核验",
+        "association_status_tone": status_tone(association_job.status) if association_job else "neutral",
+        "directory_identity_error": directory_identity_error, "source_scope_changed": source_scope_changed,
+        "association_results_stale": association_results_stale,
+    })
+
+
+@administrator
+@require_POST
+def refresh_associations(request):
+    synchronization.enqueue(kind="associate", scope="full", actor=request.user.username)
+    messages.success(request, "账号关联核验已排队；唯一匹配的 AD 账号将保存为本地关联，不修改 AD")
+    return redirect("people")
 
 
 @administrator

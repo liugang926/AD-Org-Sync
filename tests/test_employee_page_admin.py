@@ -224,28 +224,53 @@ def test_migration_seeds_only_confirmed_platform_names_and_preserves_existing_po
     code = '''
 import django
 django.setup()
+import uuid
+from datetime import timedelta
 from django.core.management import call_command
-from sync_app.models import Configuration
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
+from django.utils import timezone
+from sync_app.domain import fingerprint
 from sync_app.sspr import config_signature
-from sync_app.synchronization import configuration_signature
-call_command("migrate", "sync_app", "0009_sspr_audit_details", interactive=False, verbosity=0)
-config = Configuration.current()
+
+def historical_apps(target):
+    return MigrationExecutor(connection).loader.project_state([("sync_app", target)]).apps
+
+old_target = "0009_sspr_audit_details"
+new_target = "0010_employee_page_settings"
+call_command("migrate", "sync_app", old_target, interactive=False, verbosity=0)
+apps = historical_apps(old_target)
+Configuration = apps.get_model("sync_app", "Configuration")
+Person = apps.get_model("sync_app", "Person")
+Binding = apps.get_model("sync_app", "Binding")
+EmployeeSession = apps.get_model("sync_app", "EmployeeSession")
+config, _ = Configuration.objects.get_or_create(pk=1)
 config.minimum_password_length = 16
 config.sspr_enabled = True
 config.save()
-before = (config.updated_at, configuration_signature(config), config_signature(config))
-call_command("migrate", "sync_app", "0010_employee_page_settings", interactive=False, verbosity=0)
-from sync_app.models import EmployeePageSettings
+before = (config.updated_at, fingerprint(Configuration.objects.values().get(pk=config.pk)), config_signature(config))
+person = Person.objects.create(source_id="kept-user", name="Kept employee")
+binding = Binding.objects.create(person=person, object_guid=uuid.uuid4(), username="kept-login", manual=True)
+item = EmployeeSession.objects.create(digest="kept-session", source_id=person.source_id, object_guid=binding.object_guid,
+    config_fingerprint=before[2], expires_at=timezone.now() + timedelta(minutes=5))
+binding_before = Binding.objects.values().get(pk=binding.pk)
+session_before = EmployeeSession.objects.values().get(pk=item.pk)
+call_command("migrate", "sync_app", new_target, interactive=False, verbosity=0)
+EmployeePageSettings = historical_apps(new_target).get_model("sync_app", "EmployeePageSettings")
 page = EmployeePageSettings.objects.get(pk=1)
 assert list(page.platforms.values_list("name", flat=True)) == ["VPN", "Nextcloud", "AI知识库"]
 assert all(p.enabled and p.authentication_note == "使用企业 AD 账号认证" and not p.login_url and not p.password_note for p in page.platforms.all())
 assert EmployeePageSettings.objects.count() == 1
-config.refresh_from_db()
-assert config.minimum_password_length == 16 and config.sspr_enabled
-assert (config.updated_at, configuration_signature(config), config_signature(config)) == before
-call_command("migrate", "sync_app", "0009_sspr_audit_details", interactive=False, verbosity=0)
-config.refresh_from_db()
-assert (config.updated_at, configuration_signature(config), config_signature(config)) == before
+for target in (new_target, old_target):
+    if target == old_target:
+        call_command("migrate", "sync_app", target, interactive=False, verbosity=0)
+    apps = historical_apps(target)
+    Configuration = apps.get_model("sync_app", "Configuration")
+    config = Configuration.objects.get(pk=config.pk)
+    assert config.minimum_password_length == 16 and config.sspr_enabled
+    assert (config.updated_at, fingerprint(Configuration.objects.values().get(pk=config.pk)), config_signature(config)) == before
+    assert apps.get_model("sync_app", "Binding").objects.values().get(pk=binding.pk) == binding_before
+    assert apps.get_model("sync_app", "EmployeeSession").objects.values().get(pk=item.pk) == session_before
 call_command("migrate", interactive=False, verbosity=0)
 call_command("db_check", verbosity=0)
 '''

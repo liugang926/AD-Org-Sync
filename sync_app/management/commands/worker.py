@@ -6,6 +6,7 @@ from django.db import close_old_connections
 from sync_app.domain import RuleError
 from sync_app.synchronization import run_next
 from sync_app.password_notifications import process_one_password_notification
+from sync_app.account_associations import enqueue_due_association
 
 
 class Command(BaseCommand):
@@ -20,6 +21,7 @@ class Command(BaseCommand):
                 (settings.DATA_DIR / "worker-heartbeat").touch()
                 time.sleep(10)
         threading.Thread(target=heartbeat, daemon=True).start()
+        next_association_check = 0.0
         while True:
             close_old_connections()
             (settings.DATA_DIR / "worker-heartbeat").touch()
@@ -29,6 +31,9 @@ class Command(BaseCommand):
                 # Keep notification failures separate from sync and SSPR outcomes.
                 pass
             try:
+                if time.monotonic() >= next_association_check:
+                    enqueue_due_association()
+                    next_association_check = time.monotonic() + 30
                 run_next()
             except RuleError:
                 pass
