@@ -8,6 +8,7 @@ from .directory import DingTalk, ActiveDirectory
 from .domain import ResetOutcomeUnknown, RuleError, fingerprint, protected
 from .locking import lock
 from .models import Audit, Configuration, EmployeeSession
+from .password_notifications import enqueue_password_notification
 from .security import audit, normalized_ip, rate_limit
 
 
@@ -237,6 +238,11 @@ def reset(token, password, confirmation, ip):
             else:
                 if not _finish_attempt(attempt, outcome.message, outcome.complete, "success" if outcome.complete else "partial"):
                     raise ResetOutcomeUnknown("密码修改结果记录暂不可用，请先验证或联系管理员")
+                try:
+                    enqueue_password_notification(attempt)
+                except Exception:
+                    # A confirmed directory outcome cannot be undone by a notice failure.
+                    pass
                 return outcome.message
             finally:
                 _close_clients(source, ad)
