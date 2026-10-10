@@ -99,6 +99,53 @@ def job_progress(job):
             "message": message, "elapsed": elapsed}
 
 
+def department_results(job):
+    # The immutable preview describes the directory before Apply. Overlay only
+    # this job's OU evidence, not current bindings or an operation-results page.
+    records = {
+        record.source_id: record for record in job.operation_set.filter(action="ensure_ou")
+        .only("source_id", "status", "target_guid", "evidence", "message").order_by("pk")
+    }
+    executed = job.kind == "apply" or bool(records) or (
+        job.kind == "scheduled" and job.status in {"success", "partial_failed"}
+    )
+    rows = []
+    counts = {"success": 0, "failed": 0, "unverified": 0, "waiting": 0}
+    for item in job.plan.get("departments", []):
+        row = {"item": item, "guid": None, "message": "", "tone": "active", "state": "planned"}
+        record = records.get("department:" + item["source_id"])
+        if record:
+            evidence = record.evidence if isinstance(record.evidence, dict) else {}
+            path_matches = bool(item.get("dn")) and str(evidence.get("dn", "")).casefold() == item["dn"].casefold()
+            identity_matches = not item.get("guid") or str(record.target_guid) == str(item["guid"])
+            if not path_matches or (record.status == "success" and (not record.target_guid or not identity_matches)):
+                row.update(state="unverified", label="结果待核验", tone="warning", message="执行记录缺少匹配的 OU 路径或 GUID，请核验 AD 后重新预览。")
+            elif record.status == "success":
+                row.update(state="success", label="已关联" if item.get("guid") else "已创建", tone="success",
+                           guid=str(record.target_guid), message="本次执行已确认 OU 并保存部门映射。")
+            elif record.status == "failed":
+                row.update(state="failed", label="执行失败", tone="warning", message=record.message or "操作未完整完成，请核验 AD 后重新预览。")
+            elif record.status == "pending" and job.status == "running":
+                row.update(state="waiting", label="执行中", message="等待此 OU 的执行结果。")
+            else:
+                row.update(state="unverified", label="结果待核验", tone="warning", message="已有执行记录但未确认完成，请核验 AD 后重新预览。")
+        elif item.get("action") == "conflict":
+            row.update(label="冲突", tone="warning", message=item.get("reason", ""))
+        elif executed:
+            if job.status in {"queued", "running"}:
+                row.update(state="waiting", label="待执行", message="此部门尚未开始执行。")
+            elif job.status == "success":
+                row.update(state="unverified", label="结果待核验", tone="warning", message="未找到本次任务的 OU 执行记录，不能确认完成。")
+            else:
+                row.update(state="waiting", label="未执行", tone="neutral", message="本次任务结束前未执行到此部门。")
+        else:
+            row.update(label="已存在" if item.get("guid") else "待创建", tone="success" if item.get("guid") else "active")
+        if row["state"] in counts:
+            counts[row["state"]] += 1
+        rows.append(row)
+    return rows, counts, executed
+
+
 def administrator(view):
     @wraps(view)
     def wrapped(request, *args, **kwargs):
@@ -297,6 +344,9 @@ def job_detail(request, job_id):
          "tone": status_tone(operation.status)}
         for operation in operation_page
     ]
+    department_rows, department_result_counts, execution_view = department_results(job)
+    root_ou = job.plan.get("root_ou", "").casefold()
+    root_ou_completed = any(row["state"] == "success" and row["item"].get("dn", "").casefold() == root_ou for row in department_rows)
     return render(request, "job.html", {
         "job": job,
         "planned_page": planned_page,
@@ -309,6 +359,10 @@ def job_detail(request, job_id):
         "job_scope_label": "当前钉钉通讯录" if job.kind == "associate" else {"full": "完整管理范围", "organization": "仅同步组织架构（不修改人员）", "department": "指定部门及子部门", "users": "指定人员"}.get(job.scope, job.scope),
         "conflict_count": conflict_count,
         "department_conflict_count": department_conflict_count,
+        "department_rows": department_rows,
+        "department_result_counts": department_result_counts,
+        "execution_view": execution_view,
+        "root_ou_completed": root_ou_completed,
         "disable_count": disable_count,
         "plan_has_conflicts": synchronization.has_conflicts(job.plan),
         "plan_filter": plan_filter,

@@ -132,6 +132,15 @@ def test_organization_preview_and_confirmed_root_creation_browser(live_server, d
         assert executor.submit(sync.run_next).result()
         page.reload()
         assert page.get_by_text("同步执行完成：4 项成功", exact=False).is_visible()
+        department_results = page.locator("#department-plan")
+        assert department_results.get_by_role("heading", name="部门 OU 执行结果", exact=True).is_visible()
+        assert department_results.get_by_text("已创建", exact=True).count() == 4
+        assert department_results.get_by_text("待创建", exact=True).count() == 0
+        assert page.get_by_text("根 OU 待创建", exact=False).count() == 0
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        page.set_viewport_size({"width": 1440, "height": 1000})
+        department_results.screenshot(path=str(output / "organization-created.png"))
+        assert executor.submit(lambda: all(d["guid"] is None for d in Job.objects.get().plan["departments"])).result()
         assert executor.submit(DepartmentBinding.objects.count).result() == 4
         assert not executor.submit(Binding.objects.exists).result()
         assert directory.writes[0] == ROOT
