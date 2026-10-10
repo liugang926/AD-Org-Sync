@@ -265,7 +265,7 @@ def job_detail(request, job_id):
         "job_status_label": JOB_STATUS_LABELS.get(job.status, job.status),
         "job_status_tone": status_tone(job.status),
         "job_kind_label": JOB_KIND_LABELS.get(job.kind, job.kind),
-        "job_scope_label": "当前钉钉通讯录" if job.kind == "associate" else {"full": "完整管理范围", "department": "指定部门及子部门", "users": "指定人员"}.get(job.scope, job.scope),
+        "job_scope_label": "当前钉钉通讯录" if job.kind == "associate" else {"full": "完整管理范围", "organization": "仅同步组织架构（不修改人员）", "department": "指定部门及子部门", "users": "指定人员"}.get(job.scope, job.scope),
         "conflict_count": conflict_count,
         "department_conflict_count": department_conflict_count,
         "disable_count": disable_count,

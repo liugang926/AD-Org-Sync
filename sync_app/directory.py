@@ -45,11 +45,29 @@ def _ldap_rejection_reason(result):
 
 def under(dn, root):
     try:
-        parts = [(a.casefold(), b.casefold()) for a, b, _ in parse_dn(dn)]
-        suffix = [(a.casefold(), b.casefold()) for a, b, _ in parse_dn(root)]
-        return bool(suffix) and len(parts) >= len(suffix) and parts[-len(suffix):] == suffix
+        parts = [(a.casefold(), b.casefold(), sep) for a, b, sep in parse_dn(dn)]
+        suffix = [(a.casefold(), b.casefold(), sep) for a, b, sep in parse_dn(root)]
+        offset = len(parts) - len(suffix)
+        return bool(suffix) and offset >= 0 and parts[offset:] == suffix and (offset == 0 or parts[offset - 1][2] == ",")
     except Exception:
         return False
+
+
+def validate_ou_dn(dn, root=None):
+    """Only single-valued OU components below a domain are creation targets."""
+    try:
+        parts = parse_dn(dn)
+        types = [a.casefold() for a, _, _ in parts]
+        first_dc = types.index("dc")
+        if first_dc == 0 or any(t != "ou" for t in types[:first_dc]) or any(t != "dc" for t in types[first_dc:]):
+            raise ValueError
+        if any(sep == "+" or not value.strip() or "\x00" in value for _, value, sep in parts):
+            raise ValueError
+    except Exception:
+        raise RuleError("OU DN 格式无效：必须是 OU 层级和域 DN，不能使用域对象、CN 或多值 RDN") from None
+    if root and not under(dn, root):
+        raise RuleError("部门 OU 超出管理范围")
+    return parts
 
 
 class DingTalk:
@@ -216,6 +234,13 @@ class ActiveDirectory:
 
     def close(self):
         self.conn.unbind()
+
+    def set_read_only(self, value):
+        self.conn.read_only = bool(value)
+
+    def require_write(self):
+        if self.conn.read_only is True:
+            raise RuleError("当前为只读预览，禁止写入 AD")
 
     def search(self, query, base=None, attrs=None, scope=SUBTREE):
         results, cookie, seen = [], None, set()
@@ -471,11 +496,23 @@ class ActiveDirectory:
             raise RuleError("AD账号受保护，不能自助重置；无需先同步或绑定，请联系AD管理员核查权限与保护状态")
         return account
 
-    def ensure_ou(self, dn, root):
-        if not under(dn, root):
-            raise RuleError("OU 超出管理范围")
-        parts = parse_dn(dn)
-        root_parts = parse_dn(root)
+    def container_identity(self, dn):
+        if not under(dn, settings.LDAP_BASE_DN):
+            raise RuleError("根 OU 的父容器超出 LDAP 查询范围")
+        try:
+            rows = self.search("(|(objectClass=domainDNS)(objectClass=organizationalUnit))", base=dn, attrs=["objectGUID"], scope=BASE)
+        except RuleError:
+            if self.conn.result.get("result") == 32:
+                raise RuleError("根 OU 的父容器不存在，请核对根 OU 路径；不会在管理范围外补建父级") from None
+            raise
+        if len(rows) != 1:
+            raise RuleError("根 OU 的父容器不存在或无法唯一确认，请核对根 OU 路径")
+        return str(uuid.UUID(str(rows[0]["attributes"]["objectGUID"]).strip("{}")))
+
+    def ensure_ou(self, dn, root, *, allow_root_creation=False):
+        self.require_write()
+        parts = validate_ou_dn(dn, root)
+        root_parts = validate_ou_dn(root, settings.LDAP_BASE_DN)
         for index in range(len(parts) - len(root_parts), -1, -1):
             current = "".join(a + "=" + b + sep for a, b, sep in parts[index:]).rstrip(",")
             try:
@@ -486,9 +523,14 @@ class ActiveDirectory:
                 found = []
             if not found:
                 if current.casefold() == root.casefold():
-                    raise RuleError("配置的 AD 根 OU 不存在")
+                    if not allow_root_creation:
+                        raise RuleError("配置的 AD 根 OU 不存在，请重新预览根 OU 创建计划")
+                    parent = "".join(a + "=" + b + sep for a, b, sep in root_parts[1:])
+                    self.container_identity(parent)
                 if not self.conn.add(current, ["top", "organizationalUnit"]):
-                    raise RuleError("创建 OU 失败")
+                    code = self.conn.result.get("result")
+                    safe_code = str(code) if type(code) is int else "未知"
+                    raise RuleError(f"创建 OU 失败（LDAP 错误码 {safe_code}），请核对父容器和服务账号的创建 OU 权限")
         rows = self.search("(objectClass=organizationalUnit)", base=dn, attrs=["objectGUID"], scope=BASE)
         if len(rows) != 1:
             raise RuleError("OU 无法唯一确认")
@@ -512,6 +554,7 @@ class ActiveDirectory:
             raise
 
     def create(self, user, username, ou, root, *, enabled=True, require_change=True):
+        self.require_write()
         if self.match("source_id", username):
             raise RuleError("AD 用户名已存在，需重新预览")
         if self.match("employee_id", user["employee_id"]):
@@ -542,6 +585,7 @@ class ActiveDirectory:
         return self.by_guid(account["guid"])
 
     def update(self, guid, attrs, ou, root, *, allow_disabled=False):
+        self.require_write()
         account = self.by_guid(guid)
         if protected(account) or (not account["enabled"] and not allow_disabled):
             raise RuleError("账号受保护或已禁用，不能更新")
@@ -559,6 +603,7 @@ class ActiveDirectory:
         return self.by_guid(guid)
 
     def disable(self, guid, root):
+        self.require_write()
         account = self.check_account(guid)
         if not under(account["dn"], root):
             raise RuleError("账号超出管理范围")
@@ -566,6 +611,7 @@ class ActiveDirectory:
             raise RuleError("AD 禁用失败")
 
     def enable(self, guid, root):
+        self.require_write()
         account = self.by_guid(guid)
         if protected(account) or not under(account["dn"], root):
             raise RuleError("目标受保护或不在管理范围内")
@@ -574,6 +620,7 @@ class ActiveDirectory:
         return self.by_guid(guid)
 
     def reset_password(self, guid, password, unlock=False):
+        self.require_write()
         account = self.check_password_reset_account(guid)
         try:
             changed = self.conn.extend.microsoft.modify_password(account["dn"], password)
