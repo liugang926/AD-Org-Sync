@@ -5,6 +5,95 @@ from playwright.sync_api import sync_playwright
 
 
 @pytest.mark.django_db(transaction=True)
+def test_dashboard_updates_task_without_losing_input_and_retries_network_errors(live_server, django_user_model):
+    from django.utils import timezone
+    from playwright.sync_api import expect
+    from sync_app.models import Job
+
+    django_user_model.objects.create_superuser("live-task-admin", password="Browser-test-only-823!")
+    job = Job.objects.create(kind="associate", status="queued")
+    output = Path("test_artifacts/browser")
+    output.mkdir(parents=True, exist_ok=True)
+    with sync_playwright() as playwright, ThreadPoolExecutor(max_workers=1) as executor:
+        browser = playwright.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.goto(live_server.url + "/login")
+        page.get_by_label("用户名").fill("live-task-admin")
+        page.get_by_label("密码").fill("Browser-test-only-823!")
+        page.get_by_role("button", name="登录", exact=True).click()
+        page.wait_for_url("**/dashboard")
+        page.clock.install()
+        page.reload()
+        page.get_by_label("同步范围", exact=True).select_option("department")
+        page.get_by_label("部门 ID 或人员 userId", exact=True).fill("keep-this-input")
+        row = page.locator(f'[data-job-id="{job.pk}"]')
+        expect(row.locator("[data-job-status]")).to_have_text("排队中")
+        page.route("**/jobs/status?*", lambda route: route.fulfill(status=503, body="temporary failure"), times=1)
+        page.clock.run_for(5000)
+        expect(page.locator("[data-poll-status]")).to_contain_text("暂时无法更新")
+        expect(row.locator("[data-job-status]")).to_have_text("排队中")
+        executor.submit(lambda: Job.objects.filter(pk=job.pk).update(status="running", started_at=timezone.now())).result()
+        page.clock.run_for(5000)
+        expect(row.locator("[data-job-status]")).to_have_text("执行中")
+        expect(row.locator("[data-job-message]")).to_contain_text("不创建部门 OU")
+        page.locator(".jobs-card").screenshot(path=str(output / "task-live-running.png"))
+        executor.submit(lambda: Job.objects.filter(pk=job.pk).update(status="success", finished_at=timezone.now(), message="关联核验完成")).result()
+        page.clock.run_for(5000)
+        expect(row.locator("[data-job-status]")).to_have_text("已完成")
+        expect(row.locator("[data-job-message]")).to_have_text("关联核验完成")
+        expect(page.get_by_label("部门 ID 或人员 userId", exact=True)).to_have_value("keep-this-input")
+        expect(page.get_by_label("同步范围", exact=True)).to_have_value("department")
+        requests = []
+        page.on("request", lambda request: requests.append(request.url))
+        page.clock.run_for(15000)
+        assert not any("/jobs/status" in url for url in requests)
+        assert executor.submit(Job.objects.count).result() == 1
+        executor.submit(lambda: Job.objects.filter(pk=job.pk).update(status="running", finished_at=None)).result()
+        page.reload()
+        page.context.clear_cookies()
+        page.clock.run_for(5000)
+        expect(page.locator("[data-poll-status]")).to_contain_text("登录已失效")
+        expect(page.locator("[data-job-status]")).to_have_text("执行中")
+        requests.clear()
+        page.clock.run_for(15000)
+        assert not any("/jobs/status" in url for url in requests)
+        browser.close()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_task_detail_reloads_completed_preview_without_applying_it(live_server, django_user_model, monkeypatch):
+    from playwright.sync_api import expect
+    from sync_app import synchronization as sync
+    from sync_app.models import DepartmentBinding, Job
+    from .test_ou_sync import TreeSource, StrictDirectory
+
+    source, directory = TreeSource(), StrictDirectory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: directory)
+    django_user_model.objects.create_superuser("live-preview-admin", password="Browser-test-only-823!")
+    job = Job.objects.create(kind="preview", scope="organization")
+    with sync_playwright() as playwright, ThreadPoolExecutor(max_workers=1) as executor:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.goto(live_server.url + "/login")
+        page.get_by_label("用户名").fill("live-preview-admin")
+        page.get_by_label("密码").fill("Browser-test-only-823!")
+        page.get_by_role("button", name="登录", exact=True).click()
+        page.wait_for_url("**/dashboard")
+        page.clock.install()
+        page.goto(live_server.url + f"/jobs/{job.pk}")
+        expect(page.get_by_role("button", name="执行此计划", exact=True)).to_have_count(0)
+        assert executor.submit(sync.run_next).result()
+        page.clock.run_for(5000)
+        expect(page.get_by_role("button", name="执行此计划", exact=True)).to_be_visible()
+        expect(page.locator("[data-job-status]")).to_have_text("待审阅")
+        assert not directory.writes
+        assert not executor.submit(DepartmentBinding.objects.exists).result()
+        assert executor.submit(lambda: Job.objects.get(pk=job.pk).kind).result() == "preview"
+        browser.close()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_organization_preview_and_confirmed_root_creation_browser(live_server, django_user_model, monkeypatch):
     from sync_app import synchronization as sync
     from sync_app.models import Binding, DepartmentBinding, Job

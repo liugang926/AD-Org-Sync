@@ -33,6 +33,7 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = DATA_DIR / "static"
 SSPR_SCRIPT_VERSION = sha256((BASE_DIR / "static" / "sspr.js").read_bytes()).hexdigest()[:12]
+TASK_STATUS_SCRIPT_VERSION = sha256((BASE_DIR / "static" / "task_status.js").read_bytes()).hexdigest()[:12]
 LOGIN_URL = "/login"
 LOGIN_REDIRECT_URL = "/dashboard"
 LOGOUT_REDIRECT_URL = "/login"

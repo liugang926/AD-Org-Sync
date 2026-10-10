@@ -15,6 +15,7 @@ urlpatterns = [
     path("people/associate", views.refresh_associations, name="refresh_associations"),
     path("departments", views.departments, name="departments"),
     path("people/<int:person_id>", views.person_action, name="person_action"),
+    path("jobs/status", views.job_status, name="job_status"),
     path("jobs/<uuid:job_id>", views.job_detail, name="job"),
     path("logs", views.logs, name="logs"),
     path("connections/test", views.test_connections, name="test_connections"),

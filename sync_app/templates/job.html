@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}任务详情 · 组织同步控制台{% endblock %}
 {% block content %}
 <div class="page-heading">
@@ -6,10 +7,13 @@
   <a class="button-link secondary" href="{% url 'job' job.id %}">刷新任务状态</a>
 </div>
 
-<section class="card task-overview">
-  <div class="task-overview-head"><div><h2>当前任务</h2><small>任务 ID：{{ job.id }}</small></div><span class="status-pill tone-{{ job_status_tone }}">{{ job_status_label }}</span></div>
+<section class="card task-overview" data-job-poll="{% url 'job_status' %}" data-reload-on-finish="true">
+  <div data-job-id="{{ job.id }}" data-active="{{ progress.active|yesno:'true,false' }}">
+  <div class="task-overview-head"><div><h2>当前任务</h2><small>任务 ID：{{ job.id }}</small></div><span class="status-pill tone-{{ job_status_tone }}" data-job-status>{{ job_status_label }}</span></div>
+  <p class="hint-block"><span data-job-message>{{ progress.message }}</span><br><span data-job-elapsed>{{ progress.elapsed }}</span></p>
+  </div>
+  {% if progress.active %}{% include "task_poll_notice.html" %}{% endif %}
   <dl class="task-facts"><div><dt>任务类型</dt><dd>{{ job_kind_label }}</dd></div><div><dt>创建时间</dt><dd>{{ job.created_at|date:"Y-m-d H:i:s" }}</dd></div><div><dt>{% if association_job %}核验范围{% else %}同步范围{% endif %}</dt><dd>{{ job_scope_label }}</dd></div><div><dt>发起人</dt><dd>{{ job.actor }}</dd></div>{% if association_job %}<div><dt>完成时间</dt><dd>{{ job.finished_at|date:"Y-m-d H:i:s"|default:"—" }}</dd></div><div><dt>保存关联</dt><dd>{{ association_counts.associate }} 项</dd></div><div><dt>保留或跳过</dt><dd>{{ association_counts.skip }} 项</dd></div><div><dt>关联冲突</dt><dd>{{ association_counts.conflict }} 项</dd></div>{% else %}<div><dt>人员冲突</dt><dd>{{ conflict_count }} 项</dd></div><div><dt>部门冲突</dt><dd>{{ department_conflict_count }} 项</dd></div><div><dt>计划禁用账号</dt><dd>{{ disable_count }} 项</dd></div>{% endif %}</dl>
-  {% if job.message %}<p class="hint-block">{{ job.message }}</p>{% endif %}
   {% if job.plan.root_ou %}<p class="hint-block">本次同步根 OU：<code class="dn-value">{{ job.plan.root_ou }}</code>{% if job.plan.root_parent %}<br>根 OU 待创建；父容器：<code>{{ job.plan.root_parent.dn }}</code>。确认执行后才会创建。{% endif %}<br>钉钉根部门直接对应此 OU，子部门逐层建立，不额外增加公司包装层。</p>{% endif %}
   {% if job.scope == 'organization' %}<p class="hint-block">此计划仅同步组织架构，不创建、移动、更新或禁用人员账号。</p>{% endif %}
   {% if not association_job and job.plan.high_risk %}<p class="notice" role="alert">该计划超过禁用保护阈值。请<a href="?only=disables#person-plan">查看全部 {{ disable_count }} 个待禁用账号</a>，逐页核对后再确认执行。</p>{% endif %}
@@ -48,4 +52,5 @@
   {% if operation_page.paginator.num_pages > 1 %}<nav class="pagination" aria-label="执行结果分页">{% if operation_page.has_previous %}<a href="?only={{ plan_filter }}&amp;page={{ planned_page.number }}&amp;result_page={{ operation_page.previous_page_number }}#execution-results">上一页</a>{% endif %}<span>第 {{ operation_page.number }} / {{ operation_page.paginator.num_pages }} 页，共 {{ operation_page.paginator.count }} 项</span>{% if operation_page.has_next %}<a href="?only={{ plan_filter }}&amp;page={{ planned_page.number }}&amp;result_page={{ operation_page.next_page_number }}#execution-results">下一页</a>{% endif %}</nav>{% endif %}
 </section>
 {% endif %}
+{% if progress.active %}<script src="{% static 'task_status.js' %}?v={{ task_status_script_version }}" defer></script>{% endif %}
 {% endblock %}

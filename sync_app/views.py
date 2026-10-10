@@ -14,7 +14,7 @@ from django.shortcuts import redirect, render, get_object_or_404
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.debug import sensitive_post_parameters
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
 from django.views.csrf import csrf_failure as default_csrf_failure
 from django.utils.dateparse import parse_date
 from django.utils import timezone
@@ -75,6 +75,30 @@ def status_tone(status):
     return "neutral"
 
 
+def job_progress(job):
+    active = job.status in {"queued", "running"}
+    if job.status == "queued":
+        message = "任务已排队，等待执行进程处理；无需重复提交。"
+    elif job.status == "running":
+        message = {
+            "associate": "正在后台读取通讯录并核验 AD 账号关联；仅保存本地身份关系，不创建部门 OU。",
+            "refresh": "正在读取钉钉人员和部门；耗时取决于部门数量及接口响应，不写入 AD。",
+            "connections": "正在检查钉钉通讯录和 LDAPS 连接，请稍候。",
+            "preview": "正在读取来源并生成变更预览；此阶段不写入 AD。",
+            "apply": "正在执行已确认的同步计划，请等待逐项执行结果。",
+            "scheduled": "正在处理定时同步任务，请等待最终结果。",
+        }.get(job.kind, "任务正在后台处理，请等待结果。")
+    else:
+        message = job.message or "任务已结束，请查看详情。"
+    started = job.started_at or job.created_at
+    seconds = max(0, int(((job.finished_at or timezone.now()) - started).total_seconds()))
+    elapsed = f"{seconds // 60} 分 {seconds % 60} 秒" if seconds >= 60 else f"{seconds} 秒"
+    elapsed = ("已排队 " if job.status == "queued" else "已运行 " if active else "耗时 ") + elapsed
+    return {"id": str(job.pk), "active": active, "status": job.status,
+            "label": JOB_STATUS_LABELS.get(job.status, job.status), "tone": status_tone(job.status),
+            "message": message, "elapsed": elapsed}
+
+
 def administrator(view):
     @wraps(view)
     def wrapped(request, *args, **kwargs):
@@ -133,6 +157,21 @@ def ready(request):
     return JsonResponse({"status": "ready" if ok else "not_ready", "checks": checks}, status=200 if ok else 503)
 
 
+@never_cache
+@administrator
+@require_GET
+def job_status(request):
+    ids = request.GET.getlist("id")
+    if not ids or len(ids) > 12:
+        return JsonResponse({"error": "请选择 1–12 个任务"}, status=400)
+    try:
+        ids = [UUID(value) for value in ids]
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "任务 ID 无效"}, status=400)
+    jobs = Job.objects.filter(pk__in=ids).only("id", "kind", "status", "message", "created_at", "started_at", "finished_at")
+    return JsonResponse({"jobs": [job_progress(job) for job in jobs]})
+
+
 @administrator
 def dashboard(request):
     if request.method == "POST":
@@ -145,7 +184,7 @@ def dashboard(request):
     next_run = max(timezone.now(), latest.created_at + timedelta(minutes=config.interval_minutes)) if latest else timezone.now()
     jobs = list(Job.objects.order_by("-created_at")[:12])
     job_rows = [
-        {"job": job, "kind": JOB_KIND_LABELS.get(job.kind, job.kind), "status": JOB_STATUS_LABELS.get(job.status, job.status), "tone": status_tone(job.status)}
+        {"job": job, "kind": JOB_KIND_LABELS.get(job.kind, job.kind), "progress": job_progress(job)}
         for job in jobs
     ]
     snapshot = Snapshot.objects.order_by("-pk").first()
@@ -167,6 +206,8 @@ def dashboard(request):
         "department_binding_count": DepartmentBinding.objects.count(),
         "latest_full_plan": latest_full_plan, "conflict_count": conflict_count,
         "latest_sync_job": latest_sync_job,
+        "has_active_jobs": any(row["progress"]["active"] for row in job_rows),
+        "task_status_script_version": settings.TASK_STATUS_SCRIPT_VERSION,
     })
 
 
@@ -273,6 +314,8 @@ def job_detail(request, job_id):
         "plan_filter": plan_filter,
         "association_job": job.kind == "associate",
         "association_counts": association_counts,
+        "progress": job_progress(job),
+        "task_status_script_version": settings.TASK_STATUS_SCRIPT_VERSION,
     })
 
 
