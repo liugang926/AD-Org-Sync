@@ -1,25 +1,29 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}任务详情 · 组织同步控制台{% endblock %}
 {% block content %}
 <div class="page-heading">
-  <div><p class="eyebrow"><a href="{% url 'dashboard' %}">同步概览</a> / 任务详情</p><h1>{% if association_job %}账号关联核验结果{% else %}任务详情{% endif %}</h1><p class="page-subtitle">{% if association_job %}核验工号对应的已有 AD 登录名，保存本地账号与 GUID。此任务不创建账号、不修改密码、属性、OU 或启用状态。{% else %}先审阅计划，再决定是否执行。预览只描述拟议变更，不代表 AD 已被修改。{% endif %}</p></div>
+  <div><p class="eyebrow"><a href="{% url 'dashboard' %}">同步概览</a> / 任务详情</p><h1>{% if association_job %}账号关联核验结果{% else %}任务详情{% endif %}</h1><p class="page-subtitle">{% if association_job %}核验工号对应的已有 AD 登录名，保存本地账号与 GUID。此任务不创建账号、不修改密码、属性、OU 或启用状态。{% elif execution_view %}按本次任务的逐项执行记录查看结果；失败或中断的项目需要核验后重新预览。{% else %}先审阅计划，再决定是否执行。预览只描述拟议变更，不代表 AD 已被修改。{% endif %}</p></div>
   <a class="button-link secondary" href="{% url 'job' job.id %}">刷新任务状态</a>
 </div>
 
-<section class="card task-overview">
-  <div class="task-overview-head"><div><h2>当前任务</h2><small>任务 ID：{{ job.id }}</small></div><span class="status-pill tone-{{ job_status_tone }}">{{ job_status_label }}</span></div>
+<section class="card task-overview" data-job-poll="{% url 'job_status' %}" data-reload-on-finish="true">
+  <div data-job-id="{{ job.id }}" data-active="{{ progress.active|yesno:'true,false' }}">
+  <div class="task-overview-head"><div><h2>当前任务</h2><small>任务 ID：{{ job.id }}</small></div><span class="status-pill tone-{{ job_status_tone }}" data-job-status>{{ job_status_label }}</span></div>
+  <p class="hint-block"><span data-job-message>{{ progress.message }}</span><br><span data-job-elapsed>{{ progress.elapsed }}</span></p>
+  </div>
+  {% if progress.active %}{% include "task_poll_notice.html" %}{% endif %}
   <dl class="task-facts"><div><dt>任务类型</dt><dd>{{ job_kind_label }}</dd></div><div><dt>创建时间</dt><dd>{{ job.created_at|date:"Y-m-d H:i:s" }}</dd></div><div><dt>{% if association_job %}核验范围{% else %}同步范围{% endif %}</dt><dd>{{ job_scope_label }}</dd></div><div><dt>发起人</dt><dd>{{ job.actor }}</dd></div>{% if association_job %}<div><dt>完成时间</dt><dd>{{ job.finished_at|date:"Y-m-d H:i:s"|default:"—" }}</dd></div><div><dt>保存关联</dt><dd>{{ association_counts.associate }} 项</dd></div><div><dt>保留或跳过</dt><dd>{{ association_counts.skip }} 项</dd></div><div><dt>关联冲突</dt><dd>{{ association_counts.conflict }} 项</dd></div>{% else %}<div><dt>人员冲突</dt><dd>{{ conflict_count }} 项</dd></div><div><dt>部门冲突</dt><dd>{{ department_conflict_count }} 项</dd></div><div><dt>计划禁用账号</dt><dd>{{ disable_count }} 项</dd></div>{% endif %}</dl>
-  {% if job.message %}<p class="hint-block">{{ job.message }}</p>{% endif %}
-  {% if job.plan.root_ou %}<p class="hint-block">本次同步根 OU：<code class="dn-value">{{ job.plan.root_ou }}</code>{% if job.plan.root_parent %}<br>根 OU 待创建；父容器：<code>{{ job.plan.root_parent.dn }}</code>。确认执行后才会创建。{% endif %}<br>钉钉根部门直接对应此 OU，子部门逐层建立，不额外增加公司包装层。</p>{% endif %}
+  {% if job.plan.root_ou %}<p class="hint-block">本次同步根 OU：<code class="dn-value">{{ job.plan.root_ou }}</code>{% if root_ou_completed %}<br>本次执行已确认根 OU 并保存部门映射。{% elif job.plan.root_parent %}{% if execution_view %}<br>预览时根 OU 尚不存在，执行结果见下方部门列表。{% else %}<br>根 OU 待创建；父容器：<code>{{ job.plan.root_parent.dn }}</code>。确认执行后才会创建。{% endif %}{% endif %}<br>钉钉根部门直接对应此 OU，子部门逐层建立，不额外增加公司包装层。</p>{% endif %}
   {% if job.scope == 'organization' %}<p class="hint-block">此计划仅同步组织架构，不创建、移动、更新或禁用人员账号。</p>{% endif %}
   {% if not association_job and job.plan.high_risk %}<p class="notice" role="alert">该计划超过禁用保护阈值。请<a href="?only=disables#person-plan">查看全部 {{ disable_count }} 个待禁用账号</a>，逐页核对后再确认执行。</p>{% endif %}
 </section>
 
 {% if not association_job %}
 <section class="card listing-card" id="department-plan">
-  <div class="card-head"><div><h2>部门 OU 计划</h2><p>部门名称优先展示，完整目标 DN 可按需展开。</p></div><span class="section-note">{{ job.plan.departments|length }} 项，冲突 {{ department_conflict_count }} 项</span></div>
+  <div class="card-head"><div><h2>{% if execution_view %}部门 OU 执行结果{% else %}部门 OU 计划{% endif %}</h2><p>{% if execution_view %}状态依据本次任务的逐项执行记录；后续 AD 变化请重新预览核验。{% else %}部门名称优先展示，完整目标 DN 可按需展开。{% endif %}</p></div><span class="section-note">{{ department_rows|length }} 项，{% if execution_view %}成功 {{ department_result_counts.success }} 项，失败 {{ department_result_counts.failed }} 项，待核验 {{ department_result_counts.unverified }} 项，未完成 {{ department_result_counts.waiting }} 项{% else %}冲突 {{ department_conflict_count }} 项{% endif %}</span></div>
   <div class="table-wrap"><table><thead><tr><th>部门</th><th>目标组织单位</th><th>状态</th></tr></thead><tbody>
-    {% for item in job.plan.departments %}<tr><td><strong>{{ item.name }}</strong><small>部门 ID：{{ item.source_id }}</small></td><td>{% if item.dn %}<span class="ou-label">{{ item.dn|truncatechars:72 }}</span><details><summary>查看完整 DN</summary><code class="dn-value">{{ item.dn }}</code></details>{% else %}<span class="muted">待确认</span>{% endif %}</td><td>{% if item.action == "conflict" %}<span class="status-pill tone-warning">冲突</span><small>{{ item.reason }}</small><small><a href="{% url 'departments' %}?q={{ item.source_id|urlencode }}">查看部门并处理</a></small>{% elif item.guid %}<span class="status-pill tone-success">已存在</span>{% else %}<span class="status-pill tone-active">待创建</span>{% endif %}</td></tr>
+    {% for row in department_rows %}{% with item=row.item %}<tr><td><strong>{{ item.name }}</strong><small>部门 ID：{{ item.source_id }}</small></td><td>{% if item.dn %}<span class="ou-label">{{ item.dn|truncatechars:72 }}</span><details><summary>查看完整 DN</summary><code class="dn-value">{{ item.dn }}</code>{% if row.guid %}<small>执行确认的 objectGUID：{{ row.guid }}</small>{% endif %}</details>{% else %}<span class="muted">待确认</span>{% endif %}</td><td><span class="status-pill tone-{{ row.tone }}">{{ row.label }}</span>{% if row.message %}<small>{{ row.message }}</small>{% endif %}{% if item.action == "conflict" %}<small><a href="{% url 'departments' %}?q={{ item.source_id|urlencode }}">查看部门并处理</a></small>{% endif %}</td></tr>{% endwith %}
     {% empty %}<tr><td colspan="3" class="empty-cell">此范围没有部门变更。</td></tr>{% endfor %}
   </tbody></table></div>
 </section>
@@ -44,8 +48,9 @@
 {% if not association_job %}
 <section class="card listing-card" id="execution-results">
   <div class="card-head"><div><h2>实际执行结果</h2><p>逐项记录已经完成的操作；部分失败不等于整体成功。</p></div></div>
-  <div class="table-wrap"><table><thead><tr><th>来源 userId</th><th>操作</th><th>状态</th><th>结果</th></tr></thead><tbody>{% for row in operation_rows %}<tr><td>{{ row.operation.source_id }}</td><td>{{ row.label }}</td><td><span class="status-pill tone-{{ row.tone }}">{{ row.status }}</span></td><td class="result-cell">{{ row.operation.message|default:"—" }}</td></tr>{% empty %}<tr><td colspan="4" class="empty-cell">尚未执行。预览不代表 AD 已完成变更。</td></tr>{% endfor %}</tbody></table></div>
+  <div class="table-wrap"><table><thead><tr><th>来源人员 / 部门</th><th>操作</th><th>状态</th><th>结果</th></tr></thead><tbody>{% for row in operation_rows %}<tr><td>{% if row.operation.action == 'ensure_ou' %}{{ row.operation.evidence.name|default:row.operation.source_id }}<small>{{ row.operation.source_id }}</small>{% else %}{{ row.operation.source_id }}{% endif %}</td><td>{{ row.label }}</td><td><span class="status-pill tone-{{ row.tone }}">{{ row.status }}</span></td><td class="result-cell">{{ row.operation.message|default:"—" }}</td></tr>{% empty %}<tr><td colspan="4" class="empty-cell">尚未执行。预览不代表 AD 已完成变更。</td></tr>{% endfor %}</tbody></table></div>
   {% if operation_page.paginator.num_pages > 1 %}<nav class="pagination" aria-label="执行结果分页">{% if operation_page.has_previous %}<a href="?only={{ plan_filter }}&amp;page={{ planned_page.number }}&amp;result_page={{ operation_page.previous_page_number }}#execution-results">上一页</a>{% endif %}<span>第 {{ operation_page.number }} / {{ operation_page.paginator.num_pages }} 页，共 {{ operation_page.paginator.count }} 项</span>{% if operation_page.has_next %}<a href="?only={{ plan_filter }}&amp;page={{ planned_page.number }}&amp;result_page={{ operation_page.next_page_number }}#execution-results">下一页</a>{% endif %}</nav>{% endif %}
 </section>
 {% endif %}
+{% if progress.active %}<script src="{% static 'task_status.js' %}?v={{ task_status_script_version }}" defer></script>{% endif %}
 {% endblock %}
