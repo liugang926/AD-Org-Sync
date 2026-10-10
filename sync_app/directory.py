@@ -14,7 +14,7 @@ from ldap3 import BASE, SUBTREE, Connection, MODIFY_REPLACE, Server, Tls
 from ldap3.utils.conv import escape_filter_chars
 from ldap3.utils.dn import escape_rdn, parse_dn
 
-from .domain import ResetOutcomeUnknown, RuleError, protected
+from .domain import ResetOutcomeUnknown, RuleError, fingerprint, protected
 from .models import Configuration
 
 
@@ -583,6 +583,32 @@ class ActiveDirectory:
         if not self.conn.modify(dn, {"userAccountControl": [(MODIFY_REPLACE, [512 if enabled else 514])], "pwdLastSet": [(MODIFY_REPLACE, [0 if require_change else -1])]}):
             raise RuleError("账号初始化未完成，需人工处理")
         return self.by_guid(account["guid"])
+
+    def onboard(self, expected, attrs, ou, root, ou_guid):
+        """One-time entry into the root; regular update keeps its strict boundary."""
+        self.require_write()
+        validate_ou_dn(root, settings.LDAP_BASE_DN)
+        validate_ou_dn(ou, root)
+        if not ou_guid:
+            raise RuleError("自动纳管缺少目标 OU 身份")
+        self.verify_ou(ou, ou_guid)
+        account = self.by_guid(expected["guid"])
+        revision = str(account.get("ad_revision") or "")
+        if fingerprint(account) != fingerprint(expected) or not revision.isdecimal() or int(revision) <= 0:
+            raise RuleError("纳管前 AD 状态已变化，请重新生成计划")
+        if protected(account) or not account["enabled"]:
+            raise RuleError("账号受保护或已禁用，不能自动纳管")
+        if not under(account["dn"], settings.LDAP_BASE_DN) or under(account["dn"], root):
+            raise RuleError("自动纳管来源位置已变化或超出 LDAP 范围")
+        components = parse_dn(account["dn"])
+        rdn = components[0][0] + "=" + components[0][1]
+        if not self.conn.modify_dn(account["dn"], rdn, new_superior=ou):
+            raise RuleError("AD 账号迁入失败，请检查源容器和目标 OU 权限")
+        moved = self.by_guid(account["guid"])
+        if (moved["guid"] != account["guid"] or moved["username"] != account["username"]
+                or moved["dn"].casefold() != (rdn + "," + ou).casefold()):
+            raise RuleError("迁入结果与计划不一致，请核验 AD")
+        return self.update(account["guid"], attrs, ou, root)
 
     def update(self, guid, attrs, ou, root, *, allow_disabled=False):
         self.require_write()

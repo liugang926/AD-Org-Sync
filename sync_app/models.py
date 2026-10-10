@@ -80,11 +80,15 @@ class Configuration(models.Model):
             ("source_id", "userId 与 AD 账号名（仅建议）"),
         ],
         default="employee_id",
-        help_text="更改匹配方式后须重新生成预览；AD 根 OU 外的现有账号不会自动纳入同步。",
+        help_text="更改匹配方式后须重新生成预览；未开启自动纳管时，AD 根 OU 外的现有账号不会自动纳入同步。",
     )
     auto_associate_accounts = models.BooleanField(
         "自动关联工号对应的 AD 账号", default=True, db_default=True,
-        help_text="选择工号 → AD 账号名时，后台默认核验并保存唯一匹配；人工关联优先。关联只保存身份关系，AD 写入仍须按受管范围预览并确认。",
+        help_text="选择工号 → AD 账号名时，后台默认核验并保存唯一匹配；人工关联优先。此任务只保存身份关系，实际 AD 写入由同步任务执行。",
+    )
+    auto_onboard_accounts = models.BooleanField(
+        "自动纳管已有 AD 账号", default=False, db_default=False,
+        help_text="开启后，同步任务将 LDAP 查询范围内唯一匹配或已关联的普通启用账号，从根 OU 外迁入对应部门并纳入管理。定时同步无需逐人确认；受保护、禁用、排除或身份冲突的账号不迁入。",
     )
     attributes = models.JSONField("同步属性", default=list, blank=True, help_text="displayName、mail、title、department、telephoneNumber")
     clear_attributes = models.JSONField("允许来源空值清除的属性", default=list, blank=True, help_text="必须属于已启用的同步属性；默认空值不覆盖 AD")

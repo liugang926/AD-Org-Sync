@@ -283,7 +283,13 @@ def plan(job, source, ad):
                 if dept in overrides:
                     ad.verify_ou(overrides[dept].dn, str(overrides[dept].object_guid))
                 if target and not under(target["dn"], config.root_ou):
-                    raise RuleError("已有账号不在受管 OU 内")
+                    if not config.auto_onboard_accounts:
+                        raise RuleError("已有账号不在受管 OU 内；可在组织配置中开启自动纳管")
+                    if recovery or (binding and binding.sync_managed):
+                        raise RuleError("已纳管或待恢复账号移出了受管 OU，请核验移动原因")
+                    if not under(target["dn"], settings.LDAP_BASE_DN) or not valid_ad_revision(target):
+                        raise RuleError("首次纳管账号超出 LDAP 范围或缺少有效目录版本")
+                    action, reason = "onboard", "按自动纳管规则迁入部门 OU，保留已有账号身份"
                 if action == "resume_create" and parent_dn(target["dn"]).casefold() != ou.casefold():
                     raise RuleError("此前未完成建号的目标 OU 与当前部门不一致，请人工核验")
         except RuleError as exc:
@@ -294,12 +300,12 @@ def plan(job, source, ad):
         changes = [{"field": k, "before": before.get(k, ""), "after": v} for k, v in attrs.items() if before.get(k, "") != v]
         if action == "resume_create" and config.enable_new_accounts:
             changes.append({"field": "enabled", "before": False, "after": True})
-        if target and action in {"update", "bind"} and parent_dn(target["dn"]).casefold() != ou.casefold():
+        if target and action in {"update", "bind", "onboard"} and parent_dn(target["dn"]).casefold() != ou.casefold():
             changes.append({"field": "OU", "before": parent_dn(target["dn"]), "after": ou})
             if action == "update":
                 action = "move"
         operations.append({"source_id": user["source_id"], "user": user, "department_id": person.primary_department or user["primary_department"], "action": action, "target": target, "username": target["username"] if target else candidate(user, config.naming), "candidate": candidate(user, config.naming), "raw_naming_value": user.get(config.naming, ""), "binding": {"guid": str(binding.object_guid), "username": binding.username, "manual": binding.manual} if binding else None, "ou": ou, "attrs": attrs, "changes": changes, "reason": reason})
-        if target and action == "bind":
+        if target and action in {"bind", "onboard"}:
             occupied.add(target["guid"])
     if job.scope == "full" and config.disable_missing:
         current_ids = {u["source_id"] for u in snap.users}
@@ -327,6 +333,12 @@ def has_conflicts(plan_data):
     return any(o["action"] == "conflict" for o in plan_data.get("operations", []) + plan_data.get("departments", []))
 
 
+def blocking_conflicts(plan_data, *, scheduled=False):
+    return any(o["action"] == "conflict" for o in plan_data.get("departments", [])) or (
+        not scheduled and has_conflicts(plan_data)
+    )
+
+
 def apply(job, source, ad):
     config = Configuration.current()
     validate_directory_identity(config)
@@ -346,12 +358,21 @@ def apply(job, source, ad):
     latest = Snapshot.objects.order_by("-pk").first()
     if not latest or latest.fingerprint != saved["source"]:
         raise RuleError("当前采集版本已变化，请重新预览")
-    if has_conflicts(saved):
+    if blocking_conflicts(saved, scheduled=job.kind == "scheduled"):
         raise RuleError("请先处理计划中的部门或人员冲突，再重新预览")
     if saved["high_risk"] and not job.confirmed:
         raise RuleError("禁用数量超过阈值，需要管理员确认")
     # Preflight every existing target before the first write.
     for op in saved["operations"]:
+        if op["action"] == "onboard":
+            binding = Binding.objects.filter(person__source_id=op["source_id"]).first()
+            if (not config.auto_onboard_accounts or not op.get("target")
+                    or (binding and binding.sync_managed) or not valid_ad_revision(op["target"])
+                    or not under(op["target"]["dn"], settings.LDAP_BASE_DN)
+                    or under(op["target"]["dn"], config.root_ou)
+                    or not under(op["ou"], config.root_ou)
+                    or protected(op["target"]) or not op["target"]["enabled"]):
+                raise RuleError("自动纳管条件已变化，请重新生成计划")
         if op["action"] == "create":
             if ad.match("employee_id", op["user"]["employee_id"]) or ad.match("source_id", op["username"]):
                 raise RuleError("预览后出现同工号或同名 AD 账号，请重新预览")
@@ -379,7 +400,12 @@ def apply(job, source, ad):
             return "partial_failed"
     failed = False
     for op in saved["operations"]:
-        record = Operation.objects.create(job=job, source_id=op["source_id"], action=op["action"], target_guid=op["target"]["guid"] if op.get("target") else None, evidence={"username": op.get("username", ""), "reason": op["reason"], "changes": op.get("changes", [])})
+        record = Operation.objects.create(job=job, source_id=op["source_id"], action=op["action"], target_guid=op["target"]["guid"] if op.get("target") else None, evidence={"username": op.get("username", ""), "reason": op["reason"], "changes": op.get("changes", []), "before_dn": op.get("target", {}).get("dn", "") if op.get("target") else "", "target_ou": op.get("ou", "")})
+        if op["action"] == "conflict":
+            failed = True
+            record.status, record.message = "failed", op["reason"]
+            record.save()
+            continue
         if op["action"] == "skip":
             record.status = "skipped"
             record.save()
@@ -413,7 +439,11 @@ def apply(job, source, ad):
                     )
                     if op["action"] == "resume_create" and not creation_record:
                         raise RuleError("此前建号证据已缺失，请人工核验，不能继续初始化")
-                    account = ad.update(account["guid"], op["attrs"], op["ou"], config.root_ou, allow_disabled=op["action"] in {"create", "resume_create"})
+                    if op["action"] == "onboard":
+                        expected_ou_guid = str(ou_binding.object_guid) if ou_binding else ou_guid
+                        account = ad.onboard(account, op["attrs"], op["ou"], config.root_ou, expected_ou_guid)
+                    else:
+                        account = ad.update(account["guid"], op["attrs"], op["ou"], config.root_ou, allow_disabled=op["action"] in {"create", "resume_create"})
                     if creation_record:
                         creation_record.evidence = {**creation_record.evidence, "initialized_fingerprint": fingerprint(account)}
                         creation_record.save(update_fields=["evidence"])
@@ -423,6 +453,9 @@ def apply(job, source, ad):
                             creation_record.evidence = {**creation_record.evidence, "enabled_fingerprint": fingerprint(account)}
                             creation_record.save(update_fields=["evidence"])
                     record.target_guid = account["guid"]
+                    record.evidence = {**record.evidence, "after_dn": account["dn"]}
+                    if op["action"] == "onboard":
+                        record.message = "已纳管并迁入部门 OU；账号 GUID 保持一致"
                     # Each successful user commits independently of later users.
                     with transaction.atomic():
                         person = Person.objects.get(source_id=op["source_id"])
@@ -545,7 +578,7 @@ def run_sync_job(job):
             job.save(update_fields=["plan"])
             person_conflicts = sum(op["action"] == "conflict" for op in job.plan["operations"])
             department_conflicts = sum(op["action"] == "conflict" for op in job.plan["departments"])
-            if has_conflicts(job.plan):
+            if blocking_conflicts(job.plan, scheduled=job.kind == "scheduled"):
                 job.status = "blocked"
                 job.message = f"预览发现 {person_conflicts} 项人员冲突、{department_conflicts} 项部门冲突；未执行 AD 写入"
             elif job.plan["high_risk"]:

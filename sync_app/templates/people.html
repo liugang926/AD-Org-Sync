@@ -14,6 +14,8 @@
   {% if association_job.message %}<p class="hint-block">{{ association_job.message }}</p>{% endif %}
 </section>
 
+<section class="card"><h2>人员自动同步</h2><p>自动纳管：{{ config.auto_onboard_accounts|yesno:"已开启,未开启" }} · 定时同步：{{ config.schedule_enabled|yesno:"已开启,未开启" }}</p><p>开启后，符合匹配和保护规则的已有账号可自动迁入部门 OU，无需逐人审批；人员冲突单独记录。账号关联核验本身仍不修改 AD。</p><a href="/admin/sync_app/configuration/1/change/">配置自动纳管与同步周期 →</a></section>
+
 <section class="card listing-card">
   <div class="card-head"><div><h2>来源人员</h2><p>共 {{ page.paginator.count }} 人。人工绑定须先核验目标账号，再确认变更。</p></div><span class="section-note">数据更新时间：{{ snapshot.created_at|default:"尚未采集" }}</span></div>
   <form class="filter-bar" method="get">
@@ -34,7 +36,7 @@
       <div><dt>{% if directory_identity_error %}历史 AD 账号关联{% else %}当前 AD 账号关联{% endif %}</dt><dd>{% if binding %}<strong>{{ binding.username }}</strong><small>objectGUID：{{ binding.object_guid }}</small><small>关联更新：{{ binding.updated_at|date:"Y-m-d H:i:s" }}</small>{% else %}<span class="muted">尚未保存账号关联</span>{% endif %}</dd></div>
       <div><dt>来源工号</dt><dd>{{ source.employee_id|default:"未提供" }}</dd></div>
       <div><dt>邮箱</dt><dd>{{ source.email|default:"未提供" }}</dd></div>
-      <div><dt>最近核验说明</dt><dd>{{ association.reason|default:"已有账号关联" }}{% if association.sync_note %}<small>{{ association.sync_note }}</small>{% endif %}{% if binding and not binding.sync_managed %}<small>当前仅保存身份关联；实际 AD 同步须先预览并确认。</small>{% endif %}</dd></div>
+      <div><dt>最近核验说明</dt><dd>{{ association.reason|default:"已有账号关联" }}{% if association.sync_note %}<small>{{ association.sync_note }}</small>{% endif %}{% if binding and not binding.sync_managed %}<small>当前仅保存身份关联；同步任务按组织配置自动纳管，手动操作可先预览。</small>{% endif %}</dd></div>
     </dl>
     <details class="person-actions"><summary>维护绑定与同步设置</summary>
       <div class="grid action-grid">

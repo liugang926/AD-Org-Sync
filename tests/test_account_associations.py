@@ -525,7 +525,9 @@ guid = uuid.uuid4()
 revision = uuid.uuid4()
 old = OldBinding.objects.create(person=person, object_guid=guid, username="old-login", manual=True, enabled=False, revision=revision)
 call_command("migrate", "sync_app", "0014_default_account_associations", interactive=False, verbosity=0)
-from sync_app.models import Configuration, Binding
+apps = MigrationExecutor(connection).loader.project_state([("sync_app", "0014_default_account_associations")]).apps
+Configuration = apps.get_model("sync_app", "Configuration")
+Binding = apps.get_model("sync_app", "Binding")
 current = Binding.objects.get(pk=old.pk)
 assert current.sync_managed is True
 assert current.object_guid == guid and current.username == "old-login"
