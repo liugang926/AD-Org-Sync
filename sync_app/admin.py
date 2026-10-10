@@ -94,11 +94,11 @@ class ConfigurationAdmin(admin.ModelAdmin):
     readonly_fields = ("current_ldap_directory", "sspr_open_scope")
     fieldsets = (
         ("01 · 同步边界", {"fields": ("root_department", "root_ou"), "description": "只处理指定钉钉部门和 AD 根 OU 范围内的对象。"}),
-        ("02 · 匹配与新建账号", {"fields": ("match_field", "auto_associate_accounts", "naming", "enable_new_accounts", "require_password_change"), "description": "唯一工号匹配默认保存账号关联；关联和允许同步分别判断。新账号命名仅用于创建账号。"}),
+        ("02 · 匹配与新建账号", {"fields": ("match_field", "auto_associate_accounts", "auto_onboard_accounts", "naming", "enable_new_accounts", "require_password_change"), "description": "配置一次匹配和纳管规则，定时同步自动执行符合条件的人员变更。新账号命名仅用于创建账号。"}),
         ("03 · 属性与保护", {"fields": ("attributes", "clear_attributes", "protected_usernames")}),
         ("04 · 离职安全阈值", {"fields": ("disable_missing", "disable_limit", "disable_percent"), "description": "超过人数或比例阈值时，预览需人工确认。"}),
         ("05 · 员工自助重置", {"fields": ("current_ldap_directory", "sspr_open_scope", "sspr_enabled", "sspr_match", "unlock_after_reset", "minimum_password_length"), "description": "密码重置独立使用实时 LDAPS 唯一匹配，不依赖同步任务或本地绑定。已启用的域管理员也可重置本人密码；其他受保护账号仍拒绝。"}),
-        ("06 · 定时任务", {"fields": ("schedule_enabled", "interval_minutes")}),
+        ("06 · 定时任务", {"fields": ("schedule_enabled", "interval_minutes"), "description": "自动生成并执行计划，无需逐次审批。人员冲突单独记录，其余人员继续同步；部门冲突、来源不完整及超阈值禁用会阻断整批写入。"}),
     )
 
     @admin.display(description="当前 LDAPS 目录")

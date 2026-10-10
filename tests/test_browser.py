@@ -5,6 +5,68 @@ from playwright.sync_api import sync_playwright
 
 
 @pytest.mark.django_db(transaction=True)
+def test_automatic_onboarding_shows_preview_and_scheduled_results_without_approval(live_server, django_user_model, monkeypatch):
+    from playwright.sync_api import expect
+    from sync_app import synchronization as sync
+    from sync_app.models import Binding, Configuration, Job
+    from .fakes import Source, account, user
+    from .test_auto_onboarding import OnboardingDirectory, ROOT, OLD
+
+    config = Configuration.current()
+    config.root_ou = ROOT
+    config.auto_onboard_accounts = True
+    config.schedule_enabled = True
+    config.identity_anchor = sync.directory_identity_anchor()
+    config.attributes = ["displayName", "mail"]
+    config.save()
+    target = account()
+    target["dn"] = "CN=testuser," + OLD
+    source, directory = Source([user(), user("missing-id", "")]), OnboardingDirectory([target])
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: directory)
+    django_user_model.objects.create_superuser("onboard-admin", password="Browser-test-only-823!")
+    preview = sync.enqueue(scope="users", selected=["u1"])
+    assert sync.run_next() and directory.writes == []
+    output = Path("test_artifacts/browser")
+    output.mkdir(parents=True, exist_ok=True)
+    with sync_playwright() as playwright, ThreadPoolExecutor(max_workers=1) as executor:
+        browser = playwright.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.goto(live_server.url + "/login")
+        page.get_by_label("用户名").fill("onboard-admin")
+        page.get_by_label("密码").fill("Browser-test-only-823!")
+        page.get_by_role("button", name="登录", exact=True).click()
+        page.wait_for_url("**/dashboard")
+        page.goto(live_server.url + "/people")
+        expect(page.get_by_role("heading", name="人员自动同步")).to_be_visible()
+        expect(page.get_by_text("自动纳管：已开启 · 定时同步：已开启")).to_be_visible()
+        page.goto(live_server.url + f"/jobs/{preview.pk}")
+        expect(page.get_by_text("纳管并迁入 OU", exact=True)).to_be_visible()
+        expect(page.get_by_text(OLD, exact=True)).to_be_visible()
+        assert target["guid"] in page.locator("#person-plan").inner_text()
+        page.screenshot(path=str(output / "personnel-onboarding-preview.png"), full_page=True)
+        assert directory.writes == []
+
+        def run_scheduled():
+            job = sync.enqueue(kind="scheduled")
+            assert sync.run_next()
+            return str(job.pk)
+
+        job_id = executor.submit(run_scheduled).result()
+        page.goto(live_server.url + "/jobs/" + job_id)
+        expect(page.locator("[data-job-status]")).to_have_text("部分失败")
+        expect(page.get_by_role("button", name="执行此计划", exact=True)).to_have_count(0)
+        expect(page.locator("#execution-results")).to_contain_text("已纳管并迁入部门 OU")
+        expect(page.locator("#execution-results")).to_contain_text("匹配字段缺失或重复")
+        assert executor.submit(lambda: Binding.objects.filter(sync_managed=True).count()).result() == 1
+        assert not executor.submit(lambda: Job.objects.get(pk=job_id).confirmed).result()
+        page.screenshot(path=str(output / "personnel-onboarding-results.png"), full_page=True)
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        browser.close()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_dashboard_updates_task_without_losing_input_and_retries_network_errors(live_server, django_user_model):
     from django.utils import timezone
     from playwright.sync_api import expect

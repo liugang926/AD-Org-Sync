@@ -22,7 +22,7 @@ AUTOMATIC_ACTOR = "account-association"
 def association_basis(config, snapshot):
     return fingerprint([
         directory_identity_anchor(), config.identity_anchor, config.root_department,
-        config.match_field, config.auto_associate_accounts, snapshot.fingerprint,
+        config.match_field, config.auto_associate_accounts, config.auto_onboard_accounts, snapshot.fingerprint,
         sorted(Person.objects.filter(excluded=True).values_list("source_id", flat=True)),
     ])
 
@@ -55,8 +55,10 @@ def sync_note(account, config):
     if protected(account):
         return "受保护账号，仅维护账号关联"
     if not config.root_ou or not under(account["dn"], config.root_ou):
+        if config.auto_onboard_accounts:
+            return "已开启自动纳管；同步任务将再次核验身份并迁入对应部门 OU，本次仅保存关联"
         return "账号不在同步根 OU 内，仅维护账号关联"
-    return "可生成同步预览，确认执行后才纳入同步管理"
+    return "同步任务按配置更新并纳入管理；定时同步自动执行，手动操作可先预览"
 
 
 def run_association_job(job, source=None, ad=None):

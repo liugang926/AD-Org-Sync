@@ -2,6 +2,7 @@ import copy
 import uuid
 from sync_app.domain import RuleError, protected
 from sync_app.directory import PasswordResetOutcome
+from ldap3.utils.dn import parse_dn
 
 
 def user(uid="u1", employee="1001"):
@@ -102,7 +103,8 @@ class Directory:
         if str(guid) in self.fail_update:
             raise RuleError("属性更新失败")
         item = next(a for a in self.items if a["guid"] == str(guid))
-        new_dn = item["dn"].split(",", 1)[0] + "," + ou
+        attr, value, _ = parse_dn(item["dn"])[0]
+        new_dn = attr + "=" + value + "," + ou
         changed = new_dn != item["dn"] or any(item["attrs"].get(key, "") != value for key, value in attrs.items())
         item["attrs"].update(attrs)
         item["dn"] = new_dn

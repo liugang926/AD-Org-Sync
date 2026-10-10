@@ -36,7 +36,7 @@ JOB_KIND_LABELS = {
 }
 ACTION_LABELS = {
     "create": "新建账号", "resume_create": "继续建号", "update": "更新属性",
-    "move": "移动 OU", "bind": "关联账号", "disable": "禁用账号",
+    "move": "移动 OU", "bind": "关联账号", "onboard": "纳管并迁入 OU", "disable": "禁用账号",
     "skip": "跳过", "conflict": "冲突", "ensure_ou": "建立 OU", "associate": "保存账号关联",
 }
 AUDIT_LABELS = {
@@ -67,7 +67,7 @@ def status_tone(status):
         return "warning"
     if status in {
         "queued", "running", "preview_ready", "needs_confirmation",
-        "create", "resume_create", "update", "move", "bind", "ensure_ou", "associate",
+        "create", "resume_create", "update", "move", "bind", "onboard", "ensure_ou", "associate",
     }:
         return "active"
     if status in {"success", "completed", "created"}:
@@ -323,7 +323,8 @@ def job_detail(request, job_id):
     planned_page = Paginator(planned_operations, 50).get_page(request.GET.get("page"))
     planned_rows = [
         {"item": item, "label": ACTION_LABELS.get(item.get("action"), item.get("action", "—")),
-         "tone": status_tone(item.get("action"))}
+         "tone": status_tone(item.get("action")),
+         "current_ou": synchronization.parent_dn(item["target"]["dn"]) if (item.get("target") or {}).get("dn") else ""}
         for item in planned_page
     ]
     if job.kind == "associate":

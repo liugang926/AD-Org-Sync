@@ -20,7 +20,7 @@ def configuration_payload(config):
         "interval_minutes": config.interval_minutes,
         **{name: "on" for name in (
             "enable_new_accounts", "require_password_change", "disable_missing",
-            "sspr_enabled", "unlock_after_reset", "schedule_enabled", "auto_associate_accounts",
+            "sspr_enabled", "unlock_after_reset", "schedule_enabled", "auto_associate_accounts", "auto_onboard_accounts",
         ) if getattr(config, name)},
         "_save": "保存",
     }
