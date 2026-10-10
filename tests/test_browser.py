@@ -5,6 +5,51 @@ from playwright.sync_api import sync_playwright
 
 
 @pytest.mark.django_db(transaction=True)
+def test_organization_preview_and_confirmed_root_creation_browser(live_server, django_user_model, monkeypatch):
+    from sync_app import synchronization as sync
+    from sync_app.models import Binding, DepartmentBinding, Job
+    from .test_ou_sync import TreeSource, StrictDirectory, ROOT
+
+    source, directory = TreeSource(), StrictDirectory()
+    monkeypatch.setattr(sync, "DingTalk", lambda: source)
+    monkeypatch.setattr(sync, "ActiveDirectory", lambda: directory)
+    django_user_model.objects.create_superuser("ou-browser-admin", password="Browser-test-only-823!")
+    output = Path("test_artifacts/browser")
+    output.mkdir(parents=True, exist_ok=True)
+    with sync_playwright() as playwright, ThreadPoolExecutor(max_workers=1) as executor:
+        browser = playwright.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.goto(live_server.url + "/login")
+        page.get_by_label("用户名").fill("ou-browser-admin")
+        page.get_by_label("密码").fill("Browser-test-only-823!")
+        page.get_by_role("button", name="登录", exact=True).click()
+        page.wait_for_url("**/dashboard")
+        page.goto(live_server.url + "/departments")
+        page.get_by_role("button", name="预览组织架构", exact=True).click()
+        page.wait_for_url("**/dashboard")
+        assert executor.submit(sync.run_next).result()
+        job_id = executor.submit(lambda: str(Job.objects.get().pk)).result()
+        page.goto(live_server.url + "/jobs/" + job_id)
+        assert page.get_by_text("仅同步组织架构（不修改人员）", exact=True).is_visible()
+        assert page.get_by_text("根 OU 待创建", exact=False).is_visible()
+        assert ROOT in page.locator(".task-overview").inner_text()
+        assert not directory.writes and directory.read_only
+        assert not executor.submit(DepartmentBinding.objects.exists).result()
+        page.screenshot(path=str(output / "organization-preview.png"), full_page=True)
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        page.get_by_role("button", name="执行此计划", exact=True).click()
+        assert not directory.writes  # Submission only queues; the worker owns writes.
+        assert executor.submit(sync.run_next).result()
+        page.reload()
+        assert page.get_by_text("同步执行完成：4 项成功", exact=False).is_visible()
+        assert executor.submit(DepartmentBinding.objects.count).result() == 4
+        assert not executor.submit(Binding.objects.exists).result()
+        assert directory.writes[0] == ROOT
+        browser.close()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_real_saved_account_association_and_manual_override_browser(live_server, django_user_model, monkeypatch):
     from unittest.mock import Mock
     from sync_app import account_associations as associations, synchronization as sync

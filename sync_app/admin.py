@@ -6,13 +6,13 @@ from contextlib import closing
 from zoneinfo import ZoneInfo
 from django.db import transaction
 from django.utils import timezone
-from .directory import ActiveDirectory, under
+from .directory import ActiveDirectory, validate_ou_dn
 from .domain import RuleError
 from .models import Snapshot
 from .models import Configuration, Audit, DepartmentBinding, Job, Operation, EmployeePageSettings, AuthPlatform, PasswordResetNotification
 from .locking import lock
 from .security import audit, client_address
-from .synchronization import establish_directory_identity, validate_directory_identity
+from .synchronization import establish_directory_identity, validate_directory_identity, current_effective_configuration
 
 
 ATTRIBUTE_CHOICES = [
@@ -67,6 +67,7 @@ class ConfigurationForm(forms.ModelForm):
     class Meta:
         model = Configuration
         fields = "__all__"
+        help_texts = {"root_ou": "留空时：LDAP 范围为域则使用钉钉根部门名称创建公司 OU；LDAP 范围为 OU 则复用该 OU。已填写时使用指定 DN。缺失根 OU 只在确认执行后创建，父容器必须存在。"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -76,6 +77,15 @@ class ConfigurationForm(forms.ModelForm):
     def clean_protected_usernames(self):
         values = [item.strip() for item in self.cleaned_data["protected_usernames"].splitlines()]
         return list(dict.fromkeys(item for item in values if item))
+
+    def clean_root_ou(self):
+        dn = self.cleaned_data["root_ou"]
+        if dn:
+            try:
+                validate_ou_dn(dn, settings.LDAP_BASE_DN)
+            except RuleError as exc:
+                raise forms.ValidationError(str(exc)) from None
+        return dn
 
 
 @admin.register(Configuration)
@@ -212,9 +222,12 @@ class DepartmentForm(forms.ModelForm):
         snap = Snapshot.objects.order_by("-pk").first()
         if not snap or data.get("source_id") not in {d["id"] for d in snap.departments}:
             raise forms.ValidationError("部门不在当前通讯录，请先采集")
-        if not under(data.get("dn", ""), Configuration.current().root_ou):
-            raise forms.ValidationError("OU 超出管理范围")
         try:
+            config = current_effective_configuration(Configuration.current())
+            self.resolved_root = config.root_ou
+            validate_ou_dn(data.get("dn", ""), config.root_ou)
+            if data.get("source_id") == config.root_department and data["dn"].casefold() != config.root_ou.casefold():
+                raise RuleError("钉钉根部门必须对应同步根 OU")
             with closing(ActiveDirectory()) as ad:
                 self.instance.object_guid = ad.verify_ou(data["dn"])
         except RuleError as exc:
@@ -239,6 +252,10 @@ class DepartmentAdmin(admin.ModelAdmin):
             config = Configuration.current()
             if validate_directory_identity(config) != getattr(form, "directory_identity_anchor", None):
                 raise RuleError("企业或 AD 目录身份确认已失效，请重新审核部门映射")
+            effective = current_effective_configuration(config)
+            if effective.root_ou != form.resolved_root:
+                raise RuleError("同步根 OU 已变化，请重新审核部门映射")
+            validate_ou_dn(obj.dn, effective.root_ou)
             with closing(ActiveDirectory()) as ad:
                 obj.object_guid = ad.verify_ou(obj.dn, str(obj.object_guid))
             establish_directory_identity(config)

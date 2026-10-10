@@ -2,14 +2,15 @@
 import uuid
 from collections import Counter
 from contextlib import closing
+from copy import copy
 
 from django.conf import settings
 from django.core import signing
 from django.db import transaction
 from django.utils import timezone
-from ldap3.utils.dn import escape_rdn
+from ldap3.utils.dn import escape_rdn, parse_dn
 
-from .directory import DingTalk, ActiveDirectory, under
+from .directory import DingTalk, ActiveDirectory, under, validate_ou_dn
 from .domain import RuleError, candidate, fingerprint, protected, resolve
 from .locking import lock
 from .models import Configuration, Snapshot, Person, Binding, DepartmentBinding, Job, Operation, RuntimeState
@@ -71,30 +72,69 @@ def collect(source, config):
     return snap
 
 
+def effective_configuration(config, departments):
+    """Resolve an unset root from this source, without persisting configuration."""
+    effective = copy(config)
+    roots = [d for d in departments if d["id"] == config.root_department]
+    if len(roots) != 1 or not isinstance(roots[0].get("name"), str) or not roots[0]["name"].strip():
+        raise RuleError("钉钉根部门缺失或名称无效，无法计算根 OU")
+    if not effective.root_ou:
+        try:
+            base = parse_dn(settings.LDAP_BASE_DN)
+        except Exception:
+            raise RuleError("请设置有效的 LDAP 目录范围") from None
+        effective.root_ou = settings.LDAP_BASE_DN if base[0][0].casefold() == "ou" else "OU=" + escape_rdn(roots[0]["name"]) + "," + settings.LDAP_BASE_DN
+    validate_ou_dn(effective.root_ou, settings.LDAP_BASE_DN)
+    if not settings.LDAP_BASE_DN:
+        raise RuleError("请设置有效的 LDAP 目录范围")
+    return effective
+
+
+def current_effective_configuration(config):
+    if config.root_ou:
+        return config
+    snapshot = Snapshot.objects.order_by("-pk").first()
+    if not snapshot or snapshot.root_department != config.root_department:
+        raise RuleError("请先刷新通讯录以确定自动根 OU")
+    return effective_configuration(config, snapshot.departments)
+
+
 def department_dn(dept_id, departments, config, overrides):
-    if dept_id in overrides and overrides[dept_id].manual:
-        dn = overrides[dept_id].dn
-        if not under(dn, config.root_ou):
-            raise RuleError("部门 OU 超出管理范围")
-        return dn
-    if dept_id == config.root_department:
-        return config.root_ou
-    parts, seen = [], set()
+    validate_ou_dn(config.root_ou)
+    # Validate the entire source ancestry, including manually mapped branches.
+    chain, seen = [], set()
     current = dept_id
-    while current != config.root_department:
+    while True:
         if not current or current in seen or current not in departments:
             raise RuleError("主部门不在同步范围或部门结构不完整")
         seen.add(current)
         dept = departments[current]
-        parts.append("OU=" + escape_rdn(dept["name"]))
+        if not isinstance(dept.get("name"), str) or not dept["name"].strip() or "\x00" in dept["name"]:
+            raise RuleError("部门名称为空或无效")
+        chain.append(current)
+        if current == config.root_department:
+            break
         current = dept["parent"]
-        if current in overrides and overrides[current].manual:
-            return ",".join(parts + [overrides[current].dn])
+    parts = []
+    for current in chain:
+        binding = overrides.get(current)
+        if binding and binding.manual:
+            validate_ou_dn(binding.dn, config.root_ou)
+            if current == config.root_department and binding.dn.casefold() != config.root_ou.casefold():
+                raise RuleError("钉钉根部门必须对应同步根 OU，请核对根部门映射")
+            return ",".join(parts + [binding.dn])
+        if current == config.root_department:
+            break
+        parts.append("OU=" + escape_rdn(departments[current]["name"]))
     return ",".join(parts + [config.root_ou])
 
 
 def selected_users(snap, scope, selected):
     users = snap.users
+    if scope == "organization":
+        if selected:
+            raise RuleError("仅同步组织架构覆盖完整部门树，无需填写人员或部门 ID")
+        return []
     if scope == "full":
         return users
     if not selected:
@@ -118,7 +158,7 @@ def selected_users(snap, scope, selected):
 
 def department_plans(snap, scope, selected, users, config, overrides, ad):
     departments = {d["id"]: d for d in snap.departments}
-    if scope == "full":
+    if scope in {"full", "organization"}:
         included = set(departments)
     elif scope == "department":
         included = set(selected)
@@ -162,16 +202,18 @@ def department_plans(snap, scope, selected, users, config, overrides, ad):
         except RuleError as exc:
             entry["action"], entry["reason"] = "conflict", str(exc)
         result.append(entry)
-    return sorted(result, key=lambda item: len(item["dn"]))
+    return sorted(result, key=lambda item: len(parse_dn(item["dn"])) if item["action"] != "conflict" else 0)
 
 
 def plan(job, source, ad):
     config = Configuration.current()
-    if not config.root_ou or not under(config.root_ou, settings.LDAP_BASE_DN):
-        raise RuleError("请设置 LDAP 目录范围内的同步根 OU")
-    ad.verify_ou(config.root_ou)
     snap = collect(source, config)
-    accounts = ad.accounts()
+    config = effective_configuration(config, snap.departments)
+    root_parent = None
+    if ad.ou_identity(config.root_ou) is None:
+        parent = parent_dn(config.root_ou)
+        root_parent = {"dn": parent, "guid": ad.container_identity(parent)}
+    accounts = [] if job.scope == "organization" else ad.accounts()
     bindings = {b.person.source_id: b for b in Binding.objects.select_related("person")}
     people = {p.source_id: p for p in Person.objects.all()}
     departments = {d["id"]: d for d in snap.departments}
@@ -273,7 +315,7 @@ def plan(job, source, ad):
     disables = sum(o["action"] == "disable" for o in operations)
     managed_count = sum(binding.sync_managed for binding in bindings.values())
     threshold = disables > config.disable_limit or disables * 100 > max(managed_count, 1) * config.disable_percent
-    return {"snapshot": snap.pk, "source": snap.fingerprint, "config": configuration_signature(config), "bindings": binding_signature(), "operations": operations, "departments": ou_plans, "high_risk": threshold, "scope": job.scope, "selected": job.selected}
+    return {"snapshot": snap.pk, "source": snap.fingerprint, "config": configuration_signature(config), "bindings": binding_signature(), "root_ou": config.root_ou, "root_parent": root_parent, "operations": operations, "departments": ou_plans, "high_risk": threshold, "scope": job.scope, "selected": job.selected}
 
 
 def parent_dn(dn):
@@ -296,11 +338,16 @@ def apply(job, source, ad):
     users, departments = source.collect(config.root_department)
     if fingerprint([users, departments, config.root_department]) != saved["source"]:
         raise RuleError("通讯录已变化，请重新预览")
+    config = effective_configuration(config, departments)
+    if saved.get("root_ou") != config.root_ou:
+        raise RuleError("根 OU 路径或计划版本已变化，请重新预览")
+    if job.scope == "organization" and saved["operations"]:
+        raise RuleError("组织架构计划不能包含人员操作，请重新预览")
     latest = Snapshot.objects.order_by("-pk").first()
     if not latest or latest.fingerprint != saved["source"]:
         raise RuleError("当前采集版本已变化，请重新预览")
     if has_conflicts(saved):
-        raise RuleError("请先处理人员冲突，再重新预览")
+        raise RuleError("请先处理计划中的部门或人员冲突，再重新预览")
     if saved["high_risk"] and not job.confirmed:
         raise RuleError("禁用数量超过阈值，需要管理员确认")
     # Preflight every existing target before the first write.
@@ -315,10 +362,13 @@ def apply(job, source, ad):
     for dept in saved.get("departments", []):
         if ad.ou_identity(dept["dn"]) != dept["guid"]:
             raise RuleError("OU 状态已变化，请重新预览")
+    root_parent = saved.get("root_parent")
+    if root_parent and ad.container_identity(root_parent["dn"]) != root_parent["guid"]:
+        raise RuleError("根 OU 的父容器已变化，请重新预览")
     for dept in saved.get("departments", []):
         record = Operation.objects.create(job=job, source_id="department:" + dept["source_id"], action="ensure_ou", evidence={"dn": dept["dn"], "name": dept["name"]})
         try:
-            guid = ad.ensure_ou(dept["dn"], config.root_ou)
+            guid = ad.ensure_ou(dept["dn"], config.root_ou, allow_root_creation=dept["dn"].casefold() == config.root_ou.casefold() and root_parent is not None)
             DepartmentBinding.objects.get_or_create(source_id=dept["source_id"], defaults={"dn": dept["dn"], "object_guid": guid})
             record.target_guid, record.status = guid, "success"
             record.save()
@@ -400,8 +450,10 @@ def apply(job, source, ad):
 
 
 def enqueue(kind="preview", scope="full", selected=None, actor="scheduler", plan_seed=None):
-    if kind not in {"preview", "scheduled", "connections", "refresh", "associate"} or scope not in {"full", "users", "department"}:
+    if kind not in {"preview", "scheduled", "connections", "refresh", "associate"} or scope not in {"full", "users", "department", "organization"}:
         raise RuleError("任务类型或范围无效")
+    if scope == "organization" and (kind != "preview" or selected):
+        raise RuleError("仅同步组织架构须先预览完整部门树")
     if kind == "associate" and (scope != "full" or selected):
         raise RuleError("账号关联核验必须读取完整来源范围")
     with lock("enqueue"), transaction.atomic():
@@ -487,6 +539,7 @@ def run_next():
 
 def run_sync_job(job):
     with closing(DingTalk()) as source, closing(ActiveDirectory()) as ad:
+        ad.set_read_only(True)
         if job.kind != "apply":
             job.plan = plan(job, source, ad)
             job.save(update_fields=["plan"])
@@ -500,12 +553,17 @@ def run_sync_job(job):
                 job.kind = "preview"
                 disables = sum(op["action"] == "disable" for op in job.plan["operations"])
                 job.message = f"预览包含 {disables} 项离职禁用，超过保护阈值；请确认受影响清单"
+            elif job.kind == "scheduled" and job.plan["root_parent"]:
+                job.status, job.kind = "needs_confirmation", "preview"
+                job.message = "同步根 OU 尚不存在；请核对根 OU 创建路径并确认执行"
             elif job.kind == "scheduled":
+                ad.set_read_only(False)
                 job.status = apply(job, source, ad)
             else:
                 job.status = "preview_ready"
                 job.message = f"预览完成：{len(job.plan['operations'])} 项人员计划、{len(job.plan['departments'])} 项部门计划；未执行 AD 写入"
         else:
+            ad.set_read_only(False)
             job.status = apply(job, source, ad)
         if job.status in {"success", "partial_failed"}:
             outcomes = Counter(Operation.objects.filter(job=job).values_list("status", flat=True))
@@ -604,7 +662,7 @@ def reactivate_person(person_id, actor, reason, confirmed):
             raise RuleError("请先确认绑定且人员未排除同步")
         if not binding.sync_managed:
             raise RuleError("该账号仅维护身份关联，尚未纳入同步管理，不能从此处启用 AD 账号")
-        config = Configuration.current()
+        config = current_effective_configuration(Configuration.current())
         validate_directory_identity(config)
         user = source.user(binding.person.source_id)
         if not source.user_in_scope(user, config.root_department):

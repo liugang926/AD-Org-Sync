@@ -6,6 +6,12 @@
   <a class="button-link" href="/admin/sync_app/departmentbinding/add/">新增映射</a>
 </div>
 
+<section class="card">
+  <h2>预览组织架构同步</h2>
+  <p>根据钉钉父子部门关系计算完整 OU 路径，包含没有直属人员的部门。预览不会写入 AD；确认执行后只建立 OU 与部门映射，不创建、移动或禁用人员账号。</p>
+  <form method="post" action="{% url 'dashboard' %}">{% csrf_token %}<input type="hidden" name="scope" value="organization"><button type="submit">预览组织架构</button></form>
+</section>
+
 <div class="metrics metrics-three" aria-label="部门映射概况">
   <section class="metric"><span class="metric-label">已采集部门</span><strong>{{ source_count }}</strong><span>最近一次完整通讯录</span></section>
   <section class="metric"><span class="metric-label">已映射部门</span><strong>{{ total_count }}</strong><span>包含来源已变化的映射</span></section>

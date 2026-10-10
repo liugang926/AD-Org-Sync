@@ -87,7 +87,7 @@ def test_dashboard_preview_requires_csrf_and_only_queues_selected_scope(admin_us
 
 
 @pytest.mark.django_db
-def test_dashboard_preview_with_missing_root_ou_reports_guard_without_directory_writes(admin_user, monkeypatch):
+def test_dashboard_preview_with_unset_root_ou_plans_creation_without_directory_writes(admin_user, monkeypatch):
     from django.test import Client
     from unittest.mock import Mock
     from sync_app import synchronization as sync
@@ -103,17 +103,22 @@ def test_dashboard_preview_with_missing_root_ou_reports_guard_without_directory_
     client = Client(enforce_csrf_checks=True)
     client.force_login(admin_user)
     page = client.get("/dashboard")
-    assert "尚未配置" in page.content.decode()
+    assert "自动确定" in page.content.decode()
     assert client.post("/dashboard", {
-        "csrfmiddlewaretoken": client.cookies["csrftoken"].value, "scope": "full",
+        "csrfmiddlewaretoken": client.cookies["csrftoken"].value, "scope": "organization",
     }).status_code == 302
     assert sync.run_next()
     job = Job.objects.get()
-    assert job.status == "failed" and job.message == "请设置 LDAP 目录范围内的同步根 OU"
+    assert job.status == "preview_ready"
+    assert job.plan["root_ou"] == "OU=公司,DC=example,DC=com"
+    assert job.plan["root_parent"]
+    assert job.plan["operations"] == []
     assert job.message in client.get("/dashboard").content.decode()
-    source.collect.assert_not_called()
+    source.collect.assert_called_once()
     assert ad.created == ad.resets == 0 and ad.disabled == []
-    assert not Binding.objects.exists() and not Operation.objects.exists() and not Snapshot.objects.exists()
+    assert not Binding.objects.exists() and not Operation.objects.exists() and Snapshot.objects.count() == 1
+    detail = client.get(f"/jobs/{job.pk}")
+    assert "根 OU 待创建" in detail.content.decode()
 
 
 @pytest.mark.django_db

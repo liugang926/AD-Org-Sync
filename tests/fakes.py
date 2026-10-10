@@ -70,7 +70,15 @@ class Directory:
             raise RuleError("AD账号受保护，不能自助重置；无需先同步或绑定，请联系AD管理员核查权限与保护状态")
         return item
 
-    def ensure_ou(self, dn, root):
+    def set_read_only(self, value):
+        self.read_only = value
+
+    def container_identity(self, dn):
+        if dn.casefold() == "dc=example,dc=com":
+            return "11111111-1111-1111-1111-111111111111"
+        return self.verify_ou(dn)
+
+    def ensure_ou(self, dn, root, *, allow_root_creation=False):
         return self.ous.setdefault(dn.casefold(), str(uuid.uuid4()))
 
     def verify_ou(self, dn, guid=None):
