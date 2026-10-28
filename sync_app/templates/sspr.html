@@ -53,10 +53,17 @@
         <p>至少 {{ minimum }} 位，并符合企业 AD 密码策略。</p>
         <button>确认重置本人密码</button>
       </form>
+    {% elif error %}
+      <p id="status" role="status" aria-live="polite">请先确认上方失败原因。页面不会自动跳转，确认后将重新进行钉钉身份验证。</p>
+      <form id="verify" data-corp="{{ corp_id }}" data-client="{{ app_key }}" data-auto-start="false">
+        {% csrf_token %}
+        <button type="submit">我已了解，重新验证</button>
+      </form>
+      <script src="{% static 'sspr.js' %}?v={{ script_version }}"></script>
     {% else %}
       <p>钉钉核验后会显示本人当前AD账号；本服务无需先同步或绑定</p>
       <p id="status" role="status" aria-live="polite">正在连接钉钉…</p>
-      <form id="verify" data-corp="{{ corp_id }}" data-client="{{ app_key }}">
+      <form id="verify" data-corp="{{ corp_id }}" data-client="{{ app_key }}" data-auto-start="true">
         {% csrf_token %}
         <button type="submit" hidden>重新验证</button>
       </form>
