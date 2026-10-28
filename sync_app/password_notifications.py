@@ -1,4 +1,4 @@
-"""A dedicated, non-replaying outbox for confirmed SSPR password changes."""
+"""A dedicated, non-replaying outbox for final SSPR password outcomes."""
 import base64
 import hashlib
 import hmac
@@ -79,6 +79,7 @@ def _eligible(audit):
     return audit.action == "sspr_reset" and audit.completed_at is not None and (
         (audit.state == "success" and audit.success is True)
         or (audit.state == "partial" and audit.success is False)
+        or (audit.state == "failed" and audit.success is False)
     )
 
 
@@ -113,9 +114,17 @@ def _field(value, limit):
 
 def _text(audit):
     confirmed = timezone.localtime(audit.completed_at, ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
-    result = "密码已修改；解锁未完整完成，请联系管理员" if audit.state == "partial" else "密码已修改，本服务已确认请求完整完成"
+    if audit.state == "failed":
+        title = "AD 密码修改失败通知（本服务）"
+        result = "密码未修改；失败原因：" + _field(audit.result, 300)
+    elif audit.state == "partial":
+        title = "AD 密码修改通知（本服务）"
+        result = "密码已修改；解锁未完整完成，请联系管理员"
+    else:
+        title = "AD 密码修改通知（本服务）"
+        result = "密码已修改，本服务已确认请求完整完成"
     return "\n".join([
-        "AD 密码修改通知（本服务）",
+        title,
         "员工姓名：" + _field(audit.actor_name, 200),
         "工号：" + _field(audit.employee_id, 100),
         "AD 账号：" + _field(audit.target_username, 100),
@@ -176,7 +185,7 @@ def process_one_password_notification():
                 if notice is None:
                     return False
                 if not _eligible(notice.audit):
-                    _complete(notice, PasswordResetNotification.State.FAILED, "改密审计未确认密码修改，未发送通知")
+                    _complete(notice, PasswordResetNotification.State.FAILED, "改密审计未确认最终结果，未发送通知")
                     return True
                 try:
                     if not getattr(settings, "DINGTALK_PASSWORD_ROBOT_WEBHOOK_FILE", ""):

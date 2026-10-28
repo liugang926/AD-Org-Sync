@@ -33,6 +33,14 @@ def _finish_attempt(attempt, result, success, state):
         return False
 
 
+def _queue_password_notification(attempt):
+    try:
+        enqueue_password_notification(attempt)
+    except Exception:
+        # Notification delivery is independent from the final password outcome.
+        pass
+
+
 def _confirm_attempt_identity(attempt, user, account):
     # The live match confirms updated profile/login labels for the same actor and GUID.
     identity = _audit_identity(user=user, account=account)
@@ -224,7 +232,8 @@ def reset(token, password, confirmation, ip):
                 _finish_attempt(attempt, str(exc), False, "unknown")
                 raise
             except RuleError as exc:
-                _finish_attempt(attempt, str(exc), False, "failed")
+                if _finish_attempt(attempt, str(exc), False, "failed"):
+                    _queue_password_notification(attempt)
                 raise
             except Exception:
                 message = (
@@ -238,11 +247,7 @@ def reset(token, password, confirmation, ip):
             else:
                 if not _finish_attempt(attempt, outcome.message, outcome.complete, "success" if outcome.complete else "partial"):
                     raise ResetOutcomeUnknown("密码修改结果记录暂不可用，请先验证或联系管理员")
-                try:
-                    enqueue_password_notification(attempt)
-                except Exception:
-                    # A confirmed directory outcome cannot be undone by a notice failure.
-                    pass
+                _queue_password_notification(attempt)
                 return outcome.message
             finally:
                 _close_clients(source, ad)

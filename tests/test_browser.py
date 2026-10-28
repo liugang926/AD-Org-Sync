@@ -480,6 +480,45 @@ def test_admin_and_mobile_employee_journeys(live_server, django_user_model, monk
         assert mobile.get_by_text("当前 AD 账号", exact=True).is_visible()
         assert mobile.get_by_text("testuser", exact=True).is_visible()
         assert mobile.get_by_role("button", name="重新验证").count() == 0
+        from sync_app.domain import RuleError
+
+        auth_requests = []
+        mobile.on(
+            "request",
+            lambda request: auth_requests.append(request.url)
+            if request.url == live_server.url + "/sspr/auth/dingtalk" else None,
+        )
+        original_reset = directory.reset_password
+
+        def reject_policy(*_):
+            raise RuleError("新密码不满足 AD 域密码策略，密码未修改")
+
+        directory.reset_password = reject_policy
+        mobile.get_by_label("新密码", exact=True).fill("Browser-password-43!")
+        mobile.get_by_label("确认新密码").fill("Browser-password-43!")
+        with mobile.expect_response(
+            lambda response: response.request.method == "POST"
+            and response.url == live_server.url + "/sspr/reset"
+        ) as rejected:
+            mobile.get_by_role("button", name="确认重置本人密码").click()
+        assert rejected.value.status == 400
+        assert mobile.url == live_server.url + "/sspr/reset"
+        assert mobile.get_by_text("新密码不满足 AD 域密码策略，密码未修改", exact=True).is_visible()
+        assert mobile.get_by_role("button", name="我已了解，重新验证", exact=True).is_enabled()
+        mobile.wait_for_timeout(1500)
+        assert mobile.url == live_server.url + "/sspr/reset"
+        assert not auth_requests
+        assert mobile.get_by_text("新密码不满足 AD 域密码策略，密码未修改", exact=True).is_visible()
+        directory.reset_password = original_reset
+        mobile.evaluate("window.authAttempt = 1")
+        with mobile.expect_response(
+            lambda response: response.request.method == "POST"
+            and response.url == live_server.url + "/sspr/auth/dingtalk"
+        ) as reverified:
+            mobile.get_by_role("button", name="我已了解，重新验证", exact=True).click()
+        assert reverified.value.status == 200
+        mobile.get_by_text("当前 AD 账号", exact=True).wait_for(state="visible")
+        assert auth_requests == [live_server.url + "/sspr/auth/dingtalk"]
         mobile.get_by_label("新密码", exact=True).fill("Browser-password-43!")
         mobile.get_by_label("确认新密码").fill("Browser-password-43!")
         mobile.get_by_role("button", name="确认重置本人密码").click()
@@ -686,9 +725,18 @@ def test_admin_employee_page_text_and_authenticated_platforms_mobile(live_server
         changed.route("**/sspr/auth/dingtalk", lambda route: route.abort())
         changed.reload()
         assert changed.get_by_text("AD 匹配对象发生变化，请重新验证", exact=True).is_visible()
-        changed.get_by_text("身份核验请求失败，请检查网络后重试。", exact=True).wait_for(state="visible")
+        changed.wait_for_timeout(1000)
+        assert changed.url == live_server.url + "/sspr"
+        assert changed.get_by_text("AD 匹配对象发生变化，请重新验证", exact=True).is_visible()
         _assert_employee_identity_withheld(changed, platform_names)
-        assert changed.get_by_role("button", name="重新验证").is_enabled()
+        retry = changed.get_by_role("button", name="我已了解，重新验证", exact=True)
+        assert retry.is_enabled()
+        with changed.expect_request(
+            lambda request: request.method == "POST"
+            and request.url == live_server.url + "/sspr/auth/dingtalk"
+        ):
+            retry.click()
+        changed.get_by_text("身份核验请求失败，请检查网络后重试。", exact=True).wait_for(state="visible")
         assert directory.resets == 1
         changed.close()
         directory.items[0].update(protected=False, enabled=True, domain_admin=False, guid=expected_guid)

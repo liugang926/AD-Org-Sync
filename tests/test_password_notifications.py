@@ -66,8 +66,8 @@ def http(monkeypatch):
     return state
 
 
-@pytest.mark.parametrize("state", ["success", "partial"])
-def test_only_confirmed_password_changes_queue_once(robot_files, state):
+@pytest.mark.parametrize("state", ["success", "partial", "failed"])
+def test_final_password_outcomes_queue_once(robot_files, state):
     audit = completed_audit(state)
     first = notifications.enqueue_password_notification(audit)
     second = notifications.enqueue_password_notification(audit)
@@ -78,8 +78,8 @@ def test_only_confirmed_password_changes_queue_once(robot_files, state):
     assert not PasswordResetNotification.objects.exists()
 
 
-@pytest.mark.parametrize("state", ["failed", "unknown", "pending"])
-def test_unconfirmed_password_outcomes_never_queue(robot_files, state):
+@pytest.mark.parametrize("state", ["unknown", "pending"])
+def test_unknown_or_incomplete_password_outcomes_never_queue(robot_files, state):
     assert notifications.enqueue_password_notification(completed_audit(state)) is None
     assert not PasswordResetNotification.objects.exists()
 
@@ -128,8 +128,8 @@ def test_explicit_bad_webhook_file_has_independent_failed_notice(settings, tmp_p
     assert not http.calls and str(path) not in notice.message
 
 
-@pytest.mark.parametrize("state", ["failed", "unknown", "pending"])
-def test_unconfirmed_audit_with_bad_file_never_creates_notice(settings, tmp_path, monkeypatch, state):
+@pytest.mark.parametrize("state", ["unknown", "pending"])
+def test_unknown_or_incomplete_audit_with_bad_file_never_creates_notice(settings, tmp_path, monkeypatch, state):
     settings.DINGTALK_PASSWORD_ROBOT_WEBHOOK_FILE = str(tmp_path / "missing")
 
     def must_not_read(*args, **kwargs):
@@ -198,6 +198,27 @@ def test_partial_notification_confirms_password_but_does_not_claim_unlock_comple
     notifications.enqueue_password_notification(completed_audit("partial"))
     assert notifications.process_one_password_notification()
     assert "密码已修改；解锁未完整完成" in http.calls[0][1]["json"]["text"]["content"]
+
+
+def test_failed_notification_includes_safe_reason(robot_files, http):
+    audit = completed_audit("failed")
+    Audit.objects.filter(pk=audit.pk).update(
+        result="新密码不满足 AD 域密码策略\r\n请调整后重试\u202e",
+    )
+    audit.refresh_from_db()
+    notice = notifications.enqueue_password_notification(audit)
+    assert notice.state == "pending"
+    assert notifications.process_one_password_notification()
+    notice.refresh_from_db()
+    assert notice.state == "sent"
+    text = http.calls[0][1]["json"]["text"]["content"]
+    assert "AD 密码修改失败通知（本服务）" in text
+    assert "结果：密码未修改；失败原因：新密码不满足 AD 域密码策略" in text
+    assert "\u202e" not in text
+    assert not any(value in text for value in (
+        "unit-access-token",
+        "https://",
+    ))
 
 
 @pytest.mark.parametrize(
@@ -331,7 +352,7 @@ def test_group_or_world_readable_webhook_is_not_enabled(robot_files):
 
 
 @pytest.mark.parametrize("outcome", ["success", "partial", "failed", "unknown"])
-def test_sspr_hook_only_queues_confirmed_results_and_never_sends_inline(robot_files, http, monkeypatch, outcome):
+def test_sspr_hook_queues_final_results_without_sending_inline(robot_files, http, monkeypatch, outcome):
     config = Configuration.current();config.sspr_enabled = True;config.save()
     source, ad = Source(), Directory()
     monkeypatch.setattr(sspr, "DingTalk", lambda: source)
@@ -353,7 +374,7 @@ def test_sspr_hook_only_queues_confirmed_results_and_never_sends_inline(robot_fi
         assert sspr.reset(token, "Ab1!unit-new-password", "Ab1!unit-new-password", "127.0.0.1") == "密码已修改"
     audit = Audit.objects.get(action="sspr_reset")
     assert audit.state == outcome
-    assert PasswordResetNotification.objects.count() == int(outcome in {"success", "partial"})
+    assert PasswordResetNotification.objects.count() == int(outcome != "unknown")
     assert not http.calls
     assert "Ab1!unit-new-password" not in str(list(Audit.objects.values())) + str(list(PasswordResetNotification.objects.values()))
     if outcome in {"success", "partial"}:
@@ -362,6 +383,29 @@ def test_sspr_hook_only_queues_confirmed_results_and_never_sends_inline(robot_fi
         audit.refresh_from_db()
         assert audit.state == outcome and audit.result == "密码已修改"
         assert PasswordResetNotification.objects.get(audit=audit).state == "unknown"
+
+
+def test_queue_failure_cannot_turn_password_rejection_into_success(robot_files, monkeypatch):
+    config = Configuration.current();config.sspr_enabled = True;config.save()
+    source, ad = Source(), Directory()
+    monkeypatch.setattr(sspr, "DingTalk", lambda: source)
+    monkeypatch.setattr(sspr, "ActiveDirectory", lambda: ad)
+
+    def reject(*_):
+        raise RuleError("AD 策略拒绝；密码未修改")
+
+    monkeypatch.setattr(ad, "reset_password", reject)
+
+    def unavailable(*_):
+        raise RuntimeError("private queue diagnostic")
+
+    monkeypatch.setattr(sspr, "enqueue_password_notification", unavailable)
+    token, _ = sspr.verify("valid", "127.0.0.1")
+    with pytest.raises(RuleError, match="AD 策略拒绝；密码未修改"):
+        sspr.reset(token, "Ab1!unit-new-password", "Ab1!unit-new-password", "127.0.0.1")
+    audit = Audit.objects.get(action="sspr_reset")
+    assert audit.state == "failed" and not audit.success
+    assert not PasswordResetNotification.objects.exists()
 
 
 def test_queue_failure_cannot_turn_confirmed_reset_into_failure(robot_files, monkeypatch):

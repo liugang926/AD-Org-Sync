@@ -94,7 +94,34 @@ def test_directory_rejection_consumes_session_and_hides_account(client, setup_ss
     assert "AD 策略拒绝新密码" in content
     assert "testuser" not in content
     assert 'id="verify"' in content
+    assert 'data-auto-start="false"' in content
+    assert "我已了解，重新验证" in content
     assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+
+
+@pytest.mark.django_db
+def test_policy_rejection_stays_visible_when_notification_queue_fails(client, setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+
+    def reject(*_):
+        raise RuleError("新密码不满足 AD 域密码策略，密码未修改")
+
+    def unavailable(*_):
+        raise RuntimeError("private notification queue diagnostic")
+
+    monkeypatch.setattr(ad, "reset_password", reject)
+    monkeypatch.setattr(sspr, "enqueue_password_notification", unavailable)
+    response = client.post("/sspr/reset", {"password": "Ab1!xyza", "confirmation": "Ab1!xyza"})
+    content = response.content.decode()
+
+    assert response.status_code == 400
+    assert 'role="alert"' in content
+    assert "新密码不满足 AD 域密码策略，密码未修改" in content
+    assert 'data-auto-start="false"' in content
+    assert "private notification queue diagnostic" not in content
+    assert Audit.objects.get(action="sspr_reset").state == "failed"
 
 
 @pytest.mark.django_db
@@ -124,9 +151,14 @@ def test_ad_password_policy_rejection_is_visible_and_safe(client, setup_sspr, mo
     assert 'role="alert"' in content
     assert "新密码不满足 AD 域密码策略" in content
     assert "密码未修改" in content
+    assert 'data-auto-start="false"' in content
+    assert "我已了解，重新验证" in content
     assert "private directory diagnostic" not in content
     assert target["dn"] not in content
     assert "Ab1!xyza" not in content
+    audit = Audit.objects.get(action="sspr_reset")
+    assert "private directory diagnostic" not in audit.result
+    assert target["dn"] not in audit.result
 
     retry_token, _ = sspr.verify("valid", "ip")
     client.cookies["employee_verification"] = retry_token

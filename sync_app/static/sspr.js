@@ -103,5 +103,7 @@ if (form) {
     event.preventDefault();
     verify();
   });
-  verify();
+  if (form.dataset.autoStart !== "false") {
+    verify();
+  }
 }

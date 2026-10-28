@@ -73,7 +73,8 @@ def test_reset_rechecks_status_without_password_write_and_keeps_same_audit_reaso
     assert response.status_code == 400
     html = response.content.decode()
     assert message in html and "testuser" not in html and 'action="/sspr/reset"' not in html
-    assert "钉钉核验后会显示本人当前AD账号；本服务无需先同步或绑定" in html
+    assert "页面不会自动跳转，确认后将重新进行钉钉身份验证" in html
+    assert 'data-auto-start="false"' in html
     assert "正在通过钉钉确认身份" not in html
     denied = Audit.objects.get(action="sspr_reset")
     assert denied.result == message and denied.state == "failed" and not denied.success
@@ -101,7 +102,8 @@ def test_fresh_account_denial_hides_account_and_platforms_without_loading_copy(s
     assert "testuser" not in html and "仅验证成功才可见的平台" not in html
     assert 'class="sspr-account"' not in html and 'action="/sspr/reset"' not in html
     assert "正在通过钉钉确认身份" not in html
-    assert "钉钉核验后会显示本人当前AD账号；本服务无需先同步或绑定" in html
+    assert "页面不会自动跳转，确认后将重新进行钉钉身份验证" in html
+    assert 'data-auto-start="false"' in html
     assert not EmployeeSession.objects.get(digest=sspr.fingerprint(verification)).used
     assert status_directory.resets == 0
 
