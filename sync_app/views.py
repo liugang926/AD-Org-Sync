@@ -22,7 +22,10 @@ from django.utils import timezone
 from . import sspr, synchronization
 from .directory import domain_name_from_dn
 from .domain import ResetOutcomeUnknown, RuleError, candidate
-from .models import Configuration, Person, Binding, DepartmentBinding, Job, Audit, Snapshot, RuntimeState, EmployeePageSettings, AuthPlatform
+from .models import (
+    Configuration, Person, Binding, DepartmentBinding, GroupBinding, Job, Audit,
+    Snapshot, RuntimeState, EmployeePageSettings, AuthPlatform, SyncAuditEvent,
+)
 from .security import rate_limit, audit, client_address
 
 
@@ -38,7 +41,34 @@ JOB_KIND_LABELS = {
 ACTION_LABELS = {
     "create": "新建账号", "resume_create": "继续建号", "update": "更新属性",
     "move": "移动 OU", "bind": "关联账号", "onboard": "纳管并迁入 OU", "disable": "禁用账号",
-    "skip": "跳过", "conflict": "冲突", "ensure_ou": "建立 OU", "associate": "保存账号关联",
+    "skip": "跳过", "conflict": "冲突", "ensure_ou": "建立 OU",
+    "ensure_group": "建立全局安全组", "add_group_member": "添加分组成员",
+    "associate": "保存账号关联",
+}
+SYNC_REASON_LABELS = {
+    "ensure_ou": "建立或复用部门 OU",
+    "create": "新建账号",
+    "update": "更新属性",
+    "move": "移动到主部门 OU",
+    "bind": "关联已有账号",
+    "onboard": "纳管并迁入 OU",
+    "disable": "离职禁用",
+    "excluded": "人员已排除",
+    "binding_disabled": "绑定已停用",
+    "outside_managed_root": "账号不在受管 OU",
+    "auto_onboard_disabled": "自动纳管未开启",
+    "missing_primary_department": "主部门不明确",
+    "employee_id_invalid": "工号缺失或重复",
+    "identity_ambiguous": "AD 身份不唯一",
+    "protected_or_disabled": "账号受保护或禁用",
+    "identity_conflict": "身份冲突",
+    "create_group": "创建部门全局安全组",
+    "reuse_group": "关联现有部门全局安全组",
+    "group_conflict": "部门全局安全组冲突",
+    "nest_child_group": "嵌套直属子部门组",
+    "add_department_member": "加入部门组",
+    "already_member": "已是分组成员",
+    "account_unresolved": "成员账号尚未解析",
 }
 AUDIT_LABELS = {
     "admin_login": "管理员登录", "settings": "配置变更",
@@ -68,7 +98,8 @@ def status_tone(status):
         return "warning"
     if status in {
         "queued", "running", "preview_ready", "needs_confirmation",
-        "create", "resume_create", "update", "move", "bind", "onboard", "ensure_ou", "associate",
+        "create", "resume_create", "update", "move", "bind", "onboard", "ensure_ou",
+        "ensure_group", "add_group_member", "associate",
     }:
         return "active"
     if status in {"success", "completed", "created"}:
@@ -273,27 +304,42 @@ def departments(request):
     if status_filter not in {"", "mapped", "unmapped", "stale"}:
         status_filter = ""
     bindings = {item.source_id: item for item in DepartmentBinding.objects.all()}
+    groups = {item.source_id: item for item in GroupBinding.objects.all()}
     rows = []
     for source_id, department in sorted(source.items(), key=lambda item: str(item[1].get("name", ""))):
         binding = bindings.get(source_id)
         name = department.get("name") or "未命名部门"
         if status_filter == "stale" or (status_filter == "mapped" and binding is None) or (status_filter == "unmapped" and binding is not None):
             continue
-        if query and not any(query.casefold() in str(value).casefold() for value in (source_id, name, binding.dn if binding else "")):
+        group = groups.get(source_id)
+        if query and not any(query.casefold() in str(value).casefold() for value in (
+            source_id, name, binding.dn if binding else "", group.dn if group else "",
+        )):
             continue
-        rows.append({"source_id": source_id, "binding": binding, "name": name, "target": binding.dn.split(",", 1)[0] if binding else "", "status": "mapped" if binding else "unmapped"})
+        rows.append({
+            "source_id": source_id, "binding": binding, "group": group, "name": name,
+            "target": binding.dn.split(",", 1)[0] if binding else "",
+            "status": "mapped" if binding else "unmapped",
+        })
     for source_id, binding in sorted(bindings.items()):
         if source_id in source or status_filter in {"mapped", "unmapped"}:
             continue
         name = "来源部门未在最近采集中"
-        if query and not any(query.casefold() in str(value).casefold() for value in (source_id, name, binding.dn)):
+        group = groups.get(source_id)
+        if query and not any(query.casefold() in str(value).casefold() for value in (
+            source_id, name, binding.dn, group.dn if group else "",
+        )):
             continue
-        rows.append({"source_id": source_id, "binding": binding, "name": name, "target": binding.dn.split(",", 1)[0], "status": "stale"})
+        rows.append({
+            "source_id": source_id, "binding": binding, "group": groups.get(source_id),
+            "name": name, "target": binding.dn.split(",", 1)[0], "status": "stale",
+        })
     return render(request, "departments.html", {
         "page": Paginator(rows, 25).get_page(request.GET.get("page")), "query": query,
         "status_filter": status_filter, "snapshot": snapshot,
         "total_count": len(bindings), "source_count": len(source),
         "unmapped_count": sum(source_id not in bindings for source_id in source),
+        "group_count": len(groups),
     })
 
 
@@ -314,6 +360,27 @@ def job_detail(request, job_id):
     } if job.kind == "associate" else {}
     conflict_count = sum(item.get("action") == "conflict" for item in planned_operations)
     department_conflict_count = sum(item.get("action") == "conflict" for item in job.plan.get("departments", []))
+    group_plans = job.plan.get("groups", [])
+    group_conflict_count = sum(item.get("action") == "conflict" for item in group_plans)
+    group_rows = [
+        {
+            "item": item,
+            "label": ACTION_LABELS.get(item.get("action"), item.get("action", "—")),
+            "tone": status_tone(item.get("action")),
+            "reason_label": SYNC_REASON_LABELS.get(item.get("reason_code"), item.get("reason_code", "")),
+        }
+        for item in group_plans
+    ]
+    membership_page = Paginator(job.plan.get("group_memberships", []), 50).get_page(request.GET.get("membership_page"))
+    membership_rows = [
+        {
+            "item": item,
+            "label": ACTION_LABELS.get(item.get("action"), item.get("action", "—")),
+            "tone": status_tone(item.get("action")),
+            "reason_label": SYNC_REASON_LABELS.get(item.get("reason_code"), item.get("reason_code", "")),
+        }
+        for item in membership_page
+    ]
     disable_count = sum(item.get("action") == "disable" for item in planned_operations)
     plan_filter = request.GET.get("only", "")
     if plan_filter not in ({"conflicts"} if job.kind == "associate" else {"conflicts", "disables"}):
@@ -325,7 +392,8 @@ def job_detail(request, job_id):
     planned_rows = [
         {"item": item, "label": ACTION_LABELS.get(item.get("action"), item.get("action", "—")),
          "tone": status_tone(item.get("action")),
-         "current_ou": synchronization.parent_dn(item["target"]["dn"]) if (item.get("target") or {}).get("dn") else ""}
+         "current_ou": synchronization.parent_dn(item["target"]["dn"]) if (item.get("target") or {}).get("dn") else "",
+         "reason_label": SYNC_REASON_LABELS.get(item.get("reason_code"), item.get("reason_code", ""))}
         for item in planned_page
     ]
     if job.kind == "associate":
@@ -346,6 +414,17 @@ def job_detail(request, job_id):
          "tone": status_tone(operation.status)}
         for operation in operation_page
     ]
+    audit_event_page = Paginator(job.sync_audit_events.order_by("started_at", "event_id"), 100).get_page(request.GET.get("audit_page"))
+    audit_event_rows = [
+        {
+            "event": event,
+            "label": ACTION_LABELS.get(event.action, event.action),
+            "status": OPERATION_STATUS_LABELS.get(event.status, event.get_status_display()),
+            "tone": status_tone(event.status),
+            "reason_label": SYNC_REASON_LABELS.get(event.reason_code, event.reason_code),
+        }
+        for event in audit_event_page
+    ]
     department_rows, department_result_counts, execution_view = department_results(job)
     root_ou = job.plan.get("root_ou", "").casefold()
     root_ou_completed = any(row["state"] == "success" and row["item"].get("dn", "").casefold() == root_ou for row in department_rows)
@@ -358,9 +437,14 @@ def job_detail(request, job_id):
         "job_status_label": JOB_STATUS_LABELS.get(job.status, job.status),
         "job_status_tone": status_tone(job.status),
         "job_kind_label": JOB_KIND_LABELS.get(job.kind, job.kind),
-        "job_scope_label": "当前钉钉通讯录" if job.kind == "associate" else {"full": "完整管理范围", "organization": "仅同步组织架构（不修改人员）", "department": "指定部门及子部门", "users": "指定人员"}.get(job.scope, job.scope),
+        "job_scope_label": "当前钉钉通讯录" if job.kind == "associate" else {"full": "完整管理范围", "organization": "仅同步组织架构（OU 与安全组，不修改人员）", "department": "指定部门及子部门", "users": "指定人员"}.get(job.scope, job.scope),
         "conflict_count": conflict_count,
         "department_conflict_count": department_conflict_count,
+        "group_rows": group_rows,
+        "group_conflict_count": group_conflict_count,
+        "group_membership_count": len(job.plan.get("group_memberships", [])),
+        "membership_page": membership_page,
+        "membership_rows": membership_rows,
         "department_rows": department_rows,
         "department_result_counts": department_result_counts,
         "execution_view": execution_view,
@@ -371,6 +455,8 @@ def job_detail(request, job_id):
         "association_job": job.kind == "associate",
         "association_counts": association_counts,
         "progress": job_progress(job),
+        "audit_event_page": audit_event_page,
+        "audit_event_rows": audit_event_rows,
         "task_status_script_version": settings.TASK_STATUS_SCRIPT_VERSION,
     })
 
@@ -594,6 +680,66 @@ def logs(request):
     return render(request, "logs.html", {
         "page": page, "audit_rows": audit_rows, "filters": filters,
         "filter_query": query.urlencode(), "action_choices": action_choices,
+    })
+
+
+@administrator
+def sync_logs(request):
+    items = SyncAuditEvent.objects.select_related("job").order_by("-started_at", "-event_id")
+    search = request.GET.get("q", "").strip()[:150]
+    if search:
+        items = items.filter(
+            Q(actor__icontains=search)
+            | Q(source_id__icontains=search)
+            | Q(target_dn__icontains=search)
+            | Q(job_identifier__icontains=search)
+        )
+    action = request.GET.get("action", "")
+    if action in ACTION_LABELS:
+        items = items.filter(action=action)
+    else:
+        action = ""
+    status = request.GET.get("status", "")
+    if status in {choice for choice, _ in SyncAuditEvent.Status.choices}:
+        items = items.filter(status=status)
+    else:
+        status = ""
+    start = request.GET.get("start", "")
+    end = request.GET.get("end", "")
+    try:
+        start_date = parse_date(start) if start else None
+        end_date = parse_date(end) if end else None
+    except ValueError:
+        messages.error(request, "日期格式无效，请选择有效日期")
+        start_date = end_date = None
+        items = items.none()
+    if start_date:
+        items = items.filter(started_at__date__gte=start_date)
+    if end_date:
+        items = items.filter(started_at__date__lte=end_date)
+    query = request.GET.copy()
+    query.pop("page", None)
+    page = Paginator(items, 100).get_page(request.GET.get("page"))
+    rows = [
+        {
+            "event": event,
+            "label": ACTION_LABELS.get(event.action, event.action),
+            "status": OPERATION_STATUS_LABELS.get(event.status, event.get_status_display()),
+            "tone": status_tone(event.status),
+            "reason_label": SYNC_REASON_LABELS.get(event.reason_code, event.reason_code),
+        }
+        for event in page
+    ]
+    return render(request, "sync_logs.html", {
+        "page": page,
+        "rows": rows,
+        "filters": {"q": search, "action": action, "status": status, "start": start, "end": end},
+        "filter_query": query.urlencode(),
+        "action_choices": [(key, label) for key, label in ACTION_LABELS.items() if key in {
+            "ensure_ou", "ensure_group", "add_group_member", "create", "resume_create",
+            "update", "move", "bind", "onboard", "disable", "skip", "conflict",
+        }],
+        "status_choices": SyncAuditEvent.Status.choices,
     })
 
 

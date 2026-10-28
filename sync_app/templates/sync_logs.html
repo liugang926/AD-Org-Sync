@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% load tz %}
+{% block title %}同步操作审计 · 组织同步控制台{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><p class="eyebrow"><a href="{% url 'logs' %}">操作审计</a> / 同步明细</p><h1>同步操作审计</h1><p class="page-subtitle">记录 OU、部门安全组、分组成员、用户账号及成员的创建、更新、移动、跳过和失败。审计使用安全原因码，不保存密码、凭据或原始目录诊断。</p></div>
+  <a class="button-link secondary" href="{% url 'logs' %}">返回操作日志</a>
+</div>
+
+<section class="card listing-card audit-card">
+  <div class="card-head"><div><h2>逐项变更记录</h2><p>任务被清理后审计仍保留任务 ID，可按人员、部门、对象 DN 或任务 ID 检索。</p></div><span class="section-note">当前筛选共 {{ page.paginator.count }} 条</span></div>
+  <form method="get" class="audit-filters">
+    <div class="audit-search"><label for="sync-audit-query">人员、部门、DN 或任务 ID</label><input id="sync-audit-query" type="search" name="q" value="{{ filters.q }}" placeholder="来源 ID、部门、AD DN、执行人或任务 ID"></div>
+    <div><label for="sync-audit-action">操作类型</label><select id="sync-audit-action" name="action"><option value="">全部操作</option>{% for value, label in action_choices %}<option value="{{ value }}" {% if filters.action == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+    <div><label for="sync-audit-status">结果</label><select id="sync-audit-status" name="status"><option value="">全部</option>{% for value, label in status_choices %}<option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+    <div><label for="sync-audit-start">开始日期</label><input id="sync-audit-start" type="date" name="start" value="{{ filters.start }}"></div>
+    <div><label for="sync-audit-end">结束日期</label><input id="sync-audit-end" type="date" name="end" value="{{ filters.end }}"></div>
+    <div class="audit-filter-actions"><button type="submit" class="secondary">筛选记录</button><a href="{% url 'sync_logs' %}">清除筛选</a></div>
+  </form>
+  {% timezone "Asia/Shanghai" %}
+  <div class="table-wrap" role="region" aria-label="同步操作审计列表" tabindex="0"><table class="audit-table"><thead><tr><th>开始 / 完成时间</th><th>执行人 / 任务</th><th>对象</th><th>操作</th><th>状态</th><th>原因</th><th>AD 目标 / 前后状态</th></tr></thead><tbody>
+    {% for row in rows %}{% with event=row.event %}<tr>
+      <td class="time-cell"><strong>{{ event.started_at|date:"Y-m-d H:i:s" }}</strong><small>完成：{% if event.finished_at %}{{ event.finished_at|date:"Y-m-d H:i:s" }}{% else %}—{% endif %}</small></td>
+      <td><strong>{{ event.actor }}</strong><small>任务：{{ event.job_identifier }}</small></td>
+      <td><strong>{{ event.object_type }}</strong><small>{{ event.source_id }}</small><small>事件：{{ event.event_id }}</small></td>
+      <td><strong>{{ row.label }}</strong>{% if row.label != event.action %}<small>{{ event.action }}</small>{% endif %}</td>
+      <td><span class="status-pill tone-{{ row.tone }}">{{ row.status }}</span></td>
+      <td class="result-cell">{% if row.reason_label %}<strong>{{ row.reason_label }}</strong>{% endif %}{% if event.reason %}<small>{{ event.reason }}</small>{% endif %}</td>
+      <td>{% if event.target_dn %}<code class="dn-value">{{ event.target_dn }}</code>{% endif %}{% if event.target_guid %}<small>objectGUID：{{ event.target_guid }}</small>{% endif %}{% if event.before_values %}<details><summary>执行前状态</summary><pre>{{ event.before_values }}</pre></details>{% endif %}{% if event.after_values %}<details><summary>执行后状态</summary><pre>{{ event.after_values }}</pre></details>{% endif %}</td>
+    </tr>{% endwith %}{% empty %}<tr><td colspan="7" class="empty-cell">没有符合筛选条件的同步操作审计。</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% endtimezone %}
+  <div class="pagination">{% if page.has_previous %}<a href="?{{ filter_query }}&amp;page={{ page.previous_page_number }}">上一页</a>{% endif %}<span>第 {{ page.number }} / {{ page.paginator.num_pages }} 页</span>{% if page.has_next %}<a href="?{{ filter_query }}&amp;page={{ page.next_page_number }}">下一页</a>{% endif %}</div>
+</section>
+{% endblock %}

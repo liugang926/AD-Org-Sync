@@ -13,9 +13,9 @@
   <p class="hint-block"><span data-job-message>{{ progress.message }}</span><br><span data-job-elapsed>{{ progress.elapsed }}</span></p>
   </div>
   {% if progress.active %}{% include "task_poll_notice.html" %}{% endif %}
-  <dl class="task-facts"><div><dt>任务类型</dt><dd>{{ job_kind_label }}</dd></div><div><dt>创建时间</dt><dd>{{ job.created_at|date:"Y-m-d H:i:s" }}</dd></div><div><dt>{% if association_job %}核验范围{% else %}同步范围{% endif %}</dt><dd>{{ job_scope_label }}</dd></div><div><dt>发起人</dt><dd>{{ job.actor }}</dd></div>{% if association_job %}<div><dt>完成时间</dt><dd>{{ job.finished_at|date:"Y-m-d H:i:s"|default:"—" }}</dd></div><div><dt>保存关联</dt><dd>{{ association_counts.associate }} 项</dd></div><div><dt>保留或跳过</dt><dd>{{ association_counts.skip }} 项</dd></div><div><dt>关联冲突</dt><dd>{{ association_counts.conflict }} 项</dd></div>{% else %}<div><dt>人员冲突</dt><dd>{{ conflict_count }} 项</dd></div><div><dt>部门冲突</dt><dd>{{ department_conflict_count }} 项</dd></div><div><dt>计划禁用账号</dt><dd>{{ disable_count }} 项</dd></div>{% endif %}</dl>
+  <dl class="task-facts"><div><dt>任务类型</dt><dd>{{ job_kind_label }}</dd></div><div><dt>创建时间</dt><dd>{{ job.created_at|date:"Y-m-d H:i:s" }}</dd></div><div><dt>{% if association_job %}核验范围{% else %}同步范围{% endif %}</dt><dd>{{ job_scope_label }}</dd></div><div><dt>发起人</dt><dd>{{ job.actor }}</dd></div>{% if association_job %}<div><dt>完成时间</dt><dd>{{ job.finished_at|date:"Y-m-d H:i:s"|default:"—" }}</dd></div><div><dt>保存关联</dt><dd>{{ association_counts.associate }} 项</dd></div><div><dt>保留或跳过</dt><dd>{{ association_counts.skip }} 项</dd></div><div><dt>关联冲突</dt><dd>{{ association_counts.conflict }} 项</dd></div>{% else %}<div><dt>人员冲突</dt><dd>{{ conflict_count }} 项</dd></div><div><dt>部门冲突</dt><dd>{{ department_conflict_count }} 项</dd></div><div><dt>分组冲突</dt><dd>{{ group_conflict_count }} 项</dd></div><div><dt>分组成员计划</dt><dd>{{ group_membership_count }} 项</dd></div><div><dt>计划禁用账号</dt><dd>{{ disable_count }} 项</dd></div>{% endif %}</dl>
   {% if job.plan.root_ou %}<p class="hint-block">本次同步根 OU：<code class="dn-value">{{ job.plan.root_ou }}</code>{% if root_ou_completed %}<br>本次执行已确认根 OU 并保存部门映射。{% elif job.plan.root_parent %}{% if execution_view %}<br>预览时根 OU 尚不存在，执行结果见下方部门列表。{% else %}<br>根 OU 待创建；父容器：<code>{{ job.plan.root_parent.dn }}</code>。确认执行后才会创建。{% endif %}{% endif %}<br>钉钉根部门直接对应此 OU，子部门逐层建立，不额外增加公司包装层。</p>{% endif %}
-  {% if job.scope == 'organization' %}<p class="hint-block">此计划仅同步组织架构，不创建、移动、更新或禁用人员账号。</p>{% endif %}
+  {% if job.scope == 'organization' %}<p class="notice">当前选择“仅同步组织架构”：会创建或核对部门 OU、全局安全组及父子组嵌套，但不会创建、移动、更新或禁用人员账号。若要让人员按主部门迁入 OU，请使用“完整管理范围”或其他包含人员的同步范围重新预览。</p>{% endif %}
   {% if not association_job and job.plan.high_risk %}<p class="notice" role="alert">该计划超过禁用保护阈值。请<a href="?only=disables#person-plan">查看全部 {{ disable_count }} 个待禁用账号</a>，逐页核对后再确认执行。</p>{% endif %}
 </section>
 
@@ -29,6 +29,25 @@
 </section>
 {% endif %}
 
+{% if not association_job and job.plan.groups %}
+<section class="card listing-card" id="group-plan">
+  <div class="card-head"><div><h2>部门 AD 全局安全组计划</h2><p>每个部门在对应 OU 下建立同名全局安全组；父组只嵌套直属子部门组，直属用户加入本部门组。</p></div><span class="section-note">{{ group_rows|length }} 项，冲突 {{ group_conflict_count }} 项</span></div>
+  <div class="table-wrap"><table><thead><tr><th>部门</th><th>全局安全组 DN</th><th>sAMAccountName</th><th>状态 / 原因</th></tr></thead><tbody>
+    {% for row in group_rows %}{% with item=row.item %}<tr><td><strong>{{ item.name }}</strong><small>部门 ID：{{ item.source_id }}</small></td><td>{% if item.dn %}<span class="ou-label">{{ item.dn|truncatechars:72 }}</span><details><summary>查看完整 DN</summary><code class="dn-value">{{ item.dn }}</code>{% if item.guid %}<small>objectGUID：{{ item.guid }}</small>{% endif %}</details>{% else %}<span class="muted">待确认</span>{% endif %}</td><td><code>{{ item.sam_account_name|default:"—" }}</code></td><td><span class="status-pill tone-{{ row.tone }}">{{ row.label }}</span><small>{{ row.reason_label }}</small>{% if item.reason %}<small>{{ item.reason }}</small>{% endif %}</td></tr>{% endwith %}{% empty %}<tr><td colspan="4" class="empty-cell">当前配置未启用部门安全组同步。</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endif %}
+
+{% if not association_job and job.plan.group_memberships %}
+<section class="card listing-card" id="group-membership-plan">
+  <div class="card-head"><div><h2>分组成员与子组嵌套计划</h2><p>父组只嵌套直属子部门组；直属用户加入其所属部门组。已是成员的项目显示为跳过。</p></div><span class="section-note">{{ membership_page.paginator.count }} 项</span></div>
+  <div class="table-wrap"><table><thead><tr><th>部门组</th><th>成员</th><th>成员类型</th><th>计划操作</th><th>原因</th></tr></thead><tbody>
+    {% for row in membership_rows %}{% with item=row.item %}<tr><td><code class="dn-value">{{ item.group_dn }}</code></td><td><strong>{{ item.member_source_id }}</strong>{% if item.member_dn %}<small>{{ item.member_dn }}</small>{% endif %}</td><td>{{ item.member_type }}</td><td><span class="status-pill tone-{{ row.tone }}">{{ row.label }}</span></td><td class="result-cell">{% if row.reason_label %}<strong>{{ row.reason_label }}</strong>{% endif %}{% if item.reason %}<small>{{ item.reason }}</small>{% endif %}</td></tr>{% endwith %}{% empty %}<tr><td colspan="5" class="empty-cell">当前范围没有分组成员计划。</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% if membership_page.paginator.num_pages > 1 %}<nav class="pagination" aria-label="分组成员计划分页">{% if membership_page.has_previous %}<a href="?membership_page={{ membership_page.previous_page_number }}#group-membership-plan">上一页</a>{% endif %}<span>第 {{ membership_page.number }} / {{ membership_page.paginator.num_pages }} 页</span>{% if membership_page.has_next %}<a href="?membership_page={{ membership_page.next_page_number }}#group-membership-plan">下一页</a>{% endif %}</nav>{% endif %}
+</section>
+{% endif %}
+
 <section class="card listing-card" id="person-plan">
   <div class="card-head"><div><h2>{% if association_job %}逐人关联结果{% elif job.scope == "organization" %}组织架构执行确认{% else %}人员计划变更{% endif %}</h2><p>{% if association_job %}已有账号核验与本地保存结果。需修正时，可到人员页人工核验并修改关联。{% elif execution_view %}以下保留执行前计划；实际完成情况见下方执行结果。{% else %}命名候选、已保存绑定与将要执行的操作分别列出。{% endif %}每页最多显示 50 项。定时任务中的人员冲突单独记录，正常人员继续执行。</p></div><span class="section-note">{% if association_job %}关联{% else %}人员{% endif %}冲突 {{ conflict_count }} 项</span></div>
   {% if job.plan.operations %}<nav class="filter-tabs" aria-label="计划筛选"><a href="{% url 'job' job.id %}#person-plan" {% if not plan_filter %}aria-current="page"{% endif %}>{% if association_job %}全部结果{% else %}全部变更{% endif %}</a><a href="{% url 'job' job.id %}?only=conflicts#person-plan" {% if plan_filter == 'conflicts' %}aria-current="page"{% endif %}>仅看冲突（{{ conflict_count }}）</a>{% if not association_job %}<a href="{% url 'job' job.id %}?only=disables#person-plan" {% if plan_filter == 'disables' %}aria-current="page"{% endif %}>待禁用账号（{{ disable_count }}）</a>{% endif %}</nav>{% endif %}
@@ -37,7 +56,7 @@
       <td><strong>{{ item.user.name|default:item.source_id }}</strong>{% if association_job %}<small>工号：{{ item.user.employee_id|default:"未提供" }}</small>{% endif %}<small>userId：{{ item.source_id }}</small>{% if association_job or item.action == "conflict" %}<small><a href="{% url 'people' %}?q={{ item.source_id|urlencode }}">查看人员并处理</a></small>{% endif %}</td>
       <td><span class="status-pill tone-{{ row.tone }}">{{ row.label }}</span></td>
       <td>{% if association_job %}{% if item.target %}<strong>{{ item.target.username }}</strong><small>objectGUID：{{ item.target.guid }}</small>{% else %}<span class="muted">未取得唯一 AD 账号</span>{% endif %}<small>核验登录名：{{ item.username|default:"—" }}</small>{% else %}{{ item.username|default:"—" }}{% if item.target.guid %}<small>objectGUID：{{ item.target.guid }}</small>{% endif %}<small>命名原值：{{ item.raw_naming_value|default:"—" }} → {{ item.candidate|default:"—" }}</small><small>已保存绑定：{{ item.binding.username|default:"未绑定" }}</small>{% endif %}</td>
-      <td class="result-cell">{{ item.reason|default:"—" }}</td>
+      <td class="result-cell">{% if row.reason_label %}<strong>{{ row.reason_label }}</strong>{% endif %}{{ item.reason|default:"—" }}</td>
       <td>{% if association_job %}{{ item.sync_note|default:"仅核验账号关联" }}{% else %}{% if row.current_ou %}<small>{% if execution_view %}执行前 OU：{% else %}当前 OU：{% endif %}</small><code class="dn-value">{{ row.current_ou }}</code>{% endif %}{% if item.ou %}<small>目标 OU：</small><code class="dn-value">{{ item.ou }}</code>{% endif %}{% for change in item.changes %}<small>{{ change.field }}：{{ change.before|default_if_none:"空" }} → {{ change.after|default_if_none:"空" }}</small>{% empty %}{% if not item.ou %}<span class="muted">无属性变更</span>{% endif %}{% endfor %}{% endif %}</td>
     </tr>{% endwith %}{% empty %}<tr><td colspan="5" class="empty-cell">{% if plan_filter == 'conflicts' %}没有人员冲突。{% elif association_job %}尚无逐人关联结果，请查看任务状态并稍后刷新。{% elif plan_filter == 'disables' %}没有待禁用账号。{% elif job.scope == "organization" %}此计划不包含人员操作。{% else %}尚未生成计划，请稍后刷新。{% endif %}</td></tr>{% endfor %}
   </tbody></table></div>
@@ -50,6 +69,16 @@
   <div class="card-head"><div><h2>实际执行结果</h2><p>逐项记录已经完成的操作；部分失败不等于整体成功。</p></div></div>
   <div class="table-wrap"><table><thead><tr><th>来源人员 / 部门</th><th>操作</th><th>状态</th><th>结果</th></tr></thead><tbody>{% for row in operation_rows %}<tr><td>{% if row.operation.action == 'ensure_ou' %}{{ row.operation.evidence.name|default:row.operation.source_id }}<small>{{ row.operation.source_id }}</small>{% else %}{{ row.operation.source_id }}{% endif %}</td><td>{{ row.label }}</td><td><span class="status-pill tone-{{ row.tone }}">{{ row.status }}</span></td><td class="result-cell">{{ row.operation.message|default:"—" }}{% if row.operation.action == "onboard" %}<small>objectGUID：{{ row.operation.target_guid }}</small><small>执行前：{{ row.operation.evidence.before_dn }}</small><small>执行后：{{ row.operation.evidence.after_dn|default:"尚未确认，请核验 AD" }}</small>{% endif %}</td></tr>{% empty %}<tr><td colspan="4" class="empty-cell">尚未执行。预览不代表 AD 已完成变更。</td></tr>{% endfor %}</tbody></table></div>
   {% if operation_page.paginator.num_pages > 1 %}<nav class="pagination" aria-label="执行结果分页">{% if operation_page.has_previous %}<a href="?only={{ plan_filter }}&amp;page={{ planned_page.number }}&amp;result_page={{ operation_page.previous_page_number }}#execution-results">上一页</a>{% endif %}<span>第 {{ operation_page.number }} / {{ operation_page.paginator.num_pages }} 页，共 {{ operation_page.paginator.count }} 项</span>{% if operation_page.has_next %}<a href="?only={{ plan_filter }}&amp;page={{ planned_page.number }}&amp;result_page={{ operation_page.next_page_number }}#execution-results">下一页</a>{% endif %}</nav>{% endif %}
+</section>
+{% endif %}
+
+{% if not association_job %}
+<section class="card listing-card" id="sync-audit">
+  <div class="card-head"><div><h2>同步操作审计</h2><p>每次 OU、用户、分组及成员关系写入均保留意图、结果、原因和前后状态；任务清理后审计仍保留。</p></div><span class="section-note">{{ audit_event_page.paginator.count }} 项</span></div>
+  <div class="table-wrap"><table><thead><tr><th>时间 / 执行人</th><th>对象</th><th>操作</th><th>状态</th><th>原因</th><th>AD 目标</th></tr></thead><tbody>
+    {% for row in audit_event_rows %}{% with event=row.event %}<tr><td>{{ event.started_at|date:"Y-m-d H:i:s" }}<small>{{ event.actor }} · {{ event.job_identifier }}</small></td><td><strong>{{ event.object_type }}</strong><small>{{ event.source_id }}</small><small>事件：{{ event.event_id }}</small></td><td>{{ row.label }}</td><td><span class="status-pill tone-{{ row.tone }}">{{ row.status }}</span></td><td class="result-cell">{% if row.reason_label %}<strong>{{ row.reason_label }}</strong>{% endif %}{% if event.reason %}<small>{{ event.reason }}</small>{% endif %}</td><td>{% if event.target_dn %}<code class="dn-value">{{ event.target_dn }}</code>{% endif %}{% if event.target_guid %}<small>objectGUID：{{ event.target_guid }}</small>{% endif %}</td></tr>{% endwith %}{% empty %}<tr><td colspan="6" class="empty-cell">尚未执行或当前任务没有 AD 写操作。</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% if audit_event_page.paginator.num_pages > 1 %}<nav class="pagination" aria-label="同步审计分页">{% if audit_event_page.has_previous %}<a href="?audit_page={{ audit_event_page.previous_page_number }}#sync-audit">上一页</a>{% endif %}<span>第 {{ audit_event_page.number }} / {{ audit_event_page.paginator.num_pages }} 页</span>{% if audit_event_page.has_next %}<a href="?audit_page={{ audit_event_page.next_page_number }}#sync-audit">下一页</a>{% endif %}</nav>{% endif %}
 </section>
 {% endif %}
 {% if progress.active %}<script src="{% static 'task_status.js' %}?v={{ task_status_script_version }}" defer></script>{% endif %}

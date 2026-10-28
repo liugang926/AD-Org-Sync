@@ -9,7 +9,10 @@ from django.utils import timezone
 from .directory import ActiveDirectory, validate_ou_dn
 from .domain import RuleError
 from .models import Snapshot
-from .models import Configuration, Audit, DepartmentBinding, Job, Operation, EmployeePageSettings, AuthPlatform, PasswordResetNotification
+from .models import (
+    Configuration, Audit, DepartmentBinding, GroupBinding, Job, Operation,
+    EmployeePageSettings, AuthPlatform, PasswordResetNotification, SyncAuditEvent,
+)
 from .locking import lock
 from .security import audit, client_address
 from .synchronization import establish_directory_identity, validate_directory_identity, current_effective_configuration
@@ -93,7 +96,7 @@ class ConfigurationAdmin(admin.ModelAdmin):
     form = ConfigurationForm
     readonly_fields = ("current_ldap_directory", "sspr_open_scope")
     fieldsets = (
-        ("01 · 同步边界", {"fields": ("root_department", "root_ou"), "description": "只处理指定钉钉部门和 AD 根 OU 范围内的对象。"}),
+        ("01 · 同步边界", {"fields": ("root_department", "root_ou", "sync_groups"), "description": "只处理指定钉钉部门和 AD 根 OU 范围内的对象。部门全局安全组位于对应部门 OU 下，父组嵌套直属子部门组；用户 OU 由主部门决定。"}),
         ("02 · 匹配与新建账号", {"fields": ("match_field", "auto_associate_accounts", "auto_onboard_accounts", "naming", "enable_new_accounts", "require_password_change"), "description": "配置一次匹配和纳管规则，定时同步自动执行符合条件的人员变更。新账号命名仅用于创建账号。"}),
         ("03 · 属性与保护", {"fields": ("attributes", "clear_attributes", "protected_usernames")}),
         ("04 · 离职安全阈值", {"fields": ("disable_missing", "disable_limit", "disable_percent"), "description": "超过人数或比例阈值时，预览需人工确认。"}),
@@ -264,7 +267,7 @@ class DepartmentAdmin(admin.ModelAdmin):
             audit(request.user.username, "department_binding", obj.source_id)
 
 
-admin.site.register([Job, Operation], ReadOnlyAdmin)
+admin.site.register([Job, Operation, GroupBinding, SyncAuditEvent], ReadOnlyAdmin)
 admin.site.site_header = "组织同步 · 系统管理"
 admin.site.site_title = "组织同步控制台"
 admin.site.index_title = "系统配置与维护"
