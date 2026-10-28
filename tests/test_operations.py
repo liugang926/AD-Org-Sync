@@ -199,6 +199,14 @@ def test_ci_preserves_production_gates():
     workflow = yaml.safe_load((root / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
     assert jobs["quality"]["strategy"]["matrix"]["python-version"] == ["3.10", "3.12"]
+    windows_runs = "\n".join(step.get("run", "") for step in jobs["windows"]["steps"])
+    browser_runs = "\n".join(step.get("run", "") for step in jobs["browser-regression"]["steps"])
+    for runs in (windows_runs, browser_runs):
+        assert "python -m venv .ci-venv" in runs
+        assert './.ci-venv/Scripts/python.exe -m pip install -e ".[test]"' in runs
+        assert "./.ci-venv/Scripts/python.exe -m pip check" in runs
+    container_runs = "\n".join(step.get("run", "") for step in jobs["container"]["steps"])
+    assert "--add-host web:127.0.0.1" in container_runs and "nginx -t" in container_runs
     deploy = jobs["deploy-production"]
     assert deploy["if"] == "github.event_name == 'push' && github.ref == 'refs/heads/main'"
     assert deploy["runs-on"] == ["self-hosted", "linux", "x64", "production"]

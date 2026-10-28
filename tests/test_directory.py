@@ -398,8 +398,8 @@ def test_interrupted_password_change_remains_unknown():
 
 
 @pytest.mark.parametrize("code, reason", [
-    (19, "不满足 AD 约束"), (50, "操作权限不足"), (32, "对象不存在"),
-    (51, "目录服务繁忙"), (52, "目录服务暂不可用"), (53, "AD 不允许此操作"),
+    (19, "不满足 AD 域密码策略"), (50, "操作权限不足"), (32, "对象不存在"),
+    (51, "目录服务繁忙"), (52, "目录服务暂不可用"), (53, "AD 域策略不允许此操作"),
     (None, "未提供可识别的拒绝原因"), ("private-diagnostic", "未提供可识别的拒绝原因"),
 ])
 def test_password_rejection_reports_safe_directory_reason(code, reason):

@@ -2,8 +2,9 @@ import pytest
 from django.utils import timezone
 from datetime import timedelta
 from threading import Event, Thread
+from unittest.mock import Mock
 from sync_app import sspr
-from sync_app.directory import PasswordResetOutcome
+from sync_app.directory import ActiveDirectory, PasswordResetOutcome
 from sync_app.domain import ResetOutcomeUnknown, RuleError
 from sync_app.locking import lock
 from sync_app.models import Configuration, Binding, Job, EmployeeSession, Audit
@@ -94,6 +95,45 @@ def test_directory_rejection_consumes_session_and_hides_account(client, setup_ss
     assert "testuser" not in content
     assert 'id="verify"' in content
     assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
+
+
+@pytest.mark.django_db
+def test_ad_password_policy_rejection_is_visible_and_safe(client, setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = token
+
+    target = account(guid=ad.items[0]["guid"])
+    directory = object.__new__(ActiveDirectory)
+    directory.conn = Mock()
+    directory.conn.extend.microsoft.modify_password.return_value = False
+    directory.conn.result = {
+        "result": 19,
+        "message": "private directory diagnostic",
+        "dn": target["dn"],
+    }
+    directory.match = Mock(return_value=[target])
+    directory.check_password_reset_account = Mock(return_value=target)
+    directory.close = Mock()
+    monkeypatch.setattr(sspr, "ActiveDirectory", lambda: directory)
+
+    response = client.post("/sspr/reset", {"password": "Ab1!xyza", "confirmation": "Ab1!xyza"})
+    content = response.content.decode()
+
+    assert response.status_code == 400
+    assert 'role="alert"' in content
+    assert "新密码不满足 AD 域密码策略" in content
+    assert "密码未修改" in content
+    assert "private directory diagnostic" not in content
+    assert target["dn"] not in content
+    assert "Ab1!xyza" not in content
+
+    retry_token, _ = sspr.verify("valid", "ip")
+    client.cookies["employee_verification"] = retry_token
+    directory.conn.extend.microsoft.modify_password.return_value = True
+    response = client.post("/sspr/reset", {"password": "Ab1!xyza", "confirmation": "Ab1!xyza"})
+    assert response.status_code == 200
+    assert "密码已成功重置" in response.content.decode()
 
 
 @pytest.mark.django_db
