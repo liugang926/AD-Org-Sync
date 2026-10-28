@@ -20,6 +20,7 @@ from django.utils.dateparse import parse_date
 from django.utils import timezone
 
 from . import sspr, synchronization
+from .directory import domain_name_from_dn
 from .domain import ResetOutcomeUnknown, RuleError, candidate
 from .models import Configuration, Person, Binding, DepartmentBinding, Job, Audit, Snapshot, RuntimeState, EmployeePageSettings, AuthPlatform
 from .security import rate_limit, audit, client_address
@@ -605,6 +606,9 @@ def test_connections(request):
 
 
 def employee_page_context(**context):
+    domain_name = domain_name_from_dn(settings.LDAP_BASE_DN)
+    context["domain_name"] = domain_name
+    context["account_domain"] = domain_name.split(".", 1)[0] if domain_name else ""
     try:
         context["page_settings"] = EmployeePageSettings.current()
         # Evaluate here so a presentation-store failure cannot hide a reset result.

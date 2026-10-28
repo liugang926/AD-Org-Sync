@@ -292,6 +292,7 @@ def _assert_employee_identity_withheld(page, platform_names=()):
     assert page.get_by_text("testuser", exact=True).count() == 0
     assert page.get_by_text("当前 AD 账号", exact=True).count() == 0
     assert page.get_by_role("heading", name="企业 AD 认证平台", exact=True).count() == 0
+    assert page.get_by_text("当前域控", exact=False).count() == 0
     assert page.locator('form[action="/sspr/reset"]').count() == 0
     assert page.get_by_label("新密码", exact=True).count() == 0
     for name in platform_names:
@@ -676,6 +677,11 @@ def test_admin_employee_page_text_and_authenticated_platforms_mobile(live_server
         assert verification.value.status == 200
         domain_admin.get_by_text("当前 AD 账号", exact=True).wait_for(state="visible")
         assert domain_admin.get_by_text("testuser", exact=True).is_visible()
+        assert domain_admin.get_by_role("heading", name="域账号登录说明", exact=True).is_visible()
+        assert domain_admin.get_by_text("当前域控：example.com", exact=True).is_visible()
+        assert domain_admin.get_by_text("用户@example.com", exact=True).is_visible()
+        assert domain_admin.get_by_text(r"example\用户", exact=True).is_visible()
+        assert domain_admin.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         assert domain_admin.get_by_role("heading", name="企业 AD 认证平台", exact=True).is_visible()
         assert domain_admin.get_by_role("button", name="重新验证").count() == 0
         domain_admin.get_by_label("新密码", exact=True).fill("Browser-domain-admin-43!")

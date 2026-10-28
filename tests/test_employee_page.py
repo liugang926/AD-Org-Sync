@@ -48,6 +48,7 @@ def test_content_is_escaped_and_platforms_hidden_before_identity_check(client, e
         assert '<img src=x onerror=' not in html
         assert "仅核验后可见的平台" not in html
         assert "服务尚未开启" in html
+        assert "当前域控" not in html
         assert not response.context["auth_platforms"]
 
 
@@ -63,11 +64,23 @@ def test_verified_account_shows_enabled_platforms_in_order_without_binding(clien
     html = client.get("/sspr").content.decode()
     assert not Binding.objects.exists()
     assert "当前 AD 账号" in html and "testuser" in html
+    assert "当前域控：" in html and "example.com" in html
+    assert "用户@example.com" in html and r"example\用户" in html
     assert html.index("VPN") < html.index("Nextcloud")
     assert "已关闭平台" not in html
     assert 'href="https://vpn.example.com/"' in html
     assert 'rel="noopener noreferrer"' in html
     assert "具体访问权限以各平台授权为准" in html
+
+
+def test_verified_account_escapes_domain_name(client, employee_content, employee_directory, monkeypatch):
+    monkeypatch.setattr("sync_app.views.domain_name_from_dn", lambda _: "<script>alert(1)</script>.example")
+    token, _ = sspr.verify("valid", "127.0.0.1")
+    client.cookies["employee_verification"] = token
+    html = client.get("/sspr").content.decode()
+    assert "当前域控：" in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;.example" in html
+    assert "<script>alert(1)</script>.example" not in html
 
 
 def test_display_changes_preserve_real_session_and_sync_preview(client, employee_content, employee_directory):

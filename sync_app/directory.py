@@ -24,6 +24,22 @@ class PasswordResetOutcome:
     complete: bool
 
 
+def domain_name_from_dn(dn):
+    """Return the DNS domain represented by the trailing DC components."""
+    try:
+        components = parse_dn(dn)
+        values = []
+        for attribute, value, separator in reversed(components):
+            if attribute.casefold() != "dc":
+                break
+            if separator == "+" or not value.strip() or "\x00" in value:
+                return ""
+            values.append(value.strip().casefold())
+        return ".".join(reversed(values))
+    except Exception:
+        return ""
+
+
 def _ldap_rejection_reason(result):
     """Use protocol result categories, never server diagnostics that may contain secrets."""
     code = result.get("result") if isinstance(result, dict) else None
