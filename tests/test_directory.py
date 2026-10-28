@@ -3,8 +3,20 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 import pytest
-from sync_app.directory import DingTalk, ActiveDirectory
+from sync_app.directory import DingTalk, ActiveDirectory, domain_name_from_dn
 from sync_app.domain import ResetOutcomeUnknown, RuleError
+
+
+@pytest.mark.parametrize(("dn", "expected"), [
+    ("DC=tianji,DC=com", "tianji.com"),
+    ("OU=People,DC=Tianji,DC=COM", "tianji.com"),
+    ("OU=People,DC=example,DC=corp", "example.corp"),
+    ("", ""),
+    ("OU=People", ""),
+    ("not a DN", ""),
+])
+def test_domain_name_from_dn_uses_only_the_trailing_domain_components(dn, expected):
+    assert domain_name_from_dn(dn) == expected
 
 
 def test_dingtalk_incomplete_pagination_never_becomes_snapshot():
