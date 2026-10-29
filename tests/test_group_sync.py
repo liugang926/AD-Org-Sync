@@ -182,6 +182,20 @@ def test_existing_same_ou_global_group_is_reused_with_its_actual_sam(group_setup
     assert binding.object_guid == uuid.UUID(existing_guid)
     assert binding.sam_account_name == "existing-group"
     assert len(ad.groups) == 3
+    event = SyncAuditEvent.objects.get(
+        object_type="group",
+        source_id="2",
+        reason_code="reuse_group",
+    )
+    assert event.before_values == {
+        "bound": False,
+        "dn": "",
+        "guid": None,
+        "sam_account_name": "",
+    }
+    assert event.after_values["bound"] is True
+    assert event.after_values["guid"] == existing_guid
+    assert event.after_values["sam_account_name"] == "existing-group"
 
 
 @pytest.mark.django_db
@@ -192,6 +206,9 @@ def test_existing_binding_adopts_changed_sam_of_same_ou_group(group_setup):
     assert sync.apply(first, source, ad) == "success"
 
     group_dn = f"CN=研发,{CHILD}"
+    original_binding = GroupBinding.objects.get(source_id="2")
+    original_sam = original_binding.sam_account_name
+    original_guid = str(original_binding.object_guid)
     ad.groups[group_dn.casefold()]["sam_account_name"] = "renamed-group"
     job = Job.objects.create()
     job.plan = sync.plan(job, source, ad)
@@ -206,6 +223,14 @@ def test_existing_binding_adopts_changed_sam_of_same_ou_group(group_setup):
     assert binding.sam_account_name == "renamed-group"
     event = SyncAuditEvent.objects.filter(object_type="group", source_id="2").order_by("-started_at").first()
     assert event.reason_code == "reuse_group_rebind"
+    assert event.before_values == {
+        "bound": True,
+        "dn": group_dn,
+        "guid": original_guid,
+        "sam_account_name": original_sam,
+    }
+    assert event.after_values["bound"] is True
+    assert event.after_values["guid"] == original_guid
     assert event.after_values["sam_account_name"] == "renamed-group"
 
 

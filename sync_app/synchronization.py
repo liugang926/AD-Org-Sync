@@ -288,6 +288,7 @@ def group_plans(departments, ou_plans, config, ad):
             "reason": "按来源部门建立 AD 全局安全组",
             "reason_code": "create_group",
             "members": [],
+            "previous_binding": {"bound": False, "dn": "", "guid": None, "sam_account_name": ""},
         }
         try:
             if ou.get("action") == "conflict" or not ou.get("dn"):
@@ -297,6 +298,12 @@ def group_plans(departments, ou_plans, config, ad):
             binding = bindings.get(dept_id)
             current = ad.group_identity(dn, config.root_ou) if ou.get("guid") else None
             if binding:
+                entry["previous_binding"] = {
+                    "bound": True,
+                    "dn": binding.dn,
+                    "guid": str(binding.object_guid),
+                    "sam_account_name": binding.sam_account_name,
+                }
                 if not current or current["guid"] != str(binding.object_guid):
                     raise RuleError("关联 AD 分组不存在或对象已被替换")
                 if current["sam_account_name"].casefold() != binding.sam_account_name.casefold():
@@ -658,6 +665,15 @@ def apply(job, source, ad):
             )
             return "partial_failed"
     for group in saved.get("groups", []):
+        previous = group.get("previous_binding")
+        if not isinstance(previous, dict):
+            previous = {"bound": False, "dn": "", "guid": None, "sam_account_name": ""}
+        before = {
+            "bound": bool(previous.get("bound")),
+            "dn": str(previous.get("dn") or ""),
+            "guid": previous.get("guid"),
+            "sam_account_name": str(previous.get("sam_account_name") or ""),
+        }
         with transaction.atomic():
             record = Operation.objects.create(
                 job=job,
@@ -667,13 +683,14 @@ def apply(job, source, ad):
                     "dn": group["dn"], "name": group["name"],
                     "sam_account_name": group["sam_account_name"],
                     "reason_code": group.get("reason_code", "ensure_group"),
+                    "previous_binding": before,
                 },
             )
             audit_event = start_sync_audit(
                 job, object_type="group", source_id=group["source_id"], action="ensure_group",
                 reason_code=group.get("reason_code", "ensure_group"), reason=group.get("reason", ""),
                 target_dn=group.get("dn", ""), target_guid=group.get("guid"),
-                before={"dn": group.get("dn", ""), "guid": group.get("guid"), "sam_account_name": group.get("sam_account_name", "")},
+                before=before,
             )
         try:
             created = ad.ensure_group(group["dn"], group["sam_account_name"], config.root_ou)
@@ -687,7 +704,13 @@ def apply(job, source, ad):
             finish_sync_audit(
                 audit_event, status="success", reason=group.get("reason", ""),
                 target_dn=created["dn"], target_guid=guid,
-                after={"dn": created["dn"], "guid": guid, "group_type": created["group_type"], "sam_account_name": created["sam_account_name"]},
+                after={
+                    "bound": True,
+                    "dn": created["dn"],
+                    "guid": guid,
+                    "group_type": created["group_type"],
+                    "sam_account_name": created["sam_account_name"],
+                },
             )
         except Exception as exc:
             record.status = "failed"
