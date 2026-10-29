@@ -64,6 +64,7 @@ SYNC_REASON_LABELS = {
     "identity_conflict": "身份冲突",
     "create_group": "创建部门全局安全组",
     "reuse_group": "关联现有部门全局安全组",
+    "reuse_group_rebind": "沿用同一 OU 安全组并更新账号名",
     "group_conflict": "部门全局安全组冲突",
     "nest_child_group": "嵌套直属子部门组",
     "add_department_member": "加入部门组",

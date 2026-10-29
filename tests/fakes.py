@@ -100,8 +100,6 @@ class Directory:
         key = dn.casefold()
         group = self.groups.get(key)
         if group:
-            if group["sam_account_name"].casefold() != sam_account_name.casefold():
-                raise RuleError("同名分组已存在但账号名不一致，请人工核验")
             return copy.deepcopy(group)
         group = {
             "guid": str(uuid.uuid4()),

@@ -300,10 +300,12 @@ def group_plans(departments, ou_plans, config, ad):
                 if not current or current["guid"] != str(binding.object_guid):
                     raise RuleError("关联 AD 分组不存在或对象已被替换")
                 if current["sam_account_name"].casefold() != binding.sam_account_name.casefold():
-                    raise RuleError("AD 分组账号名已变化，请人工核验")
-                entry["reason"], entry["reason_code"] = "关联现有 AD 全局安全组", "reuse_group"
+                    entry["reason"] = "引用同一 OU 内既有全局安全组，并采用其实际账号名"
+                    entry["reason_code"] = "reuse_group_rebind"
+                else:
+                    entry["reason"], entry["reason_code"] = "关联现有 AD 全局安全组", "reuse_group"
             elif current:
-                entry["reason"], entry["reason_code"] = "关联同名 AD 全局安全组", "reuse_group"
+                entry["reason"], entry["reason_code"] = "引用同一 OU 内同名 AD 全局安全组", "reuse_group"
             entry.update(
                 dn=dn,
                 guid=current["guid"] if current else None,
@@ -622,8 +624,7 @@ def apply(job, source, ad):
     for group in saved.get("groups", []):
         current = ad.group_identity(group["dn"], config.root_ou) if group.get("guid") else None
         if group.get("guid"):
-            if (not current or current["guid"] != str(group["guid"])
-                    or current["sam_account_name"].casefold() != group["sam_account_name"].casefold()):
+            if not current or current["guid"] != str(group["guid"]):
                 raise RuleError("AD 分组状态已变化，请重新预览")
     root_parent = saved.get("root_parent")
     if root_parent and ad.container_identity(root_parent["dn"]) != root_parent["guid"]:

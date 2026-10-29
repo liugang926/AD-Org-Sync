@@ -645,8 +645,6 @@ class ActiveDirectory:
         parts = validate_group_dn(dn, root)
         existing = self.group_identity(dn, root)
         if existing:
-            if existing["sam_account_name"].casefold() != sam_account_name.casefold():
-                raise RuleError("同名分组已存在但账号名不一致，请人工核验")
             return existing
         parent = "".join(attribute + "=" + value + separator for attribute, value, separator in parts[1:]).rstrip(",")
         self.verify_ou(parent)

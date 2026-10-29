@@ -154,6 +154,90 @@ def test_user_inside_managed_root_is_moved_and_policy_rejection_has_reason_code(
 
 
 @pytest.mark.django_db
+def test_existing_same_ou_global_group_is_reused_with_its_actual_sam(group_setup):
+    _, source, ad = group_setup
+    group_dn = f"CN=研发,{CHILD}"
+    existing_guid = str(uuid.uuid4())
+    ad.ous[CHILD.casefold()] = str(uuid.uuid4())
+    ad.groups[group_dn.casefold()] = {
+        "guid": existing_guid,
+        "dn": group_dn,
+        "sam_account_name": "existing-group",
+        "group_type": 0x80000002,
+        "members": [],
+    }
+
+    job = Job.objects.create()
+    job.plan = sync.plan(job, source, ad)
+    planned = next(item for item in job.plan["groups"] if item["source_id"] == "2")
+
+    assert planned["action"] == "ensure_group"
+    assert planned["guid"] == existing_guid
+    assert planned["sam_account_name"] == "existing-group"
+    assert planned["reason_code"] == "reuse_group"
+    assert len(ad.groups) == 1
+
+    assert sync.apply(job, source, ad) == "success"
+    binding = GroupBinding.objects.get(source_id="2")
+    assert binding.object_guid == uuid.UUID(existing_guid)
+    assert binding.sam_account_name == "existing-group"
+    assert len(ad.groups) == 3
+
+
+@pytest.mark.django_db
+def test_existing_binding_adopts_changed_sam_of_same_ou_group(group_setup):
+    _, source, ad = group_setup
+    first = Job.objects.create()
+    first.plan = sync.plan(first, source, ad)
+    assert sync.apply(first, source, ad) == "success"
+
+    group_dn = f"CN=研发,{CHILD}"
+    ad.groups[group_dn.casefold()]["sam_account_name"] = "renamed-group"
+    job = Job.objects.create()
+    job.plan = sync.plan(job, source, ad)
+    planned = next(item for item in job.plan["groups"] if item["source_id"] == "2")
+
+    assert planned["action"] == "ensure_group"
+    assert planned["sam_account_name"] == "renamed-group"
+    assert planned["reason_code"] == "reuse_group_rebind"
+
+    assert sync.apply(job, source, ad) == "success"
+    binding = GroupBinding.objects.get(source_id="2")
+    assert binding.sam_account_name == "renamed-group"
+    event = SyncAuditEvent.objects.filter(object_type="group", source_id="2").order_by("-started_at").first()
+    assert event.reason_code == "reuse_group_rebind"
+    assert event.after_values["sam_account_name"] == "renamed-group"
+
+
+@pytest.mark.django_db
+def test_existing_group_with_replaced_guid_remains_conflict(group_setup):
+    _, source, ad = group_setup
+    group_dn = f"CN=研发,{CHILD}"
+    original_guid = uuid.uuid4()
+    GroupBinding.objects.create(
+        source_id="2",
+        dn=group_dn,
+        object_guid=original_guid,
+        sam_account_name="existing-group",
+    )
+    ad.groups[group_dn.casefold()] = {
+        "guid": str(uuid.uuid4()),
+        "dn": group_dn,
+        "sam_account_name": "existing-group",
+        "group_type": 0x80000002,
+        "members": [],
+    }
+
+    job = Job.objects.create()
+    job.plan = sync.plan(job, source, ad)
+    planned = next(item for item in job.plan["groups"] if item["source_id"] == "2")
+
+    assert planned["action"] == "conflict"
+    assert planned["reason_code"] == "group_conflict"
+    assert "对象已被替换" in planned["reason"]
+
+
+@pytest.mark.django_db
 def test_group_sync_can_be_disabled_without_changing_ou_plan(group_setup):
     config, source, ad = group_setup
     config.sync_groups = False
@@ -321,6 +405,25 @@ def test_active_directory_creates_global_security_group(monkeypatch):
     assert dn == f"CN=研发,{CHILD}"
     assert object_classes == ["top", "group"]
     assert attrs == {"sAMAccountName": "g-test", "groupType": 0x80000002}
+
+
+def test_active_directory_reuses_same_ou_global_group_regardless_of_sam(monkeypatch):
+    ad = object.__new__(ActiveDirectory)
+    ad.require_write = lambda: None
+    existing = {
+        "guid": str(uuid.uuid4()),
+        "dn": f"CN=研发,{CHILD}",
+        "sam_account_name": "existing-group",
+        "group_type": 0x80000002,
+        "members": [],
+    }
+    monkeypatch.setattr(ad, "group_identity", Mock(return_value=existing))
+    ad.conn = SimpleNamespace(add=Mock(), result={})
+
+    result = ad.ensure_group(f"CN=研发,{CHILD}", "expected-generated-name", ROOT)
+
+    assert result == existing
+    ad.conn.add.assert_not_called()
 
 
 def test_active_directory_adds_group_member_once(monkeypatch):
