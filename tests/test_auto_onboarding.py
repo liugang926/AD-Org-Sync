@@ -353,10 +353,12 @@ call_command("migrate", interactive=False, verbosity=0)
 from sync_app.models import Configuration
 after = Configuration.objects.values().get(pk=1)
 assert after.pop("auto_onboard_accounts") is False
+assert after.pop("sync_groups") is True
 assert after == before and list(Binding.objects.values()) == bindings
 OldConfig.objects.filter(pk=1).delete()
 OldConfig.objects.create(pk=1)
 assert Configuration.objects.get(pk=1).auto_onboard_accounts is False
+assert Configuration.objects.get(pk=1).sync_groups is True
 call_command("db_check", verbosity=0)
 '''
     result = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],

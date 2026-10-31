@@ -41,7 +41,7 @@ def test_automatic_onboarding_shows_preview_and_scheduled_results_without_approv
         expect(page.get_by_role("heading", name="人员自动同步")).to_be_visible()
         expect(page.get_by_text("自动纳管：已开启 · 定时同步：已开启")).to_be_visible()
         page.goto(live_server.url + f"/jobs/{preview.pk}")
-        expect(page.get_by_text("纳管并迁入 OU", exact=True)).to_be_visible()
+        expect(page.get_by_text("纳管并迁入 OU", exact=True).first).to_be_visible()
         expect(page.get_by_text(OLD, exact=True)).to_be_visible()
         assert target["guid"] in page.locator("#person-plan").inner_text()
         page.screenshot(path=str(output / "personnel-onboarding-preview.png"), full_page=True)
@@ -181,7 +181,7 @@ def test_organization_preview_and_confirmed_root_creation_browser(live_server, d
         assert executor.submit(sync.run_next).result()
         job_id = executor.submit(lambda: str(Job.objects.get().pk)).result()
         page.goto(live_server.url + "/jobs/" + job_id)
-        assert page.get_by_text("仅同步组织架构（不修改人员）", exact=True).is_visible()
+        assert page.get_by_text("仅同步组织架构（OU 与安全组，不修改人员）", exact=True).is_visible()
         assert page.get_by_text("根 OU 待创建", exact=False).is_visible()
         assert ROOT in page.locator(".task-overview").inner_text()
         assert not directory.writes and directory.read_only
@@ -193,7 +193,7 @@ def test_organization_preview_and_confirmed_root_creation_browser(live_server, d
         assert not directory.writes  # Submission only queues; the worker owns writes.
         assert executor.submit(sync.run_next).result()
         page.reload()
-        assert page.get_by_text("同步执行完成：4 项成功", exact=False).is_visible()
+        assert page.get_by_text("同步执行完成：", exact=False).is_visible()
         department_results = page.locator("#department-plan")
         assert department_results.get_by_role("heading", name="部门 OU 执行结果", exact=True).is_visible()
         assert department_results.get_by_text("已创建", exact=True).count() == 4

@@ -1,4 +1,5 @@
 """Single worker orchestration with immutable plans and per-person outcomes."""
+import hashlib
 import uuid
 from collections import Counter
 from contextlib import closing
@@ -10,10 +11,21 @@ from django.db import transaction
 from django.utils import timezone
 from ldap3.utils.dn import escape_rdn, parse_dn
 
-from .directory import DingTalk, ActiveDirectory, under, validate_ou_dn
+from .directory import DingTalk, ActiveDirectory, under, validate_group_dn, validate_ou_dn
 from .domain import RuleError, candidate, fingerprint, protected, resolve
 from .locking import lock
-from .models import Configuration, Snapshot, Person, Binding, DepartmentBinding, Job, Operation, RuntimeState
+from .models import (
+    Configuration,
+    Snapshot,
+    Person,
+    Binding,
+    DepartmentBinding,
+    GroupBinding,
+    Job,
+    Operation,
+    RuntimeState,
+    SyncAuditEvent,
+)
 from .security import audit
 
 
@@ -22,7 +34,55 @@ def configuration_signature(config):
 
 
 def binding_signature():
-    return fingerprint([list(Binding.objects.order_by("pk").values()), list(Person.objects.order_by("pk").values()), list(DepartmentBinding.objects.order_by("pk").values())])
+    return fingerprint([
+        list(Binding.objects.order_by("pk").values()),
+        list(Person.objects.order_by("pk").values()),
+        list(DepartmentBinding.objects.order_by("pk").values()),
+        list(GroupBinding.objects.order_by("pk").values()),
+    ])
+
+
+def start_sync_audit(job, *, object_type, source_id, action, reason_code="", reason="", target_dn="", target_guid=None, before=None):
+    """Persist write intent before touching AD. Failure must abort the mutation."""
+    return SyncAuditEvent.objects.create(
+        job=job,
+        job_identifier=str(job.pk),
+        actor=job.actor,
+        object_type=object_type,
+        source_id=source_id,
+        action=action,
+        reason_code=reason_code,
+        reason=reason,
+        target_dn=target_dn,
+        target_guid=target_guid,
+        before_values=before or {},
+    )
+
+
+def finish_sync_audit(record, *, status, reason_code="", reason="", target_dn="", target_guid=None, after=None):
+    record.status = status
+    record.reason_code = reason_code or record.reason_code
+    record.reason = reason or record.reason
+    if target_dn:
+        record.target_dn = target_dn
+    if target_guid:
+        record.target_guid = target_guid
+    record.after_values = after or {}
+    record.finished_at = timezone.now()
+    record.save()
+    return record
+
+
+def record_terminal_audit(job, *, status, object_type, source_id, action, reason_code="", reason="", target_dn="", target_guid=None, before=None, after=None):
+    record = start_sync_audit(
+        job, object_type=object_type, source_id=source_id, action=action,
+        reason_code=reason_code, reason=reason, target_dn=target_dn,
+        target_guid=target_guid, before=before,
+    )
+    return finish_sync_audit(
+        record, status=status, reason_code=reason_code, reason=reason,
+        target_dn=target_dn, target_guid=target_guid, after=after,
+    )
 
 
 def valid_ad_revision(account):
@@ -41,6 +101,7 @@ def validate_directory_identity(config):
         raise RuleError("企业或 AD 目录已更换，禁止复用旧组织绑定；请使用新的数据库")
     if not config.identity_anchor and (
         Snapshot.objects.exists() or Binding.objects.exists() or DepartmentBinding.objects.exists()
+        or GroupBinding.objects.exists()
         or Operation.objects.filter(action="create").exists()
     ):
         raise RuleError("现有来源或绑定缺少目录身份锚点，禁止复用；请使用新的数据库")
@@ -205,6 +266,166 @@ def department_plans(snap, scope, selected, users, config, overrides, ad):
     return sorted(result, key=lambda item: len(parse_dn(item["dn"])) if item["action"] != "conflict" else 0)
 
 
+def group_account_name(department_id):
+    digest = hashlib.sha256(f"department:{department_id}".encode()).hexdigest()
+    return "g-" + digest[:18]
+
+
+def group_plans(departments, ou_plans, config, ad):
+    if not config.sync_groups:
+        return []
+    bindings = {binding.source_id: binding for binding in GroupBinding.objects.all()}
+    result, by_path = [], {}
+    for ou in sorted(ou_plans, key=lambda item: len(parse_dn(item["dn"])) if item.get("dn") else 0):
+        dept_id = ou["source_id"]
+        entry = {
+            "source_id": dept_id,
+            "name": ou["name"],
+            "dn": "",
+            "sam_account_name": "",
+            "action": "ensure_group",
+            "guid": None,
+            "reason": "按来源部门建立 AD 全局安全组",
+            "reason_code": "create_group",
+            "members": [],
+            "previous_binding": {"bound": False, "dn": "", "guid": None, "sam_account_name": ""},
+        }
+        try:
+            if ou.get("action") == "conflict" or not ou.get("dn"):
+                raise RuleError("部门 OU 存在冲突，不能计算部门安全组")
+            dn = f"CN={escape_rdn(ou['name'])},{ou['dn']}"
+            validate_group_dn(dn, config.root_ou)
+            binding = bindings.get(dept_id)
+            current = ad.group_identity(dn, config.root_ou) if ou.get("guid") else None
+            if binding:
+                entry["previous_binding"] = {
+                    "bound": True,
+                    "dn": binding.dn,
+                    "guid": str(binding.object_guid),
+                    "sam_account_name": binding.sam_account_name,
+                }
+                if not current or current["guid"] != str(binding.object_guid):
+                    raise RuleError("关联 AD 分组不存在或对象已被替换")
+                if current["sam_account_name"].casefold() != binding.sam_account_name.casefold():
+                    entry["reason"] = "引用同一 OU 内既有全局安全组，并采用其实际账号名"
+                    entry["reason_code"] = "reuse_group_rebind"
+                else:
+                    entry["reason"], entry["reason_code"] = "关联现有 AD 全局安全组", "reuse_group"
+            elif current:
+                entry["reason"], entry["reason_code"] = "引用同一 OU 内同名 AD 全局安全组", "reuse_group"
+            entry.update(
+                dn=dn,
+                guid=current["guid"] if current else None,
+                sam_account_name=(
+                    current["sam_account_name"] if current
+                    else binding.sam_account_name if binding
+                    else group_account_name(dept_id)
+                ),
+                members=list(current["members"]) if current else [],
+            )
+            path = dn.casefold()
+            if path in by_path:
+                raise RuleError("多个部门映射到同一 AD 分组，请人工处理")
+            by_path[path] = dept_id
+        except RuleError as exc:
+            entry["action"], entry["reason"] = "conflict", str(exc)
+            entry["reason_code"] = "group_conflict"
+        result.append(entry)
+    return sorted(result, key=lambda item: len(parse_dn(item["dn"])) if item.get("dn") else 0)
+
+
+def operation_reason_code(action, reason):
+    if action in {"create", "resume_create", "update", "move", "bind", "onboard", "disable", "skip"}:
+        if action == "skip":
+            if "排除" in reason:
+                return "excluded"
+            if "停用" in reason:
+                return "binding_disabled"
+        return action
+    if "自动纳管" in reason:
+        return "auto_onboard_disabled"
+    if "受管 OU" in reason:
+        return "outside_managed_root"
+    if "主部门" in reason:
+        return "missing_primary_department"
+    if "工号" in reason:
+        return "employee_id_invalid"
+    if "多个 AD" in reason or "不唯一" in reason:
+        return "identity_ambiguous"
+    if "受保护" in reason or "禁用" in reason:
+        return "protected_or_disabled"
+    return "identity_conflict"
+
+
+def final_user_dn(operation):
+    if operation.get("action") in {"skip", "conflict", "disable"}:
+        return ""
+    target = operation.get("target") or {}
+    username = str(operation.get("username") or "").strip()
+    ou = str(operation.get("ou") or "").strip()
+    if not username or not ou:
+        return str(target.get("dn") or "")
+    components = parse_dn(target["dn"]) if target.get("dn") else []
+    rdn = components[0][0] + "=" + components[0][1] if components else "CN=" + escape_rdn(username)
+    return rdn + "," + ou
+
+
+def group_membership_plans(departments, groups, operations, scope):
+    group_by_department = {group["source_id"]: group for group in groups}
+    result = []
+
+    def add(department_id, member_source_id, member_type, member_dn, action, reason_code, reason):
+        group = group_by_department.get(department_id)
+        if not group or group.get("action") == "conflict":
+            return
+        current = {value.casefold() for value in group.get("members", [])}
+        if not member_dn:
+            action, reason_code, reason = "skip", "account_unresolved", "成员账号尚未解析，不能写入分组"
+        elif action == "add_group_member" and member_dn.casefold() in current:
+            action, reason_code, reason = "skip", "already_member", "已是分组成员，无需重复写入"
+        result.append({
+            "department_id": department_id,
+            "group_dn": group["dn"],
+            "group_guid": group.get("guid"),
+            "member_source_id": member_source_id,
+            "member_type": member_type,
+            "member_dn": member_dn,
+            "action": action,
+            "reason_code": reason_code,
+            "reason": reason,
+        })
+
+    for department_id, department in departments.items():
+        parent_id = department.get("parent")
+        if parent_id in group_by_department:
+            child_group = group_by_department.get(department_id)
+            if child_group:
+                add(
+                    parent_id, "group:" + department_id, "group", child_group.get("dn", ""),
+                    "add_group_member", "nest_child_group", "将直属子部门全局安全组嵌套到父部门组",
+                )
+    if scope == "organization":
+        return result
+    for operation in operations:
+        user = operation.get("user") or {}
+        member_dn = final_user_dn(operation)
+        for department_id in user.get("departments", []):
+            if department_id not in group_by_department:
+                continue
+            if operation["action"] in {"skip", "conflict", "disable"}:
+                add(
+                    department_id, operation["source_id"], "user", "",
+                    "skip", operation.get("reason_code", "account_unresolved"),
+                    "人员账号未成功解析或未执行迁移：" + operation.get("reason", ""),
+                )
+            else:
+                add(
+                    department_id, operation["source_id"], "user", member_dn,
+                    "add_group_member", "add_department_member", "将直属用户加入所属部门全局安全组",
+                )
+    return result
+
+
 def plan(job, source, ad):
     config = Configuration.current()
     snap = collect(source, config)
@@ -226,6 +447,7 @@ def plan(job, source, ad):
     operations = []
     chosen_users = selected_users(snap, job.scope, job.selected)
     ou_plans = department_plans(snap, job.scope, job.selected, chosen_users, config, overrides, ad)
+    department_groups = group_plans(departments, ou_plans, config, ad)
     for user in chosen_users:
         person, binding = people[user["source_id"]], bindings.get(user["source_id"])
         b = {"guid": str(binding.object_guid), "enabled": binding.enabled if binding.sync_managed else True} if binding else None
@@ -304,7 +526,7 @@ def plan(job, source, ad):
             changes.append({"field": "OU", "before": parent_dn(target["dn"]), "after": ou})
             if action == "update":
                 action = "move"
-        operations.append({"source_id": user["source_id"], "user": user, "department_id": person.primary_department or user["primary_department"], "action": action, "target": target, "username": target["username"] if target else candidate(user, config.naming), "candidate": candidate(user, config.naming), "raw_naming_value": user.get(config.naming, ""), "binding": {"guid": str(binding.object_guid), "username": binding.username, "manual": binding.manual} if binding else None, "ou": ou, "attrs": attrs, "changes": changes, "reason": reason})
+        operations.append({"source_id": user["source_id"], "user": user, "department_id": person.primary_department or user["primary_department"], "action": action, "target": target, "username": target["username"] if target else candidate(user, config.naming), "candidate": candidate(user, config.naming), "raw_naming_value": user.get(config.naming, ""), "binding": {"guid": str(binding.object_guid), "username": binding.username, "manual": binding.manual} if binding else None, "ou": ou, "attrs": attrs, "changes": changes, "reason": reason, "reason_code": operation_reason_code(action, reason)})
         if target and action in {"bind", "onboard"}:
             occupied.add(target["guid"])
     if job.scope == "full" and config.disable_missing:
@@ -317,11 +539,26 @@ def plan(job, source, ad):
             reason = "目标已禁用或不在管理范围"
             if target and target["enabled"] and not protected(target) and under(target["dn"], config.root_ou):
                 action, reason = "disable", "完整全量中缺失的受管人员"
-            operations.append({"source_id": uid, "action": action, "target": target, "username": binding.username, "reason": reason, "changes": [{"field": "enabled", "before": True, "after": False}] if action == "disable" else []})
+            operations.append({"source_id": uid, "action": action, "target": target, "username": binding.username, "reason": reason, "reason_code": operation_reason_code(action, reason), "changes": [{"field": "enabled", "before": True, "after": False}] if action == "disable" else []})
     disables = sum(o["action"] == "disable" for o in operations)
     managed_count = sum(binding.sync_managed for binding in bindings.values())
     threshold = disables > config.disable_limit or disables * 100 > max(managed_count, 1) * config.disable_percent
-    return {"snapshot": snap.pk, "source": snap.fingerprint, "config": configuration_signature(config), "bindings": binding_signature(), "root_ou": config.root_ou, "root_parent": root_parent, "operations": operations, "departments": ou_plans, "high_risk": threshold, "scope": job.scope, "selected": job.selected}
+    group_memberships = group_membership_plans(departments, department_groups, operations, job.scope)
+    return {
+        "snapshot": snap.pk,
+        "source": snap.fingerprint,
+        "config": configuration_signature(config),
+        "bindings": binding_signature(),
+        "root_ou": config.root_ou,
+        "root_parent": root_parent,
+        "operations": operations,
+        "departments": ou_plans,
+        "groups": department_groups,
+        "group_memberships": group_memberships,
+        "high_risk": threshold,
+        "scope": job.scope,
+        "selected": job.selected,
+    }
 
 
 def parent_dn(dn):
@@ -330,11 +567,19 @@ def parent_dn(dn):
 
 
 def has_conflicts(plan_data):
-    return any(o["action"] == "conflict" for o in plan_data.get("operations", []) + plan_data.get("departments", []))
+    return any(
+        o["action"] == "conflict"
+        for key in ("operations", "departments", "groups", "group_memberships")
+        for o in plan_data.get(key, [])
+    )
 
 
 def blocking_conflicts(plan_data, *, scheduled=False):
-    return any(o["action"] == "conflict" for o in plan_data.get("departments", [])) or (
+    return any(
+        o["action"] == "conflict"
+        for key in ("departments", "groups")
+        for o in plan_data.get(key, [])
+    ) or (
         not scheduled and has_conflicts(plan_data)
     )
 
@@ -383,32 +628,138 @@ def apply(job, source, ad):
     for dept in saved.get("departments", []):
         if ad.ou_identity(dept["dn"]) != dept["guid"]:
             raise RuleError("OU 状态已变化，请重新预览")
+    for group in saved.get("groups", []):
+        current = ad.group_identity(group["dn"], config.root_ou) if group.get("guid") else None
+        if group.get("guid"):
+            if not current or current["guid"] != str(group["guid"]):
+                raise RuleError("AD 分组状态已变化，请重新预览")
     root_parent = saved.get("root_parent")
     if root_parent and ad.container_identity(root_parent["dn"]) != root_parent["guid"]:
         raise RuleError("根 OU 的父容器已变化，请重新预览")
     for dept in saved.get("departments", []):
-        record = Operation.objects.create(job=job, source_id="department:" + dept["source_id"], action="ensure_ou", evidence={"dn": dept["dn"], "name": dept["name"]})
+        with transaction.atomic():
+            record = Operation.objects.create(job=job, source_id="department:" + dept["source_id"], action="ensure_ou", evidence={"dn": dept["dn"], "name": dept["name"], "reason_code": dept.get("reason_code", "ensure_ou")})
+            audit_event = start_sync_audit(
+                job, object_type="ou", source_id=dept["source_id"], action="ensure_ou",
+                reason_code=dept.get("reason_code", "ensure_ou"), reason=dept.get("reason", ""),
+                target_dn=dept.get("dn", ""), target_guid=dept.get("guid"),
+                before={"dn": dept.get("dn", ""), "guid": dept.get("guid")},
+            )
         try:
             guid = ad.ensure_ou(dept["dn"], config.root_ou, allow_root_creation=dept["dn"].casefold() == config.root_ou.casefold() and root_parent is not None)
             DepartmentBinding.objects.get_or_create(source_id=dept["source_id"], defaults={"dn": dept["dn"], "object_guid": guid})
             record.target_guid, record.status = guid, "success"
-            record.save()
+            record.save(update_fields=["target_guid", "status"])
+            finish_sync_audit(
+                audit_event, status="success", reason=dept.get("reason", ""),
+                target_dn=dept.get("dn", ""), target_guid=guid,
+                after={"dn": dept.get("dn", ""), "guid": guid},
+            )
         except Exception as exc:
             record.status = "failed"
             record.message = str(exc) if isinstance(exc, RuleError) else "OU 操作失败，请核验后重新预览"
             record.save()
+            finish_sync_audit(
+                audit_event, status="failed", reason=record.message,
+                target_dn=dept.get("dn", ""), target_guid=dept.get("guid"),
+            )
+            return "partial_failed"
+    for group in saved.get("groups", []):
+        previous = group.get("previous_binding")
+        if not isinstance(previous, dict):
+            previous = {"bound": False, "dn": "", "guid": None, "sam_account_name": ""}
+        before = {
+            "bound": bool(previous.get("bound")),
+            "dn": str(previous.get("dn") or ""),
+            "guid": previous.get("guid"),
+            "sam_account_name": str(previous.get("sam_account_name") or ""),
+        }
+        with transaction.atomic():
+            record = Operation.objects.create(
+                job=job,
+                source_id=("group:" + group["source_id"])[:100],
+                action="ensure_group",
+                evidence={
+                    "dn": group["dn"], "name": group["name"],
+                    "sam_account_name": group["sam_account_name"],
+                    "reason_code": group.get("reason_code", "ensure_group"),
+                    "previous_binding": before,
+                },
+            )
+            audit_event = start_sync_audit(
+                job, object_type="group", source_id=group["source_id"], action="ensure_group",
+                reason_code=group.get("reason_code", "ensure_group"), reason=group.get("reason", ""),
+                target_dn=group.get("dn", ""), target_guid=group.get("guid"),
+                before=before,
+            )
+        try:
+            created = ad.ensure_group(group["dn"], group["sam_account_name"], config.root_ou)
+            guid = created["guid"]
+            GroupBinding.objects.update_or_create(
+                source_id=group["source_id"],
+                defaults={"dn": group["dn"], "object_guid": guid, "sam_account_name": created["sam_account_name"]},
+            )
+            record.target_guid, record.status = guid, "success"
+            record.save(update_fields=["target_guid", "status"])
+            finish_sync_audit(
+                audit_event, status="success", reason=group.get("reason", ""),
+                target_dn=created["dn"], target_guid=guid,
+                after={
+                    "bound": True,
+                    "dn": created["dn"],
+                    "guid": guid,
+                    "group_type": created["group_type"],
+                    "sam_account_name": created["sam_account_name"],
+                },
+            )
+        except Exception as exc:
+            record.status = "failed"
+            record.message = str(exc) if isinstance(exc, RuleError) else "AD 分组操作失败，请核验后重新预览"
+            record.save()
+            finish_sync_audit(
+                audit_event, status="failed", reason=record.message,
+                target_dn=group.get("dn", ""), target_guid=group.get("guid"),
+            )
             return "partial_failed"
     failed = False
     for op in saved["operations"]:
-        record = Operation.objects.create(job=job, source_id=op["source_id"], action=op["action"], target_guid=op["target"]["guid"] if op.get("target") else None, evidence={"username": op.get("username", ""), "reason": op["reason"], "changes": op.get("changes", []), "before_dn": op.get("target", {}).get("dn", "") if op.get("target") else "", "target_ou": op.get("ou", "")})
+        before_dn = op.get("target", {}).get("dn", "") if op.get("target") else ""
+        with transaction.atomic():
+            record = Operation.objects.create(
+                job=job,
+                source_id=op["source_id"],
+                action=op["action"],
+                target_guid=op["target"]["guid"] if op.get("target") else None,
+                evidence={
+                    "username": op.get("username", ""),
+                    "reason": op["reason"],
+                    "reason_code": op.get("reason_code", ""),
+                    "changes": op.get("changes", []),
+                    "before_dn": before_dn,
+                    "target_ou": op.get("ou", ""),
+                },
+                reason_code=op.get("reason_code", ""),
+            )
+            audit_event = start_sync_audit(
+                job, object_type="user", source_id=op["source_id"], action=op["action"],
+                reason_code=op.get("reason_code", ""), reason=op["reason"],
+                target_dn=before_dn, target_guid=(op.get("target") or {}).get("guid"),
+                before={
+                    "dn": before_dn,
+                    "enabled": (op.get("target") or {}).get("enabled"),
+                    "changes": op.get("changes", []),
+                },
+            )
         if op["action"] == "conflict":
             failed = True
             record.status, record.message = "failed", op["reason"]
             record.save()
+            finish_sync_audit(audit_event, status="conflict", reason=op["reason"], target_dn=before_dn)
             continue
         if op["action"] == "skip":
             record.status = "skipped"
             record.save()
+            finish_sync_audit(audit_event, status="skipped", reason=op["reason"], target_dn=before_dn)
             continue
         try:
             key = op["target"]["guid"] if op.get("target") else "source-" + op["source_id"]
@@ -454,6 +805,11 @@ def apply(job, source, ad):
                             creation_record.save(update_fields=["evidence"])
                     record.target_guid = account["guid"]
                     record.evidence = {**record.evidence, "after_dn": account["dn"]}
+                    finish_sync_audit(
+                        audit_event, status="success", reason=op["reason"],
+                        target_dn=account["dn"], target_guid=account["guid"],
+                        after={"dn": account["dn"], "enabled": account["enabled"], "changes": op.get("changes", [])},
+                    )
                     if op["action"] == "onboard":
                         record.message = "已纳管并迁入部门 OU；账号 GUID 保持一致"
                     # Each successful user commits independently of later users.
@@ -479,6 +835,83 @@ def apply(job, source, ad):
             record.status = "failed"
             record.message = str(exc) if isinstance(exc, RuleError) else "操作未完整完成，请核验 AD 后重新预览"
             record.save()
+            finish_sync_audit(
+                audit_event, status="failed", reason=record.message,
+                target_dn=before_dn, target_guid=(op.get("target") or {}).get("guid"),
+            )
+    for membership in saved.get("group_memberships", []):
+        membership_key = hashlib.sha256(
+            f"{membership['department_id']}:{membership['member_source_id']}".encode()
+        ).hexdigest()[:32]
+        with transaction.atomic():
+            record = Operation.objects.create(
+                job=job,
+                source_id=("membership:" + membership_key)[:100],
+                action=membership["action"],
+                target_guid=membership.get("group_guid"),
+                evidence={
+                    "department_id": membership["department_id"],
+                    "group_dn": membership["group_dn"],
+                    "member_source_id": membership["member_source_id"],
+                    "member_type": membership["member_type"],
+                    "member_dn": membership["member_dn"],
+                    "reason_code": membership["reason_code"],
+                    "reason": membership["reason"],
+                },
+                reason_code=membership["reason_code"],
+            )
+            audit_event = start_sync_audit(
+                job,
+                object_type="group_membership",
+                source_id=membership["member_source_id"],
+                action=membership["action"],
+                reason_code=membership["reason_code"],
+                reason=membership["reason"],
+                target_dn=membership["group_dn"],
+                target_guid=membership.get("group_guid"),
+                before={
+                    "group_dn": membership["group_dn"],
+                    "member_dn": membership["member_dn"],
+                    "member_type": membership["member_type"],
+                },
+            )
+        if membership["action"] == "skip":
+            record.status = "skipped"
+            record.save(update_fields=["status"])
+            finish_sync_audit(
+                audit_event, status="skipped", reason=membership["reason"],
+                target_dn=membership["group_dn"], target_guid=membership.get("group_guid"),
+                after={"member_dn": membership["member_dn"], "changed": False},
+            )
+            continue
+        try:
+            group_binding = GroupBinding.objects.filter(source_id=membership["department_id"]).first()
+            if not group_binding:
+                raise RuleError("部门安全组尚未完成创建或绑定")
+            if not membership.get("member_dn"):
+                raise RuleError("分组成员目标为空，请重新预览")
+            with lock("group:" + str(group_binding.object_guid)):
+                group = ad.add_group_member(
+                    group_binding.object_guid,
+                    membership["member_dn"],
+                    config.root_ou,
+                )
+            record.target_guid, record.status = group_binding.object_guid, "success"
+            record.save(update_fields=["target_guid", "status"])
+            finish_sync_audit(
+                audit_event, status="success", reason=membership["reason"],
+                target_dn=group["dn"], target_guid=group["guid"],
+                after={"member_dn": membership["member_dn"], "member_count": len(group["members"]), "changed": True},
+            )
+        except Exception as exc:
+            failed = True
+            record.status = "failed"
+            record.message = str(exc) if isinstance(exc, RuleError) else "AD 分组成员操作失败，请核验后重新预览"
+            record.save()
+            finish_sync_audit(
+                audit_event, status="failed", reason=record.message,
+                target_dn=membership["group_dn"], target_guid=membership.get("group_guid"),
+            )
     return "partial_failed" if failed else "success"
 
 
@@ -578,9 +1011,10 @@ def run_sync_job(job):
             job.save(update_fields=["plan"])
             person_conflicts = sum(op["action"] == "conflict" for op in job.plan["operations"])
             department_conflicts = sum(op["action"] == "conflict" for op in job.plan["departments"])
+            group_conflicts = sum(op["action"] == "conflict" for op in job.plan.get("groups", []))
             if blocking_conflicts(job.plan, scheduled=job.kind == "scheduled"):
                 job.status = "blocked"
-                job.message = f"预览发现 {person_conflicts} 项人员冲突、{department_conflicts} 项部门冲突；未执行 AD 写入"
+                job.message = f"预览发现 {person_conflicts} 项人员冲突、{department_conflicts} 项部门冲突、{group_conflicts} 项分组冲突；未执行 AD 写入"
             elif job.plan["high_risk"]:
                 job.status = "needs_confirmation"
                 job.kind = "preview"
@@ -594,7 +1028,12 @@ def run_sync_job(job):
                 job.status = apply(job, source, ad)
             else:
                 job.status = "preview_ready"
-                job.message = f"预览完成：{len(job.plan['operations'])} 项人员计划、{len(job.plan['departments'])} 项部门计划；未执行 AD 写入"
+                job.message = (
+                    f"预览完成：{len(job.plan['operations'])} 项人员计划、"
+                    f"{len(job.plan['departments'])} 项部门计划、"
+                    f"{len(job.plan.get('groups', []))} 项分组计划、"
+                    f"{len(job.plan.get('group_memberships', []))} 项分组成员计划；未执行 AD 写入"
+                )
         else:
             ad.set_read_only(False)
             job.status = apply(job, source, ad)

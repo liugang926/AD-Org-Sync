@@ -18,6 +18,7 @@ urlpatterns = [
     path("jobs/status", views.job_status, name="job_status"),
     path("jobs/<uuid:job_id>", views.job_detail, name="job"),
     path("logs", views.logs, name="logs"),
+    path("logs/sync", views.sync_logs, name="sync_logs"),
     path("connections/test", views.test_connections, name="test_connections"),
     path("sspr", views.employee, name="sspr"),
     path("sspr/auth/dingtalk", views.employee_auth),

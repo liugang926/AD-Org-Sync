@@ -43,6 +43,7 @@ class Directory:
         self.disabled = []
         self.fail_update = set()
         self.ous = {"ou=people,dc=example,dc=com": str(uuid.uuid4())}
+        self.groups = {}
 
     def accounts(self):
         return copy.deepcopy(self.items)
@@ -90,6 +91,36 @@ class Directory:
 
     def ou_identity(self, dn):
         return self.ous.get(dn.casefold())
+
+    def group_identity(self, dn, root):
+        group = self.groups.get(dn.casefold())
+        return copy.deepcopy(group) if group else None
+
+    def ensure_group(self, dn, sam_account_name, root):
+        key = dn.casefold()
+        group = self.groups.get(key)
+        if group:
+            return copy.deepcopy(group)
+        group = {
+            "guid": str(uuid.uuid4()),
+            "dn": dn,
+            "sam_account_name": sam_account_name,
+            "group_type": 0x80000002,
+            "members": [],
+        }
+        self.groups[key] = group
+        return copy.deepcopy(group)
+
+    def add_group_member(self, group_guid, member_dn, root):
+        group = next(
+            (value for value in self.groups.values() if value["guid"] == str(group_guid)),
+            None,
+        )
+        if not group:
+            raise RuleError("AD 分组不存在或不唯一")
+        if member_dn.casefold() not in {value.casefold() for value in group["members"]}:
+            group["members"].append(member_dn)
+        return copy.deepcopy(group)
 
     def create(self, user, username, ou, root, *, enabled=True, require_change=True):
         self.created += 1

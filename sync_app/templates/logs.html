@@ -2,7 +2,7 @@
 {% load tz %}
 {% block title %}操作审计 · 组织同步控制台{% endblock %}
 {% block content %}
-<div class="page-heading"><div><p class="eyebrow">工作台 / 操作审计</p><h1>操作日志</h1><p class="page-subtitle">查看同步、账号绑定与员工密码重置记录。审计仅保存操作结果，不展示密码或授权码。</p></div></div>
+<div class="page-heading"><div><p class="eyebrow">工作台 / 操作审计</p><h1>操作日志</h1><p class="page-subtitle">查看同步、账号绑定与员工密码重置记录。审计仅保存操作结果，不展示密码或授权码。</p></div><a class="button-link secondary" href="{% url 'sync_logs' %}">查看逐项同步操作审计</a></div>
 
 <section class="card listing-card audit-card">
   <div class="card-head"><div><h2>审计记录</h2><p>时间均为北京时间（Asia/Shanghai，UTC+08:00）。姓名、工号和 AD 账号按操作时记录；历史缺失字段显示“—”。</p></div><span class="section-note">当前筛选共 {{ page.paginator.count }} 条</span></div>

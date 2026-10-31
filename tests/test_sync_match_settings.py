@@ -21,6 +21,7 @@ def configuration_payload(config):
         **{name: "on" for name in (
             "enable_new_accounts", "require_password_change", "disable_missing",
             "sspr_enabled", "unlock_after_reset", "schedule_enabled", "auto_associate_accounts", "auto_onboard_accounts",
+            "sync_groups",
         ) if getattr(config, name)},
         "_save": "保存",
     }
@@ -53,6 +54,7 @@ def test_admin_can_explicitly_save_job_to_sam_without_changing_other_policy(admi
     assert response.status_code == 200
     form = response.context["adminform"].form
     assert "employee_username" in dict(form.fields["match_field"].choices)
+    assert "sync_groups" in form.fields
     content = response.content.decode()
     assert "钉钉工号 → AD employeeID" in content
     assert "钉钉工号 → AD sAMAccountName" in content

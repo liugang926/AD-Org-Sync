@@ -90,6 +90,10 @@ class Configuration(models.Model):
         "自动纳管已有 AD 账号", default=False, db_default=False,
         help_text="开启后，同步任务将 LDAP 查询范围内唯一匹配或已关联的普通启用账号，从根 OU 外迁入对应部门并纳入管理。定时同步无需逐人确认；受保护、禁用、排除或身份冲突的账号不迁入。",
     )
+    sync_groups = models.BooleanField(
+        "同步部门 AD 全局安全组", default=True, db_default=True,
+        help_text="在每个部门 OU 下维护同名全局安全组；直属用户加入本部门组，子部门组嵌套到父部门组。",
+    )
     attributes = models.JSONField("同步属性", default=list, blank=True, help_text="displayName、mail、title、department、telephoneNumber")
     clear_attributes = models.JSONField("允许来源空值清除的属性", default=list, blank=True, help_text="必须属于已启用的同步属性；默认空值不覆盖 AD")
     enable_new_accounts = models.BooleanField("新建账号初始化成功后启用", default=True)
@@ -169,6 +173,18 @@ class DepartmentBinding(models.Model):
     manual = models.BooleanField(default=False)
 
 
+class GroupBinding(models.Model):
+    class Meta:
+        verbose_name = "部门安全组映射"
+        verbose_name_plural = "部门安全组映射"
+
+    source_id = models.CharField(max_length=100, unique=True)
+    dn = models.CharField(max_length=500)
+    object_guid = models.UUIDField(unique=True)
+    sam_account_name = models.CharField(max_length=20)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
 class Job(models.Model):
     class Meta:
         verbose_name = "同步任务"
@@ -200,6 +216,46 @@ class Operation(models.Model):
     target_guid = models.UUIDField(null=True)
     evidence = models.JSONField(default=dict)
     message = models.CharField(max_length=300, blank=True)
+    reason_code = models.CharField(max_length=64, blank=True, db_default="")
+
+
+class SyncAuditEvent(models.Model):
+    """Immutable, job-independent audit record for every synchronization mutation."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "待执行"
+        SUCCESS = "success", "成功"
+        FAILED = "failed", "失败"
+        SKIPPED = "skipped", "跳过"
+        CONFLICT = "conflict", "冲突"
+        UNKNOWN = "unknown", "结果不明"
+
+    event_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    job = models.ForeignKey(Job, null=True, blank=True, on_delete=models.SET_NULL, related_name="sync_audit_events")
+    job_identifier = models.CharField(max_length=36, db_index=True)
+    actor = models.CharField(max_length=150)
+    object_type = models.CharField(max_length=30)
+    source_id = models.CharField(max_length=150)
+    action = models.CharField(max_length=40)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    reason_code = models.CharField(max_length=64, blank=True, db_default="")
+    reason = models.CharField(max_length=500, blank=True)
+    target_dn = models.CharField(max_length=500, blank=True)
+    target_guid = models.UUIDField(null=True, blank=True)
+    before_values = models.JSONField(default=dict, blank=True)
+    after_values = models.JSONField(default=dict, blank=True)
+    started_at = models.DateTimeField(default=timezone.now)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "同步操作审计"
+        verbose_name_plural = "同步操作审计"
+        ordering = ["started_at", "event_id"]
+        indexes = [
+            models.Index(fields=["job_identifier", "started_at"]),
+            models.Index(fields=["object_type", "source_id"]),
+            models.Index(fields=["action", "status"]),
+        ]
 
 
 class Audit(models.Model):

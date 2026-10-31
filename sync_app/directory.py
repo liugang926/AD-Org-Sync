@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import requests
 from django.conf import settings
-from ldap3 import BASE, SUBTREE, Connection, MODIFY_REPLACE, Server, Tls
+from ldap3 import BASE, SUBTREE, Connection, MODIFY_ADD, MODIFY_REPLACE, Server, Tls
 from ldap3.utils.conv import escape_filter_chars
 from ldap3.utils.dn import escape_rdn, parse_dn
 
@@ -83,6 +83,21 @@ def validate_ou_dn(dn, root=None):
         raise RuleError("OU DN 格式无效：必须是 OU 层级和域 DN，不能使用域对象、CN 或多值 RDN") from None
     if root and not under(dn, root):
         raise RuleError("部门 OU 超出管理范围")
+    return parts
+
+
+def validate_group_dn(dn, root):
+    """Only a single-valued CN directly below a managed OU is a group target."""
+    try:
+        parts = parse_dn(dn)
+        parent = "".join(attribute + "=" + value + separator for attribute, value, separator in parts[1:]).rstrip(",")
+        validate_ou_dn(parent, root)
+        if not parts or parts[0][0].casefold() != "cn" or parts[0][2] != ",":
+            raise ValueError
+        if any(separator == "+" or not value.strip() or "\x00" in value for _, value, separator in parts):
+            raise ValueError
+    except Exception:
+        raise RuleError("AD 分组 DN 格式无效：必须是受管 OU 下的单一 CN") from None
     return parts
 
 
@@ -234,6 +249,7 @@ class DingTalk:
 
 class ActiveDirectory:
     DOMAIN_SCOPE_OID = "1.2.840.113556.1.4.1339"
+    GLOBAL_SECURITY_GROUP = 0x80000002
     ATTRS = ["objectGUID", "sAMAccountName", "employeeID", "mail", "displayName", "title", "department", "telephoneNumber", "userAccountControl", "adminCount", "objectSid", "lockoutTime", "isCriticalSystemObject", "uSNChanged"]
     MATCH = {"employee_id": "employeeID", "email": "mail", "source_id": "sAMAccountName"}
 
@@ -568,6 +584,105 @@ class ActiveDirectory:
             if self.conn.result.get("result") == 32:
                 return None
             raise
+
+    @staticmethod
+    def _scalar(attrs, name):
+        value = attrs.get(name)
+        if isinstance(value, list):
+            return value[0] if len(value) == 1 else None
+        return value
+
+    def group_identity(self, dn, root):
+        """Return a verified global security group at an exact DN."""
+        validate_group_dn(dn, root)
+        try:
+            rows = self.search(
+                "(objectClass=*)",
+                base=dn,
+                attrs=["objectGUID", "objectClass", "groupType", "sAMAccountName", "member"],
+                scope=BASE,
+            )
+        except RuleError:
+            if self.conn.result.get("result") == 32:
+                return None
+            raise
+        if not rows:
+            return None
+        if len(rows) != 1 or rows[0]["dn"].casefold() != dn.casefold():
+            raise RuleError("AD 分组目标不存在或不唯一")
+        attrs = rows[0].get("attributes", {})
+        classes = attrs.get("objectClass", [])
+        if isinstance(classes, str):
+            classes = [classes]
+        if not isinstance(classes, list) or "group" not in {str(value).casefold() for value in classes}:
+            raise RuleError("目标 DN 已存在但不是 AD 分组，请人工处理")
+        group_type = self._scalar(attrs, "groupType")
+        try:
+            group_type = int(group_type)
+        except (TypeError, ValueError):
+            raise RuleError("AD 分组类型无法核验，请人工处理") from None
+        if group_type != self.GLOBAL_SECURITY_GROUP:
+            raise RuleError("目标分组不是全局安全组，请人工处理")
+        guid = self._scalar(attrs, "objectGUID")
+        sam = self._scalar(attrs, "sAMAccountName")
+        if guid is None or not isinstance(sam, str) or not sam:
+            raise RuleError("AD 分组身份信息不完整，请人工处理")
+        members = attrs.get("member", [])
+        if isinstance(members, str):
+            members = [members]
+        if not isinstance(members, list):
+            raise RuleError("AD 分组成员信息无法核验，请人工处理")
+        return {
+            "guid": str(uuid.UUID(str(guid).strip("{}"))),
+            "dn": rows[0]["dn"],
+            "sam_account_name": sam,
+            "group_type": group_type,
+            "members": [str(value) for value in members],
+        }
+
+    def ensure_group(self, dn, sam_account_name, root):
+        self.require_write()
+        parts = validate_group_dn(dn, root)
+        existing = self.group_identity(dn, root)
+        if existing:
+            return existing
+        parent = "".join(attribute + "=" + value + separator for attribute, value, separator in parts[1:]).rstrip(",")
+        self.verify_ou(parent)
+        if not self.conn.add(
+            dn,
+            ["top", "group"],
+            {"sAMAccountName": sam_account_name, "groupType": self.GLOBAL_SECURITY_GROUP},
+        ):
+            result = self.conn.result or {}
+            code = result.get("result")
+            safe_code = str(code) if type(code) is int else "未知"
+            raise RuleError(f"创建 AD 全局安全组失败（LDAP 错误码 {safe_code}），请核对目标 OU 创建权限和命名规则")
+        created = self.group_identity(dn, root)
+        if not created:
+            raise RuleError("AD 分组已创建但无法确认对象，请人工核验")
+        return created
+
+    def add_group_member(self, group_guid, member_dn, root):
+        self.require_write()
+        if not under(member_dn, root):
+            raise RuleError("分组成员超出受管根 OU")
+        escaped = "".join(f"\\{byte:02x}" for byte in uuid.UUID(str(group_guid)).bytes_le)
+        rows = self.search(
+            f"(&(objectClass=group)(objectGUID={escaped}))",
+            attrs=["objectGUID", "objectClass", "groupType", "sAMAccountName", "member"],
+        )
+        if len(rows) != 1:
+            raise RuleError("AD 分组不存在或不唯一")
+        group = self.group_identity(rows[0]["dn"], root)
+        if not group or group["guid"] != str(group_guid):
+            raise RuleError("AD 分组身份已变化，请重新预览")
+        if member_dn.casefold() in {value.casefold() for value in group["members"]}:
+            return group
+        if not self.conn.modify(rows[0]["dn"], {"member": [(MODIFY_ADD, [member_dn])]}):
+            code = (self.conn.result or {}).get("result")
+            safe_code = str(code) if type(code) is int else "未知"
+            raise RuleError(f"添加分组成员失败（LDAP 错误码 {safe_code}），请核对分组和成员对象")
+        return self.group_identity(rows[0]["dn"], root)
 
     def create(self, user, username, ou, root, *, enabled=True, require_change=True):
         self.require_write()
