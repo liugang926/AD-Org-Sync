@@ -1,4 +1,5 @@
 """Bounded DingTalk reads and encrypted LDAPS operations."""
+import logging
 import secrets
 import ssl
 import string
@@ -18,6 +19,9 @@ from .domain import ResetOutcomeUnknown, RuleError, fingerprint, protected
 from .models import Configuration
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class PasswordResetOutcome:
     message: str
@@ -26,21 +30,69 @@ class PasswordResetOutcome:
 
 @dataclass(frozen=True)
 class EffectivePasswordPolicy:
-    minimum_length: int
-    complexity_enabled: bool
-    history_length: int
+    minimum_length: int | None
+    complexity_enabled: bool | None
+    history_length: int | None
     minimum_age_label: str
     maximum_age_label: str
     source: str
     fallback: bool = False
+    missing_fields: tuple[str, ...] = ()
+    lookup_failed: bool = False
+
+    @classmethod
+    def unavailable(cls):
+        return cls(
+            minimum_length=None,
+            complexity_enabled=None,
+            history_length=None,
+            minimum_age_label="",
+            maximum_age_label="",
+            source="unavailable",
+            fallback=True,
+            lookup_failed=True,
+        )
 
     @property
     def source_label(self):
+        if self.lookup_failed:
+            return "暂时无法读取 AD 密码策略"
         if self.source == "pso":
-            return "用户适用的细粒度密码策略"
-        if self.fallback:
-            return "域默认密码策略（未能确认用户专属策略）"
-        return "域默认密码策略"
+            label = "用户适用的细粒度密码策略"
+        elif self.fallback:
+            label = "域默认密码策略（未能确认用户专属策略）"
+        else:
+            label = "域默认密码策略"
+        if self.missing_fields:
+            label += "（部分属性不可读）"
+        return label
+
+    @property
+    def requirement_lines(self):
+        if self.lookup_failed:
+            return ()
+        lines = []
+        if self.minimum_length is not None:
+            lines.append(f"密码长度至少 {self.minimum_length} 位")
+        if self.complexity_enabled is True:
+            lines.extend((
+                "至少包含大写字母、小写字母、数字、特殊字符、其他 Unicode 字符中的三类",
+                "不得包含 AD 登录名或显示名称中的明显部分",
+            ))
+        elif self.complexity_enabled is False:
+            lines.append("未启用字符类别组合要求")
+        if self.history_length is not None:
+            lines.append(
+                f"不得与最近 {self.history_length} 个历史密码相同"
+                if self.history_length else "未限制重复使用历史密码"
+            )
+        if self.minimum_age_label:
+            lines.append(f"密码最短使用时间：{self.minimum_age_label}")
+        if self.maximum_age_label:
+            lines.append(f"密码最长使用时间：{self.maximum_age_label}")
+        if self.missing_fields:
+            lines.append("部分策略属性暂时无法读取；域控仍会执行完整密码校验")
+        return tuple(lines)
 
 
 def _duration_label(seconds):
@@ -72,6 +124,23 @@ def domain_name_from_dn(dn):
                 return ""
             values.append(value.strip().casefold())
         return ".".join(reversed(values))
+    except Exception:
+        return ""
+
+
+def domain_dn_from_base_dn(dn):
+    """Return the trailing DC components as a domain root DN."""
+    try:
+        values = []
+        for attribute, value, separator in reversed(parse_dn(dn)):
+            if attribute.casefold() != "dc":
+                break
+            if separator == "+" or not value.strip() or "\x00" in value:
+                return ""
+            values.append(value.strip())
+        if not values:
+            return ""
+        return ",".join(f"DC={escape_rdn(value)}" for value in reversed(values))
     except Exception:
         return ""
 
@@ -310,12 +379,13 @@ class ActiveDirectory:
         if self.conn.read_only is True:
             raise RuleError("当前为只读预览，禁止写入 AD")
 
-    def search(self, query, base=None, attrs=None, scope=SUBTREE):
+    def search(self, query, base=None, attrs=None, scope=SUBTREE, *, domain_scope=True):
         results, cookie, seen = [], None, set()
         try:
             while True:
                 # Keep searches in this AD naming context instead of following DNS/forest referrals.
-                self.conn.search(base or settings.LDAP_BASE_DN, query, scope, attributes=attrs or self.ATTRS, paged_size=500, paged_cookie=cookie, controls=[(self.DOMAIN_SCOPE_OID, True, None)])
+                controls = [(self.DOMAIN_SCOPE_OID, True, None)] if domain_scope else []
+                self.conn.search(base or settings.LDAP_BASE_DN, query, scope, attributes=attrs or self.ATTRS, paged_size=500, paged_cookie=cookie, controls=controls)
                 if self.conn.result.get("result") != 0:
                     raise RuleError("AD 查询未完整成功")
                 if any(r["type"] == "searchResRef" for r in self.conn.response):
@@ -470,11 +540,22 @@ class ActiveDirectory:
                 return False
         return default
 
+    @staticmethod
+    def _policy_result_code(connection):
+        result = getattr(connection, "result", None)
+        if not isinstance(result, dict):
+            return None
+        code = result.get("result")
+        return code if type(code) is int else None
+
     def _default_naming_context(self):
-        """Read RootDSE and return the naming context containing the configured root."""
+        """Return the domain root, avoiding RootDSE when the base DN already provides it."""
+        configured = domain_dn_from_base_dn(settings.LDAP_BASE_DN)
+        if configured:
+            return configured
         self.conn.search(
             "", "(objectClass=*)", BASE, attributes=["*", "+"],
-            controls=[(self.DOMAIN_SCOPE_OID, True, None)],
+            controls=[],
         )
         if self.conn.result.get("result") != 0:
             raise RuleError("无法读取 AD 域信息")
@@ -492,23 +573,43 @@ class ActiveDirectory:
 
     def effective_password_policy(self, account):
         """Return a display-safe snapshot of the policy that applies to this user."""
-        naming_context = self._default_naming_context()
-        domain_rows = self.search(
-            "(objectClass=domainDNS)",
-            base=naming_context,
-            attrs=["minPwdLength", "pwdProperties", "pwdHistoryLength", "pwdMinAge", "pwdMaxAge"],
-            scope=BASE,
-        )
-        if len(domain_rows) != 1 or domain_rows[0]["dn"].casefold() != naming_context.casefold():
-            raise RuleError("AD 域密码策略缺失或不唯一")
-        domain_attrs = domain_rows[0].get("attributes", {})
-        minimum_length = self._policy_integer(domain_attrs, "minPwdLength")
-        history_length = self._policy_integer(domain_attrs, "pwdHistoryLength", 0)
-        properties = self._policy_integer(domain_attrs, "pwdProperties")
-        if minimum_length is None or history_length is None or properties is None:
-            raise RuleError("AD 域密码策略属性不完整")
-        minimum_age = self._policy_integer(domain_attrs, "pwdMinAge", 0)
-        maximum_age = self._policy_integer(domain_attrs, "pwdMaxAge", 0)
+        stage = "domain_root"
+        try:
+            naming_context = self._default_naming_context()
+            stage = "domain_policy"
+            domain_rows = self.search(
+                "(objectClass=domainDNS)",
+                base=naming_context,
+                attrs=["minPwdLength", "pwdProperties", "pwdHistoryLength", "pwdMinAge", "pwdMaxAge"],
+                scope=BASE,
+                domain_scope=False,
+            )
+            if len(domain_rows) != 1 or domain_rows[0]["dn"].casefold() != naming_context.casefold():
+                raise RuleError("AD 域密码策略缺失或不唯一")
+            domain_attrs = domain_rows[0].get("attributes", {})
+            minimum_length = self._policy_integer(domain_attrs, "minPwdLength")
+            history_length = self._policy_integer(domain_attrs, "pwdHistoryLength")
+            properties = self._policy_integer(domain_attrs, "pwdProperties")
+            minimum_age = self._policy_integer(domain_attrs, "pwdMinAge", 0) or 0
+            maximum_age = self._policy_integer(domain_attrs, "pwdMaxAge", 0) or 0
+            if minimum_length is None and properties is None:
+                raise RuleError("AD 域密码策略核心属性不可读")
+            missing_fields = [
+                name for name, value in (
+                    ("minimum_length", minimum_length),
+                    ("complexity_enabled", properties),
+                    ("history_length", history_length),
+                )
+                if value is None
+            ]
+        except Exception as exc:
+            logger.warning(
+                "password_policy_lookup_failed stage=%s result=%s error=%s",
+                stage,
+                self._policy_result_code(getattr(self, "conn", None)),
+                type(exc).__name__,
+            )
+            raise
 
         source = "domain"
         fallback = False
@@ -521,6 +622,7 @@ class ActiveDirectory:
                 base=user_dn,
                 attrs=["msDS-ResultantPSO"],
                 scope=BASE,
+                domain_scope=False,
             )
             if len(user_rows) != 1 or user_rows[0]["dn"].casefold() != user_dn.casefold():
                 raise RuleError("AD 用户策略归属无法核验")
@@ -537,6 +639,7 @@ class ActiveDirectory:
                         "msDS-MaximumPasswordAge",
                     ],
                     scope=BASE,
+                    domain_scope=False,
                 )
                 if len(pso_rows) != 1:
                     raise RuleError("用户适用的细粒度密码策略不唯一")
@@ -544,7 +647,7 @@ class ActiveDirectory:
                 pso_minimum = self._policy_integer(pso_attrs, "msDS-MinimumPasswordLength")
                 pso_history = self._policy_integer(pso_attrs, "msDS-PasswordHistoryLength")
                 pso_complexity = self._policy_value(pso_attrs, "msDS-PasswordComplexityEnabled")
-                if pso_minimum is None or pso_history is None or pso_complexity is None:
+                if pso_minimum is None and pso_complexity is None and pso_history is None:
                     raise RuleError("细粒度密码策略属性不完整")
                 pso_minimum_age = self._policy_integer(
                     pso_attrs, "msDS-MinimumPasswordAge", minimum_age
@@ -552,25 +655,45 @@ class ActiveDirectory:
                 pso_maximum_age = self._policy_integer(
                     pso_attrs, "msDS-MaximumPasswordAge", maximum_age
                 )
-                minimum_length = pso_minimum
-                history_length = pso_history
+                if pso_minimum is not None:
+                    minimum_length = pso_minimum
+                if pso_history is not None:
+                    history_length = pso_history
                 minimum_age = pso_minimum_age
                 maximum_age = pso_maximum_age
-                properties = 1 if self._policy_boolean(pso_attrs, "msDS-PasswordComplexityEnabled") else 0
+                pso_complexity = self._policy_boolean(
+                    pso_attrs, "msDS-PasswordComplexityEnabled", None
+                )
+                if pso_complexity is not None:
+                    properties = 1 if pso_complexity else 0
                 source = "pso"
-        except Exception:
+                missing_fields = [
+                    name for name, value in (
+                        ("minimum_length", minimum_length),
+                        ("complexity_enabled", properties),
+                        ("history_length", history_length),
+                    )
+                    if value is None
+                ]
+        except Exception as exc:
             # The domain policy remains useful even when PSO resolution is unavailable.
+            logger.warning(
+                "password_policy_pso_fallback result=%s error=%s",
+                self._policy_result_code(getattr(self, "conn", None)),
+                type(exc).__name__,
+            )
             source = "domain"
             fallback = True
 
         return EffectivePasswordPolicy(
             minimum_length=minimum_length,
-            complexity_enabled=bool(properties & 0x01),
+            complexity_enabled=bool(properties & 0x01) if properties is not None else None,
             history_length=history_length,
             minimum_age_label=_duration_label(minimum_age),
             maximum_age_label=_duration_label(maximum_age),
             source=source,
             fallback=fallback,
+            missing_fields=tuple(missing_fields),
         )
 
     def check_account(self, guid):
