@@ -1,15 +1,19 @@
 """Employee authorization depends on live LDAPS identity, never sync status."""
+import logging
 import secrets
 from datetime import timedelta
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
-from .directory import DingTalk, ActiveDirectory
+from .directory import DingTalk, ActiveDirectory, EffectivePasswordPolicy
 from .domain import ResetOutcomeUnknown, RuleError, fingerprint, protected
 from .locking import lock
 from .models import Audit, Configuration, EmployeeSession
 from .password_notifications import enqueue_password_notification
 from .security import audit, normalized_ip, rate_limit
+
+
+logger = logging.getLogger(__name__)
 
 
 def _close_clients(*clients):
@@ -24,10 +28,15 @@ def _close_clients(*clients):
 
 def _effective_password_policy(ad, account):
     try:
-        return ad.effective_password_policy(account)
-    except Exception:
-        # Policy presentation is advisory; it must never block account recovery.
-        return None
+        policy = ad.effective_password_policy(account)
+    except Exception as exc:
+        logger.warning(
+            "password_policy_unavailable error=%s",
+            type(exc).__name__,
+        )
+        policy = None
+    # Policy presentation is advisory; it must never block account recovery.
+    return policy or EffectivePasswordPolicy.unavailable()
 
 
 def _finish_attempt(attempt, result, success, state):
@@ -202,20 +211,21 @@ def password_policy(token):
     config = Configuration.current()
     if not item or not config.sspr_enabled or item.config_fingerprint != config_signature(config):
         return None
-    source = ad = None
+    ad = None
     try:
-        source = DingTalk()
         ad = ActiveDirectory()
-        user, target = match_employee(source, ad, config, source_id=item.source_id)
-        if user["source_id"] != item.source_id or target["guid"] != str(item.object_guid):
-            return None
-        if item.config_fingerprint != config_signature(Configuration.current()):
+        target = ad.by_guid(item.object_guid)
+        if str(target.get("guid") or "") != str(item.object_guid):
             return None
         return _effective_password_policy(ad, target)
-    except Exception:
-        return None
+    except Exception as exc:
+        logger.warning(
+            "password_policy_session_lookup_failed error=%s",
+            type(exc).__name__,
+        )
+        return EffectivePasswordPolicy.unavailable()
     finally:
-        _close_clients(source, ad)
+        _close_clients(ad)
 
 
 def reset(token, password, confirmation, ip):

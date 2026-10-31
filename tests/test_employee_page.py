@@ -105,7 +105,9 @@ def test_password_policy_read_failure_does_not_block_password_form(client, emplo
     assert response.status_code == 200
     assert 'action="/sspr/reset"' in html
     assert "当前 AD 账号" in html
-    assert "当前生效的 AD 密码策略" not in html
+    assert "当前生效的 AD 密码策略" in html
+    assert "暂时无法读取 AD 密码策略" in html
+    assert "密码修改仍会由域控按实际策略校验" in html
     assert "private policy diagnostic" not in html
 
 

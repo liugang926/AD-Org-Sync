@@ -122,6 +122,9 @@ def test_policy_rejection_stays_visible_when_notification_queue_fails(client, se
     assert 'role="alert"' in content
     assert "新密码不满足 AD 域密码策略，密码未修改" in content
     assert 'data-auto-start="false"' in content
+    assert "当前生效的 AD 密码策略" in content
+    assert "密码长度至少 12 位" in content
+    assert "域默认密码策略" in content
     assert "private notification queue diagnostic" not in content
     assert Audit.objects.get(action="sspr_reset").state == "failed"
 
@@ -158,6 +161,7 @@ def test_ad_password_policy_rejection_is_visible_and_safe(client, setup_sspr, mo
     assert "private directory diagnostic" not in content
     assert target["dn"] not in content
     assert "Ab1!xyza" not in content
+    assert "暂时无法读取 AD 密码策略" in content
     audit = Audit.objects.get(action="sspr_reset")
     assert "private directory diagnostic" not in audit.result
     assert target["dn"] not in audit.result
@@ -168,6 +172,26 @@ def test_ad_password_policy_rejection_is_visible_and_safe(client, setup_sspr, mo
     response = client.post("/sspr/reset", {"password": "Ab1!xyza", "confirmation": "Ab1!xyza"})
     assert response.status_code == 200
     assert "密码已成功重置" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_consumed_session_policy_lookup_does_not_need_dingtalk(setup_sspr, monkeypatch):
+    _, ad, _ = setup_sspr
+    token, _ = sspr.verify("valid", "ip")
+    EmployeeSession.objects.filter(digest=sspr.fingerprint(token)).update(used=True)
+
+    def dingtalk_unavailable():
+        raise AssertionError("consumed session lookup must not call DingTalk")
+
+    monkeypatch.setattr(sspr, "DingTalk", dingtalk_unavailable)
+    policy = sspr.password_policy(token)
+
+    assert policy is not None
+    assert policy.minimum_length == 12
+    assert policy.history_length == 24
+    assert ad.items[0]["guid"] == str(
+        EmployeeSession.objects.get(digest=sspr.fingerprint(token)).object_guid
+    )
 
 
 @pytest.mark.django_db
