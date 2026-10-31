@@ -69,6 +69,7 @@ def test_verified_account_shows_enabled_platforms_in_order_without_binding(clien
     assert "用户@example.com" in html and r"example\用户" in html
     assert "当前生效的 AD 密码策略" in html
     assert "密码长度至少 12 位" in html
+    assert "不得包含 AD 登录名或显示名称中的明显部分" in html
     assert "最近 24 个历史密码" in html
     assert "域默认密码策略" in html
     assert html.index("VPN") < html.index("Nextcloud")

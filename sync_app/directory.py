@@ -533,6 +533,8 @@ class ActiveDirectory:
                         "msDS-MinimumPasswordLength",
                         "msDS-PasswordComplexityEnabled",
                         "msDS-PasswordHistoryLength",
+                        "msDS-MinimumPasswordAge",
+                        "msDS-MaximumPasswordAge",
                     ],
                     scope=BASE,
                 )
@@ -544,8 +546,16 @@ class ActiveDirectory:
                 pso_complexity = self._policy_value(pso_attrs, "msDS-PasswordComplexityEnabled")
                 if pso_minimum is None or pso_history is None or pso_complexity is None:
                     raise RuleError("细粒度密码策略属性不完整")
+                pso_minimum_age = self._policy_integer(
+                    pso_attrs, "msDS-MinimumPasswordAge", minimum_age
+                )
+                pso_maximum_age = self._policy_integer(
+                    pso_attrs, "msDS-MaximumPasswordAge", maximum_age
+                )
                 minimum_length = pso_minimum
                 history_length = pso_history
+                minimum_age = pso_minimum_age
+                maximum_age = pso_maximum_age
                 properties = 1 if self._policy_boolean(pso_attrs, "msDS-PasswordComplexityEnabled") else 0
                 source = "pso"
         except Exception:

@@ -61,7 +61,50 @@ def test_effective_password_policy_prefers_user_pso():
     pso_dn = "CN=Strong,CN=Password Settings Container,CN=System," + DOMAIN
     directory = policy_directory(
         [entry(account()["dn"], **{"msDS-ResultantPSO": [pso_dn]})],
-        [entry(DOMAIN, minPwdLength=[8], pwdProperties=[0], pwdHistoryLength=[24])],
+        [entry(
+            DOMAIN,
+            minPwdLength=[8],
+            pwdProperties=[0],
+            pwdHistoryLength=[24],
+            pwdMinAge=[timedelta(hours=1)],
+            pwdMaxAge=[timedelta(days=90)],
+        )],
+        [entry(
+            pso_dn,
+            **{
+                "msDS-MinimumPasswordLength": [14],
+                "msDS-PasswordComplexityEnabled": [True],
+                "msDS-PasswordHistoryLength": [8],
+                "msDS-MinimumPasswordAge": [timedelta(days=1)],
+                "msDS-MaximumPasswordAge": [timedelta(days=30)],
+            },
+        )],
+    )
+
+    policy = directory.effective_password_policy(account())
+
+    assert policy.minimum_length == 14
+    assert policy.complexity_enabled is True
+    assert policy.history_length == 8
+    assert policy.minimum_age_label == "1 天"
+    assert policy.maximum_age_label == "30 天"
+    assert policy.source == "pso"
+    assert policy.source_label == "用户适用的细粒度密码策略"
+    assert policy.fallback is False
+
+
+def test_effective_password_policy_pso_age_falls_back_to_domain_when_absent():
+    pso_dn = "CN=Strong,CN=Password Settings Container,CN=System," + DOMAIN
+    directory = policy_directory(
+        [entry(account()["dn"], **{"msDS-ResultantPSO": [pso_dn]})],
+        [entry(
+            DOMAIN,
+            minPwdLength=[8],
+            pwdProperties=[0],
+            pwdHistoryLength=[24],
+            pwdMinAge=[timedelta(hours=1)],
+            pwdMaxAge=[timedelta(days=90)],
+        )],
         [entry(
             pso_dn,
             **{
@@ -74,12 +117,9 @@ def test_effective_password_policy_prefers_user_pso():
 
     policy = directory.effective_password_policy(account())
 
-    assert policy.minimum_length == 14
-    assert policy.complexity_enabled is True
-    assert policy.history_length == 8
+    assert policy.minimum_age_label == "1 小时"
+    assert policy.maximum_age_label == "90 天"
     assert policy.source == "pso"
-    assert policy.source_label == "用户适用的细粒度密码策略"
-    assert policy.fallback is False
 
 
 def test_effective_password_policy_marks_domain_fallback_when_pso_lookup_fails():
