@@ -59,12 +59,14 @@
       {% endif %}
       <form method="post" action="/sspr/reset">
         {% csrf_token %}
+        {% include "components/password_policy.html" with policy=account.password_policy %}
         <label>新密码<input type="password" name="password" autocomplete="new-password" minlength="{{ minimum }}" maxlength="128" required></label>
         <label>确认新密码<input type="password" name="confirmation" autocomplete="new-password" minlength="{{ minimum }}" maxlength="128" required></label>
         <p>至少 {{ minimum }} 位，并符合企业 AD 密码策略。</p>
         <button>确认重置本人密码</button>
       </form>
     {% elif error %}
+      {% include "components/password_policy.html" with policy=password_policy %}
       <p id="status" role="status" aria-live="polite">请先确认上方失败原因。页面不会自动跳转，确认后将重新进行钉钉身份验证。</p>
       <form id="verify" data-corp="{{ corp_id }}" data-client="{{ app_key }}" data-auto-start="false">
         {% csrf_token %}

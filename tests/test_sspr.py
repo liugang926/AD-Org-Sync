@@ -96,6 +96,8 @@ def test_directory_rejection_consumes_session_and_hides_account(client, setup_ss
     assert 'id="verify"' in content
     assert 'data-auto-start="false"' in content
     assert "我已了解，重新验证" in content
+    assert "当前生效的 AD 密码策略" in content
+    assert "密码长度至少 12 位" in content
     assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
 
 
