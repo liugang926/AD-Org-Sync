@@ -6,7 +6,7 @@ import uuid
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 from django.conf import settings
@@ -22,6 +22,42 @@ from .models import Configuration
 class PasswordResetOutcome:
     message: str
     complete: bool
+
+
+@dataclass(frozen=True)
+class EffectivePasswordPolicy:
+    minimum_length: int
+    complexity_enabled: bool
+    history_length: int
+    minimum_age_label: str
+    maximum_age_label: str
+    source: str
+    fallback: bool = False
+
+    @property
+    def source_label(self):
+        if self.source == "pso":
+            return "用户适用的细粒度密码策略"
+        if self.fallback:
+            return "域默认密码策略（未能确认用户专属策略）"
+        return "域默认密码策略"
+
+
+def _duration_label(seconds):
+    """Render an LDAP duration without implying a password value."""
+    if not isinstance(seconds, int) or seconds <= 0:
+        return ""
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes = remainder // 60
+    parts = []
+    if days:
+        parts.append(f"{days} 天")
+    if hours:
+        parts.append(f"{hours} 小时")
+    if minutes and not days:
+        parts.append(f"{minutes} 分钟")
+    return " ".join(parts) or "不足 1 分钟"
 
 
 def domain_name_from_dn(dn):
@@ -384,6 +420,148 @@ class ActiveDirectory:
         if len(entries) != 1:
             raise RuleError("AD 目标对象不存在或不唯一")
         return self.account(entries[0], self.extra_protected)
+
+    @staticmethod
+    def _policy_value(attrs, name):
+        value = attrs.get(name) if isinstance(attrs, Mapping) else None
+        if isinstance(value, list):
+            return value[0] if len(value) == 1 else None
+        return value
+
+    @classmethod
+    def _policy_integer(cls, attrs, name, default=None):
+        value = cls._policy_value(attrs, name)
+        if isinstance(value, timedelta):
+            seconds = value.total_seconds()
+            if seconds.is_integer() and seconds >= 0:
+                return int(seconds)
+            return default
+        if value is None or isinstance(value, bool):
+            return default
+        if isinstance(value, bytes):
+            try:
+                value = value.decode("ascii")
+            except UnicodeDecodeError:
+                return default
+        if isinstance(value, str):
+            if not value.isascii() or not value.isdigit():
+                return default
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return default
+        return number if number >= 0 else default
+
+    @classmethod
+    def _policy_boolean(cls, attrs, name, default=False):
+        value = cls._policy_value(attrs, name)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, bytes):
+            try:
+                value = value.decode("ascii")
+            except UnicodeDecodeError:
+                return default
+        if isinstance(value, str):
+            normalized = value.strip().casefold()
+            if normalized in {"true", "1", "yes"}:
+                return True
+            if normalized in {"false", "0", "no"}:
+                return False
+        return default
+
+    def _default_naming_context(self):
+        """Read RootDSE and return the naming context containing the configured root."""
+        self.conn.search(
+            "", "(objectClass=*)", BASE, attributes=["*", "+"],
+            controls=[(self.DOMAIN_SCOPE_OID, True, None)],
+        )
+        if self.conn.result.get("result") != 0:
+            raise RuleError("无法读取 AD 域信息")
+        if any(row["type"] == "searchResRef" for row in self.conn.response):
+            raise RuleError("AD 域信息包含未处理的引用")
+        root_rows = [row for row in self.conn.response if row["type"] == "searchResEntry"]
+        if len(root_rows) != 1 or root_rows[0]["dn"] != "":
+            raise RuleError("AD 域信息不完整")
+        naming_context = self._policy_value(root_rows[0].get("attributes"), "defaultNamingContext")
+        if not isinstance(naming_context, str) or not naming_context:
+            raise RuleError("AD 域信息缺少命名上下文")
+        if not under(settings.LDAP_BASE_DN, naming_context):
+            raise RuleError("AD 查询范围与域命名上下文不一致")
+        return naming_context
+
+    def effective_password_policy(self, account):
+        """Return a display-safe snapshot of the policy that applies to this user."""
+        naming_context = self._default_naming_context()
+        domain_rows = self.search(
+            "(objectClass=domainDNS)",
+            base=naming_context,
+            attrs=["minPwdLength", "pwdProperties", "pwdHistoryLength", "pwdMinAge", "pwdMaxAge"],
+            scope=BASE,
+        )
+        if len(domain_rows) != 1 or domain_rows[0]["dn"].casefold() != naming_context.casefold():
+            raise RuleError("AD 域密码策略缺失或不唯一")
+        domain_attrs = domain_rows[0].get("attributes", {})
+        minimum_length = self._policy_integer(domain_attrs, "minPwdLength")
+        history_length = self._policy_integer(domain_attrs, "pwdHistoryLength", 0)
+        properties = self._policy_integer(domain_attrs, "pwdProperties")
+        if minimum_length is None or history_length is None or properties is None:
+            raise RuleError("AD 域密码策略属性不完整")
+        minimum_age = self._policy_integer(domain_attrs, "pwdMinAge", 0)
+        maximum_age = self._policy_integer(domain_attrs, "pwdMaxAge", 0)
+
+        source = "domain"
+        fallback = False
+        try:
+            user_dn = str(account.get("dn") or "")
+            if not user_dn or not under(user_dn, naming_context):
+                raise RuleError("AD 用户不在域命名上下文中")
+            user_rows = self.search(
+                "(objectClass=user)",
+                base=user_dn,
+                attrs=["msDS-ResultantPSO"],
+                scope=BASE,
+            )
+            if len(user_rows) != 1 or user_rows[0]["dn"].casefold() != user_dn.casefold():
+                raise RuleError("AD 用户策略归属无法核验")
+            pso_dn = self._policy_value(user_rows[0].get("attributes", {}), "msDS-ResultantPSO")
+            if isinstance(pso_dn, str) and pso_dn.strip():
+                pso_rows = self.search(
+                    "(objectClass=msDS-PasswordSettings)",
+                    base=pso_dn.strip(),
+                    attrs=[
+                        "msDS-MinimumPasswordLength",
+                        "msDS-PasswordComplexityEnabled",
+                        "msDS-PasswordHistoryLength",
+                    ],
+                    scope=BASE,
+                )
+                if len(pso_rows) != 1:
+                    raise RuleError("用户适用的细粒度密码策略不唯一")
+                pso_attrs = pso_rows[0].get("attributes", {})
+                pso_minimum = self._policy_integer(pso_attrs, "msDS-MinimumPasswordLength")
+                pso_history = self._policy_integer(pso_attrs, "msDS-PasswordHistoryLength")
+                pso_complexity = self._policy_value(pso_attrs, "msDS-PasswordComplexityEnabled")
+                if pso_minimum is None or pso_history is None or pso_complexity is None:
+                    raise RuleError("细粒度密码策略属性不完整")
+                minimum_length = pso_minimum
+                history_length = pso_history
+                properties = 1 if self._policy_boolean(pso_attrs, "msDS-PasswordComplexityEnabled") else 0
+                source = "pso"
+        except Exception:
+            # The domain policy remains useful even when PSO resolution is unavailable.
+            source = "domain"
+            fallback = True
+
+        return EffectivePasswordPolicy(
+            minimum_length=minimum_length,
+            complexity_enabled=bool(properties & 0x01),
+            history_length=history_length,
+            minimum_age_label=_duration_label(minimum_age),
+            maximum_age_label=_duration_label(maximum_age),
+            source=source,
+            fallback=fallback,
+        )
 
     def check_account(self, guid):
         account = self.by_guid(guid)

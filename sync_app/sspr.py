@@ -22,6 +22,14 @@ def _close_clients(*clients):
                 pass
 
 
+def _effective_password_policy(ad, account):
+    try:
+        return ad.effective_password_policy(account)
+    except Exception:
+        # Policy presentation is advisory; it must never block account recovery.
+        return None
+
+
 def _finish_attempt(attempt, result, success, state):
     attempt.result, attempt.success, attempt.state = result, success, state
     attempt.completed_at = max(timezone.now(), attempt.created_at)
@@ -179,7 +187,33 @@ def current_account(token):
             raise RuleError("AD 匹配对象发生变化，请重新验证")
         if item.config_fingerprint != config_signature(Configuration.current()):
             raise RuleError("配置发生变化，请重新验证")
-        return {"username": target["username"], "name": user["name"]}
+        return {
+            "username": target["username"],
+            "name": user["name"],
+            "password_policy": _effective_password_policy(ad, target),
+        }
+    finally:
+        _close_clients(source, ad)
+
+
+def password_policy(token):
+    """Return the authenticated user's policy even after a failed reset consumed the session."""
+    item = EmployeeSession.objects.filter(digest=fingerprint(token), expires_at__gt=timezone.now()).first()
+    config = Configuration.current()
+    if not item or not config.sspr_enabled or item.config_fingerprint != config_signature(config):
+        return None
+    source = ad = None
+    try:
+        source = DingTalk()
+        ad = ActiveDirectory()
+        user, target = match_employee(source, ad, config, source_id=item.source_id)
+        if user["source_id"] != item.source_id or target["guid"] != str(item.object_guid):
+            return None
+        if item.config_fingerprint != config_signature(Configuration.current()):
+            return None
+        return _effective_password_policy(ad, target)
+    except Exception:
+        return None
     finally:
         _close_clients(source, ad)
 

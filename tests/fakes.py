@@ -1,7 +1,7 @@
 import copy
 import uuid
 from sync_app.domain import RuleError, protected
-from sync_app.directory import PasswordResetOutcome
+from sync_app.directory import EffectivePasswordPolicy, PasswordResetOutcome
 from ldap3.utils.dn import parse_dn
 
 
@@ -63,6 +63,16 @@ class Directory:
 
     def password_reset_allowed(self, account):
         return account["enabled"] is True and (not protected(account) or account.get("domain_admin") is True)
+
+    def effective_password_policy(self, account):
+        return EffectivePasswordPolicy(
+            minimum_length=12,
+            complexity_enabled=True,
+            history_length=24,
+            minimum_age_label="",
+            maximum_age_label="90 天",
+            source="domain",
+        )
 
     def check_password_reset_account(self, guid):
         item = self.by_guid(guid)

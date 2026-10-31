@@ -143,7 +143,10 @@ def test_username_mode_preserves_dingtalk_allowlist(username_sspr, settings):
 def test_username_mode_verifies_displays_and_resets_without_sync_binding(username_sspr):
     _, ad, _ = username_sspr
     token, matched = sspr.verify("valid", "192.0.2.10")
-    assert sspr.current_account(token) == {"username": "T0002341", "name": "测试员工"}
+    current = sspr.current_account(token)
+    assert current["username"] == "T0002341" and current["name"] == "测试员工"
+    assert current["password_policy"].minimum_length == 12
+    assert current["password_policy"].history_length == 24
     item = EmployeeSession.objects.get(digest=sspr.fingerprint(token))
     assert item.source_id == "dingtalk-2341" and item.employee_id == "T0002341"
     assert str(item.object_guid) == matched["guid"] and item.target_username == "T0002341"
