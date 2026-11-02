@@ -5,7 +5,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
-from .directory import DingTalk, ActiveDirectory, EffectivePasswordPolicy
+from .directory import DingTalk, ActiveDirectory
 from .domain import ResetOutcomeUnknown, RuleError, fingerprint, protected
 from .locking import lock
 from .models import Audit, Configuration, EmployeeSession
@@ -24,19 +24,6 @@ def _close_clients(*clients):
                 client.close()
             except Exception:
                 pass
-
-
-def _effective_password_policy(ad, account):
-    try:
-        policy = ad.effective_password_policy(account)
-    except Exception as exc:
-        logger.warning(
-            "password_policy_unavailable error=%s",
-            type(exc).__name__,
-        )
-        policy = None
-    # Policy presentation is advisory; it must never block account recovery.
-    return policy or EffectivePasswordPolicy.unavailable()
 
 
 def _finish_attempt(attempt, result, success, state):
@@ -199,33 +186,9 @@ def current_account(token):
         return {
             "username": target["username"],
             "name": user["name"],
-            "password_policy": _effective_password_policy(ad, target),
         }
     finally:
         _close_clients(source, ad)
-
-
-def password_policy(token):
-    """Return the authenticated user's policy even after a failed reset consumed the session."""
-    item = EmployeeSession.objects.filter(digest=fingerprint(token), expires_at__gt=timezone.now()).first()
-    config = Configuration.current()
-    if not item or not config.sspr_enabled or item.config_fingerprint != config_signature(config):
-        return None
-    ad = None
-    try:
-        ad = ActiveDirectory()
-        target = ad.by_guid(item.object_guid)
-        if str(target.get("guid") or "") != str(item.object_guid):
-            return None
-        return _effective_password_policy(ad, target)
-    except Exception as exc:
-        logger.warning(
-            "password_policy_session_lookup_failed error=%s",
-            type(exc).__name__,
-        )
-        return EffectivePasswordPolicy.unavailable()
-    finally:
-        _close_clients(ad)
 
 
 def reset(token, password, confirmation, ip):
