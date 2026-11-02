@@ -69,9 +69,11 @@ def test_verified_account_shows_enabled_platforms_in_order_without_binding(clien
     assert "用户@example.com" in html and r"example\用户" in html
     assert "密码要求" in html
     assert "密码至少 8 位" in html
-    assert "至少包含 3 类字符" in html
-    assert "大写英文字母、小写英文字母、数字、特殊符号" in html
-    assert "大写英文字母和小写英文字母分别计算为一类" in html
+    assert "至少包含以下 4 类字符中的 3 类" in html
+    assert "大写字母计 1 类" in html
+    assert "小写字母计 1 类" in html
+    assert "数字计 1 类" in html
+    assert "特殊符号计 1 类" in html
     assert html.index("VPN") < html.index("Nextcloud")
     assert "已关闭平台" not in html
     assert 'href="https://vpn.example.com/"' in html
@@ -109,7 +111,11 @@ def test_password_form_does_not_read_dynamic_password_policy(client, employee_co
     assert "当前 AD 账号" in html
     assert "密码要求" in html
     assert "密码至少 8 位" in html
-    assert "至少包含 3 类字符" in html
+    assert "至少包含以下 4 类字符中的 3 类" in html
+    assert "大写字母计 1 类" in html
+    assert "小写字母计 1 类" in html
+    assert "数字计 1 类" in html
+    assert "特殊符号计 1 类" in html
     assert "当前生效的 AD 密码策略" not in html
     assert "域默认密码策略" not in html
     assert "msDS-ResultantPSO" not in html

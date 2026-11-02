@@ -98,7 +98,11 @@ def test_directory_rejection_consumes_session_and_hides_account(client, setup_ss
     assert "我已了解，重新验证" in content
     assert "密码要求" in content
     assert "密码至少 8 位" in content
-    assert "至少包含 3 类字符" in content
+    assert "至少包含以下 4 类字符中的 3 类" in content
+    assert "大写字母计 1 类" in content
+    assert "小写字母计 1 类" in content
+    assert "数字计 1 类" in content
+    assert "特殊符号计 1 类" in content
     assert EmployeeSession.objects.get(digest=sspr.fingerprint(token)).used
 
 
@@ -125,7 +129,11 @@ def test_policy_rejection_stays_visible_when_notification_queue_fails(client, se
     assert 'data-auto-start="false"' in content
     assert "密码要求" in content
     assert "密码至少 8 位" in content
-    assert "至少包含 3 类字符" in content
+    assert "至少包含以下 4 类字符中的 3 类" in content
+    assert "大写字母计 1 类" in content
+    assert "小写字母计 1 类" in content
+    assert "数字计 1 类" in content
+    assert "特殊符号计 1 类" in content
     assert "当前生效的 AD 密码策略" not in content
     assert "private notification queue diagnostic" not in content
     assert Audit.objects.get(action="sspr_reset").state == "failed"
@@ -165,7 +173,11 @@ def test_ad_password_policy_rejection_is_visible_and_safe(client, setup_sspr, mo
     assert "Ab1!xyza" not in content
     assert "密码要求" in content
     assert "密码至少 8 位" in content
-    assert "至少包含 3 类字符" in content
+    assert "至少包含以下 4 类字符中的 3 类" in content
+    assert "大写字母计 1 类" in content
+    assert "小写字母计 1 类" in content
+    assert "数字计 1 类" in content
+    assert "特殊符号计 1 类" in content
     assert "当前生效的 AD 密码策略" not in content
     audit = Audit.objects.get(action="sspr_reset")
     assert "private directory diagnostic" not in audit.result
