@@ -49,7 +49,7 @@ def test_content_is_escaped_and_platforms_hidden_before_identity_check(client, e
         assert "仅核验后可见的平台" not in html
         assert "服务尚未开启" in html
         assert "当前域控" not in html
-        assert "当前生效的 AD 密码策略" not in html
+        assert "密码要求" not in html
         assert not response.context["auth_platforms"]
 
 
@@ -67,11 +67,11 @@ def test_verified_account_shows_enabled_platforms_in_order_without_binding(clien
     assert "当前 AD 账号" in html and "testuser" in html
     assert "当前域控：" in html and "example.com" in html
     assert "用户@example.com" in html and r"example\用户" in html
-    assert "当前生效的 AD 密码策略" in html
-    assert "密码长度至少 12 位" in html
-    assert "不得包含 AD 登录名或显示名称中的明显部分" in html
-    assert "最近 24 个历史密码" in html
-    assert "域默认密码策略" in html
+    assert "密码要求" in html
+    assert "密码至少 8 位" in html
+    assert "至少包含 3 类字符" in html
+    assert "大写英文字母、小写英文字母、数字、特殊符号" in html
+    assert "大写英文字母和小写英文字母分别计算为一类" in html
     assert html.index("VPN") < html.index("Nextcloud")
     assert "已关闭平台" not in html
     assert 'href="https://vpn.example.com/"' in html
@@ -89,10 +89,12 @@ def test_verified_account_escapes_domain_name(client, employee_content, employee
     assert "<script>alert(1)</script>.example" not in html
 
 
-def test_password_policy_read_failure_does_not_block_password_form(client, employee_content, employee_directory, monkeypatch):
+def test_password_form_does_not_read_dynamic_password_policy(client, employee_content, employee_directory, monkeypatch):
     _, directory, _ = employee_directory
+    policy_calls = []
 
     def unavailable(*args, **kwargs):
+        policy_calls.append(True)
         raise RuntimeError("private policy diagnostic")
 
     monkeypatch.setattr(directory, "effective_password_policy", unavailable)
@@ -105,10 +107,14 @@ def test_password_policy_read_failure_does_not_block_password_form(client, emplo
     assert response.status_code == 200
     assert 'action="/sspr/reset"' in html
     assert "当前 AD 账号" in html
-    assert "当前生效的 AD 密码策略" in html
-    assert "暂时无法读取 AD 密码策略" in html
-    assert "密码修改仍会由域控按实际策略校验" in html
+    assert "密码要求" in html
+    assert "密码至少 8 位" in html
+    assert "至少包含 3 类字符" in html
+    assert "当前生效的 AD 密码策略" not in html
+    assert "域默认密码策略" not in html
+    assert "msDS-ResultantPSO" not in html
     assert "private policy diagnostic" not in html
+    assert policy_calls == []
 
 
 def test_display_changes_preserve_real_session_and_sync_preview(client, employee_content, employee_directory):
